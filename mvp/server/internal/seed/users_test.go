@@ -2,7 +2,6 @@ package seed_test
 
 import (
 	"context"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"testing"
@@ -53,7 +52,7 @@ func TestSeedUsersMatchDevIdP(t *testing.T) {
 func TestSeedDevIdPConnection(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "s.db"))
+	db, err := store.Open(ctx, store.TestTarget(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +93,7 @@ func TestSeedDevIdPConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	// without WithDevIdP there is no connection and no user
-	db2, err := store.Open(ctx, filepath.Join(t.TempDir(), "s2.db"))
+	db2, err := store.Open(ctx, store.TestTarget(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +119,7 @@ func TestSeedDevIdPConnection(t *testing.T) {
 func TestSeedDevIdPSAMLConnection(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "s.db"))
+	db, err := store.Open(ctx, store.TestTarget(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,5 +167,23 @@ func TestDevGitHubIDMatchesDevIdP(t *testing.T) {
 		if got, want := seed.DevGitHubID(u.Subject), strconv.FormatInt(devidp.GitHubID(u.Subject), 10); got != want {
 			t.Errorf("%s: %s, dev IdP %s", u.Subject, got, want)
 		}
+	}
+}
+
+// TestLarkspurHasTwoContainHolders: re-enabling an identity linked to a
+// Tessera user needs a second holder of identities.contain (four eyes,
+// #316), so the demo tenant must have at least two (#335).
+func TestLarkspurHasTwoContainHolders(t *testing.T) {
+	var holders []string
+	for _, u := range seed.LarkspurUsers {
+		for _, r := range u.Roles {
+			if slices.Contains(auth.RolePermissions(auth.Role(r)), auth.PermIdentitiesContain) {
+				holders = append(holders, u.Subject)
+				break
+			}
+		}
+	}
+	if len(holders) < 2 {
+		t.Errorf("larkspur users holding identities.contain: %v; four eyes on enable needs two", holders)
 	}
 }

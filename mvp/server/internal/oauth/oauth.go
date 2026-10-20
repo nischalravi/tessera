@@ -140,7 +140,7 @@ func New(cfg Config) (*Service, error) {
 		}
 		v.NonceKey = key
 	}
-	return &Service{cfg: cfg, db: cfg.DB, dpop: v, devAuth: ratelimit.New(6*time.Second, 10, 10000),
+	return &Service{cfg: cfg, db: cfg.DB, dpop: v, devAuth: ratelimit.New(ratelimit.ClassIP, 6*time.Second, 10, 10000),
 		lockouts: newLookupLockouts()}, nil
 }
 

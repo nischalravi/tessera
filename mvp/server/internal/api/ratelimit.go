@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -26,8 +27,10 @@ import (
 //
 // The key is the client address: the TCP peer, or, when the peer is one of
 // TrustedProxies (TESSERA_TRUSTED_PROXIES), the rightmost X-Forwarded-For
-// entry that is not a trusted proxy. An IPv6 client is keyed by its /64.
-// Refusals are 429 rate_limited with Retry-After.
+// entry that is not a trusted proxy, keyed by ratelimit.IPKey (an IPv6
+// client by its /64). Both buckets are per-IP limiters with their own LRU;
+// other key classes (sessions, user codes) get their own limiters, so they
+// cannot evict these. Refusals are 429 rate_limited with Retry-After.
 
 // RateLimit is one token bucket per IP: Burst requests at once, refilled at
 // one per Every.
@@ -48,7 +51,6 @@ const (
 	defaultAnonBurst = 120
 	defaultAuthEvery = 2 * time.Second
 	defaultAuthBurst = 30
-	defaultRateKeys  = 10000
 )
 
 func (rl RateLimit) orDefault(every time.Duration, burst int) RateLimit {
@@ -70,29 +72,23 @@ type limiters struct {
 func newLimiters(c RateLimits) *limiters {
 	keys := c.MaxKeys
 	if keys <= 0 {
-		keys = defaultRateKeys
+		keys = ratelimit.ClassIP.DefaultMaxKeys()
 	}
 	anon := c.Anonymous.orDefault(defaultAnonEvery, defaultAnonBurst)
 	au := c.Auth.orDefault(defaultAuthEvery, defaultAuthBurst)
-	return &limiters{anon: ratelimit.New(anon.Every, anon.Burst, keys), auth: ratelimit.New(au.Every, au.Burst, keys),
+	return &limiters{anon: ratelimit.New(ratelimit.ClassIP, anon.Every, anon.Burst, keys),
+		auth:      ratelimit.New(ratelimit.ClassIP, au.Every, au.Burst, keys),
 		anonEvery: anon.Every, authEvery: au.Every}
 }
 
-// rateKey is the limiter key of the request's client.
-func (s *Server) rateKey(r *http.Request) string {
-	a, ok := s.clientIP(r)
-	if !ok {
-		return r.RemoteAddr
-	}
-	if a.Is6() {
-		p, _ := a.Prefix(64)
-		return p.String()
-	}
-	return a.String()
+// rateKey is the limiter key of the request's client. A peer address that
+// does not parse (not TCP) shares one "invalid" bucket.
+func (s *Server) rateKey(r *http.Request) ratelimit.Key {
+	a, _ := s.clientIP(r)
+	return ratelimit.IPKey(a)
 }
 
-// requestIP is the client address as text (the OAuth server records it and
-// keys its limiter by it).
+// requestIP is the client address as text (the OAuth server records it).
 func (s *Server) requestIP(r *http.Request) string {
 	if a, ok := s.clientIP(r); ok {
 		return a.String()
@@ -101,7 +97,8 @@ func (s *Server) requestIP(r *http.Request) string {
 }
 
 // clientIP is the client address: the TCP peer, or, when the peer is a
-// trusted proxy, the rightmost X-Forwarded-For entry that is not one.
+// trusted proxy, the rightmost X-Forwarded-For entry that is not one. The
+// zero Addr and false mean the peer address could not be parsed.
 func (s *Server) clientIP(r *http.Request) (netip.Addr, bool) {
 	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
@@ -138,8 +135,8 @@ func (s *Server) trustedProxy(a netip.Addr) bool {
 type authenticatedKey struct{}
 
 func markAuthenticated(ctx context.Context) {
-	if b, ok := ctx.Value(authenticatedKey{}).(*bool); ok {
-		*b = true
+	if b, ok := ctx.Value(authenticatedKey{}).(*atomic.Bool); ok {
+		b.Store(true)
 	}
 }
 
@@ -147,7 +144,7 @@ func markAuthenticated(ctx context.Context) {
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := s.rateKey(r)
-		if r.URL.Path == "/api/auth" || strings.HasPrefix(r.URL.Path, "/api/auth/") {
+		if authAttempt(r) {
 			if !s.limits.auth.Allow(key) {
 				tooMany(w, s.limits.authEvery)
 				return
@@ -165,12 +162,30 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 			tooMany(w, s.limits.anonEvery)
 			return
 		}
-		authenticated := false
+		// The flag is set by the handler, which http.TimeoutHandler runs on its
+		// own goroutine and which can outlive next.ServeHTTP once the timeout
+		// fires, so it is atomic.
+		var authenticated atomic.Bool
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authenticatedKey{}, &authenticated)))
-		if !authenticated {
+		if !authenticated.Load() {
 			s.limits.anon.Allow(key)
 		}
 	})
+}
+
+// authAttempt reports whether a request counts against the sign-in limit. Every /api/auth/*
+// request does, except a signed-in browser reading its own session or session list: the UI
+// fetches those on every page load, and counting them locked active users out (UAT #308).
+// Those reads still pass the authenticated path, so a bad cookie costs the anonymous budget.
+func authAttempt(r *http.Request) bool {
+	p := r.URL.Path
+	if p != "/api/auth" && !strings.HasPrefix(p, "/api/auth/") {
+		return false
+	}
+	if r.Method == http.MethodGet && (p == "/api/auth/session" || p == "/api/auth/sessions") {
+		return false
+	}
+	return true
 }
 
 func tooMany(w http.ResponseWriter, every time.Duration) {

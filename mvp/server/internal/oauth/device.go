@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/ratelimit"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -83,7 +85,7 @@ func (s *Service) DeviceAuthorization(w http.ResponseWriter, r *http.Request, sl
 	}
 	ctx := attribute(r.Context(), t.ID)
 	r = r.WithContext(ctx)
-	if !s.devAuth.AllowAt(s.cfg.ClientIP(r), s.now()) {
+	if !s.devAuth.AllowAt(ratelimit.IPKey(ipOf(s.cfg.ClientIP(r))), s.now()) {
 		w.Header().Set("Retry-After", "6")
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate_limited"})
 		return
@@ -499,3 +501,10 @@ func (s *Service) DeviceApprove(w http.ResponseWriter, r *http.Request) {
 }
 
 var errDeviceGrantRefused = errors.New("oauth: the device grant is not allowed for this client or tenant")
+
+// ipOf parses the client address text of Config.ClientIP into a limiter key
+// address; text that is not an address shares the "invalid" bucket.
+func ipOf(s string) netip.Addr {
+	a, _ := netip.ParseAddr(s)
+	return a.Unmap()
+}

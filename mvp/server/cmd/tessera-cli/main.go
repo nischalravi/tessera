@@ -39,7 +39,6 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/cliauth"
-	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
@@ -113,11 +112,7 @@ func run(ctx context.Context, args []string, e runEnv) int {
 // newHTTPClient is the SSRF-guarded client (every outbound call of the CLI
 // goes through internal/safehttp). Development may use http and loopback.
 func newHTTPClient(env string) (*http.Client, error) {
-	o := safehttp.Options{Env: config.Prod, Timeout: 30 * time.Second, MaxBodyBytes: 32 << 20}
-	if env == config.Dev {
-		o.Env, o.AllowLoopback = config.Dev, true
-	}
-	return safehttp.New(o)
+	return safehttp.ForCLIEnv(env, 30*time.Second, 32<<20)
 }
 
 func fail(e runEnv, err error) int {

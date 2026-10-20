@@ -1,0 +1,55 @@
+[
+  {
+    "conditions": [],
+    "prefix": "s3",
+    "privileges": [
+      {
+        "access_level": "Read",
+        "description": "Grants permission to retrieve objects",
+        "privilege": "GetObject",
+        "resource_types": [
+          {"condition_keys": [], "dependent_actions": [], "resource_type": "object*"}
+        ]
+      },
+      {
+        "access_level": "Write",
+        "description": "Grants permission to add an object",
+        "privilege": "PutObject",
+        "resource_types": [
+          {"condition_keys": [], "dependent_actions": ["s3:PutObjectTagging", "kms:Decrypt"], "resource_type": "object*"},
+          {"condition_keys": [], "dependent_actions": ["kms:Decrypt", "not an action"], "resource_type": ""}
+        ]
+      },
+      {
+        "access_level": "Unknown",
+        "description": "Odd entry",
+        "privilege": "Mystery",
+        "resource_types": []
+      },
+      {
+        "access_level": "Read",
+        "description": "Hostile name",
+        "privilege": "Bad Name<script>",
+        "resource_types": []
+      }
+    ],
+    "resources": [],
+    "service_name": "Amazon S3"
+  },
+  {
+    "conditions": [],
+    "prefix": "kms",
+    "privileges": [
+      {
+        "access_level": "Permissions management",
+        "description": "Grants permission to add a grant",
+        "privilege": "CreateGrant",
+        "resource_types": [
+          {"condition_keys": [], "dependent_actions": [], "resource_type": "key*"}
+        ]
+      }
+    ],
+    "resources": [],
+    "service_name": "AWS Key Management Service"
+  }
+]

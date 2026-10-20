@@ -224,7 +224,7 @@ func (s *Service) checkAccessToken(ctx context.Context, token string, now time.T
 	// 4. and 5. the signature and the claims, inside the tenant
 	ct = &checkedToken{tenant: tenant, slug: slug}
 	err = s.db.ReadTenant(ctx, tenant.ID, func(tx *store.TenantTx) error {
-		set, err := keys.JWKSFor(tx, store.KeyPurposeAccessToken, now)
+		set, err := keys.JWKSFor(tx, store.KeyPurposeAccessToken, now, s.cfg.Log)
 		if err != nil {
 			return err
 		}

@@ -1,0 +1,19 @@
+# Services whose resource policy must explicitly allow even for a same-account
+# principal (design §7.4.3, ambiguity A10). Every service not listed uses the
+# union rule (identity allow OR resource allow) and decisions that depend on it
+# carry SERVICE_RBP_RULE_UNVERIFIED. Each entry cites the page or probe that
+# justifies it; probes from A10 add entries.
+default: union
+rules:
+  - service: iam
+    resource: role_trust_policy
+    requires_explicit_allow: true
+    verified: true
+    source: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html
+    note: A role trust policy must allow the caller; an identity policy alone never grants sts:AssumeRole to a principal named only by user or session ARN.
+  - service: kms
+    resource: key_policy
+    requires_explicit_allow: true
+    verified: true
+    source: https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-default.html
+    note: A KMS key policy is the primary access control. Identity policies work only if the key policy allows the account principal (or the caller) explicitly.

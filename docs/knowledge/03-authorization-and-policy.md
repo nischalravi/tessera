@@ -219,44 +219,78 @@ Engines differ on four axes:
 - ACLs (legacy: S3 and others)
 - VPC endpoint policies
 
-**Single-account algorithm** (paraphrasing AWS's documented logic):
+> **Corrected 2026-10-15.** An earlier version of this section simplified the SCP and RCP gates, the account-principal case, `NotPrincipal` and missing condition keys. The corrections K1 to K6 below follow the AWS evaluator design, [§4.1 and §4.2](../design/aws-effective-permission-evaluator.md#41-the-facts-the-algorithm-depends-on-each-traceable-to-18), which is the normative source. Points the AWS documentation leaves open are in the [AWS evaluation ambiguity register](aws-evaluation-ambiguities.md).
+
+**Single-account algorithm** (paraphrasing AWS's documented logic; the order is from the [AWS enforcement-logic page][aws-eval-denyallow]):
 
 ```
-0. Default: implicit DENY (except the account root user).
+0. Default: implicit DENY. The account root user is the exception: no identity
+   policy or boundary applies to it (it is still subject to SCPs and RCPs in
+   member accounts).
 1. Collect ALL applicable policies: SCPs, RCPs, resource-based, identity-based,
    permissions boundary, session policy (and endpoint policies where relevant).
-2. If ANY applicable statement is an explicit Deny        → DENY (final).
-3. RCPs: if none of the RCPs in the resource account's
-   OU chain Allows the action                             → DENY.
-   (RCPFullAWSAccess is auto-attached and undetachable, so this is
-   effectively "deny unless an RCP Deny matched".)
-4. SCPs: at EVERY level of the principal account's OU chain
-   (root → OUs → account), some SCP must Allow             else DENY.
-5. Resource-based policy: if it Allows the request principal, it can
-   produce ALLOW even with no identity-policy allow, subject to the
-   principal-type rules below.
-6. Identity-based policies: if none Allow (and step 5 did not already
-   decide)                                                 → DENY.
-7. Permissions boundary (if set): must Allow              else DENY.
-8. Session policy (if a session principal passed one): must Allow else DENY.
-9.                                                          → ALLOW.
+2. If ANY applicable statement, in ANY policy type, is an explicit Deny
+                                                          → DENY (final).
+3. RCP gate (resource side). Applies only to resources in member accounts, for
+   the services that support RCPs, and to every principal, including external
+   principals and root. Not applied to: service-linked-role callers,
+   management-account resources, AWS-managed KMS keys, kms:RetireGrant.
+   Where it applies, some RCP must Allow (RCPFullAWSAccess is auto-attached and
+   cannot be detached, so in practice "deny unless an RCP Deny matched"). The
+   RCP that applies belongs to the account that owns the resource. (K3, K6)
+4. SCP gate (principal side). Applies only when the principal is an IAM user,
+   role or root user in a MEMBER account, and not a service-linked role. Some
+   SCP must Allow at EVERY level from the organization root through each OU in
+   the path to the account, including the account itself. Principals of the
+   management account and principals from outside the organization skip this
+   gate. The resource account's SCPs never apply to an external principal. (K1)
+5. Grant paths:
+   a. Resource-based policy: it can produce ALLOW without an identity-policy
+      allow, but only per the principal-type rules below. A same-account
+      grant to the ACCOUNT principal does not allow by itself: it delegates
+      to the identity policies. (K2)
+   b. Identity-based policies: some Allow must exist, unless 5a granted
+      directly.
+6. Limits: the permissions boundary and the session policy must each Allow,
+   except where the principal-type rules below say a resource-policy grant is
+   not limited by them.
+7.                                                          → ALLOW.
 ```
 
-**Principal-type rules for same-account resource-policy grants.** These are subtle and essential for a correct engine:
-- Granted to an **IAM user ARN**: not limited by an implicit deny in identity policies or the permissions boundary.
-- Granted to an **assumed-role session ARN** or an **STS federated-user session ARN**: granted directly to the session. Not limited by an implicit deny in identity policy, boundary or session policy.
-- Granted to an **IAM role ARN** (in `Principal` or via `aws:PrincipalArn`): the requester is actually the role session, so the grant *is* limited by an implicit deny in the permissions boundary or session policy. An exception is documented for a wildcard Principal with an `aws:PrincipalArn` condition.
-- **Role trust policies and KMS key policies** must explicitly allow the principal even in the same account. An identity-policy allow alone is insufficient.
+This is the *documented order*, not a sequence of early exits: an engine should still evaluate the later stages so the explanation trace is complete.
 
-**Cross-account.** AWS evaluates the trusted (principal) account and the trusting (resource) account separately, and both must return Allow:
+**Principal-type rules for same-account resource-policy grants.** These are subtle and essential for a correct engine ([enforcement logic][aws-eval-denyallow], [boundaries][aws-boundaries], [Principal element][aws-principal], [session policies][aws-policies]):
+- Granted to an **IAM user ARN**: not limited by an implicit deny in identity policies or the permissions boundary.
+- Granted to an **assumed-role session ARN**: granted directly to the session. Not limited by an implicit deny in identity policy, boundary or session policy.
+- Granted to an **STS federated-user session ARN**: same as a role session. A grant to the **IAM user who federated** is limited by the boundary and session policy.
+- Granted to an **IAM role ARN** (in `Principal` or via `aws:PrincipalArn`): the requester is actually the role session, so the grant *is* limited by an implicit deny in the permissions boundary or session policy. It is not limited by the identity policy. The session-policy page states it as session permissions = (session ∩ resource policy) ∪ (session ∩ identity).
+- Granted to a **wildcard Principal with an `aws:PrincipalArn` condition**: boundaries and session policies do not limit it unless an identity-based policy contains an explicit deny.
+- Granted to the **account principal** (`arn:aws:iam::ID:root` or `"ID"`): this delegates to the account. It does not limit permissions to the root user, and identity policies must still allow (K2).
+- **Role trust policies and KMS key policies** must explicitly allow the principal even in the same account. An identity-policy allow alone is insufficient. Other services "may also require" it; which ones is open (ambiguity A10).
+
+**Cross-account.** AWS evaluates the trusted (principal) account and the trusting (resource) account separately, and both must return Allow ([AWS cross-account logic][aws-xacct]):
 - the identity policy plus its limiters in the principal's account (SCPs, boundary, session)
 - the resource policy plus its limiters in the resource's account (RCPs)
 
-An explicit deny anywhere wins. AWS RAM policy fragments add another layer.
+An explicit deny anywhere wins. The **resource account's RCPs apply even to external principals; the resource account's SCPs do not** (K3). ACLs cannot grant permissions to entities within the same account. AWS RAM policy fragments add another layer.
+
+**`NotPrincipal`** (K4, [AWS NotPrincipal][aws-notprincipal]):
+- It is allowed only with `Effect: Deny`, and not in identity or trust policies, SCPs or RCPs.
+- A `Deny` with `NotPrincipal` **always denies any principal that has a permissions boundary attached**, whatever values are listed.
+- List the account ARN as well as the role or user: AWS "might validate the account first, then the role, and then the assumed-role user". How much to list for a role session is not documented (ambiguity A4).
+
+**Condition operators with a missing key** (K5, [AWS condition operators][aws-condops], [single vs multivalued keys][aws-multivalued]):
+- A missing key makes a positive operator false. **Negated operators** (`StringNotEquals`, `StringNotLike`, `ArnNotLike`, `NotIpAddress` and so on) are **true** when the key is missing.
+- `…IfExists` is true when the key is missing. `Null: true` tests for absence.
+- `ForAllValues` is **true when the key is missing or empty**. `ForAnyValue` is false when the key is missing.
+- Negated operators and `ForAllValues` on absent keys are among the most common causes of over-grant. Several combinations the documentation does not settle are in the register (A5 to A8, A17).
 
 **Recent changes Tessera must model:**
-- **RCPs** launched November 2024. Initial services were S3, STS, KMS, SQS and Secrets Manager. Cognito and CloudWatch Logs were added January 2026 and DynamoDB February 2026. A third-party vendor counts 44 service entries as of August 2026 [unverified]. Lambda, RDS, SNS, API Gateway and Bedrock reportedly lack RCP support [third-party, unverified].
-- **SCPs support the full IAM policy language** (September 2025): conditions, individual resource ARNs, `NotAction` with Allow, `NotResource`, and wildcards anywhere in action strings. SCPs still don't apply to the management account or to service-linked roles.
+- **RCPs** launched November 2024. Initial services were S3, STS, KMS, SQS and Secrets Manager. Cognito and CloudWatch Logs were added January 2026 and DynamoDB February 2026.
+  - **The official list had 62 service prefixes on 2026-10-08** ([RCP page][aws-rcps]), including `s3`, `sts`, `kms`, `sqs`, `secretsmanager`, `dynamodb`, `logs`, `cognito-idp`, `ecr`, `events` and `codebuild`. An earlier version of this document said "a third-party vendor counts 44"; the official list supersedes that figure. The list keeps growing, so Tessera holds it in a reviewed overlay and diffs it against the page nightly (design §10.3).
+  - Lambda and SNS are still absent from the list. RDS, API Gateway and Bedrock are reportedly absent too **[third-party, unverified]**; check the live page rather than this list.
+  - RCPs do not apply to service-linked-role callers, to management-account **resources**, to AWS-managed KMS keys, or to `kms:RetireGrant` (K6). Customer RCPs are Deny-only, must use `"Principal": "*"`, and do not support `NotPrincipal` or `NotAction` ([RCP syntax][aws-rcp-syntax]).
+- **SCPs support the full IAM policy language** (September 2025): conditions, individual resource ARNs, `NotAction` with Allow, `NotResource`, and wildcards anywhere in action strings. `Principal` and `NotPrincipal` remain unsupported. SCPs do not affect principals in the management account, service-linked roles, or principals from accounts outside the organization (K1, K6; [SCP evaluation][aws-scp-eval]). They do apply to delegated-administrator member accounts and to member-account root users.
   - The SCP syntax page still says that an SCP `Allow` statement may use only `"Resource": "*"`, not individual ARNs. That sentence predates the September 2025 launch and conflicts with it; Tessera follows the launch and lints the case as a warning (design ambiguity A2). Every SCP and RCP must have `"Version": "2012-10-17"`, and an RCP's `Principal` must be the bare string `"*"` (not `{"AWS": "*"}`).
 - **Incomplete resource ARNs.** In identity-based policies AWS completes an ARN with fewer than six fields by adding `*` to every missing field: `arn:aws:sqs` means `arn:aws:sqs:*:*:*`, every SQS resource in every Region and account. Session policies passed to `AssumeRole*` reject incomplete ARNs (`MalformedPolicyDocumentException`). SCP behaviour is undocumented; Tessera completes them the same way and flags the result (design ambiguity A21).
 - **IAM Access Analyzer**:
@@ -265,6 +299,32 @@ An explicit deny anywhere wins. AWS RAM policy fragments add another layer.
   - *Internal access* findings (June 2025). These cover S3, DynamoDB and RDS and use automated reasoning over identity policies, resource policies, SCPs and RCPs to list which in-org users and roles can reach critical resources. They are evaluated daily, and an error is raised past 3,000 principals.
   - *Custom policy checks*: CheckNoNewAccess, CheckAccessNotGranted and CheckNoPublicAccess, suited to CI.
 - **Zelkova** translates IAM policies into SMT formulas and checks properties such as "is this bucket public?". It underpins Access Analyzer and S3 Block Public Access reasoning.
+
+**What AWS's own oracles can and cannot decide** (read 2026-10-08; detail in design §13.2). Tessera's differential harness depends on these limits.
+- **IAM policy simulator** ([`SimulatePrincipalPolicy`][aws-sim-principal], [`SimulateCustomPolicy`][aws-sim-custom]):
+  - It evaluates identity policies, one permissions boundary and **SCPs with conditions and resource scoping**. In principal mode it uses the account's real SCPs. In custom mode `OrderedOrganizationPolicyInputList` takes up to 7 levels, root to account, evaluated in the order given ([policy type][aws-sim-ordered]). One `ResourcePolicy` with `ResourceOwner` and `CallerArn` supports cross-account checks. The request also accepts a `PolicyExclusionList`.
+  - It does **not** support RCPs ("does not support resource control policies"; `PolicyExclusionList` ignores RCP identifiers), session ("scope-down") policies, assumed-role, federated-user or service-principal callers, resource policies on IAM roles (so trust policies and `sts:AssumeRole` cannot be simulated), VPC endpoint policies, role chaining, or several resource policies on one resource. KMS grants, S3 ACLs, Block Public Access, access-point delegation and `NotPrincipal` with a boundary are not mentioned, so Tessera treats them as unsupported.
+  - It auto-fills only a few principal keys (`aws:PrincipalAccount`, `PrincipalId`, `PrincipalType`, `Type`, `UserId`, `UserName`, `PrincipalOrgID`, `PrincipalOrgMasterAccountId`, `PrincipalOrgPaths`). Every other key, including `aws:PrincipalArn` and `aws:PrincipalTag/*`, must be passed in `ContextEntries`, or the result is an implicit deny with the key listed in `MissingContextValues`.
+  - It now returns **one `EvaluationResult` per action**; the top level is the most restrictive, so per-resource decisions are in `ResourceSpecificResults[].EvalResourceDecision`. SCP statements are never in `MatchedStatements`. AWS states that simulator results "can differ from your live AWS environment" ([testing policies][aws-sim-testing]).
+- **IAM Access Analyzer** ([custom policy checks][aws-aa-checks]): checks work on a **single policy** with no SCPs, RCPs or org context. A PASS is trustworthy; a FAIL may be a false positive. The external access analyzer does not apply RCPs. There is no general "check access for (principal, action, resource)" API.
+- **Live probes** (real calls in a sandbox) are the only oracle for RCPs, session policies, trust and `AssumeRole`, KMS grants, ACLs, Block Public Access, `NotPrincipal` layering and VPC endpoints.
+
+[aws-eval-denyallow]: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic_policy-eval-denyallow.html
+[aws-boundaries]: https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html
+[aws-principal]: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_principal.html
+[aws-policies]: https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html
+[aws-xacct]: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic-cross-account.html
+[aws-notprincipal]: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_notprincipal.html
+[aws-condops]: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition_operators.html
+[aws-multivalued]: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-single-vs-multi-valued-context-keys.html
+[aws-scp-eval]: https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps_evaluation.html
+[aws-rcps]: https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_rcps.html
+[aws-rcp-syntax]: https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_rcps_syntax.html
+[aws-sim-principal]: https://docs.aws.amazon.com/IAM/latest/APIReference/API_SimulatePrincipalPolicy.html
+[aws-sim-custom]: https://docs.aws.amazon.com/IAM/latest/APIReference/API_SimulateCustomPolicy.html
+[aws-sim-ordered]: https://docs.aws.amazon.com/IAM/latest/APIReference/API_OrderedOrganizationPolicyType.html
+[aws-sim-testing]: https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_testing-policies.html
+[aws-aa-checks]: https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-checks-validating-policies.html
 
 ### 4.6 Azure RBAC + ABAC + deny assignments (precise)
 
@@ -462,7 +522,7 @@ A privileged service is tricked into using its authority for a less-privileged c
 - **NIST CSRC**: RBAC project (David Ferraiolo, Rick Kuhn), ABAC SP 800-162 (Vincent Hu et al.), NGAC/Policy Machine, SP 800-207 (Scott Rose, Oliver Borchert, Stu Mitchell, Sean Connelly), SP 800-207A (Ramaswamy Chandramouli, Zack Butcher).
 - **Ravi Sandhu**: foundational RBAC (RBAC96) and ABAC (ABAC-alpha) papers.
 - **Google**: the Zanzibar paper (Pang, Caceres et al., USENIX ATC 2019) and the BeyondCorp papers (Ward, Beyer et al.).
-- **AWS Automated Reasoning Group**: Zelkova (Backes et al., FMCAD 2018), the Cedar papers ("Cedar: A New Language for Expressive, Fast, Safe, and Analyzable Authorization", OOPSLA 2024; "How We Built Cedar: A Verification-Guided Approach", FSE 2024) and SymCert (2026). Key people: Byron Cook, Emina Torlak, Mike Hicks, Neha Rungta.
+- **AWS Automated Reasoning Group**: Zelkova (Backes et al., FMCAD 2018), "Stratified Abstraction of Access Control Policies" (Backes et al., CAV 2020), "Block Public Access: Trust Safety Verification of Access Control Policies" (Bouchet et al., ESEC/FSE 2020; not by Backes), the Cedar papers ("Cedar: A New Language for Expressive, Fast, Safe, and Analyzable Authorization", OOPSLA 2024; "How We Built Cedar: A Verification-Guided Approach", FSE 2024) and SymCert (2026). Key people: Byron Cook, Emina Torlak, Mike Hicks, Neha Rungta.
 - **OpenID AuthZEN WG**: co-chairs Omri Gazitt (Aserto/Topaz) and David Brossard (Axiomatics) [current co-chairs unverified]. Alex Babeanu and Atul Tulshibagwale were active contributors [unverified].
 - **OPA**: Torin Sandall, Tim Hinrichs, Teemu Koponen (now at Apple). **SpiceDB/AuthZed**: Jake Moshenko, Joey Schorr, Jimmy Zelinskie. **OpenFGA**: Andrés Aguiar (Okta).
 - **Cloud IAM research**: Datadog Security Labs (pathfinding.cloud, Nick Frichette's Hacking the Cloud), Rhino Security Labs (Spencer Gietzen, Pacu), Wiz Research, Ian Mckay (iann0036 IAM dataset), Kinnaird McQuade (Cloudsplaining), Duo Labs' CloudMapper / NCC Group PMapper, Andy Robbins and SpecterOps (BloodHound, AzureHound), Dirk-jan Mollema (Entra attacks).
@@ -503,7 +563,7 @@ A privileged service is tricked into using its authority for a less-privileged c
 - An **SMT encoding layer**, Zelkova-style, so the engine answers *universal* questions such as "can *any* principal outside the org read this bucket?" and "does this PR expand access?", not only point checks. Practical approach: encode each platform's evaluation as formulas over symbolic request variables (action, resource ARN string constraints, condition keys) and solve with cvc5 or Z3. Pair this with a *concrete* graph engine for enumeration (who-can-access lists).
 
 **AWS plug-in:**
-- Ordered pipeline: explicit deny → RCP (per OU level, resource account) → SCP (per OU level, principal account; skip for management account and service-linked roles) → resource policy, with the principal-type matrix (user ARN, role ARN, role-session ARN, federated user) → identity policies → boundary → session policy.
+- Ordered pipeline: explicit deny across all policy types → RCP gate (resource account; skip for service-linked-role callers, management-account resources, AWS-managed KMS keys and `kms:RetireGrant`) → SCP gate (per OU level, principal account; skip for management account, service-linked roles and external principals) → resource policy, with the principal-type matrix (account principal delegates; user ARN, role ARN, role-session ARN, federated user; see §4.5) → identity policies → boundary → session policy.
 - Cross-account: dual evaluation, both must allow.
 - Special resources: role trust policies (explicit allow required), KMS key policies plus grants, S3 ACLs and Object Ownership, S3 Block Public Access, VPC endpoint policies.
 - A full condition-key semantics library: string and ARN operators, `IfExists`, `ForAllValues`/`ForAnyValue` (including the empty-set pitfalls) and global keys (`aws:PrincipalOrgID`, `aws:SourceIp`, `aws:SourceVpce`, `aws:PrincipalTag`, `aws:ResourceTag`, `aws:RequestedRegion`, `aws:MultiFactorAuthPresent`, `aws:SourceArn`).
@@ -676,6 +736,10 @@ OPA and other engines
 AWS
 - Policy evaluation logic: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic_policy-eval-denyallow.html
 - Cross-account evaluation: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic-cross-account.html
+- SCP evaluation: https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps_evaluation.html ; RCP syntax: https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_rcps_syntax.html
+- NotPrincipal: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_notprincipal.html ; condition operators: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition_operators.html
+- Policy simulator: https://docs.aws.amazon.com/IAM/latest/APIReference/API_SimulateCustomPolicy.html ; https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_testing-policies.html
+- Open ambiguities in the AWS documentation: [aws-evaluation-ambiguities.md](aws-evaluation-ambiguities.md)
 - RCPs: https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_rcps.html ; DynamoDB support: https://aws.amazon.com/about-aws/whats-new/2026/02/aws-expands-resource-control-policies-amazon/ ; third-party coverage list: https://www.native.security/cloud-docs/aws-rcp-by-service
 - SCP full IAM language: https://aws.amazon.com/about-aws/whats-new/2025/09/aws-organizations-iam-language-service-control-policies ; https://aws.amazon.com/blogs/security/unlock-new-possibilities-aws-organizations-service-control-policy-now-supports-full-iam-language
 - Access Analyzer internal access: https://aws.amazon.com/about-aws/whats-new/2025/06/iam-access-analyzer-aws-organization-access-resources ; https://aws.amazon.com/blogs/aws/verify-internal-access-to-critical-aws-resources-with-new-iam-access-analyzer-capabilities

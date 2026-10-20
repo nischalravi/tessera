@@ -110,7 +110,7 @@ func (s *Service) JWKS(w http.ResponseWriter, r *http.Request, slug string) {
 	var set any
 	if err := s.db.ReadTenant(r.Context(), t.ID, func(tx *store.TenantTx) error {
 		var err error
-		set, err = keys.JWKSFor(tx, store.KeyPurposeAccessToken, s.now())
+		set, err = keys.JWKSFor(tx, store.KeyPurposeAccessToken, s.now(), s.cfg.Log)
 		return err
 	}); err != nil {
 		serverError(w, s.cfg.Log, r, err)

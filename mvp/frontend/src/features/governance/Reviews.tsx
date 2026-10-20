@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Ban, Check, ClipboardCheck, Network, Plus, UserRound, X } from "lucide-react";
-import { Campaign as CampaignT, IdentityRow, ReviewItem, ago, fmtDate, reviewDecide, useApi } from "../../api";
+import { ReviewSchedules } from "./ReviewSchedules";
+import { Campaign as CampaignT, IdentityRow, ReviewItem, SodReviewContext, ago, fmtDate, reviewDecide, sodControlPaths, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
-import { Badge, Bar, Button, CommandBar, DataTable, EmptyState, FilterChips, Flag, IdLink, Loading, Page, Segmented, SidePanel, TypeBadge, flagLabel, useConfirm, useSelected, useToast, GovernanceTabs } from "../../components";
+import { EscalateDrawer, MitigateDrawer, Target } from "./MitigateDrawers";
+import { offers } from "./sodModel";
+import { Badge, Bar, Button, CommandBar, DataTable, EmptyState, FilterChips, Flag, IdLink, Loading, Page, Segmented, SidePanel, Tabs, TypeBadge, flagLabel, useConfirm, useSelected, useToast, GovernanceTabs } from "../../components";
 
 function useDecide() {
   const toast = useToast();
@@ -27,7 +30,38 @@ function useDecide() {
   };
 }
 
-function ItemPanel({ it, onClose }: { it: ReviewItem; onClose: () => void }) {
+/** The SoD risks behind a review item's grant, with any mitigation, and a way to ask for one from the review. */
+function SodSection({ it, campaignId }: { it: ReviewItem; campaignId: number }) {
+  const { data, reload } = useApi<SodReviewContext>(sodControlPaths.reviewContext(campaignId));
+  const [act, setAct] = useState<null | { kind: "mitigate" | "escalate"; target: Target; offerAccept: boolean }>(null);
+  const mine = data?.items.find((x) => x.item_id === it.id)?.violations ?? [];
+  if (mine.length === 0) return null;
+  return (
+    <section className="stack-sm" aria-label="Separation of duties">
+      <h3 style={{ fontSize: "var(--fs-lg)", color: "var(--text)" }}>Separation of duties</h3>
+      {mine.map((v) => {
+        const target = { riskId: v.risk_id, riskName: v.risk_name, identityId: v.identity_id, identityName: it.identity.name };
+        const open = v.status === "open";
+        return (
+          <div key={v.risk_id} className="card stack-sm">
+            <div className="row tight"><Badge tone={v.priority === "critical" || v.priority === "high" ? "critical" : "warning"}>{v.priority}</Badge><b>{v.risk_name}</b></div>
+            <div className="small muted">{v.mitigation ? v.mitigation.label + (v.mitigation.control ? ` by ${v.mitigation.control}` : "") : "Not mitigated"}</div>
+            {data?.can_request && open && (
+              <div className="row tight">
+                {(offers(v, "mitigate") || offers(v, "accept")) && <Button size="sm" onClick={() => setAct({ kind: "mitigate", target, offerAccept: offers(v, "accept") })}>Request mitigation…</Button>}
+                {offers(v, "escalate") && <Button size="sm" onClick={() => setAct({ kind: "escalate", target, offerAccept: false })}>Escalate…</Button>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {act?.kind === "mitigate" && <MitigateDrawer target={act.target} offerAccept={act.offerAccept} onClose={() => setAct(null)} onDone={reload} />}
+      {act?.kind === "escalate" && <EscalateDrawer target={act.target} onClose={() => setAct(null)} onDone={reload} />}
+    </section>
+  );
+}
+
+function ItemPanel({ it, campaignId, onClose }: { it: ReviewItem; campaignId: number; onClose: () => void }) {
   const decide = useDecide();
   const nav = useNavigate();
   const [acct, grant] = it.grant.split(" → ");
@@ -56,6 +90,7 @@ function ItemPanel({ it, onClose }: { it: ReviewItem; onClose: () => void }) {
         <div className="row tight">{it.reasons.map((r) => <Flag key={r} f={r} />)}</div>
         {c.violations.length > 0 && <div className="small muted">{c.violations.join("; ")}</div>}
       </section>
+      <SodSection it={it} campaignId={campaignId} />
       <dl className="kv">
         <dt>Granted through</dt><dd className="sys">{acct}</dd>
         <dt>Permissions used</dt><dd className="tnum">{c.permissions_used} of {c.permissions}</dd>
@@ -136,7 +171,7 @@ function Campaign({ id, identity, onRefresh, onStart }: { id: number; identity: 
         activeKey={selected}
         empty={<EmptyState title="Nothing to review here" icon={<ClipboardCheck size={18} />}>This campaign has no items for this view.</EmptyState>}
       />
-      {open && <ItemPanel it={open} onClose={() => setSelected(null)} />}
+      {open && <ItemPanel it={open} campaignId={id} onClose={() => setSelected(null)} />}
       <div className="xs faint">Tip: the Inbox shows your review items one at a time with keyboard shortcuts: A keeps, R revokes, J and K move.</div>
     </div>
   );
@@ -157,6 +192,9 @@ export function Reviews() {
     setParams(next, { replace: true });
   };
   const crumbs: [string, string?][] = [["Access"], ["Access reviews"]];
+  const view = params.get("view") === "schedules" ? "schedules" : "campaigns";
+  const setView = (v: string) => setParams(v === "schedules" ? { view: v } : {}, { replace: true });
+  const viewTabs = <Tabs label="Access review views" value={view} onChange={setView} tabs={[{ id: "campaigns", label: "Campaigns" }, { id: "schedules", label: "Schedules" }]} />;
   return (
     <Page tabs={<GovernanceTabs />}
       title="Access reviews"
@@ -168,7 +206,9 @@ export function Reviews() {
         <Segmented label="Unused threshold for new reviews" value={days} onChange={setDays} options={[["30", "30 d"], ["60", "60 d"], ["90", "90 d"]]} />
       </>}
     >
-      {!data ? <div className="card flush"><Loading error={error} /></div> : data.length === 0 ? (
+      {viewTabs}
+      {view === "schedules" ? <ReviewSchedules onLaunched={(id) => { reload(); setParams({ campaign: String(id) }, { replace: true }); }} /> :
+      !data ? <div className="card flush"><Loading error={error} /></div> : data.length === 0 ? (
         <div className="card"><EmptyState title="No reviews yet" icon={<ClipboardCheck size={18} />} action={<Button variant="primary" onClick={() => acts.startCampaign(Number(days))}>Start your first review</Button>}>
           A review collects only the access that needs a human decision. Everything with recent usage is auto-certified.
         </EmptyState></div>
