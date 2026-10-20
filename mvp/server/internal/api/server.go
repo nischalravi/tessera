@@ -572,7 +572,7 @@ type streamDeadlineKey struct{}
 func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if rt, _, _ := s.find(r.Method, r.URL.Path); rt == nil || !rt.stream {
-			timed.ServeHTTP(w, r)
+			timed.ServeHTTP(&abortWriter{ResponseWriter: w, r: r}, r)
 			return
 		}
 		deadline := time.Now().Add(s.cfg.StreamTimeout)
@@ -930,6 +930,8 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 func (s *Server) attribute(r *http.Request) {
 	p, reason, err := s.authn.Authenticate(r)
 	switch {
+	case err != nil && clientCanceled(r, err):
+		audit.SetAnonymous(r.Context(), "client_canceled")
 	case err != nil:
 		audit.SetAnonymous(r.Context(), "authentication_error")
 	case p == nil:
@@ -1001,6 +1003,35 @@ func writeJSONAs(w http.ResponseWriter, contentType string, status int, v any) {
 func timedOut(r *http.Request, err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded)
 }
+
+// statusClientClosed is nginx's 499: the client closed the request before an
+// answer. It is a 4xx so the audit event is not an error outcome and it is
+// never read as a server outage; the client that caused it never sees it.
+const statusClientClosed = 499
+
+// clientCanceled reports that the client aborted the request (context
+// canceled), not that a deadline passed or a dependency failed.
+func clientCanceled(r *http.Request, err error) bool {
+	return !timedOut(r, err) && (errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled))
+}
+
+// abortWriter sits under http.TimeoutHandler, which answers a request whose
+// client already canceled with a bare 503, the status of an outage (#310).
+// The 503 becomes 499 when the request's own context was canceled; a deadline
+// (a real timeout) and every other status pass through.
+type abortWriter struct {
+	http.ResponseWriter
+	r *http.Request
+}
+
+func (a *abortWriter) WriteHeader(code int) {
+	if code == http.StatusServiceUnavailable && errors.Is(a.r.Context().Err(), context.Canceled) {
+		code = statusClientClosed
+	}
+	a.ResponseWriter.WriteHeader(code)
+}
+
+func (a *abortWriter) Unwrap() http.ResponseWriter { return a.ResponseWriter }
 
 // writeTimedOut answers with the same 503 http.TimeoutHandler sends, so a
 // request whose deadline passed inside the handler gets one answer whichever

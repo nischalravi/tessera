@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,6 +35,30 @@ func TestMatchRedirect(t *testing.T) {
 	} {
 		if got := matchRedirect(tc.pattern, tc.uri); got != tc.want {
 			t.Errorf("matchRedirect(%q, %q) = %v, want %v", tc.pattern, tc.uri, got, tc.want)
+		}
+	}
+}
+
+// TestDefaultUsersCanActivateTheirRoles (#310): every role floor needs more
+// than a password (viewer and operator: multi-factor; admin roles:
+// phishing-resistant), so each demo user must own an authenticator that
+// activates each role they hold, or that role can never be tested end to end.
+func TestDefaultUsersCanActivateTheirRoles(t *testing.T) {
+	users, err := DefaultUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	phr := func(m Method) bool { return m == MethodPasskey || m == MethodHardwareKey }
+	mfa := func(m Method) bool { return m != MethodPassword }
+	for _, u := range users {
+		for _, role := range u.Roles {
+			ok, need := mfa, "multi-factor"
+			if role == "tenant_admin" || role == "policy_admin" {
+				ok, need = phr, "phishing-resistant"
+			}
+			if !slices.ContainsFunc(u.Authenticators, ok) {
+				t.Errorf("%s holds %s but has no %s authenticator (%v)", u.Email, role, need, u.Authenticators)
+			}
 		}
 	}
 }

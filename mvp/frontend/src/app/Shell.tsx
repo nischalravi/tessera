@@ -10,7 +10,8 @@ import { useInbox } from "../features/inbox/model";
 import { useOpenNotification } from "../features/notifications/open";
 import { useNotifications } from "../features/notifications/model";
 import { MOD, usePalette } from "./CommandPalette";
-import { RAIL, isActive } from "./nav";
+import { isActive, visibleRail } from "./nav";
+import { inactiveRoleHint } from "./roles";
 import { PERSONAS, usePersona } from "./persona";
 import { ResultList, rankEntries, useEntityEntries } from "./search";
 import { store } from "./storage";
@@ -37,6 +38,7 @@ function useMedia(query: string) {
 // ------------------------------------------------------------------ rail
 function Rail({ counts, onNavigate, id }: { counts: Record<string, number | null>; onNavigate: () => void; id: string }) {
   const { pathname } = useLocation();
+  const { can } = useSession();
   const ref = useRef<HTMLElement>(null);
   // arrow keys move between rail links; Home/End jump to the ends
   const onKey = (e: KeyboardEvent) => {
@@ -50,7 +52,7 @@ function Rail({ counts, onNavigate, id }: { counts: Record<string, number | null
   };
   return (
     <nav className="rail" id={id} aria-label="Main navigation" ref={ref} onKeyDown={onKey}>
-      {RAIL.map((g, gi) => (
+      {visibleRail(can).map((g, gi) => (
         <div key={gi} role="group" aria-labelledby={g.label ? `rg-${gi}` : undefined}>
           {g.label && <div className="rail-group" id={`rg-${gi}`}>{g.label}</div>}
           {g.items.map((it) => {
@@ -295,7 +297,7 @@ function UserMenu() {
         { label: <span className="faint small">{session.tenant.name} · {assurance} · signed in {relTime(a.auth_time.replace("Z", ""))}</span> },
         { label: <span className="faint small">Roles: {session.active_roles.join(", ") || "none active"}</span> },
         ...session.inactive_roles.map((r) => ({
-          label: <span className="small" style={{ color: "var(--warning, #9a6700)" }}>{r.role} is inactive: sign in with a passkey to use it</span>,
+          label: <span className="small" style={{ color: "var(--warning, #9a6700)" }}>{inactiveRoleHint(r.role, r.reason)}</span>,
           onSelect: () => { reauthenticate(); },
         })),
         ...(session.inactive_roles.length ? [{ label: "Re-authenticate", onSelect: () => { reauthenticate(); } }] : []),

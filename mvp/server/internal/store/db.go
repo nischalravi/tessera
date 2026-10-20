@@ -138,6 +138,10 @@ var tables = []string{
 	"sod_functions", "sod_rulesets", "sod_risks", "sod_risk_functions", "sod_versions",
 	// SoD mitigating controls (schema/0301_sod_controls.sql)
 	"sod_controls", "sod_mitigations", "sod_risk_options", "sod_escalations",
+	// SoD ruleset remediation defaults (schema/0381_sod_remediation.sql)
+	"sod_ruleset_remediation",
+	// tenant request settings (schema/0380_request_settings.sql)
+	"request_settings",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)

@@ -176,11 +176,17 @@ func (e *oauthEnv) approveVia(l authtest.Login, userCode string) *httptest.Respo
 // signInCLI runs the device flow for a user of slug.
 func (e *oauthEnv) signInCLI(slug, email, scope string, roles []auth.Role, ctx ...authtest.Ctx) cliTokens {
 	e.t.Helper()
+	return e.signInCLIUser(slug, authtest.User{Email: email, Roles: roles}, scope, ctx...)
+}
+
+// signInCLIUser is signInCLI for a user that may be linked to an identity.
+func (e *oauthEnv) signInCLIUser(slug string, u authtest.User, scope string, ctx ...authtest.Ctx) cliTokens {
+	e.t.Helper()
 	c := authtest.Phr
 	if len(ctx) > 0 {
 		c = ctx[0]
 	}
-	l := signIn(e.t, e.f.DB, e.tenants[slug], authtest.User{Email: email, Roles: roles}, c, storetest.Now)
+	l := signIn(e.t, e.f.DB, e.tenants[slug], u, c, storetest.Now)
 	device, user := e.startDevice(slug, scope)
 	if rec := e.approveVia(l, user); rec.Code != 200 {
 		e.t.Fatalf("approve: %d %s", rec.Code, rec.Body)

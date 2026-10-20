@@ -5,13 +5,13 @@
  * as a YAML file. Writes need a policy admin and a fresh sign-in (the client handles the prompt).
  */
 import { FormEvent, useEffect, useState } from "react";
-import { Archive, Download, FileUp, History, Pencil, Plus, Power, Trash2 } from "lucide-react";
+import { Archive, Download, FileUp, History, ListChecks, Pencil, Plus, Power, Trash2 } from "lucide-react";
 import {
-  IdentityRow, SodFunction, SodFunctionList, SodImportResult, SodPriority, SodRisk, SodRiskList, SodRuleset, SodRulesetList, SodSelector,
+  IdentityRow, SodFunction, SodFunctionList, SodImportResult, SodPriority, SodRemediation, SodRisk, SodRiskList, SodRuleset, SodRulesetList, SodSelector,
   fmtDate, relTime, sod, sodPaths, useApi,
 } from "../../api";
 import { Badge, Button, Callout, CommandBar, DataTable, Drawer, EmptyState, Loading, SidePanel, Sev, Tabs, useSelected, useToast } from "../../components";
-import { ATTRIBUTES, PRIORITIES, cleanSelector, describeSelector, describeSubjects, riskError, selectorError } from "./sodModel";
+import { ATTRIBUTES, PRIORITIES, REMEDIATION, cleanSelector, describeOptions, describeSelector, describeSubjects, escalationLabel, optionsError, optionsToSend, riskError, selectorError, sourceLabel } from "./sodModel";
 
 const I = 16;
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
@@ -292,6 +292,8 @@ function RiskPanel({ r: summary, canManage, onClose, onChanged }: { r: SodRisk; 
               <dt>Business process</dt><dd>{r.business_process || <span className="faint">None</span>}</dd>
               <dt>Ruleset</dt><dd>{r.ruleset.name}</dd>
               <dt>Owner</dt><dd>{r.owner?.name ?? <span className="faint">None</span>}</dd>
+              <dt>Violation options</dt><dd>{describeOptions(r.remediation)} <span className="xs faint">({sourceLabel(r.remediation_source)})</span></dd>
+              <dt>Escalates to</dt><dd>{escalationLabel(r.escalate_to)}</dd>
               <dt>Checked for</dt><dd>{describeSubjects(r.subjects)}</dd>
               <dt>Violations</dt><dd>{r.violations ?? 0}</dd>
               <dt>Updated</dt><dd title={fmtDate(r.updated_at)}>{relTime(r.updated_at)}{r.updated_by && ` by ${r.updated_by.display_name}`}</dd>
@@ -319,15 +321,18 @@ function RiskEditor({ risk, rulesetId, onClose, onSaved }: { risk?: SodRisk; rul
   const [fnIds, setFnIds] = useState<string[]>(risk?.functions.map((f) => f.id) ?? []);
   const [types, setTypes] = useState<string[]>(risk?.subjects.identity_types ?? []);
   const [note, setNote] = useState("");
+  // the options a violation of this risk offers: its own list, or (not custom) its ruleset's
+  const [customOpts, setCustomOpts] = useState(risk?.remediation_source === "risk");
+  const [opts, setOpts] = useState<SodRemediation[]>(risk?.remediation ?? REMEDIATION.map((r) => r.id));
   const { busy, err, run } = useSubmit(onClose);
-  const problem = riskError({ name, ruleset_id: ruleset, function_ids: fnIds });
+  const problem = riskError({ name, ruleset_id: ruleset, function_ids: fnIds }) ?? optionsError(customOpts, opts);
   const toggle = (id: string) => setFnIds((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
   const save = (e: FormEvent) => {
     e.preventDefault();
     if (problem || busy) return;
     void run(async () => {
       const subjects = { ...(risk?.subjects ?? {}), identity_types: types.length ? (types as never) : undefined };
-      const spec = { name: name.trim(), description, priority, business_process: process, owner_id: owner, ruleset_id: ruleset, function_ids: fnIds, subjects, note };
+      const spec = { name: name.trim(), description, priority, business_process: process, owner_id: owner, ruleset_id: ruleset, function_ids: fnIds, subjects, remediation: optionsToSend(customOpts, opts), note };
       const saved = risk ? await sod.updateRisk(risk.id, risk.version, spec) : await sod.createRisk(spec);
       toast(`Risk “${saved.name}” saved as version ${saved.version}`);
       onSaved(saved);
@@ -370,8 +375,71 @@ function RiskEditor({ risk, rulesetId, onClose, onSaved }: { risk?: SodRisk; rul
             <label key={t} className="row tight small"><input type="checkbox" checked={types.includes(t)} onChange={() => setTypes((xs) => (xs.includes(t) ? xs.filter((x) => x !== t) : [...xs, t]))} />{t}</label>
           ))}
         </fieldset>
+        <OptionsFields custom={customOpts} onCustom={setCustomOpts} chosen={opts} onChosen={setOpts} inheritLabel="Use the ruleset's options (every option if it sets none)" legend="What a violation of this risk offers" />
         <label className="field">Why this change (kept with the version)<input className="input" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} /></label>
         {problem && name.trim() !== "" && <p className="small" role="status">{problem}</p>}
+        {err && <Callout tone="bad">{err}</Callout>}
+      </form>
+    </Drawer>
+  );
+}
+
+/** Pick the remediation options a violation offers, or inherit them. The server refuses any option that is not offered. */
+function OptionsFields({ custom, onCustom, chosen, onChosen, inheritLabel, legend }: {
+  custom: boolean; onCustom: (v: boolean) => void; chosen: SodRemediation[]; onChosen: (v: SodRemediation[]) => void; inheritLabel: string; legend: string;
+}) {
+  const toggle = (id: SodRemediation) => onChosen(chosen.includes(id) ? chosen.filter((x) => x !== id) : [...chosen, id]);
+  return (
+    <fieldset className="stack-sm" style={{ border: 0, padding: 0, margin: 0 }}>
+      <legend className="small muted">{legend}</legend>
+      <label className="row small"><input type="radio" name="sod-opts" checked={!custom} onChange={() => onCustom(false)} /> {inheritLabel}</label>
+      <label className="row small"><input type="radio" name="sod-opts" checked={custom} onChange={() => onCustom(true)} /> Choose the options</label>
+      {custom && (
+        <div className="stack-sm" style={{ paddingLeft: 22 }}>
+          {REMEDIATION.map((r) => (
+            <label key={r.id} className="row small" style={{ alignItems: "flex-start", flexWrap: "nowrap" }}>
+              <input type="checkbox" checked={chosen.includes(r.id)} onChange={() => toggle(r.id)} />
+              <span><b>{r.label}</b><span className="faint"> · {r.hint}</span></span>
+            </label>
+          ))}
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
+/** What a ruleset's risks offer on a violation, and who an escalation goes to. */
+function RemediationDrawer({ ruleset, onClose, onSaved }: { ruleset: SodRuleset; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast();
+  const people = usePeople();
+  const [custom, setCustom] = useState(ruleset.remediation.length < REMEDIATION.length);
+  const [chosen, setChosen] = useState<SodRemediation[]>(ruleset.remediation);
+  const [approver, setApprover] = useState<number | null>(ruleset.escalate_to?.id ?? null);
+  const { busy, err, run } = useSubmit(onClose);
+  const problem = optionsError(custom, chosen);
+  const save = (e: FormEvent) => {
+    e.preventDefault();
+    if (problem || busy) return;
+    void run(async () => {
+      await sod.setRulesetRemediation(ruleset.id, optionsToSend(custom, chosen), approver);
+      toast(`Violation options of “${ruleset.name}” saved`);
+      onSaved();
+    });
+  };
+  return (
+    <Drawer title={`Violation options of ${ruleset.name}`} onClose={onClose}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" form="sod-rem-form" variant="primary" disabled={!!problem || busy}>Save options</Button></>}>
+      <form id="sod-rem-form" className="stack" onSubmit={save}>
+        <p className="small muted">These apply to every risk of the ruleset that does not set options of its own. The server refuses an option a risk does not offer.</p>
+        <OptionsFields custom={custom} onCustom={setCustom} chosen={chosen} onChosen={setChosen} inheritLabel="Offer every option" legend="What a violation offers" />
+        <label className="field">Escalation approver
+          <select className="input" value={approver ?? ""} onChange={(e) => setApprover(e.target.value ? Number(e.target.value) : null)}>
+            <option value="">The owner of the risk</option>
+            {people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <span className="hint">An escalation creates an inbox item for this person (or, without one, the risk owner).</span>
+        </label>
+        {problem && <p className="small" role="status">{problem}</p>}
         {err && <Callout tone="bad">{err}</Callout>}
       </form>
     </Drawer>
@@ -449,7 +517,7 @@ function RulesetPanel({ r: summary, canManage, onClose, onChanged }: { r: SodRul
   const r = detail ?? summary;
   const toast = useToast();
   const [tab, setTab] = useState<"overview" | "yaml" | "history">("overview");
-  const [drawer, setDrawer] = useState<null | "edit" | "retire" | "risk">(null);
+  const [drawer, setDrawer] = useState<null | "edit" | "retire" | "risk" | "options">(null);
   const [yaml, setYaml] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setTab("overview"); setYaml(null); }, [summary.id]);
@@ -487,6 +555,7 @@ function RulesetPanel({ r: summary, canManage, onClose, onChanged }: { r: SodRul
           manage && { label: r.enabled ? "Disable" : "Enable", icon: <Power size={I} />, onClick: toggle },
           manage && { label: "Edit", icon: <Pencil size={I} />, onClick: () => setDrawer("edit") },
           manage && { label: "Add risk", icon: <Plus size={I} />, onClick: () => setDrawer("risk") },
+          manage && { label: "Violation options", icon: <ListChecks size={I} />, onClick: () => setDrawer("options") },
           manage && { label: "Retire", icon: <Archive size={I} />, danger: true, onClick: () => setDrawer("retire") },
         ]} />}
         tabs={<Tabs label="Ruleset details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Risks" }, { id: "yaml", label: "YAML" }, { id: "history", label: <><History size={13} aria-hidden /> History</> }]} />}>
@@ -495,6 +564,10 @@ function RulesetPanel({ r: summary, canManage, onClose, onChanged }: { r: SodRul
           <div className="stack">
             <p className="muted">{r.description || <span className="faint">No description</span>}</p>
             {!r.enabled && r.status === "active" && <Callout tone="warn">Disabled: none of its risks is checked and none of its violations is reported.</Callout>}
+            <dl className="kv">
+              <dt>Violation options</dt><dd>{describeOptions(r.remediation)}</dd>
+              <dt>Escalates to</dt><dd>{r.escalate_to?.name ?? <span className="faint">The owner of each risk</span>}</dd>
+            </dl>
             {mine.length === 0 ? <p className="small muted">No active risks.</p> : (
               <ul className="stack-sm">{mine.map((x) => <li key={x.id} className="row tight"><Sev s={x.priority} /><span>{x.name}</span><span className="xs faint">{plural(x.violations ?? 0, "violation")}</span></li>)}</ul>
             )}
@@ -511,6 +584,7 @@ function RulesetPanel({ r: summary, canManage, onClose, onChanged }: { r: SodRul
       </SidePanel>
       {drawer === "edit" && <RulesetEditor ruleset={r} onClose={() => setDrawer(null)} onSaved={done} />}
       {drawer === "risk" && <RiskEditor rulesetId={r.id} onClose={() => setDrawer(null)} onSaved={done} />}
+      {drawer === "options" && <RemediationDrawer ruleset={r} onClose={() => setDrawer(null)} onSaved={done} />}
       {drawer === "retire" && <RetireDrawer what="ruleset" name={r.name} blocked={r.risks ? "It still has active risks. Retire or move them first." : undefined}
         onRetire={async (why) => { await sod.retireRuleset(r.id, why); done(); }} onClose={() => setDrawer(null)} />}
     </>
