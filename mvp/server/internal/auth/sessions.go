@@ -58,24 +58,29 @@ const (
 	// RevokedIdentityDisabled: the governed identity the user is linked to
 	// was disabled (containment.Disable, #316).
 	RevokedIdentityDisabled = "identity_disabled"
+	// RevokedIdentityTerminated: the linked identity was terminated (a
+	// leaver, #331). store.TerminateIdentity writes it.
+	RevokedIdentityTerminated = store.RevokedIdentityTerminated
 )
 
-// IdentityDisabled reports whether u is linked to a governed identity that
-// Tessera has disabled. Such a user may not sign in or use a session until
-// the identity is enabled again (#316); every sign-in path and the session
-// middleware check it.
-func IdentityDisabled(tx *store.TenantTx, u *store.PlatformUser) (bool, error) {
+// IdentityInactive reports whether u is linked to a governed identity that is
+// not active: disabled (containment.Disable, #316), terminated (a leaver),
+// merged into another identity, or any other status. Such a user may not
+// sign in or use a session; every sign-in path and the session middleware
+// check it. It fails closed (#331): only status "active" passes, and a link
+// to an identity that cannot be found blocks too.
+func IdentityInactive(tx *store.TenantTx, u *store.PlatformUser) (bool, error) {
 	if u == nil || u.IdentityID == nil {
 		return false, nil
 	}
 	ident, err := tx.Identity(*u.IdentityID)
 	if errors.Is(err, store.ErrNotFound) {
-		return false, nil
+		return true, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return ident.Status == "disabled", nil
+	return ident.Status != "active", nil
 }
 
 // secretBytes is the size of session secrets and CSRF secrets.
@@ -173,10 +178,10 @@ func CreateSession(tx *store.TenantTx, in SessionInput) (Issued, error) {
 	// Re-read the user in tx: a sign-in may have linked it to an identity
 	// since the caller loaded it.
 	if cur, err := tx.PlatformUser(in.User.ID); err == nil {
-		if off, err := IdentityDisabled(tx, cur); err != nil {
+		if off, err := IdentityInactive(tx, cur); err != nil {
 			return Issued{}, err
 		} else if off {
-			return Issued{}, fmt.Errorf("auth: user %s is linked to a disabled identity", in.User.ID)
+			return Issued{}, fmt.Errorf("auth: user %s is linked to an identity that is not active", in.User.ID)
 		}
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return Issued{}, err

@@ -178,6 +178,7 @@ func (s *Server) disableIdentity(_ http.ResponseWriter, r *http.Request, p *para
 	reason := strings.TrimSpace(b.Reason)
 	ctx := r.Context()
 	var job *containment.Job
+	refusal := ""
 	err := p.scope.Read(ctx, func(c *store.TenantTx) error {
 		ident, err := c.Identity(id)
 		if errors.Is(err, store.ErrNotFound) {
@@ -185,6 +186,15 @@ func (s *Server) disableIdentity(_ http.ResponseWriter, r *http.Request, p *para
 		}
 		if err != nil {
 			return err
+		}
+		if pr := principal(r); pr != nil && pr.UserID != nil {
+			me, err := c.PlatformUser(*pr.UserID)
+			if err != nil {
+				return err
+			}
+			if refusal = containment.DisableRefusal(id, me); refusal != "" {
+				return nil
+			}
 		}
 		if ident.Status != "active" {
 			return disableRefused(ident.Status)
@@ -198,6 +208,17 @@ func (s *Server) disableIdentity(_ http.ResponseWriter, r *http.Request, p *para
 	})
 	if err != nil {
 		return nil, err
+	}
+	if refusal != "" {
+		// nothing changed; the refusal itself is evidence of the control (#335)
+		if err := p.scope.Write(ctx, func(c *store.TenantTx) error {
+			return c.Audit(s.clock(), actor(r), "identity.disable.refused", ojson.Object{{Key: "identity_id", Value: id},
+				{Key: "reason", Value: refusal}})
+		}); err != nil {
+			return nil, err
+		}
+		return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: refusal},
+			{Key: "detail", Value: "You cannot disable the identity linked to your own Tessera user; another admin must do it."}}}, nil
 	}
 	rep := s.runContainment(ctx, job)
 	// The run is recorded first, in its own transaction, so a provider call that
