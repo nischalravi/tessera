@@ -757,6 +757,9 @@ func (e Env) UpdateGroup(id store.GroupID, in UpdateGroupInput) (*store.NativeGr
 	if g.ManagedBy == store.ManagedByGrouperMirror {
 		return nil, conflict("folder_mirrored", "group %q is mirrored from Grouper and is read-only here", g.Name)
 	}
+	if g.ManagedBy == store.ManagedByLoader && in.Extension != nil && *in.Extension != g.Extension {
+		return nil, loaderManaged(g) // the loader finds its groups by name
+	}
 	old := g.Name
 	before := *g
 	if in.Description != nil {
@@ -881,6 +884,9 @@ func (e Env) MoveGroup(id store.GroupID, folder store.FolderID) (*store.NativeGr
 	}
 	if g.FolderID == dest.ID {
 		return g, nil
+	}
+	if g.ManagedBy == store.ManagedByLoader {
+		return nil, loaderManaged(g)
 	}
 	old := g.Name
 	if err := e.placeGroup(g, dest); err != nil {

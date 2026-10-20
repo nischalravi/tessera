@@ -31,6 +31,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
@@ -217,6 +218,10 @@ type Config struct {
 	// notifier. Its veto rules are applied to every membership add. Nil: the
 	// defaults (no webhooks, email rules log).
 	GroupsRules *rules.Runtime
+	// LoaderDataDir is TESSERA_LOADER_DATA_DIR: the directory of the SQL and CSV
+	// file sources of group loaders, with a subdirectory <tenant id>/ per tenant
+	// (a loader reads only its own tenant's). Empty: file sources are off.
+	LoaderDataDir string
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -281,6 +286,8 @@ type Server struct {
 	admin *admin.Service
 	// queue is the durable job queue (issue #300); never nil.
 	queue *queue.Queue
+	// loaders runs the group loaders (issue #53); never nil.
+	loaders *loaders.Service
 }
 
 // New builds a server.
@@ -403,6 +410,8 @@ func New(cfg Config) *Server {
 	}
 	s.guestLife = guestlife.New(s.guests)
 	s.guestLife.Secrets, s.guestLife.BaseURL, s.guestLife.TenantName = cfg.Secrets, cfg.PublicURL, s.tenantName
+	s.loaders = &loaders.Service{DB: cfg.Store, Engine: cfg.GroupsEngine, Clock: func() time.Time { return s.clock() },
+		Sealer: cfg.Sealer, HTTP: cfg.OutboundHTTP, DataDir: cfg.LoaderDataDir, Log: cfg.Logger}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -472,6 +481,7 @@ func New(cfg Config) *Server {
 	s.registerReviewPopulationRoutes()
 	s.registerHelpdeskRoutes()
 	s.registerGroupsPolicyRoutes()
+	s.registerGroupsLoaderRoutes() // before /api/groups/{id}, which would also match "loaders"
 	s.registerGroupsFolderRoutes()
 	s.registerGroupsPrivilegeRoutes()
 	s.registerGroupsMemberRoutes()

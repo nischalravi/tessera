@@ -239,6 +239,8 @@ var tables = []string{
 	// group attestation, deprovisioning, Inbox and reports (schema/0292_group_attestation.sql)
 	"grp_inbox_tasks", "grp_attest_settings", "grp_attest_campaigns", "grp_attest_items", "grp_deprov_settings",
 	"grp_deprov_folders", "grp_deprovisioned", "grp_deprov_items", "grp_reports", "grp_report_runs",
+	// group loaders, their runs and unresolved subjects (schema/0377_group_loaders.sql)
+	"grp_loaders", "grp_loader_runs", "grp_loader_unresolved",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

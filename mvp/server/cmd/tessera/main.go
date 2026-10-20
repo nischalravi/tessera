@@ -92,6 +92,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/attest"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/deprov"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/reports"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
@@ -511,7 +512,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	groupsRules := &rules.Runtime{Engine: groupsEngine, HTTP: outbound, Sealer: sealer, AllowHTTP: cfg.OutboundAllowLoopback, Log: logger}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		Secrets: secrets, Credential: authority,
-		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, APIAudience: cfg.APIAudience,
+		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, LoaderDataDir: cfg.LoaderDataDir, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
@@ -677,6 +678,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(rotationDone)
 		rotationEngine.Loop(ctx, rotationInterval)
 	}()
+	// group loaders: the scheduler of full and incremental runs (Admin > Jobs)
+	loadersDone := make(chan struct{})
+	loadersRunner := &loaders.Runner{Svc: &loaders.Service{DB: st, Engine: groupsEngine, Clock: clock, Sealer: sealer, HTTP: outbound,
+		DataDir: cfg.LoaderDataDir, Log: logger}}
+	go func() {
+		defer close(loadersDone)
+		loadersRunner.Loop(ctx)
+	}()
 	errc := make(chan error, 2)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -710,6 +719,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-rotationDone
 		<-rulesDone
 		<-govDone
+		<-loadersDone
 		return err
 	case <-ctx.Done():
 	}
@@ -740,6 +750,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-rotationDone
 	<-rulesDone
 	<-govDone
+	<-loadersDone
 	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
 		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			return serveErr

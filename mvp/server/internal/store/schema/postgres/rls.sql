@@ -1808,3 +1808,24 @@ DROP POLICY IF EXISTS tenant_isolation ON grp_idempotency;
 CREATE POLICY tenant_isolation ON grp_idempotency
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_loaders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_loaders FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_loaders;
+CREATE POLICY tenant_isolation ON grp_loaders
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_loader_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_loader_runs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_loader_runs;
+CREATE POLICY tenant_isolation ON grp_loader_runs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_loader_unresolved ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_loader_unresolved FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_loader_unresolved;
+CREATE POLICY tenant_isolation ON grp_loader_unresolved
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

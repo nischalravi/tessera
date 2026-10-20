@@ -74,8 +74,9 @@ func (e Env) engineErr(err error) error {
 	return x
 }
 
-// writableGroup returns a group that can take membership changes: not deleted,
-// not in or of a mirrored folder.
+// writableGroup returns a group that can take membership changes by hand: not
+// deleted, not in or of a mirrored folder and not filled by a loader (its
+// loader is its only writer; see LoaderSync).
 func (e Env) writableGroup(id store.GroupID) (*store.NativeGroup, error) {
 	g, _, err := e.liveGroup(id)
 	if err != nil {
@@ -83,6 +84,9 @@ func (e Env) writableGroup(id store.GroupID) (*store.NativeGroup, error) {
 	}
 	if g.ManagedBy == store.ManagedByGrouperMirror {
 		return nil, conflict("folder_mirrored", "group %q is mirrored from Grouper and is read-only here", g.Name)
+	}
+	if g.ManagedBy == store.ManagedByLoader {
+		return nil, loaderManaged(g)
 	}
 	return g, nil
 }
