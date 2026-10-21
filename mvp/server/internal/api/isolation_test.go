@@ -421,6 +421,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/orgs/{org_id}/") || rt.Pattern == "/api/review-types/{review_type}" {
 			continue // TestSettingsAPI_CrossTenant (derived ids and type names, not fixture ids)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/oauth-apps/") {
+			continue // TestOAuthAppsAPI (UUIDs, not fixture ids: tenant B gets 404 on A's app and grants)
+		}
 		if _, ok := routeParamCases[rt.Method+" "+rt.Pattern]; !ok {
 			t.Errorf("route %s %s has path parameters but no cross-tenant case", rt.Method, rt.Pattern)
 		}
@@ -576,6 +579,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if path == "/api/request-drafts/{draft_id}" {
 			continue // TestRequestDraftsAPI (a UUID, private to its user)
+		}
+		if path == "/api/oauth-apps/{app_id}" {
+			continue // TestOAuthAppsAPI (a UUID, not a fixture id)
 		}
 		if path == "/api/questionnaires/{id}" {
 			continue // TestQuestionnairesAPI_CrossTenant (a UUID, not a fixture id)

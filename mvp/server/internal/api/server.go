@@ -49,6 +49,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/mcpauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
+	"github.com/nischalravi/tessera/mvp/server/internal/oauthapps"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -301,6 +302,8 @@ type Server struct {
 	rotation  *rotation.Service
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
+	// oauthapps is the third-party OAuth app inventory (issue #107); never nil.
+	oauthapps *oauthapps.Service
 	// mcp is the MCP authorization server (issue #115); never nil.
 	mcp *mcpauth.Service
 	// ssf is the Shared Signals receiver (issue #114); never nil.
@@ -404,6 +407,7 @@ func New(cfg Config) *Server {
 	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal, archive: cfg.Archive,
 		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
+	s.oauthapps = &oauthapps.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
 	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
 		PolicyVersion: s.policyVersion}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
@@ -475,6 +479,7 @@ func New(cfg Config) *Server {
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerArchiveRoutes()
+	s.registerOAuthAppsRoutes()
 	s.registerSiemRoutes()
 	s.registerCertificateRoutes()
 	s.registerBrandingRoutes()

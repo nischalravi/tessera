@@ -65,6 +65,7 @@ const AgentAuthorization = named(() => import("../features/agents/AgentAuthoriza
 const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege"), "LeastPrivilege");
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
+const OAuthApps = named(() => import("../features/security/OAuthApps"), "OAuthApps");
 const Alerts = named(() => import("../features/alerts/Alerts"), "Alerts");
 const MfaPosture = named(() => import("../features/insights/MfaPosture"), "MfaPosture");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
@@ -243,6 +244,7 @@ export default function App() {
 
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
                     <Route path="/alerts" element={<Alerts />} />
+                    <Route path="/security/oauth-apps" element={<OAuthApps />} />
                     <Route path="/governance/policies" element={<Policies />} />
                     <Route path="/governance/mitigations" element={<Mitigations />} />
                     <Route path="/governance/attributes" element={<AttributePolicies />} />

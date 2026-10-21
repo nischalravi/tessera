@@ -38,13 +38,24 @@ func beatWorker(t *testing.T, f *storetest.Fixture, tenant tenancy.ID, id string
 	}
 }
 
-// TestQueueWorkersAPI (issue #302): Admin -> Jobs lists the workers of the
-// tenant with their last heartbeat; one that has not beaten for a while is
-// stale; another tenant's workers are not visible; reading needs jobs.read.
+// TestQueueWorkersAPI (issue #302, #403): Admin -> Jobs lists the workers that serve the
+// kinds the tenant uses, with an opaque label and their last heartbeat; one that has not
+// beaten for a while is stale; no host name, PID, build or raw worker id reaches the
+// tenant; a worker serving none of its kinds and another tenant's workers are not visible;
+// reading needs jobs.read.
 func TestQueueWorkersAPI(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler() // the server's clock is storetest.Now
+	admin := signIn(t, f.DB, f.A.ID, testAdmin, authtest.Phr, storetest.Now)
+	// tenant A uses connector_sync only (one queued job)
+	if rec := corrDo(h, admin, "POST", "/api/connectors/sync?async=true", ""); rec.Code != http.StatusOK {
+		t.Fatalf("queue a sync: %d %s", rec.Code, rec.Body)
+	}
 	beatWorker(t, f, f.A.ID, "node-1-100-aaaa", storetest.Now.Add(-5*time.Second))
+	other := &store.QueueWorker{WorkerID: "node-9-900-zzzz", Mode: store.WorkerModeWorker, Kinds: "scim_export", Concurrency: 1, StartedAt: storetest.Now}
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error { return c.BeatQueueWorker(other, storetest.Now) }); err != nil {
+		t.Fatal(err)
+	}
 	beatWorker(t, f, f.A.ID, "node-2-200-bbbb", storetest.Now.Add(-10*time.Minute))
 	beatWorker(t, f, f.B.ID, "node-3-300-cccc", storetest.Now)
 	auditor := signIn(t, f.DB, f.A.ID, authtest.User{Email: "au@a.example", Roles: []auth.Role{auth.RoleAuditor}}, authtest.Phr, storetest.Now)
@@ -59,16 +70,32 @@ func TestQueueWorkersAPI(t *testing.T) {
 	for _, w := range ws {
 		byID[w.WorkerID] = w
 	}
-	fresh, old := byID["node-1-100-aaaa"], byID["node-2-200-bbbb"]
+	fresh, old := byID[workerLabel(f.A.ID, "node-1-100-aaaa")], byID[workerLabel(f.A.ID, "node-2-200-bbbb")]
 	if fresh.Status != "healthy" || fresh.LagSeconds != 5 || fresh.Concurrency != 4 || fresh.Running != 1 || fresh.Mode != "worker" ||
-		!slices.Equal(fresh.Kinds, []string{"connector_sync", "provision_push"}) || fresh.Hostname != "node-1" {
+		!slices.Equal(fresh.Kinds, []string{"connector_sync"}) {
 		t.Errorf("fresh worker = %+v", fresh)
+	}
+	for _, leak := range []string{"node-1", "node-2", "node-9", "-100-", "hostname", `"pid"`, "version", "provision_push", "scim_export"} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Errorf("the tenant view of the workers has %q: %s", leak, rec.Body)
+		}
+	}
+	if workerLabel(f.A.ID, "node-1-100-aaaa") == workerLabel(f.B.ID, "node-1-100-aaaa") {
+		t.Error("the same worker has the same label for two tenants")
+	}
+	if len(ws) != 2 {
+		t.Errorf("workers = %d, want the two that serve connector_sync", len(ws))
 	}
 	if old.Status != "stale" || old.LagSeconds != 600 {
 		t.Errorf("silent worker = %+v", old)
 	}
-	if strings.Contains(rec.Body.String(), "node-3-300-cccc") {
+	if strings.Contains(rec.Body.String(), "node-3-300-cccc") || strings.Contains(rec.Body.String(), workerLabel(f.B.ID, "node-3-300-cccc")) {
 		t.Error("another tenant's worker is listed")
+	}
+	// the job's lease owner is the worker's label, never host-pid-random
+	rec = corrDo(h, auditor, "GET", "/api/queue/jobs", "")
+	if strings.Contains(rec.Body.String(), "node-") {
+		t.Errorf("a job lists a raw lease owner: %s", rec.Body)
 	}
 	if rec := corrDo(h, viewer, "GET", "/api/queue/workers", ""); rec.Code != http.StatusForbidden {
 		t.Errorf("viewer: %d", rec.Code)

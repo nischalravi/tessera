@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/correlation"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/merge"
@@ -271,28 +269,6 @@ func (s *Server) accountLinkGate(r *http.Request, c *store.TenantTx, now time.Ti
 	}
 	return nil, statusBody{http.StatusAccepted, ojson.Object{{Key: "status", Value: "pending_second_admin"},
 		{Key: "request", Value: viewAccountLinkRequest(req)}}}, nil
-}
-
-// sameActor reports whether two platform users are the same admin: the same
-// user, or two users linked to the same identity (one person can hold a
-// sign-in user per IdP connection). A missing user is nobody's twin.
-func sameActor(c *store.TenantTx, a, b uuid.UUID) (bool, error) {
-	if a == b {
-		return true, nil
-	}
-	ua, err := c.PlatformUser(a)
-	if errors.Is(err, store.ErrNotFound) {
-		return false, nil
-	} else if err != nil {
-		return false, err
-	}
-	ub, err := c.PlatformUser(b)
-	if errors.Is(err, store.ErrNotFound) {
-		return false, nil
-	} else if err != nil {
-		return false, err
-	}
-	return ua.IdentityID != nil && ub.IdentityID != nil && *ua.IdentityID == *ub.IdentityID, nil
 }
 
 type accountLinkRequestView struct {

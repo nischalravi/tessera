@@ -412,7 +412,9 @@ func (s *Service) PrepareVerify(c *store.TenantTx, caseID string, in VerifyInput
 		if by.ID == uuid.Nil {
 			return nil, forbid(ReasonOperatorRequired, "a call-back is recorded by a signed-in operator")
 		}
-		if hc.RequestedByUserID != nil && *hc.RequestedByUserID == by.ID {
+		if same, err := requesterIs(c, hc, by.ID); err != nil {
+			return nil, err
+		} else if same {
 			return nil, forbid(ReasonRequesterVerify, "the requester cannot record the call-back; a second operator must make it")
 		}
 		if in.NumberSource != "hr" {
@@ -436,7 +438,9 @@ func (s *Service) PrepareVerify(c *store.TenantTx, caseID string, in VerifyInput
 		if by.ID == uuid.Nil {
 			return nil, fail(CodeForbidden, "a manager approval needs a signed-in platform user")
 		}
-		if hc.RequestedByUserID != nil && *hc.RequestedByUserID == by.ID {
+		if same, err := requesterIs(c, hc, by.ID); err != nil {
+			return nil, err
+		} else if same {
 			return nil, forbid(ReasonRequesterVerify, "the requester cannot give the manager approval")
 		}
 		u, err := c.PlatformUser(by.ID)
@@ -510,12 +514,16 @@ func (s *Service) SecondApprove(c *store.TenantTx, caseID string, by store.UserR
 	if err != nil {
 		return err
 	}
+	isRequester, err := requesterIs(c, hc, by.ID)
+	if err != nil {
+		return err
+	}
 	switch {
 	case !in.Privileged:
 		return fail(CodeConflict, "the identity is not privileged; no second approver is needed")
 	case by.ID == uuid.Nil:
 		return fail(CodeForbidden, "a second approval needs a signed-in platform user")
-	case hc.RequestedByUserID != nil && *hc.RequestedByUserID == by.ID:
+	case isRequester:
 		return fail(CodeForbidden, "the second approver cannot be the requester")
 	case isOneOf(&by.ID, in.SubjectUsers...):
 		return forbid(ReasonSelfReset, "the subject cannot approve their own reset")
@@ -604,12 +612,16 @@ func (s *Service) Claim(c *store.TenantTx, caseID string, by store.UserRef, now 
 	}
 	// four eyes (#358): the operator who opened the case does not also run
 	// it, and nobody runs a reset of their own identity
+	isRequester, err := requesterIs(c, hc, by.ID)
+	if err != nil {
+		return nil, err
+	}
 	switch {
 	case by.ID == uuid.Nil:
 		return nil, forbid(ReasonOperatorRequired, "a reset is executed by a signed-in operator")
 	case isOneOf(&by.ID, in.SubjectUsers...):
 		return nil, forbid(ReasonSelfReset, "you cannot execute a reset of your own identity")
-	case hc.RequestedByUserID != nil && *hc.RequestedByUserID == by.ID:
+	case isRequester:
 		return nil, forbid(ReasonRequesterExecute, "the requester cannot execute their own case; a second operator must")
 	}
 	if d := Evaluate(in); !d.Satisfied {
@@ -775,4 +787,13 @@ func (s *Service) detect(c *store.TenantTx, identityID int64, t time.Time, by st
 		}
 	}
 	return out, nil
+}
+
+// requesterIs reports whether the platform user by is the person who opened the
+// case: the same user, or another user linked to the same identity (#402).
+func requesterIs(c *store.TenantTx, hc *store.HelpdeskCase, by uuid.UUID) (bool, error) {
+	if hc.RequestedByUserID == nil || by == uuid.Nil {
+		return false, nil
+	}
+	return c.SameActor(hc.RequestedByUserID.String(), by.String())
 }

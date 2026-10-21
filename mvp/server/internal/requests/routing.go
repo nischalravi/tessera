@@ -280,7 +280,9 @@ func authorize(tx *store.TenantTx, l *store.RequestLine, by Actor, now time.Time
 	if l.Status != store.RequestPending {
 		return nil, refuse(409, "not_pending", "the request is %s", l.Status)
 	}
-	if l.RequestedBy == by.id() {
+	if same, err := tx.SameActor(l.RequestedBy, by.id()); err != nil {
+		return nil, err
+	} else if same {
 		return nil, refuse(403, "self_approval", "you cannot decide a request you made")
 	}
 	if by.IdentityID != nil && *by.IdentityID == l.BeneficiaryID {

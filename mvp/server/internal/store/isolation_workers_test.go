@@ -3,6 +3,7 @@ package store_test
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func workersDump(t *testing.T, f *storetest.Fixture, tn storetest.Tenant) string
 
 func workersCovered() map[string]bool {
 	out := map[string]bool{}
-	for _, k := range []string{"BeatQueueWorker", "QueueWorkers", "DeleteQueueWorker", "PruneQueueWorkers"} {
+	for _, k := range []string{"BeatQueueWorker", "QueueWorkers", "DeleteQueueWorker", "PruneQueueWorkers", "QueueKindsInUse"} {
 		out[k] = true // TestIsolation_QueueWorkers
 	}
 	for _, k := range []string{"EnqueueAgentJob", "AgentJob", "AgentJobs", "HasOpenAgentJob", "ClaimAgentJobs", "CompleteAgentJob",
@@ -49,9 +50,21 @@ func TestIsolation_QueueWorkers(t *testing.T) {
 	now := storetest.Now
 	w := &store.QueueWorker{WorkerID: "host-1-abcd", Mode: store.WorkerModeWorker, Hostname: "host", PID: 1, Kinds: "connector_sync",
 		Concurrency: 4, StartedAt: now}
-	inA(t, f, func(c *store.TenantTx) error { return c.BeatQueueWorker(w, now) })
+	inA(t, f, func(c *store.TenantTx) error {
+		// a kind only A has jobs of: B's operators must not learn of it (issue #403)
+		if _, err := c.EnqueueQueueJob(&store.QueueJob{Kind: "a_only_kind", RunAt: now}, now); err != nil {
+			return err
+		}
+		if ks, err := c.QueueKindsInUse(); err != nil || !slices.Contains(ks, "a_only_kind") {
+			t.Errorf("A's kinds in use = %v, %v", ks, err)
+		}
+		return c.BeatQueueWorker(w, now)
+	})
 	before := workersDump(t, f, f.A)
 	inB(t, f, func(c *store.TenantTx) error {
+		if ks, err := c.QueueKindsInUse(); err != nil || slices.Contains(ks, "a_only_kind") {
+			t.Errorf("B's kinds in use = %v, %v", ks, err)
+		}
 		if ws, err := c.QueueWorkers(); err != nil || len(ws) != 0 {
 			t.Errorf("QueueWorkers = %v, %v", ws, err)
 		}

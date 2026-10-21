@@ -133,6 +133,10 @@ func TestIsolation_AuthRows(t *testing.T) {
 		if err != nil || len(users) != 1 || users[0].ID != b.user.ID {
 			t.Errorf("PlatformUsers in B: %v %v", users, err)
 		}
+		// another tenant's user is no one in B: never the same actor as B's user (#402)
+		if same, err := c.SameActor(a.user.ID.String(), b.user.ID.String()); err != nil || same {
+			t.Errorf("SameActor(A's user, B's user) in B = %v, %v", same, err)
+		}
 		if n, err := c.CountIdPConnectionsByProfile(store.ProfileDevMock); err != nil || n != 1 {
 			t.Errorf("CountIdPConnectionsByProfile in B = %d %v, want 1", n, err)
 		}
@@ -405,7 +409,7 @@ func authCovered() map[string]bool {
 	for k := range authMutations {
 		out[k] = true
 	}
-	for _, k := range []string{"IdPConnections", "PlatformUsers", "CountIdPConnectionsByProfile", "IdPConnection",
+	for _, k := range []string{"SameActor", "IdPConnections", "PlatformUsers", "CountIdPConnectionsByProfile", "IdPConnection",
 		"PlatformUser", "AuthnContext", "Session", "LoginTransaction", "ExternalLoginBySubject", "SessionsForUser",
 		"RoleAssignments", "ExternalLoginsForUser", "RevokeUserSessions", "InsertIdPConnection", "InsertPlatformUser",
 		"InsertExternalLogin", "InsertRoleAssignment", "InsertAuthnContext", "InsertSession", "InsertLoginTransaction",

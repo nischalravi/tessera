@@ -517,8 +517,15 @@ func (s *Server) linkGrpUserIdentity(r *http.Request, p *params) (int, any, erro
 			}
 			matches := pend != nil && now.Before(pend.ExpiresAt) && sameLink(pend.PreviousIdentityID, was) &&
 				sameLink(pend.IdentityID, in.IdentityID)
+			// the same person on a second platform user (same identity) is no second admin
+			mine := false
+			if matches {
+				if mine, err = sameActor(c, pend.RequestedByUserID, by.ID); err != nil {
+					return err
+				}
+			}
 			switch {
-			case matches && pend.RequestedByUserID == by.ID:
+			case mine:
 				return &readiness.Error{Status: http.StatusForbidden, Code: "four_eyes_required",
 					Msg: "this identity link change needs a second admin: another tenant admin must make the same change"}
 			case !matches:

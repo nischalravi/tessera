@@ -491,8 +491,12 @@ worker you did not intend, though a duplicate is harmless: claims and operation 
   provisioning operation is claimed by an optimistic state change.
 - **Health.** Each worker, and an API process running queue kinds, beats every 10 s into `queue_workers`
   (schema 0460; one row per tenant it serves, removed on a clean stop, forgotten a day after a crash).
-  `GET /api/queue/workers` (`jobs.read`) and the Workers table of Admin → Jobs show host, version, kinds,
-  running / concurrency and the last heartbeat; a worker silent for 30 s is `stale`.
+  `GET /api/queue/workers` (`jobs.read`) and the Workers table of Admin → Jobs show kinds, running / concurrency
+  and the last heartbeat; a worker silent for 30 s is `stale`. Workers are shared infrastructure, so a tenant sees
+  only the workers that serve a kind it has jobs or schedules of, only those kinds, and an opaque stable label
+  (`worker-<10 hex>`, also the `lease_owner` of its jobs). Host name, PID and build are not in the API (there is
+  no platform-level operator role to show them to) and are not stored per tenant: each process logs them once
+  at start (`worker started`) for the platform operator (#403).
 - **High availability.** Run N workers (2 or more, on different hosts) against **Postgres**: a job is leased by
   `FOR UPDATE SKIP LOCKED`, so each runs on one worker at a time, a worker that disappears costs one lease
   period of delay, and schedules fire once per window however many workers poll. Size `-lease` above the
@@ -1037,7 +1041,7 @@ the way the old sweepers did (active tenant list), then works each one in its ow
   (queued again, attempt given back). `tessera serve` runs it as `Server.RunQueue`.
 * **On the queue now.** The sweepers that `RunSweeper` ran, as per-tenant schedules every 30 s:
   `jit_sweep`, `sweep_requests`, `sweep_lifecycle` (sponsorships, then lifecycle: one job so the order
-  holds), `sweep_admin_changes`, and `containment_retries`, plus `job_maintenance` every 10 min (stale
+  holds), `sweep_admin_changes`, and `containment_retries`, plus `oauth_sync` hourly and `job_maintenance` every 10 min (stale
   `job_runs`, retention, pruning succeeded queue jobs after 7 days). The containment retry sweep runs
   `RunRetries` under a lease; each `containment_retries` row keeps its own backoff (1m, 5m, 15m, 1h) and
   24 h give-up, which are tested domain rules, so the queue adds exclusion, not a second backoff.
@@ -1123,6 +1127,13 @@ and Run now.
 Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
 `internal/admin`, routes in `internal/api/admin_routes.go`, UI under Settings → Admin: Users,
 Authentication, Change requests, API clients, and a banner on every page while a change is pending).
+
+**Four-eyes compares people, not user ids** (#402). One person can hold several platform users (sign-in makes one
+per IdP connection and subject), so two users are the same actor when their ids match or both are linked to the
+same `identity_id` (`store.TenantTx.SameActor`; `sameActor` in `internal/api/fourEyes.go`). Used by change-request
+approve and reject, identity link and unlink confirmation, identity merge, SoD mitigations, JIT, helpdesk second
+approval and call-back, role requests and access-request approvals. Two users with no identity link cannot be
+matched; link them (Admin → Groups → users) to close that gap.
 
 | `type` | Who approves | Waits | Applies |
 |---|---|---|---|
@@ -2227,6 +2238,52 @@ the run failed. Provider calls go through `internal/safehttp`.
 - **Still manual or not covered.** Okta has no API that lists IdP sessions and Google none for
   sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
   still only stamps a timestamp.
+
+### Third-party OAuth apps and grants (issue #107)
+
+Security's SaaS-to-SaaS token theft (Salesloft Drift, Gainsight, Klue) is access through an app's
+grant, not a password. Protection → **OAuth apps** lists every third-party app and grant at Google
+Workspace, Microsoft Entra ID, Salesforce and GitHub, scores each app by the scopes it holds, and
+revokes a grant, an app, or every app of a breached vendor (package `server/internal/oauthapps`,
+schema 0361 for apps, grants and sync state and 0470 for pending four-eyes revokes).
+
+- **Readers.** One per provider, read-only, through `internal/safehttp` with the **containment
+  credential** of the provider's live connection (set it with `PUT /api/connections/{id}/containment-credential`;
+  Salesforce takes `base_url` = the instance URL and an API-enabled bearer token, GitHub `org`). Google lists
+  each user's tokens; Entra lists service principals, `oauth2PermissionGrants` (per user and tenant-wide) and
+  `appRoleAssignments` (role ids resolved to values); Salesforce lists `OauthToken` rows; GitHub lists the
+  organization's installed apps and SAML SSO credential authorizations. A read that fails part-way stores
+  nothing (the failure is in the provider's sync state and the audit log); a grant a complete read no longer
+  lists is marked `removed`, never deleted. A provider names no last use or grant date where it has none:
+  the sync report's notes say what each one does not offer. Okta is not covered (its grants are per-user
+  consents, already revoked by the kill switch).
+- **Risk.** A versioned scope catalog (`risk.go`, `CatalogVersion`) rates each scope critical, high, medium or
+  low; an app scores 0-100 from its worst scope plus unverified publisher, tenant-wide admin consent, unused
+  90+ days and number of users. Each app has an owner (default: the identity that granted first, set with
+  `PUT /api/oauth-apps/{id}/owner`). Flags: `high_risk_non_admin` (a high or critical scope on a non-admin's own
+  consent), `unused` (N days, `unused_days`, default 90; an unknown last use is never "unused") and `unverified`.
+- **Sync.** Queue job `oauth_sync` (hourly per tenant; a tenant with no credentials leaves no run), or
+  `POST /api/oauth-apps/sync {provider?}` (`oauthapps.manage`).
+- **Revoke.** `POST /api/oauth-apps/{id}/revoke`, `.../grants/{grant_id}/revoke` and
+  `POST /api/oauth-apps/revoke-vendor {vendor, reason, dry_run?}` (`oauthapps.revoke`, policy admin, step-up,
+  reason of 10 to 500 characters). A vendor matches an app's publisher or name. Each grant is revoked at the
+  provider, then **re-read**: it counts as revoked only when the provider no longer shows it. What no API can
+  do (a GitHub App installation: an organization owner cannot uninstall it by API) or a provider with no
+  credential is a **manual** outcome, never a success. The answer is `200` with the report, or `502
+  oauth_revoke_incomplete` with the same report. A revoke covering more than one grant of an app with a high
+  or critical scope needs **two admins**: the first request answers `202 pending_second_admin`, the same
+  admin repeating it gets `403 four_eyes_required`, and a second admin's identical request (within 24 hours)
+  runs it. Audit events: `oauthapps.synced|sync_failed|owner_set|revoke_requested|revoke_approved|revoke_started|revoked`
+  (`revoke_started` is written before the first provider call, the outcome event in the transaction that sets
+  the grant and app statuses).
+- **Read API.** `GET /api/oauth-apps?provider=&severity=&status=&flag=&vendor=&q=&unused_days=` and
+  `GET /api/oauth-apps/{id}` (graph.read).
+- **Tests and fakes.** `internal/oauthapps/oauthfake` holds stateful fakes of the four provider APIs (paging, a
+  delete that really deletes, and switches for refusing, ignoring a delete and failing reads); the reader,
+  sync, revoke and four-eyes tests run them through a real safehttp client. The Salesforce `OauthToken`
+  query is checked against the fake only, not a live org.
+- **Not built yet.** The apps are not yet rows of the Machine identities inventory (`/api/nhi`); a policy
+  type for the flags (alerts and review campaigns) is not wired.
 
 ### MCP authorization server (agent authorization)
 
@@ -3528,9 +3585,18 @@ and is audited with `admin.change.*` and `retention.updated` in the transaction 
 
 **Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL` (an http(s) object
 store, PUT and GET of `<base>/<tenant>/<class>/<segment>.seg`, always through `internal/safehttp`; https in prod),
+authenticated with a bearer token (`TESSERA_ARCHIVE_TOKEN_SEALED`: the base64 of the token sealed under the KEK;
+make it with `printf '%s\n' "$TOKEN" | tessera archive seal-token`; prod refuses an archive URL without it),
 else the directory `TESSERA_ARCHIVE_DIR`, else `TESSERA_BACKUP_DIR/archive`, else, outside prod, `var/archive` next
 to the database. In prod with none of them nothing is archived or deleted, and Admin → Retention says so. While archiving is on
 the 30-day clean-up of finished job runs is left to the archive; with it off that clean-up is unchanged.
+**Write-once storage.** A purged segment's archived copy is the only copy of that range, so the store should refuse
+overwrites and deletes: use object lock / WORM (S3 Object Lock in compliance mode, or a bucket policy that denies
+`DeleteObject` and overwrites), and give the token create and read rights only. Tessera writes create-only
+(`PUT` with `If-None-Match: *`; a key that exists fails with `archive: object already exists`, unless it already
+holds the very same bytes, which is a retry), then reads the object back and compares its sha256 before it
+catalogues the segment. Segment keys are fresh UUIDs, so an overwrite is never a legitimate retry. The local
+directory store links files into place and never replaces one.
 Back the archive store up with the database: a restore verifies the audit chain without opening it and warns
 (`archive_unchecked`); `tessera audit verify` opens it when it runs with the server's environment.
 
@@ -3544,8 +3610,21 @@ transaction, so a crash at any point loses nothing and the next run resumes:
 3. **purged**: it is checked once more, then in one transaction the online records are deleted, the anchor event is
    appended and the segment is marked purged. The schema refuses the delete unless the segment is `verified`
    (`schema/0402_archive_guards.sql`; on Postgres the application role has no DELETE on `audit_events`, and
-   `tessera_archive_purge_audit` does it for the transaction's tenant). A record that changed since it was archived is
+   `tessera_archive_purge_audit(tenant, segment)` deletes only that verified segment's seq range for the
+   transaction's tenant). A record that changed since it was archived is
    not deleted with the stale copy; it is archived again later.
+
+**What the database boundary is, and is not (`schema/0510_archive_segment_guards.sql`, #401).** The application role
+writes `archive_segments`, so the delete guards cannot treat `status = 'verified'` as proof by itself. The schema
+closes the shortcuts: a segment can only be inserted `written` (never verified or purged), items are added to a
+segment only while it is `written` (so a verified segment never gains records), a segment of a per-record class
+cannot become verified with no items, and an audit segment cannot become verified unless the audit events at both
+ends of its range exist with its `first_hash` and `last_hash`. The audit chain, which the role cannot rewrite, is
+the independent record. A forged segment therefore unlocks no delete. What no trigger can do is prove the blob
+exists in the archive store: a caller with SQL as the application role can still catalogue a real range, verify it
+and delete it without ever storing a blob. That needs SQL access as `tessera_app` (an injection bug, not an API
+session); `audit verify` reports the lost range, and the write-once store above is what keeps honest copies safe.
+On Postgres, run the migration owner and the application as different roles (the default setup).
 
 **The audit chain stays verifiable.** An audit segment records its seq range, the `prev_hash` before it and its first
 and last hash. The purge appends an `audit.archived` event to the chain naming the segment, range and hashes ("archived

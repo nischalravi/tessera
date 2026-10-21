@@ -125,8 +125,12 @@ type Config struct {
 	// through internal/safehttp. With neither, ArchiveDirFor falls back to
 	// BackupDir/archive, then, outside prod, to var/archive next to the
 	// database; in prod an unset archive means nothing is archived or deleted.
-	ArchiveDir            string
-	ArchiveURL            string
+	ArchiveDir string
+	ArchiveURL string
+	// ArchiveTokenSealed (TESSERA_ARCHIVE_TOKEN_SEALED) is the base64 of the
+	// object store's bearer token sealed under the KEK (`tessera archive
+	// seal-token`). Prod refuses ArchiveURL without it.
+	ArchiveTokenSealed    string
 	BackupEveryMinutes    int
 	BackupKeep            int
 	AccessTokenTTLSeconds int
@@ -351,6 +355,18 @@ func Load(getenv func(string) string) (*Config, error) {
 		case pu.Scheme != "https" && prod:
 			bad("TESSERA_ARCHIVE_URL must be https with TESSERA_ENV=prod")
 		}
+	}
+	c.ArchiveTokenSealed = str("TESSERA_ARCHIVE_TOKEN_SEALED", "", "")
+	if c.ArchiveTokenSealed != "" {
+		if _, err := base64.StdEncoding.DecodeString(c.ArchiveTokenSealed); err != nil {
+			bad("TESSERA_ARCHIVE_TOKEN_SEALED: not valid base64 (seal the token with `tessera archive seal-token`)")
+		}
+		if c.ArchiveURL == "" {
+			bad("TESSERA_ARCHIVE_TOKEN_SEALED needs TESSERA_ARCHIVE_URL")
+		}
+	}
+	if prod && c.ArchiveURL != "" && c.ArchiveTokenSealed == "" {
+		bad("TESSERA_ARCHIVE_URL needs TESSERA_ARCHIVE_TOKEN_SEALED with TESSERA_ENV=prod (an archive store that accepts unauthenticated writes is refused)")
 	}
 	c.BackupEveryMinutes = integer("TESSERA_BACKUP_EVERY_MINUTES", 360, 5, 7*24*60)
 	c.BackupKeep = integer("TESSERA_BACKUP_KEEP", 28, 1, 10_000)
