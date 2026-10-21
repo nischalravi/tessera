@@ -49,7 +49,10 @@ func TestPG_ArchiveVerifyOnlyThroughTheFunction(t *testing.T) {
 		if err := tx.InsertArchiveSegment(seg(honest, n)); err != nil {
 			return err
 		}
-		return tx.InsertArchiveSegment(seg(forged, n+5))
+		// the forged segment claims a range past the end of the chain (one audit segment per seq_from)
+		fs := seg(forged, n+5)
+		fs.SeqFrom, fs.SeqTo = to+1, to+5
+		return tx.InsertArchiveSegment(fs)
 	}); err != nil {
 		t.Fatal(err)
 	}
