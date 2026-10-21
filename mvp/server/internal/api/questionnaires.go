@@ -10,13 +10,15 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/questionnaires"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/svcaccounts"
 )
 
 // Questionnaires (issue #298): forms asked of requesters and reviewers.
 //
 //	GET  /api/questionnaires                    every questionnaire at its current version (catalog.manage)
 //	POST /api/questionnaires                    {title, description, questions}: version 1
-//	GET  /api/questionnaires/needed             what must be answered: ?catalog_item_ids=a,b | ?role_id= | ?review_item_id= | ?review_campaign_id=
+//	GET  /api/questionnaires/needed             what must be answered: ?catalog_item_ids=a,b | ?role_id= | ?review_item_id= | ?review_campaign_id= |
+//	                                            ?service_account_kind=create|change|transfer&primary_owner_id=&system=&identity_id= (what its workflow asks)
 //	GET  /api/questionnaires/{id}               one, with its earlier versions (catalog.manage)
 //	PUT  /api/questionnaires/{id}               {version, title, description, questions}: appends the next version
 //	POST /api/questionnaires/{id}/retire        stops it being asked; its answers stay
@@ -231,6 +233,27 @@ func (s *Server) neededQuestionnaires(_ http.ResponseWriter, r *http.Request, p 
 		}
 		if err := add(questionnaires.ForCampaign(tx, n)); err != nil {
 			return nil, err
+		}
+	}
+	if kind := qs(p, "service_account_kind"); kind != "" { // what a service-account request's workflow asks (issue #298)
+		owner, err := strconv.ParseInt(qs(p, "primary_owner_id"), 10, 64)
+		if err != nil || owner < 1 {
+			return nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "primary_owner_required", Msg: "primary_owner_id names the new primary owner"}
+		}
+		var identity *int64
+		if raw := qs(p, "identity_id"); raw != "" {
+			n, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil || n < 1 {
+				return nil, missing
+			}
+			identity = &n
+		}
+		me, err := s.requestActor(r)
+		if err != nil {
+			return nil, err
+		}
+		if err := add(svcaccounts.Needs(tx, kind, qs(p, "system"), identity, owner, me.UserID.String())); err != nil {
+			return nil, reqErr(err)
 		}
 	}
 	out.Questionnaires = append(out.Questionnaires, questionnaires.Union(lists...)...)

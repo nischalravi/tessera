@@ -71,7 +71,8 @@ export const RAIL: RailGroup[] = [
   {
     label: "Access",
     items: [
-      { id: "request", label: "Request access", icon: Plus, path: "/access/request", keywords: "catalog cart ask new access role entitlement" },
+      { id: "request", label: "Request access", icon: Plus, path: "/access/request", also: ["/access/request/service-account"], keywords: "catalog cart ask new access role entitlement service account create change transfer owner",
+        pages: [{ path: "/access/request/service-account", label: "Service account request", keywords: "create change transfer service account machine identity owner backup owner" }] },
       {
         id: "mine", label: "My access", icon: BadgeCheck, path: "/access/mine", also: ["/access/requests"], keywords: "what i have entitlements remove",
         pages: [{ path: "/access/requests", label: "My requests", keywords: "history drafts status submitted" }],

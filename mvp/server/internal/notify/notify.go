@@ -39,6 +39,7 @@ const (
 	KindRequestExpiring   = "request.expiring"
 	KindApprovalEscalated = "approval.escalated"
 	KindApprovalDelegated = "approval.delegated"
+	KindWorkflowNotice    = "workflow.notice" // a notify step of a request's workflow (#298)
 	KindReviewLaunched    = "review.launched"
 	KindReviewReminder    = "review.reminder"
 	KindReviewClosed      = "review.closed"
@@ -108,6 +109,7 @@ var Kinds = []Kind{
 	{KindApprovalNeeded, "Approval needed", "A request is waiting for your approval.", false, ChannelBoth},
 	{KindApprovalEscalated, "Approval escalated", "An approval was not decided in time and moved to deciders.", false, ChannelBoth},
 	{KindApprovalDelegated, "Approvals delegated to you", "Someone handed their approvals to you for a time.", false, ChannelInApp},
+	{KindWorkflowNotice, "Workflow notices", "A request you made, or one you own, reached a step that tells you.", false, ChannelInApp},
 	{KindRequestApproved, "Request approved", "A request you made, or one for you, was approved.", false, ChannelInApp},
 	{KindRequestDenied, "Request denied", "A request you made, or one for you, was denied.", false, ChannelInApp},
 	{KindRequestExpiring, "Requested access ending", "Access you requested, or hold, ends soon.", false, ChannelInApp},
