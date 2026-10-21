@@ -40,6 +40,14 @@ export TESSERA_ENV="${TESSERA_ENV:-dev}"
 # dev only: an in-process fake SCIM target so Admin → Provisioning can be tried without a real
 # system (the API refuses it in production). TESSERA_DEV_FAKE_TARGET=0 turns it off.
 export TESSERA_DEV_FAKE_TARGET="${TESSERA_DEV_FAKE_TARGET:-1}"
+# dev only: stateful fakes of the Google, Entra, Salesforce and GitHub app/grant APIs on a loopback port
+# (OAUTH_FAKE_PORT, default API_PORT+2000), with the seed pointing larkspur's provider connections at them,
+# so Protection → OAuth apps (sync, revoke, bulk revoke) works locally. OAUTH_FAKE=0 turns it off.
+if [ "$TESSERA_ENV" = "dev" ] && [ "${OAUTH_FAKE:-1}" != "0" ]; then
+  export TESSERA_DEV_OAUTH_FAKE_URL="${TESSERA_DEV_OAUTH_FAKE_URL:-http://127.0.0.1:${OAUTH_FAKE_PORT:-$((API_PORT + 2000))}}"
+else
+  unset TESSERA_DEV_OAUTH_FAKE_URL
+fi
 # the browser origin of the UI: the CSRF Origin check admits it
 export TESSERA_PUBLIC_URL="${TESSERA_PUBLIC_URL:-http://localhost:$UI_PORT}"
 
@@ -96,7 +104,7 @@ seed() {
 case "${1:-}" in
   test)
     # Launcher-only defaults must not affect production-refusal tests.
-    unset TESSERA_DEV_FAKE_TARGET
+    unset TESSERA_DEV_FAKE_TARGET TESSERA_DEV_OAUTH_FAKE_URL
     cd "$SERVER"
     "$GO" vet ./...
     # the test-only session helper (internal/auth/authtest) runs only with TESSERA_ENV=test

@@ -379,6 +379,13 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 		fmt.Fprintf(stdout, "Seeded the secret-rotation demo for tenant %s: a simulated provider and policies for the demo credentials\n",
 			seed.LarkspurSlug)
 	}
+	if cfg.DevOAuthFakeURL != "" {
+		if err := seedOAuthFakeDemo(ctx, st, cfg, sealer, seed.LarkspurID, clock); err != nil {
+			return fmt.Errorf("oauth apps demo: %w", err)
+		}
+		fmt.Fprintf(stdout, "Seeded the OAuth apps demo for tenant %s: four provider connections pointed at the dev fakes (%s); run a sync\n",
+			seed.LarkspurSlug, cfg.DevOAuthFakeURL)
+	}
 	if err := keys.EnsureAll(ctx, st, sealer, clock()); err != nil {
 		return err
 	}
@@ -508,6 +515,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	defer stopFake()
+	stopOAuthFakes, err := startOAuthFakes(cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer stopOAuthFakes()
 	// One shared outbound client: sign-in, containment and provisioning all
 	// send through it.
 	// One-time secrets (claim links, confirmation codes) go from the API to the
