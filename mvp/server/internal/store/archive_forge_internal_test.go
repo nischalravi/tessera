@@ -78,6 +78,21 @@ func TestArchiveForgedVerifiedSegmentUnlocksNothing(t *testing.T) {
 		t.Fatal("a forged segment unlocked a delete")
 	}
 
+	// 2b. insert written, then UPDATE to verified: a claim the chain does not back (a count that
+	// is not the range, a range the events do not fill) unlocks nothing (issue #401, reopened)
+	mustPass("insert written (inflated count)", strings.Replace(seg("00000000-0000-4000-8000-0000000000b3", "audit", "written", 2, 3, hash(2), hash(3), "NULL"), ", 2, '"+hash(2), ", 99, '"+hash(2), 1))
+	mustFail("verify an inflated count", `UPDATE archive_segments SET status = 'verified', verified_at = `+ts+` WHERE id = '00000000-0000-4000-8000-0000000000b3'`)
+	mustPass("insert written (count is not the range)", seg("00000000-0000-4000-8000-0000000000b4", "audit", "written", 4, 4, hash(4), hash(4), "NULL"))
+	mustFail("verify a count that is not the range", `UPDATE archive_segments SET status = 'verified', verified_at = `+ts+` WHERE id = '00000000-0000-4000-8000-0000000000b4'`)
+	for _, id := range []string{"b3", "b4"} {
+		if err := db.InTenant(ctx, p, func(tx *TenantTx) error { return tx.PurgeArchivedAudit("00000000-0000-4000-8000-0000000000" + id) }); err == nil {
+			t.Errorf("segment %s unlocked a purge", id)
+		}
+	}
+	if err := del(1); err == nil {
+		t.Fatal("a forged written-then-verified segment unlocked a delete")
+	}
+
 	// 3. the honest segment verifies and unlocks exactly its own range
 	mustPass("insert written", seg("00000000-0000-4000-8000-0000000000c1", "audit", "written", 1, 2, hash(1), hash(2), "NULL"))
 	mustPass("verify", `UPDATE archive_segments SET status = 'verified', verified_at = `+ts+` WHERE id = '00000000-0000-4000-8000-0000000000c1'`)
@@ -103,6 +118,8 @@ func TestArchiveForgedVerifiedSegmentUnlocksNothing(t *testing.T) {
 		return `INSERT INTO archive_segment_items (tenant_id, segment_id, item_id) VALUES ('` + p.String() + `', '` + seg + `', '` + id + `')`
 	}
 	mustPass("add item to a written segment", item(req("d1"), "r1"))
+	mustFail("verify with fewer items than it claims", `UPDATE archive_segments SET status = 'verified', verified_at = `+ts+` WHERE id = '`+req("d1")+`'`)
+	mustPass("add the second item", item(req("d1"), "r1b"))
 	mustPass("verify with items", `UPDATE archive_segments SET status = 'verified', verified_at = `+ts+` WHERE id = '`+req("d1")+`'`)
 	mustFail("add item to a verified segment", item(req("d1"), "r2"))
 }

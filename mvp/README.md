@@ -3626,17 +3626,23 @@ transaction, so a crash at any point loses nothing and the next run resumes:
    transaction's tenant). A record that changed since it was archived is
    not deleted with the stale copy; it is archived again later.
 
-**What the database boundary is, and is not (`schema/0510_archive_segment_guards.sql`, #401).** The application role
-writes `archive_segments`, so the delete guards cannot treat `status = 'verified'` as proof by itself. The schema
-closes the shortcuts: a segment can only be inserted `written` (never verified or purged), items are added to a
-segment only while it is `written` (so a verified segment never gains records), a segment of a per-record class
-cannot become verified with no items, and an audit segment cannot become verified unless the audit events at both
-ends of its range exist with its `first_hash` and `last_hash`. The audit chain, which the role cannot rewrite, is
-the independent record. A forged segment therefore unlocks no delete. What no trigger can do is prove the blob
-exists in the archive store: a caller with SQL as the application role can still catalogue a real range, verify it
-and delete it without ever storing a blob. That needs SQL access as `tessera_app` (an injection bug, not an API
-session); `audit verify` reports the lost range, and the write-once store above is what keeps honest copies safe.
-On Postgres, run the migration owner and the application as different roles (the default setup).
+**What the database boundary is, and is not (`schema/0510_archive_segment_guards.sql`, `0520_archive_verify_proof.sql`, #401).**
+The application role writes `archive_segments`, so the delete guards cannot treat `status = 'verified'` as proof by
+itself. The schema closes the shortcuts: a segment can only be inserted `written` (never verified or purged), items are
+added to a segment only while it is `written` (so a verified segment never gains records), and the `written` to
+`verified` transition recomputes what the row claims in the same statement: a per-record segment must hold exactly
+`item_count` items, and an audit segment's range must be complete (one event per seq, `item_count` of them), carry its
+`first_hash` and `last_hash` at the ends, and link event to event. The audit chain, which the role cannot rewrite, is
+the independent record. On Postgres the transition is also a privilege boundary: only `tessera_archive_mark_verified`
+(SECURITY DEFINER, owned by the migration role) can verify, and the trigger refuses `UPDATE ... SET status = 'verified'`
+from any other role, so `tessera_app` cannot verify a forged segment with plain SQL (SQLite has one role, so there the
+checks raise the cost of a forgery but are not a boundary). A forged segment therefore unlocks no delete. What no
+database check can do is prove the blob exists in the archive store: a caller with SQL as the application role can
+still insert a segment for a real range, give it the matching items, have the function verify it and delete the range
+without ever storing a blob. That needs SQL access as `tessera_app` (an injection bug, not an API session);
+`audit verify` reports the lost range, and the write-once store above is what keeps honest copies safe. A proof the
+role's SQL cannot reach (a MAC under a key kept outside the database) is the remaining step. On Postgres, run the
+migration owner and the application as different roles (the default setup).
 
 **The audit chain stays verifiable.** An audit segment records its seq range, the `prev_hash` before it and its first
 and last hash. The purge appends an `audit.archived` event to the chain naming the segment, range and hashes ("archived
