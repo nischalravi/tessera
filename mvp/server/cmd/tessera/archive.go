@@ -29,7 +29,11 @@ func newArchive(cfg *config.Config, dbFile string, st *store.DB, sealer *seal.Se
 		if err != nil {
 			return nil, err
 		}
-		if blobs, err = archive.NewHTTPStore(cfg.ArchiveURL, client); err != nil {
+		token, err := archive.OpenToken(sealer, cfg.ArchiveTokenSealed)
+		if err != nil {
+			return nil, err
+		}
+		if blobs, err = archive.NewHTTPStore(cfg.ArchiveURL, client, token); err != nil {
 			return nil, err
 		}
 	default:

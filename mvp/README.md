@@ -491,8 +491,12 @@ worker you did not intend, though a duplicate is harmless: claims and operation 
   provisioning operation is claimed by an optimistic state change.
 - **Health.** Each worker, and an API process running queue kinds, beats every 10 s into `queue_workers`
   (schema 0460; one row per tenant it serves, removed on a clean stop, forgotten a day after a crash).
-  `GET /api/queue/workers` (`jobs.read`) and the Workers table of Admin → Jobs show host, version, kinds,
-  running / concurrency and the last heartbeat; a worker silent for 30 s is `stale`.
+  `GET /api/queue/workers` (`jobs.read`) and the Workers table of Admin → Jobs show kinds, running / concurrency
+  and the last heartbeat; a worker silent for 30 s is `stale`. Workers are shared infrastructure, so a tenant sees
+  only the workers that serve a kind it has jobs or schedules of, only those kinds, and an opaque stable label
+  (`worker-<10 hex>`, also the `lease_owner` of its jobs). Host name, PID and build are not in the API (there is
+  no platform-level operator role to show them to) and are not stored per tenant: each process logs them once
+  at start (`worker started`) for the platform operator (#403).
 - **High availability.** Run N workers (2 or more, on different hosts) against **Postgres**: a job is leased by
   `FOR UPDATE SKIP LOCKED`, so each runs on one worker at a time, a worker that disappears costs one lease
   period of delay, and schedules fire once per window however many workers poll. Size `-lease` above the
@@ -1121,6 +1125,13 @@ and Run now.
 Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
 `internal/admin`, routes in `internal/api/admin_routes.go`, UI under Settings → Admin: Users,
 Authentication, Change requests, API clients, and a banner on every page while a change is pending).
+
+**Four-eyes compares people, not user ids** (#402). One person can hold several platform users (sign-in makes one
+per IdP connection and subject), so two users are the same actor when their ids match or both are linked to the
+same `identity_id` (`store.TenantTx.SameActor`; `sameActor` in `internal/api/fourEyes.go`). Used by change-request
+approve and reject, identity link and unlink confirmation, identity merge, SoD mitigations, JIT, helpdesk second
+approval and call-back, role requests and access-request approvals. Two users with no identity link cannot be
+matched; link them (Admin → Groups → users) to close that gap.
 
 | `type` | Who approves | Waits | Applies |
 |---|---|---|---|
@@ -3468,9 +3479,18 @@ and is audited with `admin.change.*` and `retention.updated` in the transaction 
 
 **Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL` (an http(s) object
 store, PUT and GET of `<base>/<tenant>/<class>/<segment>.seg`, always through `internal/safehttp`; https in prod),
+authenticated with a bearer token (`TESSERA_ARCHIVE_TOKEN_SEALED`: the base64 of the token sealed under the KEK;
+make it with `printf '%s\n' "$TOKEN" | tessera archive seal-token`; prod refuses an archive URL without it),
 else the directory `TESSERA_ARCHIVE_DIR`, else `TESSERA_BACKUP_DIR/archive`, else, outside prod, `var/archive` next
 to the database. In prod with none of them nothing is archived or deleted, and Admin → Retention says so. While archiving is on
 the 30-day clean-up of finished job runs is left to the archive; with it off that clean-up is unchanged.
+**Write-once storage.** A purged segment's archived copy is the only copy of that range, so the store should refuse
+overwrites and deletes: use object lock / WORM (S3 Object Lock in compliance mode, or a bucket policy that denies
+`DeleteObject` and overwrites), and give the token create and read rights only. Tessera writes create-only
+(`PUT` with `If-None-Match: *`; a key that exists fails with `archive: object already exists`, unless it already
+holds the very same bytes, which is a retry), then reads the object back and compares its sha256 before it
+catalogues the segment. Segment keys are fresh UUIDs, so an overwrite is never a legitimate retry. The local
+directory store links files into place and never replaces one.
 Back the archive store up with the database: a restore verifies the audit chain without opening it and warns
 (`archive_unchecked`); `tessera audit verify` opens it when it runs with the server's environment.
 
@@ -3484,8 +3504,21 @@ transaction, so a crash at any point loses nothing and the next run resumes:
 3. **purged**: it is checked once more, then in one transaction the online records are deleted, the anchor event is
    appended and the segment is marked purged. The schema refuses the delete unless the segment is `verified`
    (`schema/0402_archive_guards.sql`; on Postgres the application role has no DELETE on `audit_events`, and
-   `tessera_archive_purge_audit` does it for the transaction's tenant). A record that changed since it was archived is
+   `tessera_archive_purge_audit(tenant, segment)` deletes only that verified segment's seq range for the
+   transaction's tenant). A record that changed since it was archived is
    not deleted with the stale copy; it is archived again later.
+
+**What the database boundary is, and is not (`schema/0510_archive_segment_guards.sql`, #401).** The application role
+writes `archive_segments`, so the delete guards cannot treat `status = 'verified'` as proof by itself. The schema
+closes the shortcuts: a segment can only be inserted `written` (never verified or purged), items are added to a
+segment only while it is `written` (so a verified segment never gains records), a segment of a per-record class
+cannot become verified with no items, and an audit segment cannot become verified unless the audit events at both
+ends of its range exist with its `first_hash` and `last_hash`. The audit chain, which the role cannot rewrite, is
+the independent record. A forged segment therefore unlocks no delete. What no trigger can do is prove the blob
+exists in the archive store: a caller with SQL as the application role can still catalogue a real range, verify it
+and delete it without ever storing a blob. That needs SQL access as `tessera_app` (an injection bug, not an API
+session); `audit verify` reports the lost range, and the write-once store above is what keeps honest copies safe.
+On Postgres, run the migration owner and the application as different roles (the default setup).
 
 **The audit chain stays verifiable.** An audit segment records its seq range, the `prev_hash` before it and its first
 and last hash. The purge appends an `audit.archived` event to the chain naming the segment, range and hashes ("archived
