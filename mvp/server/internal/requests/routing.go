@@ -13,6 +13,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/internal/workflow"
 )
 
 // Approval routing (issue #165).
@@ -91,10 +92,13 @@ func SetPolicy(tx *store.TenantTx, itemID string, stages []string, hours float64
 }
 
 // startStages files a new line's stages from its item's policy.
-func startStages(tx *store.TenantTx, l *store.RequestLine, ben *store.Identity, now time.Time) error {
+func startStages(tx *store.TenantTx, l *store.RequestLine, ben *store.Identity, plan *workflow.Plan, now time.Time) error {
 	it, err := tx.CatalogItem(l.CatalogItemID)
 	if err != nil {
 		return err
+	}
+	if plan != nil { // a workflow routes it (issue #298)
+		return startPlanned(tx, l, ben, it, plan, now)
 	}
 	kinds, hours, err := Policy(tx, it.ID)
 	if err != nil {
@@ -135,16 +139,32 @@ func startStages(tx *store.TenantTx, l *store.RequestLine, ben *store.Identity, 
 }
 
 // notifyWaiting tells the approvers of a line's waiting stage that it needs
-// them (issue #189), in the caller's transaction.
+// them (issue #189), in the caller's transaction. A stage a workflow holds is
+// not announced yet; it shows in the approvers' inbox when it opens.
 func notifyWaiting(tx *store.TenantTx, l *store.RequestLine, now time.Time) error {
 	stages, err := tx.RequestStages(l.ID)
 	if err != nil {
 		return err
 	}
 	for _, st := range stages {
-		if st.Status == store.StageWaiting {
-			return notify.ApprovalNeeded(tx, now, l, st, len(stages))
+		if st.Status != store.StageWaiting {
+			continue
 		}
+		if st.StartedAt != nil && now.Before(*st.StartedAt) {
+			return nil
+		}
+		plan, err := workflow.PlanFor(tx, store.WFSubjectAccessLine, l.ID)
+		if err != nil {
+			return err
+		}
+		if sp := plan.StageAt(st.Idx); sp != nil && sp.Approver == workflow.ApproverGroup && !(st.DueAt != nil && !now.Before(*st.DueAt)) {
+			to, err := GroupRecipients(tx, sp.GroupID, now)
+			if err != nil {
+				return err
+			}
+			return notify.ApprovalNeededTo(tx, now, l, st, len(stages), to)
+		}
+		return notify.ApprovalNeeded(tx, now, l, st, len(stages))
 	}
 	return nil
 }
@@ -152,10 +172,35 @@ func notifyWaiting(tx *store.TenantTx, l *store.RequestLine, now time.Time) erro
 // begin makes st the waiting stage, due after hours, or at once when nobody
 // can act as its assignee.
 func begin(tx *store.TenantTx, st *store.RequestStage, hours float64, now time.Time) error {
-	due := now.Add(timeutil.Delta(hours, timeutil.MicrosPerHour))
+	return BeginStage(tx, st, nil, hours, now)
+}
+
+// BeginStage makes st the waiting stage. sp is its workflow plan (nil: none): a hold opens the
+// stage later, and a group stage is reachable when a member can sign in. The stage is due
+// hours after it opens, or when it opens if nobody can act as its assignee.
+func BeginStage(tx *store.TenantTx, st *store.RequestStage, sp *workflow.StagePlan, hours float64, now time.Time) error {
+	start := now
+	if sp != nil && sp.HoldHours > 0 {
+		start = now.Add(timeutil.Delta(sp.HoldHours, timeutil.MicrosPerHour))
+	}
+	due := start.Add(timeutil.Delta(hours, timeutil.MicrosPerHour))
 	if st.Kind != store.StageDecider {
 		reachable := false
-		if st.AssigneeID != nil {
+		if sp != nil && sp.Approver == workflow.ApproverGroup {
+			ids, err := GroupMembers(tx, sp.GroupID, now)
+			if err != nil {
+				return err
+			}
+			for _, id := range ids {
+				users, err := tx.UsersLinkedTo(id)
+				if err != nil {
+					return err
+				}
+				if reachable = len(users) > 0; reachable {
+					break
+				}
+			}
+		} else if st.AssigneeID != nil {
 			if i, err := tx.Identity(*st.AssigneeID); err == nil && i.Status == "active" {
 				users, err := tx.UsersLinkedTo(i.ID)
 				if err != nil {
@@ -167,11 +212,43 @@ func begin(tx *store.TenantTx, st *store.RequestStage, hours float64, now time.T
 			}
 		}
 		if !reachable {
-			due = now // escalated at once: deciders act
+			due = start // escalated as soon as it opens: deciders act
 		}
 	}
-	st.Status, st.StartedAt, st.DueAt = store.StageWaiting, &now, &due
+	st.Status, st.StartedAt, st.DueAt = store.StageWaiting, &start, &due
 	return nil
+}
+
+// GroupMembers lists the identities that are effective members of a native group (the first
+// 200), for a workflow group stage.
+func GroupMembers(tx *store.TenantTx, groupID string, now time.Time) ([]int64, error) {
+	rows, _, err := tx.GrpEffectiveSearch(store.MemberSearch{Group: store.GroupID(groupID), List: store.MembersListID(tx.Tenant()),
+		Now: now, Limit: 200})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int64, len(rows))
+	for i, r := range rows {
+		out[i] = r.Identity
+	}
+	return out, nil
+}
+
+// GroupRecipients are the people to tell about a stage a native group approves.
+func GroupRecipients(tx *store.TenantTx, groupID string, now time.Time) ([]notify.Recipient, error) {
+	ids, err := GroupMembers(tx, groupID, now)
+	if err != nil {
+		return nil, err
+	}
+	var out []notify.Recipient
+	for _, id := range ids {
+		rs, err := notify.Identity(tx, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rs...)
+	}
+	return out, nil
 }
 
 // Authority says whether a user may act on a line's waiting stage, and on
@@ -205,6 +282,32 @@ func authorize(tx *store.TenantTx, l *store.RequestLine, by Actor, now time.Time
 		}
 		return &Authority{}, nil
 	}
+	return AuthorizeStages(tx, Subject{RequestedBy: l.RequestedBy, BeneficiaryID: l.BeneficiaryID, Kind: store.WFSubjectAccessLine, ID: l.ID},
+		stages, by, now)
+}
+
+// Subject is what a chain of approval stages decides: who asked, the person the access is for
+// (0: none, as for a service-account request) and the workflow run key (kind, id) that holds
+// the plan of the stages.
+type Subject struct {
+	RequestedBy   string
+	BeneficiaryID int64
+	Kind, ID      string
+}
+
+// AuthorizeStages finds the waiting stage of a subject and checks that by may decide it. The
+// rules are the approval routing's (#165) whatever the subject: never the requester, the
+// beneficiary or a delegate acting for them, never someone who approved an earlier stage;
+// the assignee, their delegates, or members of a workflow group stage; deciders when the
+// stage is a decider stage or past due.
+func AuthorizeStages(tx *store.TenantTx, sub Subject, stages []*store.RequestStage, by Actor, now time.Time) (*Authority, error) {
+	if sub.RequestedBy == by.id() {
+		return nil, refuse(403, "self_approval", "you cannot decide a request you made")
+	}
+	plan, err := workflow.PlanFor(tx, sub.Kind, sub.ID)
+	if err != nil {
+		return nil, err
+	}
 	var waiting *store.RequestStage
 	for _, s := range stages {
 		if s.Status == store.StageApproved && (eq(s.DecidedBy, by.id()) || eq(s.OnBehalfOf, by.id())) {
@@ -217,6 +320,9 @@ func authorize(tx *store.TenantTx, l *store.RequestLine, by Actor, now time.Time
 	if waiting == nil {
 		return nil, refuse(409, "not_pending", "the request has no stage waiting")
 	}
+	if waiting.StartedAt != nil && now.Before(*waiting.StartedAt) { // a workflow wait holds it
+		return nil, refuse(409, "stage_not_open", "the stage opens at %s", timeutil.ISO(*waiting.StartedAt))
+	}
 	escalated := waiting.DueAt != nil && !now.Before(*waiting.DueAt)
 	a := &Authority{Stage: waiting, Escalated: escalated}
 	if waiting.Kind == store.StageDecider || escalated {
@@ -224,7 +330,16 @@ func authorize(tx *store.TenantTx, l *store.RequestLine, by Actor, now time.Time
 			return a, nil
 		}
 	}
-	if waiting.Kind != store.StageDecider && waiting.AssigneeID != nil {
+	if sp := plan.StageAt(waiting.Idx); sp != nil && sp.Approver == workflow.ApproverGroup {
+		if by.IdentityID != nil && sub.BeneficiaryID != *by.IdentityID {
+			n, err := tx.GrpEffectiveSupport(store.GroupID(sp.GroupID), store.MembersListID(tx.Tenant()), *by.IdentityID)
+			if err != nil {
+				return nil, err
+			} else if n > 0 {
+				return a, nil
+			}
+		}
+	} else if waiting.Kind != store.StageDecider && waiting.AssigneeID != nil {
 		if by.IdentityID != nil && *by.IdentityID == *waiting.AssigneeID {
 			return a, nil
 		}
@@ -237,7 +352,7 @@ func authorize(tx *store.TenantTx, l *store.RequestLine, by Actor, now time.Time
 			return nil, err
 		}
 		for _, d := range dels {
-			if d.FromUser == l.RequestedBy || !slices.Contains(assignees, d.FromUser) {
+			if d.FromUser == sub.RequestedBy || !slices.Contains(assignees, d.FromUser) {
 				continue // a delegation never covers the delegator's own requests
 			}
 			from := d.FromUser
@@ -248,7 +363,7 @@ func authorize(tx *store.TenantTx, l *store.RequestLine, by Actor, now time.Time
 			}
 			if u, err := tx.PlatformUser(fid); err != nil {
 				return nil, err
-			} else if u.IdentityID != nil && *u.IdentityID == l.BeneficiaryID {
+			} else if u.IdentityID != nil && *u.IdentityID == sub.BeneficiaryID {
 				continue
 			}
 			a.OnBehalfOf = &from
@@ -279,7 +394,15 @@ func approveStage(tx *store.TenantTx, l *store.RequestLine, a *Authority, by Act
 			if err != nil {
 				return false, err
 			}
-			if err := begin(tx, next, hours, now); err != nil {
+			plan, err := workflow.PlanFor(tx, store.WFSubjectAccessLine, l.ID)
+			if err != nil {
+				return false, err
+			}
+			sp := plan.StageAt(next.Idx)
+			if sp != nil {
+				hours = sp.EscalateAfterHours
+			}
+			if err := BeginStage(tx, next, sp, hours, now); err != nil {
 				return false, err
 			}
 			return true, tx.SaveRequestStage(next, store.StageQueued)

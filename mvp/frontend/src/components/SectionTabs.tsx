@@ -1,5 +1,4 @@
 /** Tab strips for rail items that hold several pages (Insights, Access reviews, My access, Groups). */
-import { PreviewBadge } from "./Badge";
 import { LinkTabs } from "./Page";
 
 export const InsightsTabs = () => (
@@ -26,7 +25,7 @@ export const GovernanceTabs = () => (
       { to: "/governance/guest-lifecycle", label: "Guest lifecycle" },
       { to: "/governance/terms", label: "Guest terms" },
       { to: "/governance/questionnaires", label: "Questionnaires" },
-      { to: "/governance/workflows", label: <>Workflows <PreviewBadge /></> },
+      { to: "/governance/workflows", label: "Workflows" },
     ]}
   />
 );
