@@ -605,7 +605,14 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/rotation/bulk` · `GET /api/rotation/bulk/{id}` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
-`DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` (202 and a request
+`DELETE /api/accounts/{id}/link` (pin and release need two admins with `identities.correlate`, #376: the first
+request answers 202 `pending_second_admin` and stores a request for 72 hours; the same admin again, from any
+session or any sign-in user linked to the same identity, is 403 `four_eyes_required`; a different admin's identical
+request applies it, audited in the same transaction; a differing request replaces the pending one and applies
+nothing; not-person stays single-admin) ·
+`GET /api/correlation/link-requests` (pending pins and releases, `identities.correlate`) ·
+`DELETE /api/correlation/link-requests/{account_id}` (the requester withdraws; others 403 `not_requester`; the UI
+shows both on Directory > Account matches as "Pending second admin" with Approve and Cancel) · `POST /api/identities/{id}/merge {into, reason}` (202 and a request
 when a second reviewer is needed) ·
 `GET /api/identity-matches[?status=review|reverification|decided|all&limit=]` ·
 `POST /api/identity-matches/{match_id}/decide {decision: link|new_person|reject, reason}` ·

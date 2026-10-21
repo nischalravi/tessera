@@ -17,7 +17,7 @@ export function EmptyState({ icon, title, children, action }: { icon?: ReactNode
 }
 
 export function Skeleton({ w = "100%", h = 14, style }: { w?: number | string; h?: number; style?: CSSProperties }) {
-  return <div className="skel" style={{ width: w, height: h, ...style }} aria-hidden />;
+  return <div className="skel" style={{ width: w, maxWidth: "100%", height: h, ...style }} aria-hidden />;
 }
 
 export function TableSkeleton({ rows = 8, cols = 5 }: { rows?: number; cols?: number }) {

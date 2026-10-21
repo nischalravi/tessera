@@ -26,6 +26,7 @@ test("decisions send method, path, body and CSRF", async () => {
   await api.linkAccount(7, 3, "checked");
   await api.markNotPerson(8, "shared login");
   await api.releaseAccount(7);
+  await api.cancelAccountLinkRequest(7);
   await api.mergeIdentity(5, 2, "duplicate");
   await api.unmergeIdentity("a b/c", "wrong person");
   assert.deepEqual(
@@ -34,6 +35,7 @@ test("decisions send method, path, body and CSRF", async () => {
       ["POST", "/api/accounts/7/link", { identity_id: 3, reason: "checked" }],
       ["POST", "/api/accounts/8/not-person", { reason: "shared login" }],
       ["DELETE", "/api/accounts/7/link", undefined],
+      ["DELETE", "/api/correlation/link-requests/7", undefined],
       ["POST", "/api/identities/5/merge", { into: 2, reason: "duplicate" }],
       ["POST", "/api/identity-merges/a%20b%2Fc/unmerge", { reason: "wrong person" }],
     ],

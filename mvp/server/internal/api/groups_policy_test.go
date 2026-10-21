@@ -168,6 +168,12 @@ func TestGroupsPolicyAPI_Privileges(t *testing.T) {
 	other := e.user("other", "alice")
 	e.grant("/api/groups/folders/"+app, "create", "alice", "")
 	e.grant("/api/groups/"+ref, "read", "alice", "")
+	// a policy group she may not view is unknown to her (#404): no admin or read refusal names it
+	denied(t, other, "POST", "/api/groups/policy/apply", body2, "create")
+	if r := other.do("POST", "/api/groups/policy/diff", body2); r.Code != 422 || strings.Contains(r.Body.String(), pid) {
+		t.Errorf("diff of a hidden group = %d %s", r.Code, r.Body)
+	}
+	e.grant("/api/groups/"+pid, "view", "alice", "")
 	denied(t, other, "POST", "/api/groups/policy/apply", body2, "admin")
 	denied(t, other, "POST", "/api/groups/policy/diff", body2, "read")
 	denied(t, other, "GET", "/api/groups/"+pid+"/policy", "", "read")
@@ -228,13 +234,51 @@ func TestGroupsPolicyDefinedHiddenGroupNoID(t *testing.T) {
 		t.Run(route, func(t *testing.T) {
 			path := "/api/groups/policy/" + route
 			rec := bob.do("POST", path, body("sec:secret"))
-			if rec.Code != 403 || strings.Contains(rec.Body.String(), secret) {
+			want := 403 // an apply is refused as a create the caller lacks; a diff finds the name unknown (#404)
+			if route == "diff" {
+				want = 422
+			}
+			if rec.Code != want || strings.Contains(rec.Body.String(), secret) || strings.Contains(rec.Body.String(), "object_id") {
 				t.Errorf("defining a hidden group: %d %s", rec.Code, rec.Body)
+			}
+			if route == "diff" && !strings.Contains(rec.Body.String(), "unknown_group") {
+				t.Errorf("want an unknown_group finding: %s", rec.Body)
+			}
+			if route == "apply" && !strings.Contains(rec.Body.String(), "privilege_required") {
+				t.Errorf("want privilege_required: %s", rec.Body)
 			}
 			// a group the caller can view still names itself in the refusal
 			rec = bob.do("POST", path, body("sec:seen3"))
 			if rec.Code != 403 || !strings.Contains(rec.Body.String(), seen) {
 				t.Errorf("defining a viewable group: %d %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+// TestGroupsPolicyDefinedHiddenFolderNoID: a change that defines a group under
+// a folder the caller may not view is refused like one under a folder that does
+// not exist, without the folder's id (#404).
+func TestGroupsPolicyDefinedHiddenFolderNoID(t *testing.T) {
+	e := newPrivEnv(t)
+	hid := e.admin.folder("", "hid")
+	e.admin.group(hid, "other")
+	bob := e.user("bob", "bob")
+	body := func(name string) string {
+		return policyReq(map[string]string{"groups/p.cedar": policyCedar(name, `principal has department && principal.department == "x"`, "")}, "", "", false)
+	}
+	for _, route := range []string{"diff", "apply"} {
+		t.Run(route, func(t *testing.T) {
+			path := "/api/groups/policy/" + route
+			hidden := bob.do("POST", path, body("hid:newgrp"))
+			missing := bob.do("POST", path, body("nofolder:newgrp"))
+			if hidden.Code != missing.Code {
+				t.Errorf("hidden folder = %d %s, missing folder = %d %s", hidden.Code, hidden.Body, missing.Code, missing.Body)
+			}
+			for _, rec := range []string{hidden.Body.String(), missing.Body.String()} {
+				if strings.Contains(rec, hid) || strings.Contains(rec, "object_id") {
+					t.Errorf("a folder the caller may not view is named: %s", rec)
+				}
 			}
 		})
 	}
