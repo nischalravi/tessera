@@ -2,14 +2,27 @@ package mining
 
 import (
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
 // Load reads the tenant's standing access: for every active person, the
 // groups their active accounts hold through a grant that does not expire
 // (a JIT or other timed grant is not a pattern to turn into a role), and the
-// entitlement sets of the active business roles. A missing attribute is "".
+// entitlement sets of the active business roles. Tessera's own reference groups
+// (access.IsRefGroup: assurance level, sponsor eligibility) are derived, not
+// grantable access, so they are left out of both (#405). A missing attribute is "".
 func Load(tx *store.TenantTx) (Input, error) {
+	groups, err := tx.Groups()
+	if err != nil {
+		return Input{}, err
+	}
+	internal := map[int64]bool{}
+	for _, g := range groups {
+		if access.IsRefGroup(g) {
+			internal[g.ID] = true
+		}
+	}
 	people, err := tx.Identities()
 	if err != nil {
 		return Input{}, err
@@ -38,7 +51,7 @@ func Load(tx *store.TenantTx) (Input, error) {
 			continue
 		}
 		dk, gid, err := graph.ParseKey(e.Dst)
-		if err != nil || dk != "group" {
+		if err != nil || dk != "group" || internal[gid] {
 			continue
 		}
 		id, ok := owner[aid]
@@ -77,6 +90,9 @@ func Load(tx *store.TenantTx) (Input, error) {
 	}
 	byRole := map[string][]int64{}
 	for _, e := range ents {
+		if internal[e.GroupID] {
+			continue
+		}
 		byRole[e.RoleID] = append(byRole[e.RoleID], e.GroupID)
 	}
 	for _, r := range roles {
