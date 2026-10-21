@@ -264,9 +264,11 @@ func (e *Entra) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 	case len(parts) == 3 && parts[0] == "servicePrincipals" && parts[2] == "appRoleAssignments" && r.Method == http.MethodGet:
 		var rows []*EntraRole
+		client := "" // the stored principal id; the next link never repeats the request path
 		for _, ra := range e.Roles {
 			if ra.ClientSP == parts[1] {
 				rows = append(rows, ra)
+				client = ra.ClientSP
 			}
 		}
 		from, to, next := window(r.URL.Query().Get("skip"), len(rows), e.size())
@@ -274,7 +276,7 @@ func (e *Entra) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, ra := range rows[from:to] {
 			vals = append(vals, map[string]any{"id": ra.ID, "appRoleId": ra.RoleID, "resourceId": ra.Resource, "createdDateTime": ra.Created})
 		}
-		e.page(w, "servicePrincipals/"+parts[1]+"/appRoleAssignments", vals, next)
+		e.page(w, "servicePrincipals/"+client+"/appRoleAssignments", vals, next)
 	case len(parts) == 4 && parts[0] == "servicePrincipals" && parts[2] == "appRoleAssignments" && r.Method == http.MethodDelete:
 		for i, ra := range e.Roles {
 			if ra.ID == parts[3] && ra.ClientSP == parts[1] {
