@@ -102,6 +102,10 @@ GET    /api/audit/checkpoints                        audit.read      -
 GET    /api/audit/keys                               audit.read      -
 POST   /api/audit/verify                             audit.verify    -
 GET    /api/audit/export                             audit.read      -
+GET    /api/admin/retention                          admin.read      -  # issue #298
+GET    /api/admin/archive/segments                   audit.read      -  # issue #298
+POST   /api/admin/archive/segments/{segment_id}/verify audit.verify  -  # issue #298
+GET    /api/admin/archive/segments/{segment_id}/export audit.read    STEP_UP_ADMIN  # issue #298
 GET    /api/readiness/templates                      connections.read   -
 GET    /api/readiness/templates/{type}               connections.read   -
 PUT    /api/readiness/overlays/{type}                connections.manage STEP_UP_POLICY
@@ -174,6 +178,13 @@ GET    /api/catalog                                  requests.create -  # issue 
 PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
 GET    /api/request-settings                          requests.create  -  # issue #298
 PUT    /api/request-settings                          catalog.manage  STEP_UP_POLICY  # issue #298
+GET    /api/questionnaires                           catalog.manage  -  # issue #298
+POST   /api/questionnaires                           catalog.manage  -  # issue #298
+GET    /api/questionnaires/needed                    requests.create -  # issue #298
+GET    /api/questionnaires/{id}                      catalog.manage  -  # issue #298
+PUT    /api/questionnaires/{id}                      catalog.manage  -  # issue #298
+POST   /api/questionnaires/{id}/retire               catalog.manage  -  # issue #298
+PUT    /api/questionnaires/{id}/attachments          catalog.manage  -  # issue #298
 POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
 GET    /api/requests                                 requests.create -  # issue #164 (scope=pending|all: requests.decide or graph.read)
 GET    /api/requests/{request_id}                    requests.create -  # issue #164

@@ -33,6 +33,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/questionnaires"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
@@ -214,6 +215,9 @@ type Submission struct {
 	Justification string
 	DurationHours *float64 // nil: each item's default, then the tenant's
 	Attachments   []string // references, only if the tenant's settings allow them
+	// Answers are the answers to the questionnaires the items ask (questionnaire id ->
+	// question id -> value); Submit validates them against the version in force.
+	Answers map[string]map[string]any
 }
 
 // Submit files one pending line per beneficiary and item, or none.
@@ -270,8 +274,15 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 			lines = append(lines, l)
 		}
 	}
+	checked, perItem, err := checkAnswers(tx, lines, s.Answers)
+	if err != nil {
+		return "", nil, err
+	}
 	for _, l := range lines {
 		if err := tx.InsertRequestLine(l); err != nil {
+			return "", nil, err
+		}
+		if err := questionnaires.Record(tx, store.QSubjectRequestLine, l.ID, forItem(checked, perItem[l.CatalogItemID]), by.Display, now); err != nil {
 			return "", nil, err
 		}
 		ben, err := tx.Identity(l.BeneficiaryID)
@@ -295,6 +306,9 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 	detail := ojson.Object{{Key: "batch_id", Value: batch}, {Key: "lines", Value: ids}, {Key: "justification", Value: just}}
 	if len(attachments) > 0 {
 		detail = append(detail, ojson.KV{Key: "attachments", Value: attachments})
+	}
+	if len(checked) > 0 {
+		detail = append(detail, ojson.KV{Key: "questionnaires", Value: questionnaires.AuditDetail(checked)})
 	}
 	if err := tx.Audit(now, by.Display, "request.submit", detail); err != nil {
 		return "", nil, err

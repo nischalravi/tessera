@@ -315,7 +315,7 @@ func (s *Server) auditVerify(_ http.ResponseWriter, r *http.Request, p *params) 
 	if err != nil {
 		return nil, err
 	}
-	opts := audit.VerifyOptions{Keys: pub, Anchors: anchors, Now: time.Now().UTC()}
+	opts := audit.VerifyOptions{Keys: pub, Anchors: anchors, Now: time.Now().UTC(), Archive: s.archiveSource()}
 	if body.FromSeq != nil {
 		opts.FromSeq = *body.FromSeq
 	}
@@ -333,7 +333,8 @@ func (s *Server) auditVerify(_ http.ResponseWriter, r *http.Request, p *params) 
 			{Key: "from_seq", Value: opts.FromSeq}, {Key: "to_seq", Value: opts.ToSeq},
 			{Key: "result", Value: rep.Result}, {Key: "exit_code", Value: rep.ExitCode},
 			{Key: "events", Value: rep.Events}, {Key: "checkpoints", Value: rep.Checkpoints},
-			{Key: "anchored", Value: rep.Anchored}, {Key: "anchors_checked", Value: anchors != nil}},
+			{Key: "anchored", Value: rep.Anchored}, {Key: "anchors_checked", Value: anchors != nil},
+			{Key: "archived_events", Value: rep.ArchivedEvents}},
 			audit.At(s.clock()))
 		return err
 	})

@@ -113,7 +113,15 @@ type Config struct {
 	AWSCatalogVersion string
 	// BackupDir (TESSERA_BACKUP_DIR) turns on scheduled encrypted backups
 	// every BackupEveryMinutes, keeping the newest BackupKeep (issue #171).
-	BackupDir             string
+	BackupDir string
+	// ArchiveDir (TESSERA_ARCHIVE_DIR) is where the archival job (issue #298)
+	// keeps sealed segments of records past their retention; ArchiveURL
+	// (TESSERA_ARCHIVE_URL) is an http(s) object store used instead, reached
+	// through internal/safehttp. With neither, ArchiveDirFor falls back to
+	// BackupDir/archive, then, outside prod, to var/archive next to the
+	// database; in prod an unset archive means nothing is archived or deleted.
+	ArchiveDir            string
+	ArchiveURL            string
 	BackupEveryMinutes    int
 	BackupKeep            int
 	AccessTokenTTLSeconds int
@@ -327,6 +335,17 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.AuthRateBurst = integer("TESSERA_AUTH_RATE_BURST", 30, 1, 100_000)
 	c.AnonRateBurst = integer("TESSERA_ANON_RATE_BURST", 120, 1, 100_000)
 	c.BackupDir = str("TESSERA_BACKUP_DIR", "", "")
+	c.ArchiveDir = str("TESSERA_ARCHIVE_DIR", "", "")
+	c.ArchiveURL = str("TESSERA_ARCHIVE_URL", "", "")
+	if u := c.ArchiveURL; u != "" {
+		pu, err := url.Parse(u)
+		switch {
+		case err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" || pu.User != nil || pu.RawQuery != "" || pu.Fragment != "":
+			bad("TESSERA_ARCHIVE_URL: %q is not an http(s) URL without credentials, query or fragment", u)
+		case pu.Scheme != "https" && prod:
+			bad("TESSERA_ARCHIVE_URL must be https with TESSERA_ENV=prod")
+		}
+	}
 	c.BackupEveryMinutes = integer("TESSERA_BACKUP_EVERY_MINUTES", 360, 5, 7*24*60)
 	c.BackupKeep = integer("TESSERA_BACKUP_KEEP", 28, 1, 10_000)
 	c.GroupsSyncBudget = integer("TESSERA_GROUPS_SYNC_BUDGET", 5000, 1, 10_000_000)
@@ -486,6 +505,21 @@ func Load(getenv func(string) string) (*Config, error) {
 	}
 	c.outbound = &outboundSettings{env: c.Env, allowLoopback: c.OutboundAllowLoopback}
 	return c, nil
+}
+
+// ArchiveDirFor is the directory of the local archive store for a database
+// path: TESSERA_ARCHIVE_DIR, else BackupDir/archive, else (outside prod) var/archive
+// next to the database. Empty: no local archive (prod with none configured).
+func (c *Config) ArchiveDirFor(dbPath string) string {
+	switch {
+	case c.ArchiveDir != "":
+		return c.ArchiveDir
+	case c.BackupDir != "":
+		return filepath.Join(c.BackupDir, "archive")
+	case c.IsProd():
+		return ""
+	}
+	return filepath.Join(localDir(dbPath), "var", "archive")
 }
 
 // MetricsDefaultAddr is the dev and test /metrics listener (loopback).

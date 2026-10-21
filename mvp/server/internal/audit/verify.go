@@ -60,10 +60,16 @@ type Report struct {
 	// AnchorsUnverified counts this tenant's anchor lines whose JWS no
 	// platform key verifies (a reseeded dev database, or a revoked key); they
 	// cannot vouch for anything and are ignored.
-	AnchorsUnverified int       `json:"anchors_unverified,omitempty"`
-	Result            string    `json:"result"` // ok | warning | failed
-	ExitCode          int       `json:"exit_code"`
-	Problems          []Problem `json:"problems"`
+	AnchorsUnverified int `json:"anchors_unverified,omitempty"`
+	// ArchivedThrough is the last seq that is in an archive segment (0: none
+	// archived), in ArchivedSegments segments holding ArchivedEvents events
+	// that this run opened and checked (0 when no ArchiveSource was given).
+	ArchivedThrough  int64     `json:"archived_through,omitempty"`
+	ArchivedSegments int       `json:"archived_segments,omitempty"`
+	ArchivedEvents   int64     `json:"archived_events,omitempty"`
+	Result           string    `json:"result"` // ok | warning | failed
+	ExitCode         int       `json:"exit_code"`
+	Problems         []Problem `json:"problems"`
 }
 
 // VerifyOptions scope and configure a verification.
@@ -77,6 +83,11 @@ type VerifyOptions struct {
 	Now     time.Time
 	// Strict makes stale anchoring (exit 6) an error rather than a warning.
 	Strict bool
+	// Archive opens the archived audit segments (issue #298), so the verifier
+	// checks the whole chain, archived range included. Without it, a chain
+	// with archived events verifies the online part and reports the archived
+	// range as unchecked (a warning, kind archive_unchecked).
+	Archive ArchiveSource
 }
 
 // maxProblems caps the problems listed in one report.
@@ -96,7 +107,7 @@ func Verify(tx *store.TenantTx, slug string, o VerifyOptions) (Report, error) {
 		if len(r.Problems) < maxProblems {
 			r.Problems = append(r.Problems, Problem{Code: code, Kind: kind, Seq: seq, Detail: fmt.Sprintf(format, args...)})
 		}
-		if code == ExitStaleAnchoring && !o.Strict {
+		if code == 0 || (code == ExitStaleAnchoring && !o.Strict) {
 			return
 		}
 		if r.ExitCode == 0 || code < r.ExitCode {
@@ -116,17 +127,37 @@ func Verify(tx *store.TenantTx, slug string, o VerifyOptions) (Report, error) {
 		return r, err
 	}
 	ckSeq := map[int64]bool{}
-	timeAt := map[int64]bool{from: true} // the first event after each checkpoint (stale-anchoring check)
 	for _, c := range checkpoints {
 		ckSeq[c.Seq] = true
+	}
+	// 0. the archived range (issue #298): the online chain starts after it.
+	arch, err := verifyArchive(tx, o, ckSeq, add, &r)
+	if err != nil {
+		return r, err
+	}
+	prevHash := Genesis(tx.Tenant())
+	fetchPrev := from > 1
+	if arch.base > 0 && from <= arch.base+1 {
+		from, prevHash, fetchPrev = arch.base+1, arch.baseHash, false
+	}
+	if !arch.opened && arch.base > 0 { // the archived checkpoints cannot be checked without their events
+		kept := checkpoints[:0:0]
+		for _, c := range checkpoints {
+			if c.Seq >= from {
+				kept = append(kept, c)
+			}
+		}
+		checkpoints = kept
+	}
+	timeAt := map[int64]bool{from: true} // the first event after each checkpoint (stale-anchoring check)
+	for _, c := range checkpoints {
 		timeAt[c.Seq+1] = true
 	}
-	hashAt := map[int64]string{} // hashes at checkpoint seqs
+	hashAt := arch.hashAt // hashes at checkpoint seqs
 	times := map[int64]time.Time{}
 
 	// 1. the chain
-	prevHash := Genesis(tx.Tenant())
-	if from > 1 {
+	if fetchPrev {
 		prev, err := tx.AuditEventBySeq(from - 1)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -176,6 +207,9 @@ func Verify(tx *store.TenantTx, slug string, o VerifyOptions) (Report, error) {
 			}
 			if ckSeq[e.Seq] {
 				hashAt[e.Seq] = e.Hash
+			}
+			if e.Action == ActionArchived {
+				arch.noteAnchor(e.Detail)
 			}
 			if timeAt[e.Seq] {
 				times[e.Seq] = e.OccurredAt
@@ -269,6 +303,9 @@ func Verify(tx *store.TenantTx, slug string, o VerifyOptions) (Report, error) {
 			add(ExitStaleAnchoring, "stale_anchoring", s, "event %d is %s old and no anchored checkpoint covers it",
 				s, o.Now.Sub(t).Round(time.Second))
 		}
+	}
+	if arch.opened && o.FromSeq <= 1 && (to == 0 || to >= head.LastSeq) {
+		arch.checkAnchors(add)
 	}
 	switch {
 	case r.ExitCode != 0:

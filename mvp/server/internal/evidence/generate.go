@@ -126,6 +126,12 @@ func Generate(c *store.TenantTx, in Input) (*Result, error) {
 	}
 	tables = append(tables, table{FileRevoked, revHeader, rev})
 
+	qa, err := questionnaireTable(c, in)
+	if err != nil {
+		return nil, err
+	}
+	tables = append(tables, table{FileQuestionnaires, questionnaireHeader, qa})
+
 	readme := readmeText(in, notes)
 	files := []struct {
 		name string
@@ -539,5 +545,26 @@ func revocationTable(c *store.TenantTx, g *graph.Snapshot, in Input) ([][]string
 			closed, strconv.FormatBool(held), verification})
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i][4] < rows[j][4] })
+	return rows, nil
+}
+
+// ---------------------------------------------------------------- questionnaires
+
+var questionnaireHeader = []string{"subject_kind", "subject_id", "questionnaire_id", "questionnaire", "version", "answers_hash",
+	"answered_by", "answered_at", "answers"}
+
+// questionnaireTable lists the answers given in the period to the questionnaires on requests and
+// review decisions (issue #298): the version each was given against, the SHA-256 the audit event
+// carries, and the answers as JSON keyed by question id.
+func questionnaireTable(c *store.TenantTx, in Input) ([][]string, error) {
+	as, err := c.QuestionnaireAnswersBetween(in.From, in.To)
+	if err != nil {
+		return nil, err
+	}
+	rows := [][]string{}
+	for _, a := range as {
+		rows = append(rows, []string{a.SubjectKind, a.SubjectID, a.QuestionnaireID, a.Title, strconv.Itoa(a.Version), a.Hash,
+			a.AnsweredBy, timeutil.ISO(a.AnsweredAt), a.Answers})
+	}
 	return rows, nil
 }

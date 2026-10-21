@@ -204,6 +204,8 @@ var tables = []string{
 	"queue_jobs", "queue_schedules", "queue_workers", "agent_jobs",
 	// role mining (schema/0420_role_mining.sql)
 	"role_mining_runs", "role_mining_candidates",
+	// log retention settings and archive segments (schema/0400, 0401; issue #298)
+	"retention_policies", "archive_segments", "archive_segment_items",
 	// configuration transport (schema/0211_config_transport.sql)
 	"config_signing_keys", "config_trusted_signers", "config_imports",
 	// native groups (schema/0280_groups.sql, 0284_groups_engine.sql)
@@ -253,6 +255,8 @@ var tables = []string{
 	"grp_provisioners", "grp_provisionable", "grp_sync_groups", "grp_sync_runs", "grp_sync_ops",
 	// group event sinks (schema/0379_group_event_sinks.sql)
 	"grp_event_sinks", "grp_sink_dead_letters",
+	// questionnaires, their versions, attachments and answers (schema/0450_questionnaires.sql)
+	"questionnaires", "questionnaire_versions", "questionnaire_attachments", "questionnaire_answers",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

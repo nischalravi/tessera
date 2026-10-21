@@ -757,9 +757,9 @@ export const jitCreate = (body: { identity_id: number; group_id: number; duratio
   api<JitRequest>("/jit/requests", body);
 
 /** ruleAction: revoking a rule membership needs exclude (from the rule) or flag (to the role owner). */
-export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string, ruleAction?: RuleAction) =>
+export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string, ruleAction?: RuleAction, answers?: QuestionnaireAnswers) =>
   api<{ id: number; decision: string; resolution?: string }>(`/reviews/items/${itemId}/decision`,
-    { decision, comment: comment || null, ...(ruleAction ? { rule_action: ruleAction } : {}) });
+    { decision, comment: comment || null, ...(ruleAction ? { rule_action: ruleAction } : {}), ...(answers ? { answers } : {}) });
 
 // ------------------------------------------------ frozen review populations (issue #110)
 export interface QAItem {
@@ -1329,6 +1329,69 @@ export const requestSettingsPath = "/request-settings";
 export const requestSettings = {
   save: (version: number, s: RequestSettings) => api<RequestSettingsView>(requestSettingsPath, { version, ...s }, "PUT"),
 };
+/** Questionnaires (Governance → Questionnaires, issue #298): forms asked at request time and in review decisions. */
+export type QuestionType = "short_text" | "long_text" | "single_choice" | "multi_choice" | "yes_no" | "date";
+export interface Question {
+  /** Stable across versions; the server assigns "q1", "q2"… to a question saved without one. */
+  id: string;
+  type: QuestionType;
+  text: string;
+  help?: string;
+  required: boolean;
+  /** Choice questions only. */
+  options?: string[];
+  /** Text questions only; 0 or absent: the type's default (200 short, 2000 long). */
+  max_length?: number;
+}
+export interface QuestionnaireSpec { title: string; description: string; questions: Question[] }
+export type QuestionnaireTargetKind = "catalog_item" | "business_role" | "review_campaign" | "privileged";
+export interface QuestionnaireTarget { kind: QuestionnaireTargetKind; target_id: string }
+export interface Questionnaire extends QuestionnaireSpec {
+  id: string;
+  status: "active" | "retired";
+  version: number;
+  targets: QuestionnaireTarget[];
+  created_at: string;
+  updated_by: string;
+  updated_at: string;
+}
+export interface QuestionnaireDetail extends Questionnaire { versions: (QuestionnaireSpec & { version: number })[] }
+export interface QuestionnaireList { questionnaires: Questionnaire[]; types: QuestionType[]; limits: Record<string, number> }
+/** A questionnaire someone must answer now, at its current version. */
+export interface QuestionnaireNeed { id: string; title: string; description: string; version: number; questions: Question[] }
+export type AnswerValue = string | boolean | string[];
+/** question id -> value */
+export type QuestionnaireAnswers = Record<string, AnswerValue>;
+/** questionnaire id -> its answers (what a request sends) */
+export type AnswersByQuestionnaire = Record<string, QuestionnaireAnswers>;
+/** What approvers see: the answers beside the questions, at the version they were given against. */
+export interface AnsweredQuestionnaire {
+  questionnaire_id: string;
+  title: string;
+  version: number;
+  answers_hash: string;
+  answered_by: string;
+  answered_at: string;
+  items: { question_id: string; text: string; type: QuestionType; answer: AnswerValue }[];
+}
+export const questionnairesPath = "/questionnaires";
+const questionnairePath = (id: string, rest = "") => questionnairesPath + "/" + encodeURIComponent(id) + rest;
+/** The query for what a form must ask: catalog items, a role, a review campaign or a review item. */
+export const neededPath = (q: { catalogItemIds?: string[]; roleId?: string; reviewCampaignId?: number; reviewItemId?: number }) => {
+  const p = new URLSearchParams();
+  if (q.catalogItemIds?.length) p.set("catalog_item_ids", q.catalogItemIds.join(","));
+  if (q.roleId) p.set("role_id", q.roleId);
+  if (q.reviewCampaignId) p.set("review_campaign_id", String(q.reviewCampaignId));
+  if (q.reviewItemId) p.set("review_item_id", String(q.reviewItemId));
+  return questionnairesPath + "/needed?" + p.toString();
+};
+export const questionnaires = {
+  create: (spec: QuestionnaireSpec) => api<Questionnaire>(questionnairesPath, spec),
+  edit: (id: string, version: number, spec: QuestionnaireSpec) => api<QuestionnaireDetail>(questionnairePath(id), { version, ...spec }, "PUT"),
+  retire: (id: string) => api<Questionnaire>(questionnairePath(id, "/retire"), {}),
+  attach: (id: string, targets: QuestionnaireTarget[]) => api<Questionnaire>(questionnairePath(id, "/attachments"), { targets }, "PUT"),
+};
+
 export type RequestStatus = "pending" | "approved" | "denied" | "cancelled" | "expired" | "removed";
 export interface RequestLine {
   id: string;
@@ -1348,13 +1411,15 @@ export interface RequestLine {
   expires_at: string | null;
   closed_at: string | null;
   events?: { event: string; actor: string; note: string | null; at: string }[];
+  /** The requester's answers, in the detail view only. */
+  questionnaires?: AnsweredQuestionnaire[];
   stages: RequestStage[];
   can_approve: boolean;
   can_cancel: boolean;
   can_remove: boolean;
 }
 
-export const submitRequest = (body: { beneficiary_ids: number[]; catalog_item_ids: string[]; justification: string; duration_hours?: number | null; attachments?: string[] }) =>
+export const submitRequest = (body: { beneficiary_ids: number[]; catalog_item_ids: string[]; justification: string; duration_hours?: number | null; attachments?: string[]; answers?: AnswersByQuestionnaire }) =>
   api<{ batch_id: string; lines: RequestLine[] }>("/requests", body);
 const line = (id: string, action: string, body: object = {}) => api<RequestLine>(`/requests/${encodeURIComponent(id)}/${action}`, body);
 export const approveRequest = (id: string, reason?: string) => line(id, "approve", reason ? { reason } : {});
@@ -1641,6 +1706,7 @@ export interface RoleRequest {
   decision_reason: string | null;
   can_approve: boolean;
   can_cancel: boolean;
+  questionnaires?: AnsweredQuestionnaire[];
 }
 
 const rolePath = (id: string, rest = "") => `/roles/${encodeURIComponent(id)}${rest}`;
@@ -1655,9 +1721,9 @@ export const roles = {
     api<RoleChange>(rolePath(id, "/members" + dry(dryRun)), { identity_id: identityId, reason }),
   unassign: (id: string, identityId: number, reason: string, dryRun?: boolean) =>
     api<RoleChange>(rolePath(id, `/members/${identityId}/remove` + dry(dryRun)), { reason }),
-  request: (roleId: string, beneficiaryId: number, justification: string) =>
+  request: (roleId: string, beneficiaryId: number, justification: string, answers?: AnswersByQuestionnaire) =>
     // not resumable after a step-up: the body names a person, and a pending action is kept in browser storage
-    apiNoResume<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification }),
+    apiNoResume<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification, ...(answers ? { answers } : {}) }),
   approve: (id: string, reason?: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/approve`, reason ? { reason } : {}),
   deny: (id: string, reason: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/deny`, { reason }),
   cancel: (id: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/cancel`, {}),
@@ -3696,7 +3762,8 @@ export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rej
 /** The change types of design §15.2 that the API accepts. */
 export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
-  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke";
+  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
+  | "groups.loader.save" | "retention.update";
 
 export interface AdminPersonRef { id: string; display_name: string }
 
@@ -3745,6 +3812,65 @@ export interface PlatformHealth {
 }
 
 export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }
+
+// ------------------------------------------------------------ log retention and the archive (issue #298)
+
+/** The data classes with a retention setting, in the order the archival job runs them. */
+export type RetentionClass = "audit" | "review_campaigns" | "requests" | "job_runs" | "notifications";
+
+export interface RetentionSetting {
+  class: RetentionClass; label: string; days: number; custom: boolean; default_days: number; min_days: number; max_days: number;
+  /** What the age of a record is counted from. */
+  basis: string; updated_at?: string; updated_by?: string;
+}
+
+export interface ArchiveStatus { enabled: boolean; location: "local" | "remote" | ""; every_seconds: number }
+
+/** GET /api/admin/retention. */
+export interface RetentionView { archive: ArchiveStatus; settings: RetentionSetting[] }
+
+export type SegmentStatus = "written" | "verified" | "purged" | "failed";
+
+export interface ArchiveSegment {
+  id: string; class: RetentionClass; status: SegmentStatus; count: number;
+  /** Audit segments: the chain range they cover. */
+  seq_from?: number; seq_to?: number; range_from: string; range_to: string; first_hash?: string; last_hash?: string;
+  sha256: string; size_bytes: number; location: "local" | "remote"; created_at: string; verified_at: string | null; purged_at: string | null;
+}
+
+/** GET /api/admin/archive/segments. */
+export interface ArchiveList { archive: ArchiveStatus; segments: ArchiveSegment[] }
+
+/** POST /api/admin/archive/segments/{id}/verify: a segment that fails is the answer (ok false), not an error. */
+export interface SegmentCheck { segment_id: string; ok: boolean; checks: string[] | null; problem?: string; records: number; checked_at: string }
+
+export const archive = {
+  verify: (id: string) => api<SegmentCheck>(`/admin/archive/segments/${encodeURIComponent(id)}/verify`, {}),
+};
+
+/**
+ * The segment's records as NDJSON, for saving (the read-only restore). The server checks the segment first and
+ * refuses a tampered one (409). A step-up is asked for like any other action.
+ */
+export async function downloadArchiveSegment(id: string): Promise<Blob> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/admin/archive/segments/${encodeURIComponent(id)}/export`, { credentials: "same-origin" });
+  } catch {
+    throw new ApiError("Tessera can't reach its API right now.", 0, null);
+  }
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    if (res.status === 401 && j?.error === "step_up_required") window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+  }
+  return res.blob();
+}
 
 /** Admin-change workflow calls. Approving needs the hash of the payload the admin reviewed. */
 export const adminChanges = {

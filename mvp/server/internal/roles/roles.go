@@ -40,6 +40,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/questionnaires"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -1253,6 +1254,13 @@ func RoleDrift(tx *store.TenantTx, id string, now time.Time) (*Drift, error) {
 // Request files a pending request for a requestable role. forOthers allows
 // beneficiaries other than the actor's own identity.
 func Request(tx *store.TenantTx, id string, beneficiary int64, justification string, by Actor, forOthers bool, now time.Time) (*store.RoleRequest, error) {
+	return RequestAnswered(tx, id, beneficiary, justification, by, forOthers, now, nil)
+}
+
+// RequestAnswered is Request with the answers to the questionnaires the role asks (its own and,
+// for a high-risk role, the privileged one; issue #298), validated against the version in force.
+func RequestAnswered(tx *store.TenantTx, id string, beneficiary int64, justification string, by Actor, forOthers bool, now time.Time,
+	answers map[string]map[string]any) (*store.RoleRequest, error) {
 	just := strings.TrimSpace(justification)
 	if just == "" || len(just) > MaxJustify {
 		return nil, refuse(422, "justification_required", "a justification of 1 to %d characters is required", MaxJustify)
@@ -1296,12 +1304,31 @@ func Request(tx *store.TenantTx, id string, beneficiary int64, justification str
 			}
 		}
 	}
+	needs, err := questionnaires.ForRole(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	checked, err := questionnaires.Validate(needs, answers)
+	if err != nil {
+		var qe *questionnaires.Error
+		if errors.As(err, &qe) {
+			return nil, refuse(qe.Status, qe.Code, "%s", qe.Msg)
+		}
+		return nil, err
+	}
 	q := &store.RoleRequest{ID: uuid.NewString(), RoleID: id, BeneficiaryID: beneficiary, RequestedBy: by.UserID.String(),
 		Justification: just, Status: store.RequestPending, RequestedAt: now}
 	if err := tx.InsertRoleRequest(q); err != nil {
 		return nil, err
 	}
-	return q, tx.Audit(now, by.Display, "role.request.submit", reqDetail(q, nil))
+	if err := questionnaires.Record(tx, store.QSubjectRoleRequest, q.ID, checked, by.Display, now); err != nil {
+		return nil, err
+	}
+	detail := reqDetail(q, nil)
+	if len(checked) > 0 {
+		detail = append(detail, ojson.KV{Key: "questionnaires", Value: questionnaires.AuditDetail(checked)})
+	}
+	return q, tx.Audit(now, by.Display, "role.request.submit", detail)
 }
 
 func reqDetail(q *store.RoleRequest, reason *string) ojson.Object {

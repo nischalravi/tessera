@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"time"
 
@@ -35,6 +36,10 @@ verify exit codes: 0 ok, 2 hash mismatch (edited row), 3 seq gap or duplicate
 (deleted row) or truncation (the chain ends before its head or its newest
 signed checkpoint), 4 checkpoint signature invalid, 5 anchor missing or
 mismatched, 6 stale anchoring (only with -strict; otherwise a warning).
+
+Events moved to the archive (issue #298) are checked too when the archive is
+configured (TESSERA_ENV, TESSERA_ARCHIVE_DIR or TESSERA_ARCHIVE_URL, and the KEK, as
+for the server); otherwise verify warns that the archived range was not checked.
 
 Without -anchors, a database owner who deletes the newest events, their
 checkpoint rows and rewinds the head is not detected; with -anchors only the
@@ -88,7 +93,7 @@ func auditCmd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 	switch sub {
 	case "verify":
-		return auditVerify(ctx, st, tenants, *from, *to, *anchors, *strict, *asJSON, stdout)
+		return auditVerify(ctx, st, tenants, *from, *to, *anchors, *strict, *asJSON, archiveSourceFor(*db, st), stdout)
 	case "checkpoint":
 		return auditCheckpoint(ctx, st, *db, tenants, stdout)
 	default:
@@ -118,7 +123,7 @@ func selectTenants(ctx context.Context, st *store.DB, slug string) ([]store.Tena
 }
 
 func auditVerify(ctx context.Context, st *store.DB, tenants []store.Tenant, from, to int64, anchorURL string,
-	strict, asJSON bool, stdout io.Writer) error {
+	strict, asJSON bool, src audit.ArchiveSource, stdout io.Writer) error {
 	pub, err := audit.PlatformPublicKeys(ctx, st)
 	if err != nil {
 		return err
@@ -140,7 +145,7 @@ func auditVerify(ctx context.Context, st *store.DB, tenants []store.Tenant, from
 		if err := st.ReadTenant(ctx, t.ID, func(tx *store.TenantTx) error {
 			var err error
 			rep, err = audit.Verify(tx, t.Slug, audit.VerifyOptions{FromSeq: from, ToSeq: to, Keys: pub,
-				Anchors: anchors, Now: time.Now().UTC(), Strict: strict})
+				Anchors: anchors, Now: time.Now().UTC(), Strict: strict, Archive: src})
 			return err
 		}); err != nil {
 			return fmt.Errorf("audit: verify %s: %w", t.Slug, err)
@@ -158,8 +163,12 @@ func auditVerify(ctx context.Context, st *store.DB, tenants []store.Tenant, from
 		}
 	} else {
 		for _, r := range reports {
-			fmt.Fprintf(stdout, "%-12s %-7s events=%d seq=%d..%d head=%d checkpoints=%d anchored=%d\n", r.Tenant, r.Result,
+			fmt.Fprintf(stdout, "%-12s %-7s events=%d seq=%d..%d head=%d checkpoints=%d anchored=%d", r.Tenant, r.Result,
 				r.Events, r.FirstSeq, r.LastSeq, r.HeadSeq, r.Checkpoints, r.Anchored)
+			if r.ArchivedThrough > 0 {
+				fmt.Fprintf(stdout, " archived=1..%d (%d events checked)", r.ArchivedThrough, r.ArchivedEvents)
+			}
+			fmt.Fprintln(stdout)
 			for _, p := range r.Problems {
 				fmt.Fprintf(stdout, "  [%d] %s seq=%d: %s\n", p.Code, p.Kind, p.Seq, p.Detail)
 			}
@@ -212,4 +221,26 @@ func operatorName() string {
 		}
 	}
 	return "operator"
+}
+
+// archiveSourceFor opens the archive for the chain verification when the
+// environment is configured like the server's; nil (a warning in the report)
+// when it is not.
+func archiveSourceFor(dbFile string, st *store.DB) audit.ArchiveSource {
+	if os.Getenv("TESSERA_ENV") == "" {
+		return nil
+	}
+	cfg, err := config.Load(os.Getenv)
+	if err != nil {
+		return nil
+	}
+	sealer, err := cfg.Sealer(config.DevKEKPath(dbFile))
+	if err != nil {
+		return nil
+	}
+	svc, err := newArchive(cfg, dbFile, st, sealer, timeutil.System, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil || !svc.Enabled() {
+		return nil
+	}
+	return svc
 }

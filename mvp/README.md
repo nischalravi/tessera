@@ -581,7 +581,8 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/provisioning/findings[?status=open|resolved]` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
-`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?}` ·
+`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?, answers?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/abac/policies` · `GET|PUT /api/abac/policies/{id}` · `POST /api/abac/policies/{id}/retire` ·
@@ -624,7 +625,8 @@ when a second reviewer is needed) ·
 `POST /api/affiliations/{id}/end {reason}` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
-`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?}` ·
+`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?, answers?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
@@ -1557,6 +1559,46 @@ cannot bypass them:
 | `attachments_allowed` | off | `attachments` on `POST /api/requests`: `422 attachments_not_allowed`. An attachment is a reference (a link or ticket id, at most 5); Tessera stores no files, the references are in the `request.submit` audit event |
 | `history_visibility` | `readers` | `involved`: graph readers no longer see other people's requests (the people on a request, its approvers and deciders still do) |
 | `for_others` | `permission` | `nobody`, `managers` (the beneficiary's manager only) or `permission` (`requests.create_for_others`): `403 for_others_not_allowed`. Business-role requests (`/api/role-requests`) are not covered |
+
+### Questionnaires
+
+**Governance → Questionnaires** (`/governance/questionnaires`, issue #298) holds forms asked of requesters and reviewers
+("why do you need this?", risk questions for privileged items). Tables `questionnaires`,
+`questionnaire_versions` (append-only), `questionnaire_attachments` and `questionnaire_answers`
+(schema `0450`).
+
+- **Definition.** A title, a description and ordered questions of six types: `short_text`, `long_text`,
+  `single_choice`, `multi_choice`, `yes_no`, `date`. Each has a `required` flag; text questions a `max_length`
+  (default 200 short, 2000 long; at most 500 and 5000), choice questions 2 to 20 distinct `options`. At most 30
+  questions. A question keeps its `id` across versions.
+- **Versions.** `PUT /api/questionnaires/{id} {version, title, description, questions}` appends the next version
+  (`409 version_conflict` if the caller read an older one). An answer stores the version it was given against, so
+  an approver always sees the question as it was asked. `POST .../retire` stops it being asked and removes its
+  attachments; its answers stay. Create, edit, retire and attach need `catalog.manage` and are audited
+  (`questionnaire.create|update|retire|attach`).
+- **Where it is asked** (`PUT /api/questionnaires/{id}/attachments {targets:[{kind,target_id}]}`, one questionnaire per
+  target): a `catalog_item` or `business_role` (the requester answers at submit); `privileged` (target `*`: every
+  catalog item whose group has the `privileged` flag, and every `high`-risk role, which is the role version of that flag);
+  or a `review_campaign`. An item can ask two questionnaires (its own and the privileged one); a cart asks each once.
+- **Requests.** `POST /api/requests` and `POST /api/role-requests` take `answers: {questionnaire_id: {question_id: value}}`
+  (string, boolean or list of strings by type). The server validates them against the version in force:
+  `422 questionnaire_required`, `answer_required`, `invalid_answer`, `unknown_question`, `unexpected_questionnaire`.
+  The form reads what to ask from `GET /api/questionnaires/needed`. The `request.submit` and `role.request.submit`
+  audit events carry `questionnaires: [{questionnaire_id, version, answers_hash}]` (SHA-256 of the answers as JSON
+  with sorted keys), not the answers. Approvers see the answers with the questions in the request side panel
+  (`GET /api/requests/{id}`, `questionnaires`) and on role requests.
+- **Access reviews: answered per decision**, not once per campaign. Review items are decided one by one, each decision
+  has its own audit event and a campaign has several reviewers, so the answers belong to the decision.
+  `POST /api/reviews/items/{id}/decision` takes `answers: {question_id: value}` for the campaign's questionnaire; a
+  decision without them is refused with `422`, and an already decided item asks nothing. The answers are stored with
+  the item and a `review.answers` audit event (in the same transaction) records the questionnaire, its version and
+  the hash. In the UI a campaign with a questionnaire is decided from the item panel, which shows the form; the row
+  buttons open the panel and bulk keep is off. The Inbox quick keys do not show the form: the server refuses with
+  the questionnaire's name, and the decision is made from Governance → Access reviews.
+- **Evidence packs** (#258) get `questionnaire_answers.csv`: answers given in the period with the version, hash and
+  answers JSON, listed under SOC 2 CC6.2, SOX ITGC-Provisioning and ISO A.5.18.
+- Not covered: onboarding (joiner) has no hook for a form (HRIS-driven, no person to answer); answers are not saved
+  in request drafts; removal requests, JIT and SoD mitigation requests ask nothing.
 
 ### Contractors, guests and end dates
 
@@ -3272,7 +3314,7 @@ Every tenant has an append-only, hash-chained audit log (`audit_events`; design
 `docs/design/phase-0-platform-security.md` §13). Each event's hash is SHA-256 over
 `"tessera-audit-v1" 0x00` and the RFC 8785 (JCS) form of the event, and links to the previous
 event; `server/testdata/golden/audit_v1.json` is a test vector for independent verifiers.
-SQLite triggers refuse UPDATE and DELETE. Every API call writes one `http.request` event (the
+SQLite triggers refuse UPDATE and DELETE (the one exception is an event inside a verified archive segment: see "Log retention and the archive"). Every API call writes one `http.request` event (the
 route template, status, sorted query keys, never bodies or query values); a read whose event
 cannot be written answers `503 {"error":"audit_unavailable"}` instead of the data, and so does a
 POST that committed no domain event of its own (and `POST /api/simulate`, whose answer is data). Domain events
@@ -3328,6 +3370,70 @@ credential endpoints, so give the process credentials through the SDK's other so
 (environment, web identity / IRSA) and set `AWS_REGION`. `AWS_CA_BUNDLE` is not supported with the
 safehttp client; trust a private CA through the system roots. `tessera audit verify -anchors`
 reads `file://` anchor files only; verifying against the bucket is a later step.
+
+## Log retention and the archive (issue #298)
+
+Admin → Retention sets, per tenant, how long each data class stays online. A scheduled job on the durable
+queue (`archive_sweep`, every 6 hours per tenant) seals what is older into archive segments and then removes it
+online. Admin → Archive lists the segments, verifies one and exports it.
+
+| Class | Default | Minimum | Counted from |
+| --- | --- | --- | --- |
+| Audit events (`audit`) | 2 years | 1 year | the event time; the chain head is never archived |
+| Closed review campaigns (`review_campaigns`) | 2 years | 1 year | creation, `completed` campaigns only, with items, frozen population and auto-decisions; one that group attestation or a role exclusion still points at stays online |
+| Closed and expired requests (`requests`) | 2 years | 1 year | the close time of a denied, cancelled, expired or removed request, with its event log and stages |
+| Job runs (`job_runs`) | 90 days | 30 days | the start of a finished run |
+| Notification outbox (`notifications`) | 90 days | 30 days | creation, delivered, skipped or dead only (with the email delivery log) |
+
+The ceiling of every class is 10 years. The floors are in `internal/retention` and enforced on the server: the
+change request is a 422 below one. A floor raised later lifts a stored lower value to it.
+
+**Changing a setting** is an admin change request of type `retention.update` (`POST /api/admin/change-requests`,
+`{"type":"retention.update","payload":{"audit_days":400,"job_runs_days":45}}`; only the classes that change).
+It needs a step-up from the requester and from a second admin who approves the payload hash, has no cooling-off,
+and is audited with `admin.change.*` and `retention.updated` in the transaction that applies it.
+
+**Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL` (an http(s) object
+store, PUT and GET of `<base>/<tenant>/<class>/<segment>.seg`, always through `internal/safehttp`; https in prod),
+else the directory `TESSERA_ARCHIVE_DIR`, else `TESSERA_BACKUP_DIR/archive`, else, outside prod, `var/archive` next
+to the database. In prod with none of them nothing is archived or deleted, and Admin → Retention says so. While archiving is on
+the 30-day clean-up of finished job runs is left to the archive; with it off that clean-up is unchanged.
+Back the archive store up with the database: a restore verifies the audit chain without opening it and warns
+(`archive_unchecked`); `tessera audit verify` opens it when it runs with the server's environment.
+
+A segment is NDJSON, gzip-compressed and sealed under the KEK (`internal/seal`) with an AAD that binds tenant, class,
+segment id and range (a segment does not open as another tenant's, class's or range). Per segment, each step its own
+transaction, so a crash at any point loses nothing and the next run resumes:
+
+1. **written**: the blob is put in the store, then catalogued (`archive_segments`);
+2. **verified**: it is read back, its checksum, seal, count and content are checked (an audit segment's every hash and
+   link); a segment that fails is marked `failed`, its records stay online and are archived again in a new one;
+3. **purged**: it is checked once more, then in one transaction the online records are deleted, the anchor event is
+   appended and the segment is marked purged. The schema refuses the delete unless the segment is `verified`
+   (`schema/0402_archive_guards.sql`; on Postgres the application role has no DELETE on `audit_events`, and
+   `tessera_archive_purge_audit` does it for the transaction's tenant). A record that changed since it was archived is
+   not deleted with the stale copy; it is archived again later.
+
+**The audit chain stays verifiable.** An audit segment records its seq range, the `prev_hash` before it and its first
+and last hash. The purge appends an `audit.archived` event to the chain naming the segment, range and hashes ("archived
+up to N"). `audit.Verify` (`POST /api/audit/verify`, `tessera audit verify`) checks the purged segments join up from
+genesis with no gap or overlap, opens each one and recomputes every event hash and link, checks the signed checkpoints
+that fall inside, requires an `audit.archived` anchor for every purged segment (online or inside a later segment), and
+starts the online chain at N+1 from the last archived hash. A segment that is altered, replaced, missing or
+unreadable is exit 2 (`archive_corrupt`, `archive_hash_mismatch`, `archive_broken_link`, `archive_ends`), a gap
+exit 3, a forged or dropped catalogue row a missing anchor. With no archive source, verification still checks the online
+chain and reports the archived range as unchecked (a warning, never `ok`). The golden vector and the hash contract are
+unchanged.
+
+Routes: `GET /api/admin/retention` (`admin.read`: settings, defaults, floors, archive state),
+`GET /api/admin/archive/segments?class=&status=&limit=` (`audit.read`),
+`POST /api/admin/archive/segments/{id}/verify` (`audit.verify`: reads the segment back and checks it; a segment that
+fails is the answer, `ok: false`), `GET /api/admin/archive/segments/{id}/export` (`audit.read` and a step-up: NDJSON
+after the same checks, the read-only restore; nothing is written back online). Every verify and export is audited
+(`archive.segment.checked`, `archive.segment.exported`), as are the job's steps (`archive.segment.written`,
+`.verified`, `.failed`, `audit.archived`, `archive.purged`).
+
+Not archived yet: the legacy `access_requests` table, and anything else outside the five classes.
 
 ## Operational monitoring (issue #303)
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
+	"github.com/nischalravi/tessera/mvp/server/internal/archive"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
@@ -82,6 +83,7 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.RoleMining, queue.Kind{Handler: s.queueRoleMining, Actor: mining.Worker})
 	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
 	q.Register(jobs.CertificateExpiry, queue.Kind{Handler: s.queueCertificateExpiry, Actor: "certificate.sweeper"})
+	q.Register(jobs.ArchiveSweep, queue.Kind{Handler: s.queueArchive, Actor: archive.Actor})
 	// The worker kinds (issue #302): run here unless a `tessera worker` is
 	// meant to. provision_push is not registered here: the process keeps the
 	// provisioning loop (RunProvisioning), which the serve wiring skips when
@@ -98,6 +100,7 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Schedule(jobs.SweepDrift, jobs.SweepDrift, "@every "+driftEvery.String(), maxSweepAttempts)
 	q.Schedule(jobs.Maintenance, jobs.Maintenance, "@every "+jobMaintainGap.String(), 1)
 	q.Schedule(jobs.CertificateExpiry, jobs.CertificateExpiry, certificateExpirySchedule, maxSweepAttempts)
+	q.Schedule(jobs.ArchiveSweep, jobs.ArchiveSweep, "@every "+archiveEvery.String(), maxArchiveAttempts)
 	return q
 }
 
@@ -292,7 +295,12 @@ func (s *Server) queueCertificateExpiry(ctx context.Context, j queue.Job) (any, 
 func (s *Server) queueMaintenance(ctx context.Context, j queue.Job) (any, error) {
 	now := s.clock()
 	return nil, s.store.InTenant(ctx, j.Tenant, func(tx *store.TenantTx) error {
-		if err := jobs.MaintainTx(tx, now, jobStaleAfter, jobRetention); err != nil {
+		if s.archive.Enabled() {
+			// finished runs leave the online store through the archive (issue #298)
+			if err := jobs.FailStaleTx(tx, now, jobStaleAfter); err != nil {
+				return err
+			}
+		} else if err := jobs.MaintainTx(tx, now, jobStaleAfter, jobRetention); err != nil {
 			return err
 		}
 		_, err := s.queue.Prune(tx)
