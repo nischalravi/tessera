@@ -1,16 +1,16 @@
 /**
  * Preview mock layer. Typed stand-ins for backend capabilities that do not exist yet:
- * workflows, reset-password and import actions, generic object create/edit and admin settings.
+ * reset-password and import actions, generic object create/edit and admin settings.
  *
  * State lives in this browser only (localStorage) so the demo feels real across reloads.
  * Nothing here calls the API, and nothing here invents API routes.
  */
 import { useSyncExternalStore } from "react";
 import { store } from "../app/storage";
-import { ADMIN_SECTIONS, WORKFLOWS } from "./data";
+import { ADMIN_SECTIONS } from "./data";
 
 export * from "./types";
-export { ADMIN_SECTIONS, WORKFLOWS };
+export { ADMIN_SECTIONS };
 
 const delay = <T,>(v: T, ms = 350) => new Promise<T>((r) => setTimeout(() => r(v), ms));
 

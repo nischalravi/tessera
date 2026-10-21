@@ -6,16 +6,6 @@
  * src/api.ts that returns the same type, and remove the badge.
  */
 
-export interface Workflow {
-  id: string;
-  name: string;
-  trigger: string;
-  steps: string[];
-  appliesTo: string;
-  enabled: boolean;
-  sla: string;
-}
-
 export interface AdminSection {
   id: string;
   title: string;
