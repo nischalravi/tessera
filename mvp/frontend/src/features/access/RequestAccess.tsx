@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Layers, Minus, Plus, Search, ShieldAlert, ShoppingCart, Timer, X } from "lucide-react";
+import { KeyRound, Layers, Minus, Plus, Search, ShieldAlert, ShoppingCart, Timer, X } from "lucide-react";
 import { AnswersByQuestionnaire, BusinessRole, CatalogView, QuestionnaireNeed, ConnectorRow, Group, IdentityRow, DraftItem, RequestDraft, Risk, RequestSettingsView, RolesView, SimResult, api, draftPath, neededPath, requestDrafts, requestSettingsPath, roles as roleApi, simulate, submitRequest, useApi } from "../../api";
 import { DEFAULT_REQUEST_SETTINGS, attachmentError, defaultDurationLabel, durationChoices, durationRequired, effectiveMaxHours, forOthersNote, justificationError, justificationHint, parseAttachments } from "./requestSettings";
 import { SodWarning } from "./SodWarning";
 import { QuestionnaireForm, formReady } from "./QuestionnaireForm";
 import { answersPayload, mergeNeeds } from "../governance/questionnaireModel";
-import { Badge, Button, Callout, EmptyState, FilterChips, Loading, Page, Segmented, Skeleton, useToast } from "../../components";
+import { Badge, Button, ButtonLink, Callout, EmptyState, FilterChips, Loading, Page, Segmented, Skeleton, useToast } from "../../components";
 
 /** What a catalog card stands for: one group (an entitlement) or one business role. */
 type RequestTarget = { kind: "group"; groupId: number; name: string; system: string; privileged: boolean; jit: boolean } | { kind: "role"; roleId: string; name: string };
@@ -326,7 +326,7 @@ export function RequestAccess() {
   ];
 
   return (
-    <Page title="Request access" crumbs={[["Access"], ["Request access"]]} sub="Find what you need, add it to your request, and see policy conflicts before you submit. Time-limited access is removed automatically when it ends.">
+    <Page title="Request access" crumbs={[["Access"], ["Request access"]]} actions={<ButtonLink to="/access/request/service-account" icon={<KeyRound size={15} />}>Service account</ButtonLink>} sub="Find what you need, add it to your request, and see policy conflicts before you submit. Time-limited access is removed automatically when it ends.">
       <div className="split request-split">
         <div className="stack">
           <div className="row">

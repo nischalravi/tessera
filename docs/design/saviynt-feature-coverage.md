@@ -184,7 +184,7 @@
 
 | # | Capability | Section | Status | Phase |
 |---|---|---|---|---|
-| 101 | Approval workflow designer (stages, escalations, conditions) | Governance → Workflows | partial (Preview) | 2 |
+| 101 | Approval workflow designer (stages, escalations, conditions) | Governance → Workflows | partial (live, issue #298: step-list designer, versions, conditions, assignment; no canvas or parallel branches) | 2 |
 | 102 | Workflow approvals in a single inbox, Slack and Teams | Inbox | partial (Inbox; ChatOps planned) | 2 |
 
 ### 1.14 Admin functions

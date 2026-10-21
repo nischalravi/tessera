@@ -257,6 +257,9 @@ var tables = []string{
 	"grp_event_sinks", "grp_sink_dead_letters",
 	// questionnaires, their versions, attachments and answers (schema/0450_questionnaires.sql)
 	"questionnaires", "questionnaire_versions", "questionnaire_attachments", "questionnaire_answers",
+	// workflow definitions, versions, assignments, runs and service-account stages and requests
+	// (schema/0480_workflows.sql, 0481_service_account_requests.sql, 0482_workflow_runs.sql)
+	"workflows", "workflow_versions", "workflow_assignments", "workflow_runs", "workflow_stages", "service_account_requests",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

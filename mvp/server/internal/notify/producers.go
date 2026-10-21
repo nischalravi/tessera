@@ -131,9 +131,17 @@ func stageApprovers(tx *store.TenantTx, now time.Time, st *store.RequestStage) (
 // stages) that it needs them: when a line is submitted and each time the next
 // stage starts.
 func ApprovalNeeded(tx *store.TenantTx, now time.Time, l *store.RequestLine, st *store.RequestStage, total int) error {
-	to, err := stageApprovers(tx, now, st)
-	if err != nil {
-		return err
+	return ApprovalNeededTo(tx, now, l, st, total, nil)
+}
+
+// ApprovalNeededTo is ApprovalNeeded for a stage whose approvers the caller knows (a workflow
+// stage a group approves, issue #298); nil to means the stage's assignee and their delegates.
+func ApprovalNeededTo(tx *store.TenantTx, now time.Time, l *store.RequestLine, st *store.RequestStage, total int, to []Recipient) error {
+	if to == nil {
+		var err error
+		if to, err = stageApprovers(tx, now, st); err != nil {
+			return err
+		}
 	}
 	skip, err := lineParties(tx, l)
 	if err != nil {
@@ -499,4 +507,18 @@ func Expiring(tx *store.TenantTx, now time.Time, e Ending) (int, error) {
 // admin-change notifications (#16) use it.
 func SecurityAlert(tx *store.TenantTx, now time.Time, key, subject, body, link string, to ...Recipient) (int, error) {
 	return Emit(tx, now, Message{Kind: KindSecurityAlert, Key: "security.alert:" + key, Subject: subject, Body: body, Link: link}, to...)
+}
+
+// StageApprovers are the people who can act on a waiting stage now (see stageApprovers), for
+// stages of requests that are not access lines (service-account requests, issue #298).
+func StageApprovers(tx *store.TenantTx, now time.Time, st *store.RequestStage) ([]Recipient, error) {
+	return stageApprovers(tx, now, st)
+}
+
+// WorkflowNotice tells people about a request's progress, from a notify step of its workflow
+// (issue #298). key names the event (run, step) so it is sent once per recipient.
+func WorkflowNotice(tx *store.TenantTx, now time.Time, key, subject, body, link string, skip []string, to ...Recipient) error {
+	_, err := Emit(tx, now, Message{Kind: KindWorkflowNotice, Key: "workflow.notice:" + key, Subject: clip(subject, MaxSubject),
+		Body: clip(body, MaxBody), Link: link, Skip: skip}, to...)
+	return err
 }

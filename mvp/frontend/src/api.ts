@@ -1264,6 +1264,10 @@ export type StageKind = "manager" | "owner" | "decider" | "sponsor";
 export interface RequestStage {
   index: number;
   kind: StageKind;
+  /** The step of the workflow that made the stage (issue #298); absent for a stage of the item's approval policy. */
+  label?: string;
+  /** A workflow wait can hold a stage: it opens at this time. */
+  started_at?: string | null;
   status: "queued" | "waiting" | "approved" | "denied" | "closed";
   assignee: PersonRef | null;
   due_at: string | null;
@@ -1377,8 +1381,15 @@ export interface AnsweredQuestionnaire {
 export const questionnairesPath = "/questionnaires";
 const questionnairePath = (id: string, rest = "") => questionnairesPath + "/" + encodeURIComponent(id) + rest;
 /** The query for what a form must ask: catalog items, a role, a review campaign or a review item. */
-export const neededPath = (q: { catalogItemIds?: string[]; roleId?: string; reviewCampaignId?: number; reviewItemId?: number }) => {
+export const neededPath = (q: { catalogItemIds?: string[]; roleId?: string; reviewCampaignId?: number; reviewItemId?: number;
+  serviceAccount?: { kind: string; primaryOwnerId: number; system?: string; identityId?: number } }) => {
   const p = new URLSearchParams();
+  if (q.serviceAccount) {
+    p.set("service_account_kind", q.serviceAccount.kind);
+    p.set("primary_owner_id", String(q.serviceAccount.primaryOwnerId));
+    if (q.serviceAccount.system) p.set("system", q.serviceAccount.system);
+    if (q.serviceAccount.identityId) p.set("identity_id", String(q.serviceAccount.identityId));
+  }
   if (q.catalogItemIds?.length) p.set("catalog_item_ids", q.catalogItemIds.join(","));
   if (q.roleId) p.set("role_id", q.roleId);
   if (q.reviewCampaignId) p.set("review_campaign_id", String(q.reviewCampaignId));
@@ -1390,6 +1401,135 @@ export const questionnaires = {
   edit: (id: string, version: number, spec: QuestionnaireSpec) => api<QuestionnaireDetail>(questionnairePath(id), { version, ...spec }, "PUT"),
   retire: (id: string) => api<Questionnaire>(questionnairePath(id, "/retire"), {}),
   attach: (id: string, targets: QuestionnaireTarget[]) => api<Questionnaire>(questionnairePath(id, "/attachments"), { targets }, "PUT"),
+};
+
+/** Workflow designer (Governance → Workflows, issue #298): versioned definitions that route approvals. */
+export type WorkflowScope = "access" | "service_account";
+export type WorkflowStepType = "approval" | "questionnaire" | "notify" | "wait" | "condition" | "provisioning";
+export type WorkflowOp = "eq" | "ne" | "in" | "not_in";
+export interface WorkflowCondition { attribute: string; op: WorkflowOp; values: string[] }
+/** One step. Fields that do not belong to the step's type stay absent; "next" and a condition's "then" and "else" name a step id or "end". */
+export interface WorkflowStep {
+  id: string;
+  type: WorkflowStepType;
+  name?: string;
+  next?: string;
+  approver?: string;
+  group_id?: string;
+  escalate_after_hours?: number;
+  questionnaire_id?: string;
+  notify?: string;
+  message?: string;
+  hours?: number;
+  when?: WorkflowCondition;
+  then?: string;
+  else?: string;
+}
+export interface WorkflowTarget { kind: "catalog_item" | "request_type"; target_id: string }
+export interface WorkflowSpec { name: string; description: string; steps: WorkflowStep[] }
+export interface Workflow extends WorkflowSpec {
+  id: string;
+  scope: WorkflowScope;
+  status: "active" | "retired";
+  version: number;
+  targets: WorkflowTarget[];
+  runs: number;
+  created_at: string;
+  updated_by: string;
+  updated_at: string;
+}
+export interface WorkflowDetail extends Workflow { versions: (WorkflowSpec & { version: number })[] }
+export interface WorkflowIssue { step?: string; code: string; message: string }
+/** What the editor offers, by scope. */
+export interface WorkflowVocabulary {
+  step_types: WorkflowStepType[];
+  approvers: Record<WorkflowScope, string[]>;
+  notify: string[];
+  attributes: Record<WorkflowScope, string[]>;
+  ops: WorkflowOp[];
+  request_types: Record<WorkflowScope, string[]>;
+  limits: Record<string, number>;
+}
+export interface WorkflowList extends WorkflowVocabulary { workflows: Workflow[]; can_manage: boolean }
+export interface WorkflowRef { id: string; name: string; version: number }
+export const workflowsPath = "/workflows";
+const workflowPath = (id: string, rest = "") => workflowsPath + "/" + encodeURIComponent(id) + rest;
+export const workflows = {
+  create: (scope: WorkflowScope, spec: WorkflowSpec) => api<Workflow>(workflowsPath, { scope, ...spec }),
+  /** Checks a draft against the server's rules; saves nothing. */
+  validate: (scope: WorkflowScope, steps: WorkflowStep[]) => api<{ valid: boolean; issues: WorkflowIssue[] }>(workflowsPath + "/validate", { scope, steps }),
+  edit: (id: string, version: number, spec: WorkflowSpec) => api<WorkflowDetail>(workflowPath(id), { version, ...spec }, "PUT"),
+  retire: (id: string) => api<Workflow>(workflowPath(id, "/retire"), {}),
+  assign: (id: string, targets: WorkflowTarget[]) => api<Workflow>(workflowPath(id, "/assignments"), { targets }, "PUT"),
+};
+
+/** Service-account requests (Access → Request access, issue #298): create, change or transfer a service account, with mandatory owners. */
+export type ServiceAccountRequestKind = "create" | "change" | "transfer";
+export type ServiceAccountRequestStatus = "pending" | "approved" | "fulfilled" | "denied" | "cancelled";
+export interface ServiceAccountRequest {
+  id: string;
+  kind: ServiceAccountRequestKind;
+  status: ServiceAccountRequestStatus;
+  account: PersonRef | null;
+  name: string;
+  system: string;
+  username: string;
+  purpose: string;
+  description: string;
+  primary_owner: PersonRef;
+  backup_owner: PersonRef | null;
+  previous_primary_owner: PersonRef | null;
+  previous_backup_owner: PersonRef | null;
+  justification: string;
+  requested_by: { id: string; display_name: string };
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  closed_at: string | null;
+  fulfilled_at: string | null;
+  op_id: string | null;
+  workflow: WorkflowRef | null;
+  /** The requester's answers to the questionnaires its workflow asks, in the detail view only. */
+  questionnaires?: AnsweredQuestionnaire[];
+  stages: RequestStage[];
+  can_approve: boolean;
+  can_cancel: boolean;
+}
+/** A service account with its owners, for the change and transfer forms. */
+export interface ServiceAccountRow {
+  id: number;
+  name: string;
+  status: string;
+  purpose: string;
+  primary_owner: PersonRef | null;
+  backup_owner: PersonRef | null;
+  systems: string[];
+  /** the id of the request that is open about it (only one at a time) */
+  open_request: string | null;
+}
+export interface ServiceAccountList { accounts: ServiceAccountRow[]; systems: string[] }
+export interface ServiceAccountInput {
+  kind: ServiceAccountRequestKind;
+  identity_id?: number;
+  name?: string;
+  system?: string;
+  username?: string;
+  purpose?: string;
+  description?: string;
+  primary_owner_id?: number;
+  backup_owner_id?: number;
+  justification: string;
+  answers?: AnswersByQuestionnaire;
+}
+export const serviceAccountsPath = "/service-accounts";
+export const serviceAccountRequestsPath = "/service-account-requests";
+const saRequest = (id: string, action: string, body: object = {}) => api<ServiceAccountRequest>(`${serviceAccountRequestsPath}/${encodeURIComponent(id)}/${action}`, body);
+export const serviceAccountRequests = {
+  file: (b: ServiceAccountInput) => api<ServiceAccountRequest>(serviceAccountRequestsPath, b),
+  approve: (id: string, reason?: string) => saRequest(id, "approve", reason ? { reason } : {}),
+  deny: (id: string, reason: string) => saRequest(id, "deny", { reason }),
+  cancel: (id: string) => saRequest(id, "cancel"),
 };
 
 export type RequestStatus = "pending" | "approved" | "denied" | "cancelled" | "expired" | "removed";
@@ -1414,6 +1554,8 @@ export interface RequestLine {
   /** The requester's answers, in the detail view only. */
   questionnaires?: AnsweredQuestionnaire[];
   stages: RequestStage[];
+  /** The workflow that routed the line (issue #298); absent: the item's approval policy did. */
+  workflow?: WorkflowRef;
   can_approve: boolean;
   can_cancel: boolean;
   can_remove: boolean;
