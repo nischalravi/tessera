@@ -309,9 +309,11 @@ func (e *Entra) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		notFound(w)
 	case len(parts) == 2 && parts[0] == "users" && r.Method == http.MethodGet:
-		if n, ok := e.UserNames[parts[1]]; ok {
-			writeJSON(w, map[string]any{"id": parts[1], "userPrincipalName": n})
-			return
+		for id, n := range e.UserNames {
+			if id == parts[1] { // answer with the stored id, never the request path
+				writeJSON(w, map[string]any{"id": id, "userPrincipalName": n})
+				return
+			}
 		}
 		notFound(w)
 	default:
@@ -455,7 +457,7 @@ func (g *GitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slug := strings.TrimPrefix(r.URL.Path, "/apps/")
 		for _, in := range g.Installs {
 			if in.Slug == slug {
-				writeJSON(w, map[string]any{"slug": slug, "owner": map[string]any{"login": in.Owner}})
+				writeJSON(w, map[string]any{"slug": in.Slug, "owner": map[string]any{"login": in.Owner}})
 				return
 			}
 		}

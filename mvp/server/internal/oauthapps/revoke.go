@@ -103,6 +103,7 @@ func BuildPlan(tx *store.TenantTx, scope, appID, target string, now time.Time) (
 				return nil, err
 			}
 			only = g.ID
+			plan.Target = g.ID
 		} else {
 			plan.Target = app.ID
 		}
