@@ -1017,12 +1017,28 @@ export interface IdentityMerge {
 export interface CreatedAfter { table: string; id: string; at: string }
 export interface UnmergeResult { merge: IdentityMerge; restored: MergeMove[]; kept: MergeMove[]; created_after?: CreatedAfter[] }
 
+/**
+ * Pinning or releasing an account needs two admins (#376): the first call answers 202 with
+ * status "pending_second_admin" and changes nothing; a different admin's identical call applies it.
+ */
+export interface PendingAccountLink { status: "pending_second_admin"; request: AccountLinkRequest }
+export type AccountLinkResult = { account: CorrAccount; decision: LinkDecision } | PendingAccountLink;
+export const isPendingAccountLink = (r: unknown): r is PendingAccountLink => (r as PendingAccountLink | null)?.status === "pending_second_admin";
+/** A pin or release waiting for a second admin. identity_id is null for a release. */
+export interface AccountLinkRequest {
+  account_id: number; account?: string; action: "link" | "release"; identity_id: number | null;
+  identity_name?: string; previous_identity_id: number | null; previous_identity_name?: string; reason: string;
+  requested_by: string; requested_by_user_id: string; requested_at: string; expires_at: string;
+}
 export const linkAccount = (accountId: number, identityId: number, reason: string) =>
-  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, { identity_id: identityId, reason });
+  api<AccountLinkResult>(`/accounts/${accountId}/link`, { identity_id: identityId, reason });
 export const markNotPerson = (accountId: number, reason: string) =>
   api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/not-person`, { reason });
 export const releaseAccount = (accountId: number) =>
-  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, undefined, "DELETE");
+  api<AccountLinkResult>(`/accounts/${accountId}/link`, undefined, "DELETE");
+/** The requester withdraws a pending pin or release. */
+export const cancelAccountLinkRequest = (accountId: number) =>
+  api<{ cancelled: boolean }>(`/correlation/link-requests/${accountId}`, undefined, "DELETE");
 /**
  * Ask for a merge. Where either person holds privileged access, has IAL 2 or more or is an
  * employee, the API answers 202 with a request that a second reviewer approves; the merge has not happened.

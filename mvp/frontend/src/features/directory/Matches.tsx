@@ -1,15 +1,19 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { GitMerge, Link2, Undo2, UserX } from "lucide-react";
+import { Check, GitMerge, Link2, Undo2, UserX, X } from "lucide-react";
 import {
+  AccountLinkRequest,
   AccountRow,
   IdentityMerge,
   IdentityRow,
   LinkDecision,
   MatchItem,
+  cancelAccountLinkRequest,
   fmtDate,
+  isPendingAccountLink,
   linkAccount,
   markNotPerson,
+  relTime,
   releaseAccount,
   unmergeIdentity,
   useApi,
@@ -30,14 +34,16 @@ import { PersonPicker, RULE_LABEL } from "./correlation";
  * their login proposes (never linked automatically), the decisions reviewers pinned (a sync
  * never undoes them), and identity merges, which can be undone for 180 days.
  */
-type Tab = "queue" | "decisions" | "merges";
+type Tab = "queue" | "pending" | "decisions" | "merges";
 
 export function Matches() {
+  const { can } = useSession();
   const [params, setParams] = useSearchParams();
   const tab = (params.get("tab") ?? "queue") as Tab;
   const queue = useApi<MatchItem[]>("/correlation/queue");
   const decisions = useApi<LinkDecision[]>("/correlation/decisions");
   const merges = useApi<IdentityMerge[]>("/identity-merges");
+  const pending = useApi<{ items: AccountLinkRequest[]; count: number }>(can("identities.correlate") ? "/correlation/link-requests" : null);
   const open = (merges.data ?? []).filter((m) => !m.unmerged_at).length;
   return (
     <Page
@@ -51,6 +57,7 @@ export function Matches() {
           onChange={(t) => setParams({ tab: t }, { replace: true })}
           tabs={[
             { id: "queue", label: `To review${queue.data ? ` (${queue.data.length})` : ""}` },
+            { id: "pending", label: `Pending second admin${pending.data ? ` (${pending.data.count})` : ""}` },
             { id: "decisions", label: `Decisions${decisions.data ? ` (${decisions.data.length})` : ""}` },
             { id: "merges", label: `Merges${merges.data ? ` (${open} open)` : ""}` },
           ]}
@@ -58,6 +65,7 @@ export function Matches() {
       }
     >
       {tab === "queue" && <Queue q={queue} />}
+      {tab === "pending" && <PendingLinks p={pending} onApplied={() => { decisions.reload(); queue.reload(); }} />}
       {tab === "decisions" && <Decisions d={decisions} />}
       {tab === "merges" && <Merges m={merges} />}
     </Page>
@@ -75,8 +83,9 @@ function useDecide() {
       reason: { label: "Reason (kept in the audit log)", required: true, placeholder: "What did you check?" } });
     if (reason == null) return false;
     try {
-      await o.run(reason);
-      toast(o.done);
+      const res = await o.run(reason);
+      // a pin or release needs a second admin (#376): the first request only waits
+      toast(isPendingAccountLink(res) ? "Request recorded. A different admin must approve it before it applies." : o.done);
       return true;
     } catch (e: any) {
       toast(String(e.message ?? e), { kind: "error" });
@@ -174,6 +183,57 @@ function MatchPanel({ item, onClose }: { item: MatchItem; onClose: () => void })
         >Not a person</Button>
       </div>
     </SidePanel>
+  );
+}
+
+// A pin or release needs two admins (#376). The first admin's request waits here; a different
+// admin approves by making the same request, and only the requester can cancel it.
+function PendingLinks({ p, onApplied }: { p: Loaded<{ items: AccountLinkRequest[]; count: number }>; onApplied: () => void }) {
+  const { can, session } = useSession();
+  const toast = useToast();
+  const me = session.user.id;
+  const allowed = can("identities.correlate");
+  const what = (r: AccountLinkRequest) =>
+    r.action === "release" ? "Release the pinned decision" : `Link to ${r.identity_name || `identity ${r.identity_id}`}`;
+  const run = (fn: () => Promise<unknown>, done: string) =>
+    fn().then(() => { toast(done); p.reload(); onApplied(); }).catch((x) => toast(String(x.message ?? x), { kind: "error" }));
+  const cols: Column<AccountLinkRequest>[] = [
+    { id: "acct", header: "Account", sort: (r) => r.account ?? "", cell: (r) => <span className="sys">{r.account ?? `account ${r.account_id}`}</span> },
+    { id: "what", header: "Change", cell: (r) => <span className="small">{what(r)}</span> },
+    { id: "state", header: "Status", cell: () => <Badge tone="warning">Pending second admin</Badge> },
+    { id: "by", header: "Asked by", sort: (r) => r.requested_by, cell: (r) => <span className="small">{r.requested_by}</span> },
+    { id: "at", header: "Asked", sort: (r) => r.requested_at, cell: (r) => <span className="small nowrap" title={fmtDate(r.requested_at)}>{relTime(r.requested_at)}</span> },
+    { id: "act", header: "Actions",
+      cell: (r) => {
+        const mine = r.requested_by_user_id === me;
+        return (
+          <span className="row tight">
+            <Button size="sm" variant="primary" icon={<Check size={14} />} disabled={!allowed || mine} title={mine ? "A different admin must approve" : undefined}
+              onClick={(e) => {
+                e.stopPropagation();
+                run(() => (r.action === "release" ? releaseAccount(r.account_id) : linkAccount(r.account_id, r.identity_id ?? 0, r.reason)), "Change applied");
+              }}>Approve</Button>
+            {mine && (
+              <Button size="sm" variant="ghost" icon={<X size={14} />} disabled={!allowed}
+                onClick={(e) => { e.stopPropagation(); run(() => cancelAccountLinkRequest(r.account_id), "Request cancelled"); }}>Cancel</Button>
+            )}
+          </span>
+        );
+      } },
+  ];
+  return (
+    <DataTable
+      id="account-link-requests"
+      rows={p.data?.items ?? null}
+      error={p.error}
+      rowKey={(r) => r.account_id}
+      columns={cols}
+      searchText={(r) => `${r.account ?? ""} ${r.identity_name ?? ""} ${r.requested_by}`}
+      searchPlaceholder="Search pending changes…"
+      onRefresh={p.reload}
+      rowLabel={(r) => `${r.account ?? r.account_id}: ${what(r)}`}
+      empty={<EmptyState title="Nothing waits for a second admin" icon={<Link2 size={18} />}>Pinning an account to a person, or releasing the pin, needs two admins. The first admin's request appears here for a different admin to approve.</EmptyState>}
+    />
   );
 }
 
