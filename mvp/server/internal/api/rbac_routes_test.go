@@ -140,6 +140,8 @@ GET    /api/correlation/decisions                    graph.read      -  # issue 
 POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
 POST   /api/accounts/{account_id}/not-person         identities.correlate STEP_UP_POLICY  # issue #160
 DELETE /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
+GET    /api/correlation/link-requests                identities.correlate STEP_UP_POLICY  # issue #376
+DELETE /api/correlation/link-requests/{account_id}   identities.correlate STEP_UP_POLICY  # issue #376
 POST   /api/identities/{identity_id}/merge           identities.merge STEP_UP_POLICY  # issue #160
 GET    /api/identity-merges                          graph.read      -  # issue #160
 GET    /api/identities/{identity_id}/affiliations    graph.read      -  # issue #64
