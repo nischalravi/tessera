@@ -1601,7 +1601,7 @@ unchanged. Audit action `sod.view.update`.
 `service_account`. Each has `reviewer_source` (`owner`, `owner_or_backup`, `fixed` + `reviewer_id`), a
 `fallback_reviewer_id` for grants whose owner cannot be reached (no owner on record, or not active), and
 `on_incomplete` for items undecided at the due date: `revoke` (what every review did before), `escalate` (to the
-fallback for `escalation_days`, then revoke) or `keep` (leave the access, close the review incomplete; the
+fallback for `escalation_days`, then revoke; `escalation_days` (1 to 30) is required only for `escalate`) or `keep` (leave the access, close the review incomplete; the
 `review.close` event records `kept`). Owners come from the ownership model (#167): the application's owner by
 the grant's system, the entitlement's by group or resource id, the machine identity's owner, the role's owner
 for memberships (a `role_owner` schedule with no roles picked reviews every active role), an organization's
@@ -1638,7 +1638,7 @@ tree stays derived from the HR data. On an organization's page: assigned owners 
 replace the derived owners while one is active, and `organization_owner` reviews go to them), a default approval
 workflow (stages and escalation, used for a request line whose catalog item has no approval policy of its own,
 for beneficiaries in the organization; a workflow from the designer, when one applies, routes first and this default is only the fallback) and request settings overrides that only tighten the tenant's
-(always require a justification, a longer minimum, a shorter default or maximum duration). On the list: the
+(always require a justification, a longer minimum, a shorter default or maximum duration). A `max_hours` above the tenant's own is refused `422 override_cannot_loosen`, like a waived justification. On the list: the
 hierarchy source, which limits the tree to people ingested from one source (`system`). Only `hr_department` is
 available as the source kind. Audit actions `org.settings.update`, `org.hierarchy_source.update`. Needs `catalog.manage`.
 
@@ -2282,6 +2282,18 @@ schema 0361 for apps, grants and sync state and 0470 for pending four-eyes revok
   delete that really deletes, and switches for refusing, ignoring a delete and failing reads); the reader,
   sync, revoke and four-eyes tests run them through a real safehttp client. The Salesforce `OauthToken`
   query is checked against the fake only, not a live org.
+- **Dev fakes in `./run.sh` (issue #417).** `./run.sh` sets `TESSERA_DEV_OAUTH_FAKE_URL`
+  (`http://127.0.0.1:<API_PORT+2000>`; `OAUTH_FAKE_PORT` changes the port, `OAUTH_FAKE=0` turns it off) and
+  `tessera serve` serves the four fakes there (`/google`, `/entra`, `/salesforce`, `/github`), preloaded with
+  a few apps and grants, among them a high-risk app held by several users (Salesloft Drift with
+  `mail.google.com` and Salesforce modify-all, Gainsight with a Graph directory write role). The seed gives
+  larkspur a connection and credential per provider pointed at them (so they also show under Admin →
+  Connections). Sign in as Pat or Ivan, open Protection → OAuth apps and press **Sync now** (or
+  `POST /api/oauth-apps/sync`): apps and grants appear, and sync, a single grant revoke (with step-up) and the
+  two-admin bulk revoke (`202 pending_second_admin`) work locally. The fakes keep state in memory, so a
+  restart restores the grants. Config refuses the setting with `TESSERA_ENV=prod`, it must be a plain
+  `http://<loopback IP>:<port>` origin, and an architecture test keeps `oauthfake` out of every package but
+  `cmd/tessera`. `./run.sh test` clears it like the fake target.
 - **Not built yet.** The apps are not yet rows of the Machine identities inventory (`/api/nhi`); a policy
   type for the flags (alerts and review campaigns) is not wired.
 

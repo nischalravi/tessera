@@ -369,6 +369,30 @@ func TestFakeTargetOnlyImportedByTheBinary(t *testing.T) {
 	}
 }
 
+// TestOAuthFakesOnlyImportedByTheBinary: the stateful OAuth app provider
+// fakes are a dev and test tool. Outside tests only cmd/tessera (which serves
+// them behind TESSERA_DEV_OAUTH_FAKE_URL, refused in prod) imports them; the
+// API and the engine never do.
+func TestOAuthFakesOnlyImportedByTheBinary(t *testing.T) {
+	graph := moduleImports(t, moduleRoot(t))
+	const fakePkg = "internal/oauthapps/oauthfake"
+	found := false
+	for pkg, deps := range graph {
+		for _, dep := range deps {
+			if dep != fakePkg {
+				continue
+			}
+			found = found || pkg == "cmd/tessera"
+			if pkg != "cmd/tessera" {
+				t.Errorf("%s imports %s; only cmd/tessera may (tests excepted)", pkg, dep)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("cmd/tessera does not import the OAuth fakes; the import graph is incomplete")
+	}
+}
+
 // TestReachableFindsTransitiveImports is the control for the graph walk.
 func TestReachableFindsTransitiveImports(t *testing.T) {
 	g := map[string][]string{"cmd/tessera": {"internal/api"}, "internal/api": {"internal/x"}, "internal/x": {"internal/devidp/devidptest"}}

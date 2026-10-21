@@ -11,6 +11,9 @@ const STATIC_ROUTES = [
   "/insights/risk", "/insights/graph", "/insights/least-privilege", "/insights/sod", "/insights/deployment-health",
   "/governance/policies", "/governance/reviews", "/governance/lifecycle", "/governance/workflows",
   "/admin", "/admin/connections", "/admin/connections/new", "/admin/jobs", "/admin/audit", "/admin/authentication",
+  // issue #420: OAuth apps, the settings pages, preferences and service-account requests
+  "/security/oauth-apps", "/admin/request-settings", "/admin/step-up", "/admin/sod-page", "/governance/review-types",
+  "/account/preferences", "/access/request/service-account",
 ];
 
 test.use({ colorScheme: "light", reducedMotion: "reduce" });
@@ -50,6 +53,18 @@ test("detail pages have no serious or critical WCAG 2.2 AA violations", async ({
     all.push(...(await seriousViolations(page, route)));
   }
   expect(all, report(all)).toEqual([]);
+});
+
+// The dev stack serves stateful fakes of the four providers (issue #417): sync, then check the
+// page with apps and grants on it, the filled-in state the empty-state route check above cannot see.
+test("OAuth apps with a synced inventory has no serious or critical WCAG 2.2 AA violations", async ({ page }) => {
+  await page.goto("/security/oauth-apps");
+  await settle(page);
+  await page.getByRole("button", { name: "Sync now" }).click();
+  await expect(page.getByText("Inventory refreshed").first()).toBeVisible({ timeout: 30_000 });
+  await settle(page);
+  const found = await seriousViolations(page, "/security/oauth-apps (synced)");
+  expect(found, report(found)).toEqual([]);
 });
 
 test.describe("dark theme", () => {

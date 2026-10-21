@@ -661,6 +661,18 @@ func TestFakeTargetIsDevOnly(t *testing.T) {
 	}
 }
 
+// The fake OAuth app providers are a dev tool: prod refuses their base URL.
+func TestDevOAuthFakeURLIsDevOnly(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_DEV_OAUTH_FAKE_URL": "http://127.0.0.1:10000/"}))
+	if err != nil || c.DevOAuthFakeURL != "http://127.0.0.1:10000" {
+		t.Errorf("dev: %v, %v", c, err)
+	}
+	_, err = config.Load(env(with(safeProd(), "TESSERA_DEV_OAUTH_FAKE_URL", "http://127.0.0.1:10000")))
+	if err == nil || !strings.Contains(err.Error(), "TESSERA_DEV_OAUTH_FAKE_URL") {
+		t.Errorf("prod accepted the fake OAuth URL: %v", err)
+	}
+}
+
 func TestDevOnlyURL(t *testing.T) {
 	for raw, want := range map[string]bool{
 		"https://login.example.com/oauth2": false, "https://203.0.113.9/x": false, "not a url": false, "": false,

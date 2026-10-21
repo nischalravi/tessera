@@ -4,7 +4,9 @@ import (
 	"net/http"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/cfgerr"
 	"github.com/nischalravi/tessera/mvp/server/internal/orgs"
+	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -104,6 +106,18 @@ func (s *Server) putOrgSettings(_ http.ResponseWriter, r *http.Request, p *param
 	var b orgSettingsBody
 	if err := decodeBody(r, &b, false); err != nil {
 		return nil, err
+	}
+	// An override only tightens (as a waived justification is refused): a
+	// maximum duration above the tenant's own is refused the same way.
+	if b.Policies.MaxHours != nil {
+		ts, _, err := requests.LoadSettings(store.TxFrom(r.Context()))
+		if err != nil {
+			return nil, err
+		}
+		if ts.MaxHours != nil && *b.Policies.MaxHours > *ts.MaxHours {
+			return nil, cfgErr(cfgerr.Refuse(422, "override_cannot_loosen",
+				"an organization can shorten the maximum duration, not extend it: the tenant's maximum is %g hours", *ts.MaxHours))
+		}
 	}
 	if _, _, err := orgs.SaveSettings(store.TxFrom(r.Context()), orgs.Settings{OrgID: id, Owners: b.OwnerIDs, Policies: b.Policies},
 		b.Version, principal(r).Display, s.clock().UTC()); err != nil {
