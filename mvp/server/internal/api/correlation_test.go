@@ -55,10 +55,15 @@ func TestCorrelationAPI_LinkMergeUnmerge(t *testing.T) {
 	h := newIsolationServer(f).Handler()
 	ids := f.B.IDs
 	l := policyAdmin(t, f, f.B.ID, "pa@b.example")
+	l2 := policyAdmin(t, f, f.B.ID, "pa2@b.example")
 
-	// re-attribute dave's AWS account to carol
-	rec := corrDo(h, l, "POST", fmt.Sprintf("/api/accounts/%d/link", ids["acct:aws:dave-iam"]),
-		fmt.Sprintf(`{"identity_id":%d,"reason":"AWS team confirmed"}`, ids["carol"]))
+	// re-attribute dave's AWS account to carol: a pin needs two admins (#376)
+	pinBody := fmt.Sprintf(`{"identity_id":%d,"reason":"AWS team confirmed"}`, ids["carol"])
+	rec := corrDo(h, l, "POST", fmt.Sprintf("/api/accounts/%d/link", ids["acct:aws:dave-iam"]), pinBody)
+	if rec.Code != 202 || !strings.Contains(rec.Body.String(), "pending_second_admin") {
+		t.Fatalf("link request: %d %s", rec.Code, rec.Body)
+	}
+	rec = corrDo(h, l2, "POST", fmt.Sprintf("/api/accounts/%d/link", ids["acct:aws:dave-iam"]), pinBody)
 	if rec.Code != 200 {
 		t.Fatalf("link: %d %s", rec.Code, rec.Body)
 	}
@@ -88,7 +93,6 @@ func TestCorrelationAPI_LinkMergeUnmerge(t *testing.T) {
 
 	// merge carol into alice, then undo it. Both are employees with access, so a
 	// second reviewer must approve: the request alone changes nothing.
-	l2 := policyAdmin(t, f, f.B.ID, "pa2@b.example")
 	rec = corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/merge", ids["carol"]),
 		fmt.Sprintf(`{"into":%d,"reason":"duplicate HR record"}`, ids["alice"]))
 	if rec.Code != 202 || !strings.Contains(rec.Body.String(), `"pending_approval"`) {
@@ -135,8 +139,11 @@ func TestCorrelationAPI_LinkMergeUnmerge(t *testing.T) {
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "already_unmerged") {
 		t.Errorf("second unmerge: %d %s", rec.Code, rec.Body)
 	}
-	rec = corrDo(h, l, "DELETE", fmt.Sprintf("/api/accounts/%d/link", ids["acct:aws:dave-iam"]), "")
-	if rec.Code != 200 {
+	rel := fmt.Sprintf("/api/accounts/%d/link", ids["acct:aws:dave-iam"])
+	if rec = corrDo(h, l, "DELETE", rel, ""); rec.Code != 202 {
+		t.Errorf("release request: %d %s", rec.Code, rec.Body)
+	}
+	if rec = corrDo(h, l2, "DELETE", rel, ""); rec.Code != 200 {
 		t.Errorf("release: %d %s", rec.Code, rec.Body)
 	}
 

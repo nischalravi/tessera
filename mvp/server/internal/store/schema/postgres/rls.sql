@@ -1983,3 +1983,10 @@ DROP POLICY IF EXISTS tenant_isolation ON agent_jobs;
 CREATE POLICY tenant_isolation ON agent_jobs
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE account_link_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE account_link_requests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON account_link_requests;
+CREATE POLICY tenant_isolation ON account_link_requests
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

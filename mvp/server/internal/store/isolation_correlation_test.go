@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
@@ -185,13 +186,80 @@ func corrDump(t *testing.T, db *store.DB, tid tenancy.ID) string {
 	return out
 }
 
+// TestIsolation_AccountLinkRequests (#376): a pending pin or release is the
+// tenant's own. Another tenant's request looks nonexistent and cannot be
+// deleted, and a request naming another tenant's account, identity or user is
+// refused by the guard triggers.
+func TestIsolation_AccountLinkRequests(t *testing.T) {
+	f, a, b := corrFixture(t)
+	exp := storetest.Now.Add(time.Hour)
+	put := func(tn storetest.Tenant, r corrRows) {
+		t.Helper()
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			return c.PutAccountLinkRequest(&store.AccountLinkRequest{AccountID: r.acct, Action: store.AccountLinkActionLink,
+				IdentityID: &r.bob, Reason: "x", RequestedByUserID: r.user.ID, RequestedBy: "admin " + tn.Slug,
+				RequestedAt: storetest.Now, ExpiresAt: exp})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(f.A, a)
+	put(f.B, b)
+	inB(t, f, func(c *store.TenantTx) error {
+		r, err := c.AccountLinkRequest(b.acct)
+		if err != nil || r.RequestedBy != "admin "+f.B.Slug || r.IdentityID == nil || *r.IdentityID != b.bob || !r.ExpiresAt.Equal(exp) {
+			t.Errorf("AccountLinkRequest(B's) = %+v, %v", r, err)
+		}
+		rows, err := c.AccountLinkRequests(storetest.Now)
+		if err != nil || len(rows) != 1 || rows[0].AccountID != b.acct || rows[0].IdentityName == "" {
+			t.Errorf("AccountLinkRequests from B = %+v, %v, want only B's", rows, err)
+		}
+		if rows, err = c.AccountLinkRequests(exp.Add(time.Second)); err != nil || len(rows) != 0 {
+			t.Errorf("expired requests listed: %+v, %v", rows, err)
+		}
+		return c.DeleteAccountLinkRequest(a.acct) // a no-op on A's row
+	})
+	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		if _, err := c.AccountLinkRequest(a.acct); err != nil {
+			t.Errorf("A's request after B's delete: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for name, r := range map[string]store.AccountLinkRequest{
+		"for A's account":      {AccountID: a.acct, Action: store.AccountLinkActionRelease, RequestedByUserID: b.user.ID},
+		"by A's user":          {AccountID: b.acct, Action: store.AccountLinkActionRelease, RequestedByUserID: a.user.ID},
+		"to A's identity":      {AccountID: b.acct, Action: store.AccountLinkActionLink, IdentityID: &a.ident, RequestedByUserID: b.user.ID},
+		"against A's identity": {AccountID: b.acct, Action: store.AccountLinkActionRelease, PreviousIdentityID: &a.ident, RequestedByUserID: b.user.ID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r.RequestedBy, r.RequestedAt, r.ExpiresAt, r.Reason = "x", storetest.Now, exp, "x"
+			err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error { return c.PutAccountLinkRequest(&r) })
+			if !errors.Is(err, store.ErrCrossTenant) {
+				t.Fatalf("err = %v, want ErrCrossTenant", err)
+			}
+		})
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if err := c.DeleteAccountLinkRequest(b.acct); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.AccountLinkRequest(b.acct); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("after delete: %v", err)
+		}
+		return nil
+	})
+}
+
 func correlationCovered() map[string]bool {
 	out := map[string]bool{}
 	for k := range corrMutations {
 		out[k] = true
 	}
 	for _, k := range []string{"AccountLinks", "AccountLink", "AccountLinksTo", "IdentityMerges", "OpenIdentityMerges",
-		"IdentityMerge", "MergeSurvivors", "DelegationIDsByPrincipal", "PlatformUsersForIdentity", "MoveRef"} {
+		"IdentityMerge", "MergeSurvivors", "DelegationIDsByPrincipal", "PlatformUsersForIdentity", "MoveRef",
+		"AccountLinkRequest", "PutAccountLinkRequest", "DeleteAccountLinkRequest", "AccountLinkRequests"} {
 		out[k] = true // TestIsolation_CorrelationReads
 	}
 	return out
