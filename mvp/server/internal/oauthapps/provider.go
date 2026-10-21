@@ -123,7 +123,11 @@ func follow(c *containment.Client, link string) (string, url.Values, error) {
 	if base := c.BasePath(); base != "" {
 		p = strings.TrimPrefix(p, base)
 	}
-	return p, u.Query(), nil
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return "", nil, errors.New("oauthapps: unreadable next link")
+	}
+	return p, q, nil
 }
 
 func parseTime(s string) *time.Time {

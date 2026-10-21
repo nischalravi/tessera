@@ -687,6 +687,9 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		// Certificates and branding: TestIsolation_Certificates, TestCertificateLifecycleStore, TestIsolation_Branding.
 		"InsertCertificate": true, "Certificates": true, "Certificate": true, "CertificateKey": true, "NextSAMLCertificate": true,
 		"ActivateCertificate": true, "RetireCertificate": true, "SetIdPSPKey": true,
+		// Pending four-eyes OAuth revokes: TestIsolation_OAuthRevokeRequests, TestOAuthRevokeRequestLifecycle.
+		"InsertOAuthRevokeRequest": true, "PendingOAuthRevokeRequest": true, "PendingOAuthRevokeRequests": true,
+		"ExpireOAuthRevokeRequests": true, "ExecuteOAuthRevokeRequest": true,
 		"PutBranding": true, "Branding": true, "BrandingLogo": true, "BrandName": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
