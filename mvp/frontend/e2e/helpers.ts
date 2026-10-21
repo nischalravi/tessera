@@ -41,10 +41,11 @@ export function report(findings: Finding[]): string {
 /** Waits for a route to settle: its heading is shown and loading spinners are gone. */
 export async function settle(page: Page) {
   await expect(page.locator("main h1").first()).toBeVisible({ timeout: 20_000 });
-  // pages that poll never go network-idle; wait a bounded time, then for skeletons to go
+  // pages that poll never go network-idle, so that wait is only a hint; the settled state is
+  // that every loading placeholder (.skeleton, .skel, aria-busy) is gone and animations are done
   await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
-  await page.locator(".skeleton, [aria-busy='true']").first().waitFor({ state: "detached", timeout: 5_000 }).catch(() => {});
-  await page.waitForTimeout(150); // let entrance transitions finish (reduced motion makes them instant)
+  await expect(page.locator(".skeleton, .skel, [aria-busy='true']")).toHaveCount(0, { timeout: 20_000 });
+  await page.evaluate(() => Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined))));
 }
 
 /** The setup project's saved session (e2e/auth.setup.ts). */

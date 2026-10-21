@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -85,20 +86,43 @@ func (s *Server) groupHidden(ck *privs.Checker) func(store.GroupID) bool {
 }
 
 // requireOnDefined requires want on a group the files define. When the caller
-// may not even view that group, the 403 leaves out its id (#387): the name was
-// the caller's own input, and the group's UUID must not come back with it.
-func (s *Server) requireOnDefined(ck *privs.Checker, id store.GroupID, want privs.Privilege) error {
-	err := ck.Require(privs.GroupObject(id), want)
-	if err == nil {
-		return nil
-	}
-	var d *privs.DeniedError
-	if errors.As(err, &d) && s.groupHidden(ck)(id) {
+// may not even view that group, it answers as for a name that does not exist
+// (#387, #404): no object_id, and for a diff no sign of the group at all. The
+// name was the caller's own input, and nothing about the group may come back.
+func (s *Server) requireOnDefined(ck *privs.Checker, id store.GroupID, name string, want privs.Privilege) error {
+	if s.groupHidden(ck)(id) {
+		if want == privs.Read { // a diff: the name is unknown
+			return policyErr(&policygroups.ValidationError{Diags: []policygroups.Diagnostic{{
+				Code: policygroups.CodeUnknownGroup, Msg: fmt.Sprintf("no group named %q", name)}}})
+		}
 		return &readiness.Error{Status: http.StatusForbidden, Code: "privilege_required",
-			Msg:   "the " + string(want) + " privilege is required on this group",
-			Extra: map[string]any{"privilege": string(want), "object_type": string(d.Object.Type)}}
+			Msg:   "the " + string(privs.Create) + " privilege is required on this folder",
+			Extra: map[string]any{"privilege": string(privs.Create), "object_type": string(privs.Folder)}}
 	}
-	return grpErr(err)
+	return grpErr(ck.Require(privs.GroupObject(id), want))
+}
+
+// hideFolderID drops the object_id of a refusal on a folder the caller may not
+// view, so a hidden folder looks like one that does not exist (#404).
+func hideFolderID(ck *privs.Checker, err error) error {
+	var re *readiness.Error
+	if !errors.As(err, &re) || re.Code != "privilege_required" {
+		return err
+	}
+	id, _ := re.Extra["object_id"].(string)
+	if id == "" || re.Extra["object_type"] != string(privs.Folder) {
+		return err
+	}
+	if ok, herr := ck.Has(privs.FolderObject(store.FolderID(id)), privs.View); herr == nil && ok {
+		return err
+	}
+	extra := map[string]any{}
+	for k, v := range re.Extra {
+		if k != "object_id" {
+			extra[k] = v
+		}
+	}
+	return &readiness.Error{Status: re.Status, Code: re.Code, Msg: re.Msg, Extra: extra}
 }
 
 // requireReadOnRefs requires read on every group the files refer to that exists,
@@ -162,7 +186,7 @@ func (s *Server) diffGrpPolicy(r *http.Request, _ *params) (int, any, error) {
 	tx := store.TxFrom(r.Context())
 	for _, f := range fs { // the members of the groups compared are shown
 		if g, err := tx.GrpGroupByName(f.Group); err == nil {
-			if err := s.requireOnDefined(ck, g.ID, privs.Read); err != nil {
+			if err := s.requireOnDefined(ck, g.ID, f.Group, privs.Read); err != nil {
 				return 0, nil, err
 			}
 		} else if !errors.Is(err, store.ErrNotFound) {
@@ -218,7 +242,7 @@ func (s *Server) requireApply(r *http.Request, ck *privs.Checker, fs []*policygr
 		g, err := tx.GrpGroupByName(f.Group)
 		switch {
 		case err == nil:
-			if err := s.requireOnDefined(ck, g.ID, privs.Admin); err != nil {
+			if err := s.requireOnDefined(ck, g.ID, f.Group, privs.Admin); err != nil {
 				return err
 			}
 			continue
@@ -240,7 +264,7 @@ func (s *Server) requireApply(r *http.Request, ck *privs.Checker, fs []*policygr
 			}
 		}
 		if _, err := s.grpFolderOrRoot(r, ck, folder, privs.Create); err != nil {
-			return err
+			return hideFolderID(ck, err)
 		}
 	}
 	return s.requireReadOnRefs(r, ck, fs)

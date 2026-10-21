@@ -239,6 +239,8 @@ var tables = []string{
 	"agent_profiles", "mcp_findings",
 	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)
 	"identity_link_requests",
+	// pending account pins and releases, the four-eyes step (schema/0500_account_link_requests.sql)
+	"account_link_requests",
 	// groups REST API idempotency keys (schema/0376_groups_api.sql)
 	"grp_idempotency",
 	// group attribute framework (schema/0287_group_attrs.sql)
