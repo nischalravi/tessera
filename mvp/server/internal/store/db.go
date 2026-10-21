@@ -138,6 +138,10 @@ var tables = []string{
 	"sod_functions", "sod_rulesets", "sod_risks", "sod_risk_functions", "sod_versions",
 	// SoD mitigating controls (schema/0301_sod_controls.sql)
 	"sod_controls", "sod_mitigations", "sod_risk_options", "sod_escalations",
+	// SoD ruleset remediation defaults (schema/0381_sod_remediation.sql)
+	"sod_ruleset_remediation",
+	// tenant request settings (schema/0380_request_settings.sql)
+	"request_settings",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)
@@ -186,6 +190,8 @@ var tables = []string{
 	"helpdesk_cases", "helpdesk_verifications", "helpdesk_signals", "helpdesk_findings",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
+	// certificates and rotation state, tenant branding (schema/0410_certificates.sql, 0411_branding.sql)
+	"tenant_certificates", "tenant_branding",
 	// alerting (schema/0209_alerts.sql)
 	"alert_rule_settings", "alerts", "alert_channels", "alert_deliveries", "alert_cursors",
 	// identity disable / enable (schema/0310_identity_disables.sql)
@@ -195,7 +201,11 @@ var tables = []string{
 	// request access drafts (schema/0312_request_drafts.sql)
 	"request_drafts",
 	// durable job queue (schema/0320_queue.sql)
-	"queue_jobs", "queue_schedules",
+	"queue_jobs", "queue_schedules", "queue_workers", "agent_jobs",
+	// role mining (schema/0420_role_mining.sql)
+	"role_mining_runs", "role_mining_candidates",
+	// log retention settings and archive segments (schema/0400, 0401; issue #298)
+	"retention_policies", "archive_segments", "archive_segment_items",
 	// configuration transport (schema/0211_config_transport.sql)
 	"config_signing_keys", "config_trusted_signers", "config_imports",
 	// native groups (schema/0280_groups.sql, 0284_groups_engine.sql)
@@ -245,6 +255,8 @@ var tables = []string{
 	"grp_provisioners", "grp_provisionable", "grp_sync_groups", "grp_sync_runs", "grp_sync_ops",
 	// group event sinks (schema/0379_group_event_sinks.sql)
 	"grp_event_sinks", "grp_sink_dead_letters",
+	// questionnaires, their versions, attachments and answers (schema/0450_questionnaires.sql)
+	"questionnaires", "questionnaire_versions", "questionnaire_attachments", "questionnaire_answers",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

@@ -33,6 +33,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/questionnaires"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
@@ -212,22 +213,37 @@ type Submission struct {
 	Beneficiaries []int64
 	Items         []string // catalog item ids
 	Justification string
-	DurationHours *float64 // nil: each item's default
+	DurationHours *float64 // nil: each item's default, then the tenant's
+	Attachments   []string // references, only if the tenant's settings allow them
+	// Answers are the answers to the questionnaires the items ask (questionnaire id ->
+	// question id -> value); Submit validates them against the version in force.
+	Answers map[string]map[string]any
 }
 
 // Submit files one pending line per beneficiary and item, or none.
-// forOthers allows beneficiaries other than the actor's own identity.
+// forOthers is whether the actor holds requests.create_for_others; the tenant's
+// request settings (justification, durations, attachments, request for others)
+// are enforced here, so no client can bypass them.
 func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time.Time) (string, []*store.RequestLine, error) {
 	just := strings.TrimSpace(s.Justification)
+	set, _, err := LoadSettings(tx)
+	if err != nil {
+		return "", nil, err
+	}
 	switch {
 	case len(s.Beneficiaries) == 0 || len(s.Items) == 0:
 		return "", nil, refuse(422, "empty_request", "name at least one person and one item")
 	case len(s.Beneficiaries)*len(s.Items) > MaxLines:
 		return "", nil, refuse(422, "too_many_lines", "at most %d person-item pairs per request", MaxLines)
-	case just == "" || len(just) > MaxJustification:
-		return "", nil, refuse(422, "justification_required", "a justification of 1 to %d characters is required", MaxJustification)
 	case !hoursOK(s.DurationHours):
 		return "", nil, refuse(422, "invalid_duration", "durations are between 0 and %d hours", MaxHours)
+	}
+	if err := set.checkJustification(just); err != nil {
+		return "", nil, err
+	}
+	attachments, err := set.checkAttachments(s.Attachments)
+	if err != nil {
+		return "", nil, err
 	}
 	batch := uuid.NewString()
 	seen := map[[2]string]bool{}
@@ -239,10 +255,8 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 		} else if err != nil {
 			return "", nil, err
 		}
-		if by.IdentityID == nil || *by.IdentityID != ben.ID {
-			if !forOthers {
-				return "", nil, refuse(403, "for_others_not_allowed", "you can request access only for yourself")
-			}
+		if err := set.checkForOthers(ben, by, forOthers); err != nil {
+			return "", nil, err
 		}
 		if ben.Status != "active" {
 			return "", nil, refuse(409, "beneficiary_not_active", "%s is not active", ben.Name)
@@ -253,15 +267,22 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 				continue
 			}
 			seen[k] = true
-			l, err := line(tx, batch, ben, iid, s.DurationHours, just, by, now)
+			l, err := line(tx, batch, ben, iid, s.DurationHours, just, by, set, now)
 			if err != nil {
 				return "", nil, err
 			}
 			lines = append(lines, l)
 		}
 	}
+	checked, perItem, err := checkAnswers(tx, lines, s.Answers)
+	if err != nil {
+		return "", nil, err
+	}
 	for _, l := range lines {
 		if err := tx.InsertRequestLine(l); err != nil {
+			return "", nil, err
+		}
+		if err := questionnaires.Record(tx, store.QSubjectRequestLine, l.ID, forItem(checked, perItem[l.CatalogItemID]), by.Display, now); err != nil {
 			return "", nil, err
 		}
 		ben, err := tx.Identity(l.BeneficiaryID)
@@ -282,8 +303,14 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 	for i, l := range lines {
 		ids[i] = l.ID
 	}
-	if err := tx.Audit(now, by.Display, "request.submit", ojson.Object{{Key: "batch_id", Value: batch},
-		{Key: "lines", Value: ids}, {Key: "justification", Value: just}}); err != nil {
+	detail := ojson.Object{{Key: "batch_id", Value: batch}, {Key: "lines", Value: ids}, {Key: "justification", Value: just}}
+	if len(attachments) > 0 {
+		detail = append(detail, ojson.KV{Key: "attachments", Value: attachments})
+	}
+	if len(checked) > 0 {
+		detail = append(detail, ojson.KV{Key: "questionnaires", Value: questionnaires.AuditDetail(checked)})
+	}
+	if err := tx.Audit(now, by.Display, "request.submit", detail); err != nil {
 		return "", nil, err
 	}
 	return batch, lines, nil
@@ -322,7 +349,7 @@ func attributeEligible(tx *store.TenantTx, it *store.CatalogItem, g *store.Group
 }
 
 func line(tx *store.TenantTx, batch string, ben *store.Identity, itemID string, hours *float64, just string, by Actor,
-	now time.Time) (*store.RequestLine, error) {
+	set Settings, now time.Time) (*store.RequestLine, error) {
 	it, err := tx.CatalogItem(itemID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, refuse(404, "item_not_found", "catalog item not found")
@@ -350,6 +377,12 @@ func line(tx *store.TenantTx, batch string, ben *store.Identity, itemID string, 
 	}
 	if hours == nil {
 		hours = it.DefaultHours
+	}
+	if hours == nil {
+		hours = set.DefaultHours
+	}
+	if err := set.checkDuration(hours, name); err != nil {
+		return nil, err
 	}
 	switch {
 	case hours == nil && (g.Privileged || it.MaxHours != nil):

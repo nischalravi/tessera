@@ -151,6 +151,7 @@ func (s *Server) samlMetadata(w http.ResponseWriter, r *http.Request, p *params)
 		return nil, err
 	}
 	var conn *store.IdPConnection
+	var next []byte // a certificate being rotated in (Admin > Certificates): published beside the active one
 	var tid tenancy.ID
 	for _, t := range tenants {
 		if t.ID == tenancy.Platform {
@@ -163,6 +164,14 @@ func (s *Server) samlMetadata(w http.ResponseWriter, r *http.Request, p *params)
 			}
 			if err == nil && c.Protocol == "saml" && c.Status != "disabled" {
 				conn, tid = c, t.ID
+				n, nerr := tx.NextSAMLCertificate(id)
+				if nerr == nil {
+					if b, _ := pem.Decode([]byte(n.CertPEM)); b != nil {
+						next = b.Bytes
+					}
+				} else if !errors.Is(nerr, store.ErrNotFound) {
+					return nerr
+				}
 			}
 			return err
 		}); err != nil {
@@ -178,6 +187,9 @@ func (s *Server) samlMetadata(w http.ResponseWriter, r *http.Request, p *params)
 	sc, err := s.samlConnection(tid, conn, false)
 	if err != nil {
 		return nil, err
+	}
+	if next != nil {
+		sc.NextSPCerts = [][]byte{next}
 	}
 	b, err := samlsp.Metadata(sc, s.clock())
 	if err != nil {

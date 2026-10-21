@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +85,15 @@ type Config struct {
 	AgentAddr    string
 	AgentTLSCert string
 	AgentTLSKey  string
+	// ExternalWorkerKinds is TESSERA_EXTERNAL_WORKER_KINDS: the worker kinds
+	// (WorkerKinds) that `tessera serve` does not run in-process because
+	// `tessera worker` processes do (issue #302). Empty: serve runs them all.
+	ExternalWorkerKinds []string
+	// ConnectorSyncSchedule is TESSERA_CONNECTOR_SYNC_SCHEDULE: a queue spec
+	// ("@every 15m" or five cron fields) that schedules connector_sync for
+	// every tenant, run by whichever process runs that kind. Empty: syncs run
+	// on demand only. The spec itself is validated where it is registered.
+	ConnectorSyncSchedule string
 	// RotationFakeAdapters admits the simulated secret-rotation adapter
 	// (TESSERA_ROTATION_FAKE_ADAPTERS; dev and test only).
 	RotationFakeAdapters   bool
@@ -103,7 +113,15 @@ type Config struct {
 	AWSCatalogVersion string
 	// BackupDir (TESSERA_BACKUP_DIR) turns on scheduled encrypted backups
 	// every BackupEveryMinutes, keeping the newest BackupKeep (issue #171).
-	BackupDir             string
+	BackupDir string
+	// ArchiveDir (TESSERA_ARCHIVE_DIR) is where the archival job (issue #298)
+	// keeps sealed segments of records past their retention; ArchiveURL
+	// (TESSERA_ARCHIVE_URL) is an http(s) object store used instead, reached
+	// through internal/safehttp. With neither, ArchiveDirFor falls back to
+	// BackupDir/archive, then, outside prod, to var/archive next to the
+	// database; in prod an unset archive means nothing is archived or deleted.
+	ArchiveDir            string
+	ArchiveURL            string
 	BackupEveryMinutes    int
 	BackupKeep            int
 	AccessTokenTTLSeconds int
@@ -296,6 +314,18 @@ func Load(getenv func(string) string) (*Config, error) {
 	if c.AgentAddr == "" && (c.AgentTLSCert != "" || c.AgentTLSKey != "") {
 		bad("TESSERA_AGENT_TLS_CERT and TESSERA_AGENT_TLS_KEY are set without TESSERA_AGENT_ADDR")
 	}
+	for _, k := range strings.Split(getenv("TESSERA_EXTERNAL_WORKER_KINDS"), ",") {
+		if k = strings.TrimSpace(k); k == "" || slices.Contains(c.ExternalWorkerKinds, k) {
+			continue
+		}
+		if !slices.Contains(WorkerKinds, k) {
+			bad("TESSERA_EXTERNAL_WORKER_KINDS: unknown kind %q (want %s)", k, strings.Join(WorkerKinds, ", "))
+			continue
+		}
+		c.ExternalWorkerKinds = append(c.ExternalWorkerKinds, k)
+	}
+	slices.Sort(c.ExternalWorkerKinds)
+	c.ConnectorSyncSchedule = strings.TrimSpace(getenv("TESSERA_CONNECTOR_SYNC_SCHEDULE"))
 	c.AuditAnchor = str("TESSERA_AUDIT_ANCHOR", "", "")
 	if a := c.AuditAnchor; a != "" && !strings.HasPrefix(a, "file://") && !strings.HasPrefix(a, "s3://") {
 		bad("TESSERA_AUDIT_ANCHOR: %q is not a file:// or s3:// URL", a)
@@ -305,6 +335,17 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.AuthRateBurst = integer("TESSERA_AUTH_RATE_BURST", 30, 1, 100_000)
 	c.AnonRateBurst = integer("TESSERA_ANON_RATE_BURST", 120, 1, 100_000)
 	c.BackupDir = str("TESSERA_BACKUP_DIR", "", "")
+	c.ArchiveDir = str("TESSERA_ARCHIVE_DIR", "", "")
+	c.ArchiveURL = str("TESSERA_ARCHIVE_URL", "", "")
+	if u := c.ArchiveURL; u != "" {
+		pu, err := url.Parse(u)
+		switch {
+		case err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" || pu.User != nil || pu.RawQuery != "" || pu.Fragment != "":
+			bad("TESSERA_ARCHIVE_URL: %q is not an http(s) URL without credentials, query or fragment", u)
+		case pu.Scheme != "https" && prod:
+			bad("TESSERA_ARCHIVE_URL must be https with TESSERA_ENV=prod")
+		}
+	}
 	c.BackupEveryMinutes = integer("TESSERA_BACKUP_EVERY_MINUTES", 360, 5, 7*24*60)
 	c.BackupKeep = integer("TESSERA_BACKUP_KEEP", 28, 1, 10_000)
 	c.GroupsSyncBudget = integer("TESSERA_GROUPS_SYNC_BUDGET", 5000, 1, 10_000_000)
@@ -466,8 +507,27 @@ func Load(getenv func(string) string) (*Config, error) {
 	return c, nil
 }
 
+// ArchiveDirFor is the directory of the local archive store for a database
+// path: TESSERA_ARCHIVE_DIR, else BackupDir/archive, else (outside prod) var/archive
+// next to the database. Empty: no local archive (prod with none configured).
+func (c *Config) ArchiveDirFor(dbPath string) string {
+	switch {
+	case c.ArchiveDir != "":
+		return c.ArchiveDir
+	case c.BackupDir != "":
+		return filepath.Join(c.BackupDir, "archive")
+	case c.IsProd():
+		return ""
+	}
+	return filepath.Join(localDir(dbPath), "var", "archive")
+}
+
 // MetricsDefaultAddr is the dev and test /metrics listener (loopback).
 const MetricsDefaultAddr = "127.0.0.1:9464"
+
+// WorkerKinds are the queue kinds that can run outside the API process
+// (internal/worker.Kinds, which a test keeps equal).
+var WorkerKinds = []string{"connector_sync", "provision_push"}
 
 // loadMetricsAddr reads TESSERA_METRICS_ADDR ("off" disables it). Outside
 // production the listener must be loopback. In production it is off unless

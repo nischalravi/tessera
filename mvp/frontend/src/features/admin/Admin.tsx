@@ -9,9 +9,14 @@ import { Badge, Button, Callout, DataTable, EmptyState, Page, PreviewBadge, useT
 import { EmailDelivery } from "../notifications/EmailDelivery";
 import { NotificationsAdminPanel } from "../notifications/Notifications";
 import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../mocks";
+import { BrandingAdmin } from "./BrandingAdmin";
+import { Certificates } from "./Certificates";
 import { GuestsAdmin } from "./GuestsAdmin";
+import { IdentityRules } from "./IdentityRules";
 import { Jobs } from "./Jobs";
 import { Provisioning } from "./Provisioning";
+import { Archive } from "./Archive";
+import { Retention } from "./Retention";
 import { ConfigTransfer } from "./ConfigTransfer";
 import { SiemSinks } from "./SiemSinks";
 
@@ -155,7 +160,7 @@ function AuditLog() {
   );
 }
 
-const LIVE: Record<string, () => React.JSX.Element> = { guests: GuestsAdmin, jobs: Jobs, audit: AuditLog, provisioning: Provisioning, siem: SiemSinks, "config-transfer": ConfigTransfer, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery };
+const LIVE: Record<string, () => React.JSX.Element> = { certificates: Certificates, branding: BrandingAdmin, "identity-rules": IdentityRules, guests: GuestsAdmin, jobs: Jobs, audit: AuditLog, provisioning: Provisioning, siem: SiemSinks, "config-transfer": ConfigTransfer, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery, archive: Archive, retention: Retention };
 
 export function AdminSectionPage() {
   const { section } = useParams();

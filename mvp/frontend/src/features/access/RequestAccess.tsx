@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Layers, Minus, Plus, Search, ShieldAlert, ShoppingCart, Timer, X } from "lucide-react";
-import { BusinessRole, CatalogView, ConnectorRow, Group, IdentityRow, DraftItem, RequestDraft, Risk, RolesView, SimResult, api, draftPath, requestDrafts, roles as roleApi, simulate, submitRequest, useApi } from "../../api";
+import { AnswersByQuestionnaire, BusinessRole, CatalogView, QuestionnaireNeed, ConnectorRow, Group, IdentityRow, DraftItem, RequestDraft, Risk, RequestSettingsView, RolesView, SimResult, api, draftPath, neededPath, requestDrafts, requestSettingsPath, roles as roleApi, simulate, submitRequest, useApi } from "../../api";
+import { DEFAULT_REQUEST_SETTINGS, attachmentError, defaultDurationLabel, durationChoices, durationRequired, effectiveMaxHours, forOthersNote, justificationError, justificationHint, parseAttachments } from "./requestSettings";
 import { SodWarning } from "./SodWarning";
+import { QuestionnaireForm, formReady } from "./QuestionnaireForm";
+import { answersPayload, mergeNeeds } from "../governance/questionnaireModel";
 import { Badge, Button, Callout, EmptyState, FilterChips, Loading, Page, Segmented, Skeleton, useToast } from "../../components";
 
 /** What a catalog card stands for: one group (an entitlement) or one business role. */
@@ -151,8 +154,15 @@ export function RequestAccess() {
   const [others, setOthers] = useState<number[]>(forIds);
   const [duration, setDuration] = useState<number | null>(null);
   const [justification, setJustification] = useState("");
+  const [attachmentText, setAttachmentText] = useState("");
   const [busy, setBusy] = useState(false);
+  // the tenant's request settings (Admin → Request settings); the server enforces them on submit
+  const { data: rs } = useApi<RequestSettingsView>(requestSettingsPath);
+  const set = rs ?? DEFAULT_REQUEST_SETTINGS;
   const [draftId, setDraftId] = useState<string | undefined>();
+  // the questionnaires the cart asks (Governance → Questionnaires): the items', and each role's; null while loading
+  const [answers, setAnswers] = useState<AnswersByQuestionnaire>({});
+  const [asked, setAsked] = useState<{ items: QuestionnaireNeed[]; roles: Record<string, QuestionnaireNeed[]> } | null>({ items: [], roles: {} });
 
   useEffect(() => {
     if (forIds.length) {
@@ -193,7 +203,35 @@ export function RequestAccess() {
   }, [draft, catalog]);
 
   // the longest duration every item in the cart allows (null: no limit)
-  const maxHours = cart.reduce<number | null>((m, c) => (c.maxHours == null ? m : m == null ? c.maxHours : Math.min(m, c.maxHours)), null);
+  const itemMaxHours = cart.reduce<number | null>((m, c) => (c.maxHours == null ? m : m == null ? c.maxHours : Math.min(m, c.maxHours)), null);
+  const maxHours = effectiveMaxHours(itemMaxHours, set);
+  const catalogCart = cart.filter((c) => c.catalogId);
+  const itemsHaveDefaults = catalogCart.length > 0 && catalogCart.every((c) => c.defaultHours != null);
+  const askSig = catalogCart.map((c) => c.catalogId).join(",") + "|" + cart.filter((c) => !c.catalogId).map((c) => c.role!.id).join(",");
+  useEffect(() => {
+    const itemIds = catalogCart.map((c) => c.catalogId!);
+    const roleIds = cart.filter((c) => !c.catalogId).map((c) => c.role!.id);
+    if (!itemIds.length && !roleIds.length) {
+      setAsked({ items: [], roles: {} });
+      return;
+    }
+    let alive = true;
+    setAsked(null);
+    (async () => {
+      try {
+        const get = async (q: Parameters<typeof neededPath>[0]) => (await api<{ questionnaires: QuestionnaireNeed[] }>(neededPath(q))).questionnaires;
+        const items = itemIds.length ? await get({ catalogItemIds: itemIds }) : [];
+        const roles: Record<string, QuestionnaireNeed[]> = {};
+        for (const id of roleIds) roles[id] = await get({ roleId: id });
+        if (alive) setAsked({ items, roles });
+      } catch {
+        if (alive) setAsked({ items: [], roles: {} }); // the server asks again on submit
+      }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askSig]);
+  const needs = mergeNeeds([asked?.items ?? [], ...Object.values(asked?.roles ?? {})]);
   useEffect(() => {
     if (duration != null && maxHours != null && duration > maxHours) setDuration(null);
   }, [maxHours, duration]);
@@ -248,19 +286,22 @@ export function RequestAccess() {
           catalog_item_ids: real.map((c) => c.catalogId!),
           justification: justification.trim(),
           duration_hours: duration,
+          ...(set.attachments_allowed && attachments.length ? { attachments } : {}),
+          answers: answersPayload(asked?.items ?? [], answers),
         });
         n += res.lines.length;
       }
       // a role is requested per person (one approval assigns the whole bundle)
       for (const c of roles) {
         for (const b of beneficiaries) {
-          await roleApi.request(c.role!.id, b.id, justification.trim());
+          await roleApi.request(c.role!.id, b.id, justification.trim(), answersPayload(asked?.roles[c.role!.id] ?? [], answers));
           n++;
         }
       }
       if (draftId) await requestDrafts.remove(draftId).catch(() => undefined); // the request is in; a draft left behind is harmless
       toast(`Submitted ${n} request${n === 1 ? "" : "s"}. Approvers can see ${n === 1 ? "it" : "them"} now.`);
       setCart([]);
+      setAnswers({});
       setJustification("");
       setDraftId(undefined);
       nav("/access/requests");
@@ -271,7 +312,12 @@ export function RequestAccess() {
     }
   };
 
-  const canSubmit = cart.length > 0 && beneficiaries.length > 0 && justification.trim().length >= 5 && !busy;
+  const attachments = parseAttachments(attachmentText);
+  const justError = justificationError(set, justification, rs?.max_justification_length);
+  const attachError = attachmentError(set, attachments);
+  const needsDuration = catalogCart.length > 0 && duration === null && durationRequired(set, itemsHaveDefaults);
+  const answersReady = asked !== null && formReady(needs, answers);
+  const canSubmit = cart.length > 0 && beneficiaries.length > 0 && !justError && !attachError && !needsDuration && answersReady && !busy;
   const kinds: { id: CatalogKind; label: string; count?: number }[] = [
     { id: "all", label: "All", count: catalog?.length },
     { id: "role", label: "Roles", count: catalog?.filter((c) => c.target.kind === "role").length },
@@ -333,6 +379,7 @@ export function RequestAccess() {
               <Segmented label="Request for" value={who} onChange={(v) => { setWho(v); if (v === "me") setParams({}); }}
                 options={[...(me ? [["me", "Me"] as ["me", string]] : []), ...(view?.can_request_for_others ? [["other", "Someone else"], ["many", "Several people"]] as [Who, string][] : [])]} />
             </div>
+            {forOthersNote(set) && <p className="small muted">{forOthersNote(set)}</p>}
             {view && !me && !view.can_request_for_others && <Callout tone="warn">Your sign-in is not linked to a person in the directory, and you can't request for others. Ask an administrator.</Callout>}
             {who !== "me" && (
               <div className="field">
@@ -371,16 +418,26 @@ export function RequestAccess() {
             )}
             <label className="field">
               Duration
-              <select className="input" value={duration === null ? "" : String(duration)} onChange={(e) => setDuration(e.target.value ? Number(e.target.value) : null)}>
-                {DURATIONS.filter(([, h]) => h === null || maxHours === null || h <= maxHours).map(([l, h]) => <option key={l} value={h === null ? "" : h}>{h === null ? "Each item's default" : l}</option>)}
+              <select className="input" value={duration === null ? "" : String(duration)} onChange={(e) => setDuration(e.target.value ? Number(e.target.value) : null)} aria-describedby="req-duration-hint">
+                {durationChoices(DURATIONS, itemMaxHours, set, itemsHaveDefaults).map(([l, h]) => <option key={l} value={h === null ? "" : h}>{h === null ? defaultDurationLabel(set, hoursLabel) : l}</option>)}
               </select>
-              <span className="hint">{maxHours != null ? `Items in this request allow at most ${hoursLabel(maxHours)}.` : "Items without a default stay until removed."}</span>
+              <span className="hint" id="req-duration-hint">{maxHours != null ? `Requests here last at most ${hoursLabel(maxHours)}.${needsDuration ? " Choose a duration." : ""}` : set.default_hours != null ? `Items without a default get ${hoursLabel(set.default_hours)}.` : "Items without a default stay until removed."}</span>
             </label>
             <label className="field">
               Justification
-              <textarea className="input" maxLength={1000} value={justification} onChange={(e) => setJustification(e.target.value)} placeholder="What do you need it for? Include a ticket if there is one." />
-              <span className="hint">Approvers see this. At least a few words.</span>
+              <textarea className="input" maxLength={rs?.max_justification_length ?? 1000} value={justification} onChange={(e) => setJustification(e.target.value)} placeholder="What do you need it for? Include a ticket if there is one." aria-describedby="req-just-hint" aria-invalid={!!justError && justification.trim() !== ""} />
+              <span className="hint" id="req-just-hint">{justification.trim() !== "" && justError ? justError : justificationHint(set)}</span>
             </label>
+            {set.attachments_allowed && (
+              <label className="field">
+                Attachments (optional)
+                <textarea className="input" rows={2} value={attachmentText} onChange={(e) => setAttachmentText(e.target.value)} placeholder="One reference per line: a ticket or document link" aria-describedby="req-att-hint" aria-invalid={!!attachError} />
+                <span className="hint" id="req-att-hint">{attachError ?? `Links or ids, at most ${rs?.max_attachments ?? 5}. Approvers see them. Files are not uploaded.`}</span>
+              </label>
+            )}
+            {cart.length > 0 && asked === null && <p className="small muted" role="status">Checking what approvers ask…</p>}
+            {needs.length > 0 && <QuestionnaireForm needs={needs} value={answers} onChange={setAnswers} disabled={busy} />}
+            {needs.length > 0 && !answersReady && <p className="hint" role="status">Answer the required questions to submit.</p>}
             <SodWarning beneficiaryIds={beneficiaries.map((b) => b.id)} catalogIds={cart.flatMap((c) => (c.catalogId ? [c.catalogId] : []))} durationHours={duration} />
             {groups && <RiskPreview beneficiaries={beneficiaries} cart={cart} groups={groups} />}
             {cart.some((c) => !c.catalogId) && <Callout tone="neutral">A role is one request per person: approving it grants every entitlement in the role.</Callout>}

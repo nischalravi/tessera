@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LifeBuoy, LockKeyhole, LucideIcon, Network, Plug, Plus, Radio, RotateCw, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
+  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LifeBuoy, LockKeyhole, type LucideIcon, Network, Plug, Plus, Radio, RotateCw, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -19,6 +19,8 @@ export interface RailItem extends NavPage {
   except?: string[];
   /** Pages reachable from this item's tabs; listed in the palette, not in the rail. */
   pages?: NavPage[];
+  /** The permission the page needs; the rail hides the item from a session without it (the server still decides). */
+  perm?: string;
 }
 
 export interface RailGroup {
@@ -74,14 +76,15 @@ export const RAIL: RailGroup[] = [
         id: "mine", label: "My access", icon: BadgeCheck, path: "/access/mine", also: ["/access/requests"], keywords: "what i have entitlements remove",
         pages: [{ path: "/access/requests", label: "My requests", keywords: "history drafts status submitted" }],
       },
-      { id: "guests", label: "Guests I sponsor", icon: UserPlus, path: "/access/guests", keywords: "guest sponsor invite visitor contractor volunteer partner sponsorship bulk csv approve transfer" },
+      { id: "guests", label: "Guests I sponsor", icon: UserPlus, path: "/access/guests", perm: "guests.sponsor", keywords: "guest sponsor invite visitor contractor volunteer partner sponsorship bulk csv approve transfer" },
       { id: "jit", label: "Just-in-time", icon: Timer, path: "/access/jit", keywords: "jit elevation temporary privileged break glass" },
       {
-        id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/guest-lifecycle", "/governance/terms", "/governance/workflows", "/governance/drift"], keywords: "certification campaigns attestation",
+        id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/guest-lifecycle", "/governance/terms", "/governance/questionnaires", "/governance/workflows", "/governance/drift"], keywords: "certification campaigns attestation",
         pages: [
           { path: "/governance/lifecycle", label: "Lifecycle", keywords: "joiner mover leaver jml hris workday onboarding offboarding" },
           { path: "/governance/guest-lifecycle", label: "Guest lifecycle", keywords: "guest sponsorship expiry renewal reminder transfer sponsor leaver conversion deprovision grace retention purge step-up" },
           { path: "/governance/terms", label: "Guest terms", keywords: "guest terms of use acceptable use privacy notice acceptance consent version grace recovery" },
+          { path: "/governance/questionnaires", label: "Questionnaires", keywords: "forms questions why do you need this justification risk privileged request review decision answers approvers version" },
           { path: "/governance/drift", label: "Drift", keywords: "intended observed rogue orphan stale missing reconciliation remediation" },
           { path: "/governance/workflows", label: "Workflows", keywords: "approval routing escalation" },
         ],
@@ -120,7 +123,10 @@ export const RAIL: RailGroup[] = [
       {
         id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/shared-signals", "/admin/flat-files", "/admin/conditional-access"], keywords: "settings configuration audit jobs",
         pages: [{ path: "/admin/guests", label: "Guests and external identities", keywords: "guest settings matching lifecycle terms sponsor codes populations recovery cases sponsor policy" },
-          { path: "/admin/event-sinks", label: "Group event sinks", keywords: "streaming sqs sns rabbitmq kafka cloudevents queue topic dead letter outbox" }],
+          { path: "/admin/retention", label: "Retention", keywords: "log retention audit events campaigns requests job runs outbox keep online days minimum floor archive two admins" },
+          { path: "/admin/archive", label: "Archive", keywords: "archive segments sealed verify export restore read-only retention audit hash chain" },
+          { path: "/admin/event-sinks", label: "Group event sinks", keywords: "streaming sqs sns rabbitmq kafka cloudevents queue topic dead letter outbox" },
+          { path: "/admin/request-settings", label: "Request settings", keywords: "access request justification duration maximum default attachments history visibility request for others manager" }],
       },
     ],
   },
@@ -133,6 +139,11 @@ export function isActive(item: RailItem, pathname: string) {
   if (item.path === "/") return pathname === "/";
   if (item.except?.some((p) => under(pathname, p))) return false;
   return under(pathname, item.path) || !!item.also?.some((p) => under(pathname, p));
+}
+
+/** The rail without the entries the session lacks the permission for; empty groups drop out. */
+export function visibleRail(can: (permission: string) => boolean): RailGroup[] {
+  return RAIL.map((g) => ({ ...g, items: g.items.filter((i) => !i.perm || can(i.perm)) })).filter((g) => g.items.length > 0);
 }
 
 export function railItemFor(pathname: string) {

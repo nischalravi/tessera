@@ -25,6 +25,7 @@ export const GovernanceTabs = () => (
       { to: "/governance/drift", label: "Drift" },
       { to: "/governance/guest-lifecycle", label: "Guest lifecycle" },
       { to: "/governance/terms", label: "Guest terms" },
+      { to: "/governance/questionnaires", label: "Questionnaires" },
       { to: "/governance/workflows", label: <>Workflows <PreviewBadge /></> },
     ]}
   />
@@ -36,6 +37,16 @@ export const MyAccessTabs = () => (
     tabs={[
       { to: "/access/mine", label: "My access" },
       { to: "/access/requests", label: "My requests" },
+    ]}
+  />
+);
+
+export const RoleTabs = () => (
+  <LinkTabs
+    label="Roles"
+    tabs={[
+      { to: "/directory/roles", label: "Roles", end: true },
+      { to: "/directory/roles/mining", label: "Mining" },
     ]}
   />
 );

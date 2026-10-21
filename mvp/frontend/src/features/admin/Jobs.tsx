@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { Play, RotateCcw } from "lucide-react";
-import { JobRun, QueueJob, QueueSchedule, api, fmtDate, jobs, queue, relTime, useApi } from "../../api";
+import { JobRun, QueueJob, QueueSchedule, QueueWorker, api, fmtDate, jobs, queue, relTime, useApi } from "../../api";
 import { Badge, Button, Callout, DataTable, SidePanel, useToast } from "../../components";
 
 const KIND: Record<string, string> = {
   sync: "Connector sync", provision: "Provisioning (leaver/mover)", validation: "Connection validation", dry_run: "Dry run",
   health_rerun: "Deployment health re-run", jit_sweep: "JIT expiry sweep", audit_anchor: "Audit anchoring", guest_lifecycle: "Guest lifecycle",
   sweep_requests: "Access request sweep", sweep_lifecycle: "Lifecycle and sponsorship sweep", sweep_admin_changes: "Admin change sweep",
-  containment_retries: "Containment retries", job_maintenance: "Job history upkeep",
+  containment_retries: "Containment retries", job_maintenance: "Job history upkeep", archive_sweep: "Archive sweep (records past retention)",
+  connector_sync: "Connector sync (worker)", provision_push: "Provisioning push (worker)",
 };
 const QUEUE_TONE: Record<string, "ok" | "critical" | "warning" | "info"> = { succeeded: "ok", dead: "critical", failed: "warning", running: "info", queued: "info" };
 const STATUS_TONE: Record<string, "ok" | "critical" | "warning"> = { succeeded: "ok", failed: "critical", running: "warning" };
@@ -69,6 +70,7 @@ function QueueSection() {
           {dead > 0 && <> <b>{dead} dead {dead === 1 ? "job needs" : "jobs need"} a look.</b></>}
         </p>
       </div>
+      <WorkersTable />
       <DataTable
         id="queue-schedules"
         rows={schedules}
@@ -112,6 +114,36 @@ function QueueSection() {
         empty="The queue is empty."
       />
       {open && <QueueJobPanel job={open} onClose={() => setOpen(null)} onRetried={() => { setOpen(null); reload(); }} />}
+    </div>
+  );
+}
+
+/** The workers that serve the queue, with their last heartbeat (issue #302). A silent one is stale: its jobs return to the queue when their leases expire. */
+function WorkersTable() {
+  const { data, error } = useApi<QueueWorker[]>("/queue/workers");
+  const stale = (data ?? []).filter((w) => w.status === "stale").length;
+  return (
+    <div className="stack-sm">
+      {stale > 0 && <Callout tone="warn">{stale} {stale === 1 ? "worker has" : "workers have"} stopped reporting. Its running jobs return to the queue when their leases expire and another worker takes them.</Callout>}
+      <DataTable
+        id="queue-workers"
+        rows={data}
+        error={error}
+        rowKey={(r) => r.worker_id}
+        initialSort={["beat", -1]}
+        rowLabel={(r) => `Worker ${r.worker_id} ${r.status}`}
+        columns={[
+          { id: "worker", header: "Worker", sort: (r) => r.worker_id, cell: (r) => <span className="small"><b>{r.worker_id}</b><span className="faint"> · {r.mode === "api" ? "API process" : "tessera worker"}</span></span> },
+          { id: "status", header: "Health", sort: (r) => r.status, cell: (r) => <Badge tone={r.status === "healthy" ? "ok" : "warning"}>{r.status}</Badge> },
+          { id: "beat", header: "Last heartbeat", sort: (r) => r.last_heartbeat_at, cell: (r) => <span className="small nowrap" title={fmtDate(r.last_heartbeat_at)}>{r.lag_seconds < 90 ? `${r.lag_seconds} s ago` : relTime(r.last_heartbeat_at.replace("Z", ""))}</span> },
+          { id: "kinds", header: "Runs", csv: (r) => r.kinds.join(" "), cell: (r) => <span className="xs">{r.kinds.map((k) => KIND[k] ?? k).join(", ") || "—"}</span>, hideNarrow: true },
+          { id: "load", header: "Running", num: true, sort: (r) => r.running, cell: (r) => <span className="small tnum">{r.running} / {r.concurrency}</span>, hideNarrow: true },
+          { id: "host", header: "Host", csv: (r) => `${r.hostname} ${r.pid}`, cell: (r) => <span className="xs">{r.hostname}{r.version && <span className="faint"> · {r.version}</span>}</span>, hideNarrow: true },
+        ]}
+        searchText={(r) => `${r.worker_id} ${r.hostname} ${r.kinds.join(" ")} ${r.status}`}
+        searchPlaceholder="Search workers…"
+        empty="No worker has reported yet. Start the API, or run tessera worker, to see it here."
+      />
     </div>
   );
 }

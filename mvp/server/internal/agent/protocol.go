@@ -250,21 +250,8 @@ func ValidateJob(j Job) error {
 	if j.ID == "" || len(j.ID) > 64 {
 		return errors.New("job id is required")
 	}
-	if j.Target.Host == "" || len(j.Target.Host) > 253 || strings.ContainsAny(j.Target.Host, "/@ \t\r\n\x00") {
-		return errors.New("target host is not valid")
-	}
-	if j.Target.Port != safedial.PortLDAPS && j.Target.Port != safedial.PortStartTLS {
-		return fmt.Errorf("target port must be %d or %d", safedial.PortStartTLS, safedial.PortLDAPS)
-	}
-	c := j.Config
-	if len(c.BindDN) > maxItem || !validCredName(c.CredName) || len(c.UserFilter) > maxFilter || len(c.CABundle) > maxCA ||
-		len(c.BaseDNs) > maxList {
-		return errors.New("config is not valid")
-	}
-	for _, d := range c.BaseDNs {
-		if len(d) > maxItem {
-			return errors.New("config is not valid")
-		}
+	if err := validateTarget(j.Target, j.Config); err != nil {
+		return err
 	}
 	if len(j.Arg) > maxItem {
 		return errors.New("arg is too long")
@@ -291,6 +278,27 @@ func ValidateJob(j Job) error {
 	}
 	if (j.Op != OpObjectExists && j.Op != OpEffectiveRights) && j.Arg != "" {
 		return fmt.Errorf("%s takes no argument", j.Op)
+	}
+	return nil
+}
+
+// validateTarget checks the directory a job addresses and the non-secret
+// settings it carries (a probe job and a pulled sync job alike).
+func validateTarget(t Target, c ProbeConfig) error {
+	if t.Host == "" || len(t.Host) > 253 || strings.ContainsAny(t.Host, "/@ \t\r\n\x00") {
+		return errors.New("target host is not valid")
+	}
+	if t.Port != safedial.PortLDAPS && t.Port != safedial.PortStartTLS {
+		return fmt.Errorf("target port must be %d or %d", safedial.PortStartTLS, safedial.PortLDAPS)
+	}
+	if len(c.BindDN) > maxItem || !validCredName(c.CredName) || len(c.UserFilter) > maxFilter || len(c.CABundle) > maxCA ||
+		len(c.BaseDNs) > maxList {
+		return errors.New("config is not valid")
+	}
+	for _, d := range c.BaseDNs {
+		if len(d) > maxItem {
+			return errors.New("config is not valid")
+		}
 	}
 	return nil
 }

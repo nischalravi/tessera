@@ -6,7 +6,7 @@ import { IdentityDetail, SodMitigationList, SodViolation, sodControlPaths, sodPa
 import { Badge, Button, Callout, CommandBar, DataTable, EmptyState, InsightsTabs, Page, Sev, SidePanel, useSelected } from "../../components";
 import { EndEarlyDrawer, EscalateDrawer, MitigateDrawer, Target } from "../governance/MitigateDrawers";
 import { RevokeDrawer } from "../directory/IdentityPage";
-import { PRIORITIES, distinct, offers, openCount, sortViolations, statusLabel } from "../governance/sodModel";
+import { PRIORITIES, describeOptions, distinct, escalationLabel, offers, openCount, sortViolations, statusLabel } from "../governance/sodModel";
 
 const opts = (vs: SodViolation[], get: (v: SodViolation) => string | string[]) => distinct(vs, get).map((value) => ({ value, label: value }));
 
@@ -50,13 +50,13 @@ function ConflictPanel({ v, onClose, onChanged }: { v: SodViolation; onClose: ()
               ))}
             </section>
           ))}
-          <p className="xs faint">Options this risk offers: {v.remediation.join(", ")}. Resolve by removing either side, or cover it with a control another person approves.</p>
+          <p className="xs faint">Options this risk offers: {describeOptions(v.remediation)}. {v.remediation.includes("escalate") && <>Escalations go to {escalationLabel(v.escalate_to)}. </>}Resolve by removing either side, or cover it with a control another person approves.</p>
         </div>
       </SidePanel>
       {revoke !== null && <RevokeDrawer edgeId={revoke} via={{ riskId: v.risk_id, identityId: v.identity_id }} onClose={() => setRevoke(null)} onDone={done} />}
       {(drawer === "mitigate" || drawer === "accept") && <MitigateDrawer target={target} kind={drawer === "accept" ? "accept" : "control"} offerControl={drawer === "mitigate"} offerAccept={drawer === "accept"} onClose={() => setDrawer(null)} onDone={done} />}
       {drawer === "end" && live && <EndEarlyDrawer mitigationId={live.id} label={`${v.identity_name}: ${v.risk_name}`} onClose={() => setDrawer(null)} onDone={done} />}
-      {drawer === "escalate" && <EscalateDrawer target={target} onClose={() => setDrawer(null)} onDone={done} />}
+      {drawer === "escalate" && <EscalateDrawer target={target} routeTo={v.escalate_to?.name} onClose={() => setDrawer(null)} onDone={done} />}
     </>
   );
 }

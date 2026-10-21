@@ -1878,3 +1878,108 @@ DROP POLICY IF EXISTS tenant_isolation ON grp_sink_dead_letters;
 CREATE POLICY tenant_isolation ON grp_sink_dead_letters
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE request_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE request_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON request_settings;
+CREATE POLICY tenant_isolation ON request_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE sod_ruleset_remediation ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sod_ruleset_remediation FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON sod_ruleset_remediation;
+CREATE POLICY tenant_isolation ON sod_ruleset_remediation
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE retention_policies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE retention_policies FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON retention_policies;
+CREATE POLICY tenant_isolation ON retention_policies
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE archive_segments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE archive_segments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON archive_segments;
+CREATE POLICY tenant_isolation ON archive_segments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE archive_segment_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE archive_segment_items FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON archive_segment_items;
+CREATE POLICY tenant_isolation ON archive_segment_items
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE tenant_certificates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_certificates FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON tenant_certificates;
+CREATE POLICY tenant_isolation ON tenant_certificates
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE tenant_branding ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_branding FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON tenant_branding;
+CREATE POLICY tenant_isolation ON tenant_branding
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE role_mining_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE role_mining_runs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON role_mining_runs;
+CREATE POLICY tenant_isolation ON role_mining_runs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE role_mining_candidates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE role_mining_candidates FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON role_mining_candidates;
+CREATE POLICY tenant_isolation ON role_mining_candidates
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE questionnaires ENABLE ROW LEVEL SECURITY;
+ALTER TABLE questionnaires FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON questionnaires;
+CREATE POLICY tenant_isolation ON questionnaires
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE questionnaire_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE questionnaire_versions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON questionnaire_versions;
+CREATE POLICY tenant_isolation ON questionnaire_versions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE questionnaire_attachments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE questionnaire_attachments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON questionnaire_attachments;
+CREATE POLICY tenant_isolation ON questionnaire_attachments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE questionnaire_answers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE questionnaire_answers FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON questionnaire_answers;
+CREATE POLICY tenant_isolation ON questionnaire_answers
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE queue_workers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE queue_workers FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON queue_workers;
+CREATE POLICY tenant_isolation ON queue_workers
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE agent_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_jobs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON agent_jobs;
+CREATE POLICY tenant_isolation ON agent_jobs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

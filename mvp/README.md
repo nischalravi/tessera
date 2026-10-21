@@ -422,6 +422,84 @@ commands, no raw LDAP, no proxying). The server sends typed jobs; the agent open
 - API: `GET /api/agents`, `POST /api/agents` (step-up; returns the code once), `POST /api/agents/{id}/revoke`
   (step-up). Table `directory_agents`, `agent_enrolments` (schema 0250).
 - The Windows DPAPI store is cross-compiled and vetted (`GOOS=windows go vet`) but not run on Windows.
+
+##### Remote agents that pull syncs (issue #302)
+
+An enrolled agent can also be the worker for a connection in its own network: Tessera never dials in,
+the agent **pulls**. It long-polls `POST /agent/v1/jobs/claim` on the same mutual-TLS listener (the client
+key pin decides the tenant and the agent; nothing in the request does), receives the sync jobs addressed to
+it, reads its directory and posts a typed listing to `POST /agent/v1/jobs/report`. There is nothing to
+open inbound at the customer; the agent needs only HTTPS out to `TESSERA_AGENT_ADDR`.
+
+- **Registering one.** As above (enrol, `tessera-agent credential … set svc`, run). Bind an LDAP connection
+  to it by giving the connection's credential reference `agent:<agent id>/svc`. Run `tessera-agent run`
+  with a build that has a syncer (the shipped one reads LDAP: people by the connection's user filter,
+  groups by `member`/`uniqueMember`, under its base DNs). Nothing else is configured on Tessera.
+- **What gets queued.** The `connector_sync` job (below) also queues one `sync` job per live connection that
+  is bound to an active agent of the tenant, addressed to that agent, unless one is already open
+  (`agent_jobs`, schema 0461). An agent only ever sees rows addressed to its own `(tenant, agent id)`, and a
+  report for any other row, another agent's, another tenant's, or one that is not leased to it, is
+  `404 unknown_job`. Revoking an agent cancels its open jobs.
+- **Leases.** A claimed job is leased for 10 minutes and handed out again if no report arrives (3 attempts,
+  then `failed`). A transient failure (`failed`, `rate_limited`) is retried; a refused target, a missing
+  credential or a bad request is not. The agent runs one sync at a time.
+- **Recording.** The report is validated (bounded: 20 000 accounts, 5 000 groups, 100 000 memberships;
+  every membership must name an account and a group of the same listing), then ingested with `ingest.Discovery`
+  into the connection's own system, drift is reconciled, and the job is finished, in one transaction, with
+  `connectors.sync` and `agent.job_done` audited (`agent.job_failed` for failures).
+- **Secrets.** The directory password is never sent to the agent for a job: it stays in the agent's local
+  credential store (the existing Directory Agent design), and a job carries only its name. Sealing a
+  server-held secret to an agent key would need a key-agreement design that does not exist yet.
+- **Not covered.** Provisioning pushes to a private target and per-target rate limits or circuit breakers do
+  not go through agents yet (see "Connector workers").
+
+### Connector workers (issue #302)
+
+Syncs and provisioning pushes can run outside the API process. `internal/worker` holds the two queue kinds
+and `tessera worker` runs them with no HTTP API and no listener, over the same database and the same
+`internal/queue` lease, heartbeat, backoff and dead-letter rules as the API's own queue:
+
+- `connector_sync` reads the configured connectors into a tenant (the code of `POST /api/connectors/sync`,
+  except that the sources are read with **no transaction open**: a slow source holds neither SQLite's write
+  lock nor a Postgres transaction, and cannot stop the lease heartbeat; the checkpoints the connectors move
+  are written with the records, so a failed sync keeps none), then queues the remote agents' syncs.
+  `POST /api/connectors/sync?async=true[&mode=full]` queues it and returns `{"queued":true}` (audited as
+  `connectors.sync_queued`); without `async` the call is as before. `TESSERA_CONNECTOR_SYNC_SCHEDULE`
+  (`@every 15m` or five cron fields) schedules it for every tenant; unset, syncs run on demand only.
+- `provision_push` is one tenant's pass of the provisioning engine (`provision.Engine.RunTenant`), scheduled
+  every 5 s per tenant. It records a `provision` run only when it found work, like the in-process loop.
+
+```
+TESSERA_ENV=prod TESSERA_DB=postgres://… TESSERA_KEK=… \
+  tessera worker -kinds connector_sync,provision_push -concurrency 8 -shutdown-grace 30s
+tessera serve -external-kinds connector_sync,provision_push      # or TESSERA_EXTERNAL_WORKER_KINDS
+```
+
+Flags of `tessera worker`: `-db`, `-kinds` (default both), `-concurrency` (1 to 64, default 4), `-id` (the
+name in leases and in Admin → Jobs), `-poll` (2 s), `-lease` (60 s; the heartbeat runs every third of it),
+`-shutdown-grace` (30 s). It needs the same `TESSERA_ENV`, key (`TESSERA_KEK`) and connector settings as the
+API (`TESSERA_CONNECTORS`, `TESSERA_OKTA_*`, …) because it opens the credentials itself, and every outbound
+call goes through `safehttp`. Default behaviour is unchanged: `tessera serve` runs `connector_sync` on its
+own queue and keeps its provisioning loop; `-external-kinds` / `TESSERA_EXTERNAL_WORKER_KINDS` hands a kind
+to workers (a kind nobody runs just waits in the queue; do not name a kind external and also run it on a
+worker you did not intend, though a duplicate is harmless: claims and operation states are in the database).
+
+- **Crashes and shutdown.** A worker that dies mid-job leaves a lease that expires (`-lease`); another worker
+  claims the job and retries it (the attempt counts; after `max_attempts` it is dead and audited). SIGTERM
+  stops claiming, lets running jobs finish for `-shutdown-grace`, then cancels the rest and releases their
+  leases at once (queued again, attempt given back). Handlers are at-least-once, so a sync converges and a
+  provisioning operation is claimed by an optimistic state change.
+- **Health.** Each worker, and an API process running queue kinds, beats every 10 s into `queue_workers`
+  (schema 0460; one row per tenant it serves, removed on a clean stop, forgotten a day after a crash).
+  `GET /api/queue/workers` (`jobs.read`) and the Workers table of Admin → Jobs show host, version, kinds,
+  running / concurrency and the last heartbeat; a worker silent for 30 s is `stale`.
+- **High availability.** Run N workers (2 or more, on different hosts) against **Postgres**: a job is leased by
+  `FOR UPDATE SKIP LOCKED`, so each runs on one worker at a time, a worker that disappears costs one lease
+  period of delay, and schedules fire once per window however many workers poll. Size `-lease` above the
+  longest pause you expect (it is renewed every third of it) and `-concurrency` to the sources' rate limits. On
+  SQLite, workers on one host share the file and work, but there is one writer at a time; use it for
+  development only. Worker health rows cost tenants × workers every 10 s.
+
 ### Config transport (dev → test → prod)
 
 Admin → Export / import configuration moves a tenant's connections (config, owners, credential
@@ -473,6 +551,9 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it) · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
+`GET|POST /api/admin/certificates` · `POST /api/admin/certificates/generate {connection_id}` · `POST /api/admin/certificates/{id}/promote|retire` ·
+`GET|PUT /api/admin/branding` · `GET /api/auth/branding?tenant=` · `GET /api/auth/branding/logo?tenant=` (the last two are public, see "Certificates, branding and identity rules") ·
+`GET /api/admin/identity-rules` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
 `GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
@@ -499,7 +580,9 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/provisioning/ops/{op_id}/retry|cancel` · `POST /api/provisioning/run` ·
 `GET /api/provisioning/findings[?status=open|resolved]` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
-`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
+`GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
+`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?, answers?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/abac/policies` · `GET|PUT /api/abac/policies/{id}` · `POST /api/abac/policies/{id}/retire` ·
@@ -510,6 +593,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/sod/simulate` ·
 `GET|POST /api/sod/controls` · `GET|PUT /api/sod/controls/{id}` · `POST /api/sod/controls/{id}/retire` ·
 `GET|POST /api/sod/mitigations` · `POST /api/sod/mitigations/{id}/approve|reject|cancel|revoke` ·
+`PUT /api/sod/rulesets/{id}/remediation {options, escalate_to_id}` ·
 `POST /api/sod/violations/escalate` · `POST /api/sod/violations/revoke` · `GET /api/sod/review-context` ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
@@ -540,12 +624,16 @@ when a second reviewer is needed) ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
-`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
+`GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
+`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?, answers?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
 `POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
 (changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
+`GET|POST /api/role-mining/runs` · `GET /api/role-mining/runs/{id}` · `GET /api/role-mining/candidates/{id}` ·
+`POST /api/role-mining/candidates/{id}/accept|dismiss` (role mining, below) ·
 `GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
 `GET|PUT /api/identities/{id}/lifecycle` · `POST /api/identities/{id}/lifecycle/extend {ends_at, reason}`
 `POST /api/guests/invitations` · `POST /api/guests/invitations/bulk {csv, dry_run}` ·
@@ -698,6 +786,61 @@ The pull export (`/api/audit/export`) stays available.
   - `siem.configure`: tenant_admin, plus the `tessera:admin` scope.
 - **UI:** **Admin > Log streaming (SIEM)** lists each sink with its health, delivered count, dead letters, and Test, Replay and Edit actions.
 - **Not yet:** S3-compatible bucket sinks.
+### Certificates, branding and identity rules
+
+Three Admin settings pages that were Previews are live (`/admin/certificates`, `/admin/branding`, `/admin/identity-rules`).
+
+**Certificates** (`internal/certs`, schema `0410_certificates.sql`). `GET /api/admin/certificates` lists everything Tessera
+holds, with subject, issuer, SANs, validity, SHA-256 fingerprint, key algorithm and where it is used: the SP key of each SAML
+connection (`idp_connections`), uploaded and rotating certificates (`tenant_certificates`), the tenant's signing keys
+(`internal/keys`, public key only) and the pinned mTLS key of each active directory agent. No call returns a private key.
+
+* **Upload.** `POST /api/admin/certificates {purpose, label, certificate_pem, private_key_pem, connection_id?}` with purpose
+  `saml_sp | mtls_client | signing | encryption`. The upload must be PEM (one certificate, an unencrypted key), the key must match the
+  certificate, the certificate must not be expired, RSA keys must be at least 2048 bits (EC: P-256 or stronger), no SHA-1 or MD5
+  signature, and each field is at most 16 KiB. A SAML key must be RSA. The key is re-encoded as PKCS#8 and sealed with
+  `internal/seal` (AAD binds tenant, table, column and row id). Refusals are 422 with a code (`cert_expired`, `weak_key`,
+  `weak_signature`, `key_mismatch`, `bad_pem`, `bad_key`, `key_not_rsa`), 413 `cert_too_large`, 409 `duplicate_certificate`.
+* **SAML SP rotation.** `POST /api/admin/certificates/generate {connection_id}` (or an upload with purpose `saml_sp`) adds a
+  `next` key. While it waits, `GET /api/auth/saml/{id}/metadata` lists both certificates (the overlap window), so the identity
+  provider can trust the new one before it is used; sign-in keeps signing with the active key. `POST .../{id}/promote` copies the
+  sealed key onto the connection, makes the new certificate active and retires the old one (its key is destroyed). One waiting
+  key per connection (409 `rotation_in_progress`); the active key cannot be retired (409 `in_use`). `POST .../{id}/retire`
+  discards a waiting key or retires an uploaded certificate.
+* **Access.** Listing needs `connections.read`; every change needs `connections.manage` and a fresh strong sign-in (step-up), and
+  writes `certificate.uploaded|generated|promoted|retired` in the same transaction (no key material in the event).
+* **Expiry alerts.** The durable queue kind `certificate_expiry` runs daily (`17 6 * * *` UTC) and calls
+  `alerts.RunScheduled`, which runs the alert rule `certificate_expiry` (kind `scheduled`: the alerts engine's own 15-minute
+  detections skip it). A certificate in use (active or waiting) with 30 days or fewer left gets one alert; inside 7 days (or once
+  expired) the alert becomes the 7-day one and the 30-day one resolves. Retiring or rotating a certificate resolves its alert.
+  The rule's severity can be changed, or the rule switched off, under Alerts > Rules like any other.
+* **Limits.** An uploaded `mtls_client` certificate is stored sealed, can name a connector and is monitored for expiry, but no
+  connector reads it yet (connectors do not use client certificates today). The directory agent's key is shown by its pin only,
+  because Tessera does not hold the agent's certificate.
+
+**Branding** (`internal/branding`, schema `0411_branding.sql`). `GET|PUT /api/admin/branding` saves the product name, a button
+colour and its text colour, and a logo. Reading needs `admin.read`; saving needs `email.manage` (tenant admin) and a step-up,
+and is audited as `branding.updated`.
+
+* The colour pair must reach WCAG AA (4.5:1): a pair below it is refused with 422 `low_contrast` and the ratio. An empty text
+  colour is chosen automatically (white or black). Pages only override the button colours (`--accent`, `--accent-hover`,
+  `--on-accent`); text and link colours stay the theme's.
+* The logo is `{content_type, data_base64}`: PNG or JPEG only (SVG is refused with `svg_not_allowed`), at most 256 KiB, 32 to
+  1024 pixels each way, checked by decoding it, and the declared type must match the bytes. It is stored in the table.
+* Public, unauthenticated, rate limited: `GET /api/auth/branding?tenant=<slug>` (name, colours, logo URL; a tenant that does not
+  exist or has no branding gets the same default answer) and `GET /api/auth/branding/logo?tenant=<slug>`, served with
+  `Content-Type: image/png|jpeg`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, an
+  ETag and `Cache-Control: public, max-age=300`.
+* Used by the sign-in page, the guest claim, register and renew pages (name, logo, button colours) and by email (subject
+  prefix, link line and footer say the product name; emails are plain text, so no logo). Without branding everything says Tessera.
+
+**Identity rules** (`GET /api/admin/identity-rules`, `graph.read`). One read of what the identity engines apply: the matching
+rules with their tier (`internal/identity/match.Catalog`, kept in step by a test), the thresholds, the tenant's matching settings
+(changed with the existing `PUT /api/admin/matching`, `identity.matching.configure`, also editable on the page), the correlation
+proposals of `internal/correlation`, the group naming rules of `internal/groups/naming` and the machine-identity dormancy
+threshold of `internal/nhi`. It lists what is not configurable yet: the authoritative source per attribute, the order of the
+correlation rules and per-type dormancy thresholds have no engine behind them.
+
 ### Alerts
 
 The alert engine (`internal/alerts`, issue #168) runs every minute in `tessera serve`. It reads new audit
@@ -889,7 +1032,9 @@ the way the old sweepers did (active tenant list), then works each one in its ow
   (kind = the queue kind, trigger `schedule`, or `retry` from the second attempt), so the run history of
   #172 and Admin → Jobs show it, and a failure appends `job.failed`. A sweep that finds nothing returns no
   result and records nothing, as before. `GET /api/queue/jobs?status=&kind=` and `GET
-  /api/queue/schedules` (`jobs.read`) feed the Queue section of Admin → Jobs.
+  /api/queue/schedules` and `GET /api/queue/workers` (`jobs.read`) feed the Queue section of Admin → Jobs.
+* **Workers.** `connector_sync` and `provision_push` can run in `tessera worker` processes instead (issue
+  #302; see "Connector workers").
 * **Not on the queue yet.** The notification outbox (own dead-letter state and loop) and provisioning
   operations (`provision.Engine`) keep their loops, and the audit checkpointer its own; see Known gaps.
 
@@ -1217,8 +1362,54 @@ contains their value.
 Changing roles needs `roles.manage` (policy admins) and a fresh phishing-resistant sign-in.
 Members, versions and drift need `graph.read`. The seed creates the demo company's six roles.
 Rule members are seeded only where people already hold every entitlement, so seeding grants
-nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103)
-and role mining (Phase 3).
+nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103).
+
+#### Role mining
+
+**Directory → Roles → Mining** (issue #298, `internal/roles/mining`, schema `0420_role_mining.sql`,
+tables `role_mining_runs` and `role_mining_candidates`). A run suggests business roles from the
+access people hold today. It is deterministic: no random seed and no ML service, so the same data
+and settings always give the same candidates (the run stores its parameters and a SHA-256
+`snapshot_hash` over the algorithm, the parameters and the filtered input).
+
+- **Input.** Every active person's standing entitlements: groups reached by an active account
+  through a grant that does not expire (JIT and other timed grants are left out). Optional filters:
+  department, job title and identity type (`human`, `service`, `ai_agent`). The identity model has
+  no location or organization column yet, so those cannot be filtered on.
+- **Method.** Drop entitlements held by fewer than `min_members` people (default 3). People with
+  the same remaining set share a profile; profiles are ordered (most people, largest set, key) and
+  clustered by Jaccard similarity to a cluster's first profile (`min_similarity`, default 60%). A
+  cluster's core is the intersection of its profiles. A core of at least `min_entitlements`
+  (default 2) becomes a candidate whose **coverage** is everyone in the filtered population who
+  holds all of it. A set equal to an existing role's is not listed again; a near match names the
+  similar role.
+- **Per candidate.** The entitlement set, the people who hold all of it, **outliers** (covered
+  people who also hold an entitlement under 25% of the others have), the **suggested birthright
+  rule** (the attribute among department, title and type whose values best predict coverage, by
+  F1, with precision and recall; none when F1 is under 50), and a **confidence** from 0 to 100:
+  40% rule F1, 30% cohesion (how close members are to the set), 30% size (people against three
+  times `min_members`).
+- **Bounds.** At most 20,000 people per run (a filter narrows it; more is `too_many_identities`),
+  people holding over 300 entitlements are skipped, 3,000 profiles are clustered, 40 million
+  comparison steps (a run that hits a bound is marked `truncated`), 100 candidates, two minutes.
+  Everything is integer maths, so results do not vary by platform.
+- **Queue.** A run over at most 500 people is computed in the request (`201`); a larger one, or
+  one sent with `"async": true`, is a `role_mining` job on the durable queue (`202`, status
+  `queued`, then `succeeded` or `failed`; the page polls). One run is active at a time (`409
+  run_in_progress`; a run still queued after an hour no longer blocks).
+- **Review.** `accept` creates a business role through the roles service (versioned, audited as
+  `role.create`) with the candidate's entitlements, a name you may change, a description of how it
+  was mined (including the suggested rule), risk `high` when it holds a privileged entitlement
+  and `medium` otherwise (or the one you choose). You may drop entitlements before accepting, not
+  add. **The role has no members, no birthright rule and is not requestable**, so accepting grants
+  and removes nothing; assigning people, adding the rule and requesting follow the usual role
+  flows and approvals. `dismiss` needs a reason. A candidate is decided once. Audit events:
+  `role_mining.run`, `role_mining.complete`, `role_mining.accept`, `role_mining.dismiss`.
+
+Reading needs `graph.read`; starting a run and dismissing need `roles.manage`; accepting needs
+`roles.manage` and a fresh phishing-resistant sign-in, like creating a role. The demo tenant
+`larkspur` yields a dozen candidates on a default run (Sales, Data, People, Security, and the
+engineering teams), each with a department or title rule.
 
 ### Attribute policies (ABAC)
 
@@ -1325,7 +1516,20 @@ sign-in; simulate needs `requests.create` (and `requests.create_for_others` for 
   (`remediation` on the risk and in its YAML; none stated: all four). The API refuses an option the
   risk does not offer (`409 option_not_offered`). Revoke goes through the existing revoke path
   (`POST /api/sod/violations/revoke`, dry run first, only for a grant behind the violation);
-  escalate notifies the risk owner and is recorded (`sod_escalations`).
+  escalate sends an inbox item (a notification) to the ruleset's escalation approver, else the risk
+  owner, and is recorded (`sod_escalations`, `sod.violation.escalate` with who it went to).
+  **Per ruleset or per risk:** a risk with options of its own offers those; otherwise it inherits its
+  ruleset's (`PUT /api/sod/rulesets/{id}/remediation`, `sod.manage` + step-up, audited as
+  `sod.ruleset.remediation`, table `sod_ruleset_remediation`); with neither it offers all four. The
+  ruleset's `escalate_to_id` names the escalation approver. Risks, rulesets and violations carry the
+  effective `remediation` (and, on risks and violations, `escalate_to`); risks also `remediation_source`
+  (`risk`, `ruleset` or `default`). The options are set in **Policies & SoD**: a ruleset's *Violation
+  options* command and the risk editor. The ruleset's options are not part of its YAML file.
+- **Accept until a date** is a mitigation of kind `accept` with a justification, an end date and
+  four-eyes approval. Its accountable owner is the risk owner (the one told when it ends). Approving it
+  queues a job (`sod_mitigation_expire`, idempotency key `sod-expire:<id>`, `run_at` the end date) in the
+  same transaction; when it runs the mitigation expires and the violation is open again. The periodic
+  sweeper is the backstop.
 - **Expiry.** The sweeper warns the control owner and the person's manager
   `TESSERA_SOD_WARN_DAYS` (default 14) before the end date, once, through the notification outbox.
   When the end date passes the mitigation expires (`sod.mitigation.expire`), the violation is open
@@ -1336,6 +1540,65 @@ sign-in; simulate needs `requests.create` (and `requests.create_for_others` for 
   the SoD risks behind its grant with any mitigation; the review panel shows them and lets a reviewer
   request a mitigation or escalate. Every step is an audit event, so `GET /api/audit/export`
   carries violations' mitigations and their approvals.
+
+### Request settings
+
+**Admin → Request settings** (`/admin/request-settings`, issue #298) holds the tenant-wide rules for
+access requests, in `request_settings` (one row per tenant; none saved means the defaults below).
+`GET /api/request-settings` is open to anyone who can request (the request form reads it);
+`PUT /api/request-settings {version, ...}` needs `catalog.manage` and a fresh phishing-resistant
+sign-in, is versioned (`409 version_conflict` on a stale version) and audited as
+`request.settings.update` with the values it replaced. `requests.Submit` enforces them, so a client
+cannot bypass them:
+
+| Setting | Default | Enforced as |
+|---|---|---|
+| `justification_required`, `justification_min_length` | required, 1 | `422 justification_required` (length counted after trimming) |
+| `default_hours` | none | used when neither the request nor the item names a duration |
+| `max_hours` | none | `422 duration_too_long`; "until removed" is refused (`duration_required`) unless a default applies |
+| `attachments_allowed` | off | `attachments` on `POST /api/requests`: `422 attachments_not_allowed`. An attachment is a reference (a link or ticket id, at most 5); Tessera stores no files, the references are in the `request.submit` audit event |
+| `history_visibility` | `readers` | `involved`: graph readers no longer see other people's requests (the people on a request, its approvers and deciders still do) |
+| `for_others` | `permission` | `nobody`, `managers` (the beneficiary's manager only) or `permission` (`requests.create_for_others`): `403 for_others_not_allowed`. Business-role requests (`/api/role-requests`) are not covered |
+
+### Questionnaires
+
+**Governance → Questionnaires** (`/governance/questionnaires`, issue #298) holds forms asked of requesters and reviewers
+("why do you need this?", risk questions for privileged items). Tables `questionnaires`,
+`questionnaire_versions` (append-only), `questionnaire_attachments` and `questionnaire_answers`
+(schema `0450`).
+
+- **Definition.** A title, a description and ordered questions of six types: `short_text`, `long_text`,
+  `single_choice`, `multi_choice`, `yes_no`, `date`. Each has a `required` flag; text questions a `max_length`
+  (default 200 short, 2000 long; at most 500 and 5000), choice questions 2 to 20 distinct `options`. At most 30
+  questions. A question keeps its `id` across versions.
+- **Versions.** `PUT /api/questionnaires/{id} {version, title, description, questions}` appends the next version
+  (`409 version_conflict` if the caller read an older one). An answer stores the version it was given against, so
+  an approver always sees the question as it was asked. `POST .../retire` stops it being asked and removes its
+  attachments; its answers stay. Create, edit, retire and attach need `catalog.manage` and are audited
+  (`questionnaire.create|update|retire|attach`).
+- **Where it is asked** (`PUT /api/questionnaires/{id}/attachments {targets:[{kind,target_id}]}`, one questionnaire per
+  target): a `catalog_item` or `business_role` (the requester answers at submit); `privileged` (target `*`: every
+  catalog item whose group has the `privileged` flag, and every `high`-risk role, which is the role version of that flag);
+  or a `review_campaign`. An item can ask two questionnaires (its own and the privileged one); a cart asks each once.
+- **Requests.** `POST /api/requests` and `POST /api/role-requests` take `answers: {questionnaire_id: {question_id: value}}`
+  (string, boolean or list of strings by type). The server validates them against the version in force:
+  `422 questionnaire_required`, `answer_required`, `invalid_answer`, `unknown_question`, `unexpected_questionnaire`.
+  The form reads what to ask from `GET /api/questionnaires/needed`. The `request.submit` and `role.request.submit`
+  audit events carry `questionnaires: [{questionnaire_id, version, answers_hash}]` (SHA-256 of the answers as JSON
+  with sorted keys), not the answers. Approvers see the answers with the questions in the request side panel
+  (`GET /api/requests/{id}`, `questionnaires`) and on role requests.
+- **Access reviews: answered per decision**, not once per campaign. Review items are decided one by one, each decision
+  has its own audit event and a campaign has several reviewers, so the answers belong to the decision.
+  `POST /api/reviews/items/{id}/decision` takes `answers: {question_id: value}` for the campaign's questionnaire; a
+  decision without them is refused with `422`, and an already decided item asks nothing. The answers are stored with
+  the item and a `review.answers` audit event (in the same transaction) records the questionnaire, its version and
+  the hash. In the UI a campaign with a questionnaire is decided from the item panel, which shows the form; the row
+  buttons open the panel and bulk keep is off. The Inbox quick keys do not show the form: the server refuses with
+  the questionnaire's name, and the decision is made from Governance → Access reviews.
+- **Evidence packs** (#258) get `questionnaire_answers.csv`: answers given in the period with the version, hash and
+  answers JSON, listed under SOC 2 CC6.2, SOX ITGC-Provisioning and ISO A.5.18.
+- Not covered: onboarding (joiner) has no hook for a form (HRIS-driven, no person to answer); answers are not saved
+  in request drafts; removal requests, JIT and SoD mitigation requests ask nothing.
 
 ### Contractors, guests and end dates
 
@@ -2496,7 +2759,8 @@ inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/grou
 | `DELETE .../privileges/{privilege_id}` | revoke one row (the design has `DELETE .../privileges`; the row is in the path here) |
 | `GET .../privileges/effective[?identity=]` | for each privilege of the object, every path by which the identity (default: the caller) holds it, with a sentence such as "Ivan holds UPDATE on `app:foo:g` because they are in `app:foo:admins`, which holds STEM_ADMIN on folder `app:foo` ..."; another identity's needs `admin` |
 | `GET\|PUT /api/groups/privileges/settings` | the everyone policy and default privileges (`groups.admin`) |
-| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited). #357: never your own user (`403 self_link_not_allowed`), only to an `active` identity (`409 identity_not_active`), and a user whose identity is terminated or disabled keeps the link so sign-in stays blocked (`409 identity_inactive`). Linking an unlinked user applies at once; changing or removing an existing link needs two admins: the first gets `202 pending_second_admin` (schema `0362`, 72 h), the same admin again `403 four_eyes_required`, and a second admin's identical change applies it and revokes the user's sessions and CLI refresh tokens |
+| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited). #357: never your own user (`403 self_link_not_allowed`), only to an `active` identity (`409 identity_not_active`), and a user whose identity is terminated or disabled keeps the link so sign-in stays blocked (`409 identity_inactive`). Every change needs two admins, a first link to a free identity included (#376; unlinking too): the first gets `202 pending_second_admin` (schema `0362`, 72 h), the same admin again `403 four_eyes_required`, and a second admin's identical change applies it (a relink or unlink also revokes the user's sessions and CLI refresh tokens). Another tenant's admin gets 404. This is the only code path that writes `platform_users.identity_id` besides the seed, guest claim (the person claims their own identity; an already-linked identity is refused) and first sign-in provisioning. |
+| `GET /api/groups/users/identity-requests` | the unexpired pending link changes, oldest first (`groups.admin`); the UI shows them as "pending second admin" on Directory > Identity matches > Sign-in links, where a different admin approves |
 
 - Tests: `go test ./internal/groups/privs` (`TestImplication` for all 21 privileges,
   `TestPrivs_InheritanceOneVsSub`, `TestPrivs_ExplainListsAllPaths`,
@@ -2904,7 +3168,10 @@ numbers it 0106). Code: `server/internal/groups/provisioning`; SQL for the SQL t
   group's target name, attributes and members' references come from templates (Go `text/template`, only
   `lower upper replace truncateHash ldapEscape join`, output at most 4 KiB): `group_name` (default
   `{{.Name}}`), `attrs` and `member_ref` (default `{{.Username}}`), fed by the group and by the member's
-  **active account** in `account_system`. A member with no account is counted in the run summary
+  **active account** in `account_system`. For an `ldap`/`ad` target whose member attribute holds DNs
+  (`member`, `uniqueMember`), every field substituted into `member_ref` is DN-escaped (RFC 4514) automatically
+  (`ldapEscape` there changes nothing), and a rendered DN that no longer has the template's RDN structure is
+  refused. A member with no account is counted in the run summary
   (`unmapped_members`) and in diagnostics, never dropped silently; two groups with one target name are
   both left alone (`conflicts`); a group the engine is still recomputing is skipped until its events
   arrive; a disabled group is the empty set.
@@ -3047,7 +3314,7 @@ Every tenant has an append-only, hash-chained audit log (`audit_events`; design
 `docs/design/phase-0-platform-security.md` §13). Each event's hash is SHA-256 over
 `"tessera-audit-v1" 0x00` and the RFC 8785 (JCS) form of the event, and links to the previous
 event; `server/testdata/golden/audit_v1.json` is a test vector for independent verifiers.
-SQLite triggers refuse UPDATE and DELETE. Every API call writes one `http.request` event (the
+SQLite triggers refuse UPDATE and DELETE (the one exception is an event inside a verified archive segment: see "Log retention and the archive"). Every API call writes one `http.request` event (the
 route template, status, sorted query keys, never bodies or query values); a read whose event
 cannot be written answers `503 {"error":"audit_unavailable"}` instead of the data, and so does a
 POST that committed no domain event of its own (and `POST /api/simulate`, whose answer is data). Domain events
@@ -3103,6 +3370,70 @@ credential endpoints, so give the process credentials through the SDK's other so
 (environment, web identity / IRSA) and set `AWS_REGION`. `AWS_CA_BUNDLE` is not supported with the
 safehttp client; trust a private CA through the system roots. `tessera audit verify -anchors`
 reads `file://` anchor files only; verifying against the bucket is a later step.
+
+## Log retention and the archive (issue #298)
+
+Admin → Retention sets, per tenant, how long each data class stays online. A scheduled job on the durable
+queue (`archive_sweep`, every 6 hours per tenant) seals what is older into archive segments and then removes it
+online. Admin → Archive lists the segments, verifies one and exports it.
+
+| Class | Default | Minimum | Counted from |
+| --- | --- | --- | --- |
+| Audit events (`audit`) | 2 years | 1 year | the event time; the chain head is never archived |
+| Closed review campaigns (`review_campaigns`) | 2 years | 1 year | creation, `completed` campaigns only, with items, frozen population and auto-decisions; one that group attestation or a role exclusion still points at stays online |
+| Closed and expired requests (`requests`) | 2 years | 1 year | the close time of a denied, cancelled, expired or removed request, with its event log and stages |
+| Job runs (`job_runs`) | 90 days | 30 days | the start of a finished run |
+| Notification outbox (`notifications`) | 90 days | 30 days | creation, delivered, skipped or dead only (with the email delivery log) |
+
+The ceiling of every class is 10 years. The floors are in `internal/retention` and enforced on the server: the
+change request is a 422 below one. A floor raised later lifts a stored lower value to it.
+
+**Changing a setting** is an admin change request of type `retention.update` (`POST /api/admin/change-requests`,
+`{"type":"retention.update","payload":{"audit_days":400,"job_runs_days":45}}`; only the classes that change).
+It needs a step-up from the requester and from a second admin who approves the payload hash, has no cooling-off,
+and is audited with `admin.change.*` and `retention.updated` in the transaction that applies it.
+
+**Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL` (an http(s) object
+store, PUT and GET of `<base>/<tenant>/<class>/<segment>.seg`, always through `internal/safehttp`; https in prod),
+else the directory `TESSERA_ARCHIVE_DIR`, else `TESSERA_BACKUP_DIR/archive`, else, outside prod, `var/archive` next
+to the database. In prod with none of them nothing is archived or deleted, and Admin → Retention says so. While archiving is on
+the 30-day clean-up of finished job runs is left to the archive; with it off that clean-up is unchanged.
+Back the archive store up with the database: a restore verifies the audit chain without opening it and warns
+(`archive_unchecked`); `tessera audit verify` opens it when it runs with the server's environment.
+
+A segment is NDJSON, gzip-compressed and sealed under the KEK (`internal/seal`) with an AAD that binds tenant, class,
+segment id and range (a segment does not open as another tenant's, class's or range). Per segment, each step its own
+transaction, so a crash at any point loses nothing and the next run resumes:
+
+1. **written**: the blob is put in the store, then catalogued (`archive_segments`);
+2. **verified**: it is read back, its checksum, seal, count and content are checked (an audit segment's every hash and
+   link); a segment that fails is marked `failed`, its records stay online and are archived again in a new one;
+3. **purged**: it is checked once more, then in one transaction the online records are deleted, the anchor event is
+   appended and the segment is marked purged. The schema refuses the delete unless the segment is `verified`
+   (`schema/0402_archive_guards.sql`; on Postgres the application role has no DELETE on `audit_events`, and
+   `tessera_archive_purge_audit` does it for the transaction's tenant). A record that changed since it was archived is
+   not deleted with the stale copy; it is archived again later.
+
+**The audit chain stays verifiable.** An audit segment records its seq range, the `prev_hash` before it and its first
+and last hash. The purge appends an `audit.archived` event to the chain naming the segment, range and hashes ("archived
+up to N"). `audit.Verify` (`POST /api/audit/verify`, `tessera audit verify`) checks the purged segments join up from
+genesis with no gap or overlap, opens each one and recomputes every event hash and link, checks the signed checkpoints
+that fall inside, requires an `audit.archived` anchor for every purged segment (online or inside a later segment), and
+starts the online chain at N+1 from the last archived hash. A segment that is altered, replaced, missing or
+unreadable is exit 2 (`archive_corrupt`, `archive_hash_mismatch`, `archive_broken_link`, `archive_ends`), a gap
+exit 3, a forged or dropped catalogue row a missing anchor. With no archive source, verification still checks the online
+chain and reports the archived range as unchecked (a warning, never `ok`). The golden vector and the hash contract are
+unchanged.
+
+Routes: `GET /api/admin/retention` (`admin.read`: settings, defaults, floors, archive state),
+`GET /api/admin/archive/segments?class=&status=&limit=` (`audit.read`),
+`POST /api/admin/archive/segments/{id}/verify` (`audit.verify`: reads the segment back and checks it; a segment that
+fails is the answer, `ok: false`), `GET /api/admin/archive/segments/{id}/export` (`audit.read` and a step-up: NDJSON
+after the same checks, the read-only restore; nothing is written back online). Every verify and export is audited
+(`archive.segment.checked`, `archive.segment.exported`), as are the job's steps (`archive.segment.written`,
+`.verified`, `.failed`, `audit.archived`, `archive.purged`).
+
+Not archived yet: the legacy `access_requests` table, and anything else outside the five classes.
 
 ## Operational monitoring (issue #303)
 
@@ -3337,10 +3668,10 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
+| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles (with a *Mining* tab), Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*) |
+| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities* and *Request settings*) |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
@@ -3434,7 +3765,7 @@ back a step and `Esc` to close. `/` focuses the top-bar search.
 
 **Preview features.** Some screens have no backend endpoint yet: workflows, reset password, generic
 object create / edit / import (accounts, machine identities, rotate secret) and most admin settings
-(Identity rules, Branding & labels, Certificates, Export / import configuration). They run on typed mock data in `src/mocks/`, keep their state in the
+(Export / import configuration; Identity rules, Branding & labels and Certificates are live, see "Certificates, branding and identity rules"). They run on typed mock data in `src/mocks/`, keep their state in the
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to
 `src/api.ts` that returns the same type and remove the badge.
 
@@ -3483,7 +3814,7 @@ id, and the reason is in the audit log (`auth.login.failure`), never in the URL.
 | Ivan (`00u-ivan-admin2`) | larkspur | also policy_admin | the second holder of `identities.contain`, so an identity Pat disabled can be enabled under four eyes (#335) |
 | Pat (`00u-pat-policy`) | larkspur | policy_admin | read, JIT and review decisions, revoke grants, run HRIS plans, sync connectors |
 | Olu (`00u-olu-operator`) | larkspur | operator | read, request and decide JIT, review decisions |
-| Vic (`00u-vic-viewer`) | larkspur | viewer | read (with MFA; his only authenticator in the dev IdP is a password) |
+| Vic (`00u-vic-viewer`) | larkspur | viewer | read (with MFA: password + OTP in the dev IdP; password-only sign-in leaves him no active role) |
 | Gina (`00u-gina-globex`) | globex | tenant_admin | the second tenant |
 
 Approvals, review decisions, HRIS execution, applying a revoke and editing a connection's config or

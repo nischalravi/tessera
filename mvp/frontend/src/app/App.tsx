@@ -40,6 +40,7 @@ const Matches = named(() => import("../features/directory/Matches"), "Matches");
 const IdentityMatches = named(() => import("../features/directory/IdentityMatches"), "IdentityMatches");
 const roles = () => import("../features/roles/Roles");
 const Roles = named(roles, "Roles");
+const RoleMining = named(() => import("../features/roles/RoleMining"), "RoleMining");
 const Workers = named(() => import("../features/lifecycle/Workers"), "Workers");
 const Entitlements = named(directory, "Entitlements");
 const Apps = named(directory, "Apps");
@@ -72,6 +73,7 @@ const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifec
 const Drift = named(() => import("../features/governance/Drift"), "Drift");
 const GuestLifecycle = named(() => import("../features/governance/GuestLifecycle"), "GuestLifecycle");
 const Terms = named(() => import("../features/governance/Terms"), "Terms");
+const Questionnaires = named(() => import("../features/governance/Questionnaires"), "Questionnaires");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
 const EvidencePacks = named(() => import("../features/governance/EvidencePacks"), "EvidencePacks");
 const Admin = named(admin, "Admin");
@@ -90,6 +92,7 @@ const RotationPolicies = named(rotationPages, "RotationPolicies");
 const VendorCompromised = named(rotationPages, "VendorCompromised");
 const SharedSignals = named(() => import("../features/admin/SharedSignals"), "SharedSignals");
 const EventSinks = named(() => import("../features/admin/EventSinks"), "EventSinks");
+const RequestSettings = named(() => import("../features/admin/RequestSettings"), "RequestSettings");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
 const AdminUsers = named(() => import("../features/admin/Users"), "Users");
@@ -195,6 +198,7 @@ export default function App() {
                       <Route path="matches" element={<Matches />} />
                       <Route path="identity-matches" element={<IdentityMatches />} />
                       <Route path="roles" element={<Roles />} />
+                      <Route path="roles/mining" element={<RoleMining />} />
                       <Route path="workers" element={<Workers />} />
                       <Route path="entitlements" element={<Entitlements />} />
                       <Route path="apps" element={<Apps />} />
@@ -239,6 +243,7 @@ export default function App() {
                     <Route path="/governance/drift" element={<Drift />} />
                     <Route path="/governance/guest-lifecycle" element={<GuestLifecycle />} />
                     <Route path="/governance/terms" element={<Terms />} />
+                    <Route path="/governance/questionnaires" element={<Questionnaires />} />
                     <Route path="/governance/workflows" element={<Workflows />} />
                     <Route path="/governance/evidence" element={<EvidencePacks />} />
 
@@ -259,6 +264,7 @@ export default function App() {
                     <Route path="/admin/break-glass" element={<BreakGlass />} />
                     <Route path="/admin/platform-health" element={<PlatformHealth />} />
                     <Route path="/admin/event-sinks" element={<EventSinks />} />
+                    <Route path="/admin/request-settings" element={<RequestSettings />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}

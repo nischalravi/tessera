@@ -307,7 +307,8 @@ func (a *Authenticator) authenticateToken(r *http.Request) (*Principal, *Failure
 		}
 		authn := ContextFromRecord(rec)
 		assigned := AssignedRoles(as, now)
-		active, inactive := ActivateRoles(assigned, &authn, TenantSettings(vt.Tenant.Settings), now)
+		settings := TenantSettings(vt.Tenant.Settings)
+		active, inactive := ActivateRoles(assigned, &authn, settings, now)
 		uid, sessID := u.ID, s.ID
 		display := u.DisplayName
 		if u.Email != nil && *u.Email != "" {
@@ -315,7 +316,9 @@ func (a *Authenticator) authenticateToken(r *http.Request) (*Principal, *Failure
 		}
 		p = &Principal{Kind: KindUser, TenantID: vt.Tenant.ID, UserID: &uid, ClientID: vt.ClientID, Display: display,
 			SessionID: &sessID, Authn: &authn, AssignedRoles: assigned, ActiveRoles: active, InactiveRoles: inactive,
-			Scopes: ScopeSetOf(vt.Scopes), Via: ViaDPoP, session: s}
+			Scopes: ScopeSetOf(vt.Scopes), Via: ViaDPoP, session: s,
+			// the same identity and Groups viewer view as a browser session; the scopes still cap what it may do
+			IdentityID: u.IdentityID, GroupsViewerView: settings.GroupsViewerCanView}
 		return nil
 	})
 	if errors.Is(err, store.ErrNotFound) {

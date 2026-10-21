@@ -21,6 +21,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
+	"github.com/nischalravi/tessera/mvp/server/internal/archive"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/casclient"
@@ -90,6 +91,13 @@ type Config struct {
 	// Connectors returns the configured connectors (defaults to connectors.Load("", now)).
 	Connectors func(now time.Time) ([]connectors.Connector, error)
 	Logger     *slog.Logger // defaults to slog.Default()
+	// ExternalKinds are the worker kinds (internal/worker.Kinds) this process
+	// does not run: a `tessera worker` does (issue #302). Empty runs them all,
+	// as a single node always has.
+	ExternalKinds []string
+	// ConnectorSyncSchedule, when set, schedules connector_sync (a queue spec,
+	// TESSERA_CONNECTOR_SYNC_SCHEDULE) for every tenant.
+	ConnectorSyncSchedule string
 	// AllowedOrigins are the browser origins allowed by CORS (exact match,
 	// credentials allowed): TESSERA_CORS_ORIGINS, empty in production.
 	AllowedOrigins []string
@@ -140,6 +148,10 @@ type Config struct {
 	// credentials cannot be read after a restart. cmd/tessera always passes
 	// the real one.
 	Sealer *seal.Sealer
+	// Archive is the archival job and its checks (issue #298; internal/archive).
+	// Nil, or without a sealer or store: archiving is off, nothing is archived
+	// or deleted, and the Admin -> Archive routes answer 503.
+	Archive *archive.Service
 	// OutboundHTTP is the safehttp client for IdP discovery, JWKS and token
 	// requests. Nil: browser sign-in through an IdP is unavailable.
 	OutboundHTTP *http.Client
@@ -276,6 +288,7 @@ type Server struct {
 	agents    *agent.Service
 	prov      *provision.Engine
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
+	archive   *archive.Service
 	rotation  *rotation.Service
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
@@ -380,7 +393,7 @@ func New(cfg Config) *Server {
 		cfg.Helpdesk = &helpdesk.Service{HTTP: hc, Containment: cfg.Containment, Clock: cfg.Clock, Simulated: cfg.Env != "prod"}
 	}
 	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal,
+		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal, archive: cfg.Archive,
 		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
 		PolicyVersion: s.policyVersion}
@@ -452,7 +465,11 @@ func New(cfg Config) *Server {
 	s.authn.Tokens = s.oauth
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerArchiveRoutes()
 	s.registerSiemRoutes()
+	s.registerCertificateRoutes()
+	s.registerBrandingRoutes()
+	s.registerIdentityRulesRoutes()
 	s.registerAlertRoutes()
 	s.registerOwnershipRoutes()
 	s.registerReviewScheduleRoutes()
@@ -463,9 +480,11 @@ func New(cfg Config) *Server {
 	s.registerRequestRoutes()
 	s.registerRemovalRoutes()
 	s.registerRequestDraftRoutes()
+	s.registerQuestionnaireRoutes()
 	s.registerOrgRoutes()
 	s.registerActivityRoutes()
 	s.registerRoleRoutes()
+	s.registerRoleMiningRoutes()
 	s.registerAbacRoutes()
 	s.registerSodRoutes()
 	s.registerSodControlRoutes()
@@ -571,7 +590,7 @@ type streamDeadlineKey struct{}
 func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if rt, _, _ := s.find(r.Method, r.URL.Path); rt == nil || !rt.stream {
-			timed.ServeHTTP(w, r)
+			timed.ServeHTTP(&abortWriter{ResponseWriter: w, r: r}, r)
 			return
 		}
 		deadline := time.Now().Add(s.cfg.StreamTimeout)
@@ -929,6 +948,8 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 func (s *Server) attribute(r *http.Request) {
 	p, reason, err := s.authn.Authenticate(r)
 	switch {
+	case err != nil && clientCanceled(r, err):
+		audit.SetAnonymous(r.Context(), "client_canceled")
 	case err != nil:
 		audit.SetAnonymous(r.Context(), "authentication_error")
 	case p == nil:
@@ -1000,6 +1021,35 @@ func writeJSONAs(w http.ResponseWriter, contentType string, status int, v any) {
 func timedOut(r *http.Request, err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded)
 }
+
+// statusClientClosed is nginx's 499: the client closed the request before an
+// answer. It is a 4xx so the audit event is not an error outcome and it is
+// never read as a server outage; the client that caused it never sees it.
+const statusClientClosed = 499
+
+// clientCanceled reports that the client aborted the request (context
+// canceled), not that a deadline passed or a dependency failed.
+func clientCanceled(r *http.Request, err error) bool {
+	return !timedOut(r, err) && (errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled))
+}
+
+// abortWriter sits under http.TimeoutHandler, which answers a request whose
+// client already canceled with a bare 503, the status of an outage (#310).
+// The 503 becomes 499 when the request's own context was canceled; a deadline
+// (a real timeout) and every other status pass through.
+type abortWriter struct {
+	http.ResponseWriter
+	r *http.Request
+}
+
+func (a *abortWriter) WriteHeader(code int) {
+	if code == http.StatusServiceUnavailable && errors.Is(a.r.Context().Err(), context.Canceled) {
+		code = statusClientClosed
+	}
+	a.ResponseWriter.WriteHeader(code)
+}
+
+func (a *abortWriter) Unwrap() http.ResponseWriter { return a.ResponseWriter }
 
 // writeTimedOut answers with the same 503 http.TimeoutHandler sends, so a
 // request whose deadline passed inside the handler gets one answer whichever

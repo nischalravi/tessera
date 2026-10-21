@@ -55,6 +55,8 @@
 //	TESSERA_SAFEDIAL_ALLOW      dev only: host:port or CIDR:port private LDAP targets live checks may dial (see mvp/README.md "Live LDAP checks")
 //	TESSERA_AGENT_ADDR, TESSERA_AGENT_TLS_CERT, TESSERA_AGENT_TLS_KEY  the mutual-TLS listener Directory
 //	                      Agents connect to, and its certificate and key (see mvp/README.md "Directory Agent")
+//	TESSERA_EXTERNAL_WORKER_KINDS  worker kinds (connector_sync, provision_push) that `tessera worker`
+//	                      runs instead of serve; TESSERA_CONNECTOR_SYNC_SCHEDULE schedules connector_sync (see mvp/README.md "Connector workers")
 //	TESSERA_ROTATION_FAKE_ADAPTERS  true (the dev and test default) admits the simulated secret-rotation
 //	                      adapter, which the demo policies use; prod refuses it
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
@@ -101,6 +103,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
@@ -120,6 +123,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ssf"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/internal/worker"
 	"github.com/nischalravi/tessera/mvp/server/policies"
 )
 
@@ -138,6 +142,9 @@ type options struct {
 	addr   string
 	db     string
 	reseed bool
+	// externalKinds is serve's -external-kinds: worker kinds left to
+	// `tessera worker` processes (overrides TESSERA_EXTERNAL_WORKER_KINDS).
+	externalKinds string
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -169,6 +176,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "catalog" {
 		return catalogCmd(ctx, args, stdout, stderr)
 	}
+	if cmd == "worker" {
+		return workerCmd(ctx, args, stderr)
+	}
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
 	var o options
@@ -176,6 +186,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "serve" {
 		fset.StringVar(&o.addr, "addr", "127.0.0.1:8000", "listen address")
 		fset.BoolVar(&o.reseed, "reseed", false, "wipe and re-seed the database before serving")
+		fset.StringVar(&o.externalKinds, "external-kinds", "", "comma-separated worker kinds ("+strings.Join(worker.Kinds, ", ")+
+			") that tessera worker processes run instead of this one (default TESSERA_EXTERNAL_WORKER_KINDS, else none)")
 	}
 	if err := fset.Parse(args); err != nil {
 		return err
@@ -188,7 +200,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return st.Close()
 	}
 	if cmd != "seed" && cmd != "serve" {
-		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness, audit, backup, migration, admin or catalog)", cmd)
+		return fmt.Errorf("unknown command %q (want serve, worker, seed, check-db, readiness, audit, backup, migration, admin or catalog)", cmd)
 	}
 	if os.Getenv("TESSERA_ENV") == "" {
 		// fail closed: the environment decides the guard rails (§18.4) and
@@ -464,7 +476,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	rsvc.Runner.Scenario = scenario
 	rsvc.Runner.Live.Sealer, rsvc.Runner.Live.Allow = sealer, allow
 	// Directory Agents (DR-11): private directories are probed through them.
-	agents := &agent.Service{DB: st, Hub: agent.NewHub(nil), Clock: clock}
+	agents := &agent.Service{DB: st, Hub: agent.NewHub(nil), Clock: clock, Recorder: worker.RecordAgentSync}
 	rsvc.Runner.Live.Agents = agents
 	if err := configureReadinessSchedule(rsvc); err != nil {
 		return err
@@ -539,7 +551,25 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}
 	provisioningSvc := &provisioning.Service{DB: st, Sealer: sealer, Clock: clock, Log: logger,
 		Deps: provisioning.Deps{HTTP: provHTTP, Dial: provDial, AllowPlainLDAP: cfg.Env == config.Dev, SQLDir: cfg.GroupsProvSQLDir}}
-	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
+	external := cfg.ExternalWorkerKinds
+	if o.externalKinds != "" {
+		if external, err = worker.ParseKinds(o.externalKinds); err != nil {
+			return fmt.Errorf("-external-kinds: %w", err)
+		}
+	}
+	if len(external) > 0 {
+		logger.Info("worker kinds left to tessera worker processes", "kinds", external)
+	}
+	archiveSvc, err := newArchive(cfg, o.db, st, sealer, clock, logger)
+	if err != nil {
+		return err
+	}
+	if archiveSvc.Enabled() {
+		logger.Info("archiving on", "location", archiveSvc.Store.Location())
+	} else {
+		logger.Warn("archiving is off: no archive store is configured (TESSERA_ARCHIVE_DIR or TESSERA_ARCHIVE_URL); nothing is archived or deleted")
+	}
+	srv := api.New(api.Config{ExternalKinds: external, ConnectorSyncSchedule: cfg.ConnectorSyncSchedule, Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger, Archive: archiveSvc,
 		Secrets: secrets, Credential: authority,
 		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, Provisioning: provisioningSvc, LoaderDataDir: cfg.LoaderDataDir, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
@@ -613,7 +643,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	sweepDone := make(chan struct{})
 	go func() {
 		defer close(sweepDone)
-		srv.RunQueue(ctx)
+		// the queue and its health beat: Admin -> Jobs shows this process as a worker
+		worker.Serve(ctx, srv.Queue(), &worker.Beater{DB: st, Queue: srv.Queue(), Mode: store.WorkerModeAPI,
+			Version: agent.Version, Clock: clock, Log: logger})
 	}()
 	reviewsDone := make(chan struct{})
 	go func() {
@@ -623,6 +655,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	provDone := make(chan struct{})
 	go func() {
 		defer close(provDone)
+		if srv.ExternalKind(jobs.ProvisionPush) {
+			return // a tessera worker sends the provisioning operations
+		}
 		srv.RunProvisioning(ctx, provisionInterval)
 	}()
 	keysDone := make(chan struct{})

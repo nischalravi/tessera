@@ -757,9 +757,9 @@ export const jitCreate = (body: { identity_id: number; group_id: number; duratio
   api<JitRequest>("/jit/requests", body);
 
 /** ruleAction: revoking a rule membership needs exclude (from the rule) or flag (to the role owner). */
-export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string, ruleAction?: RuleAction) =>
+export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string, ruleAction?: RuleAction, answers?: QuestionnaireAnswers) =>
   api<{ id: number; decision: string; resolution?: string }>(`/reviews/items/${itemId}/decision`,
-    { decision, comment: comment || null, ...(ruleAction ? { rule_action: ruleAction } : {}) });
+    { decision, comment: comment || null, ...(ruleAction ? { rule_action: ruleAction } : {}), ...(answers ? { answers } : {}) });
 
 // ------------------------------------------------ frozen review populations (issue #110)
 export interface QAItem {
@@ -1105,6 +1105,16 @@ export const approveMergeRequest = (id: string) =>
 export const rejectMergeRequest = (id: string, reason: string) =>
   api<{ request: MergeRequest }>(`/identity-merge-requests/${encodeURIComponent(id)}/reject`, { reason });
 
+/** A platform user's identity link change waiting for a second admin (#376): a link, a relink or an unlink. */
+export interface IdentityLinkRequest {
+  user_id: string; user_name: string; identity_id: number | null; identity_name: string;
+  previous_identity_id: number | null; previous_identity_name: string;
+  requested_by: string; requested_by_user_id: string; requested_at: string; expires_at: string;
+}
+/** Making the same change as the first admin applies it; the first call answers 202 pending_second_admin. */
+export const putUserIdentityLink = (userId: string, identityId: number | null) =>
+  api<{ status?: string; identity_id: number | null }>(`/groups/users/${encodeURIComponent(userId)}/identity`, { identity_id: identityId }, "PUT");
+
 export interface MatchingSettings {
   auto_link_tier_b: boolean;
   require_review_tier_a: boolean;
@@ -1291,6 +1301,97 @@ export interface CatalogView {
   can_manage: boolean;
   items: CatalogEntry[];
 }
+/** Tenant-wide request settings (Admin → Request settings). The server enforces them on submit; the form reads them to guide people. */
+export type RequestForOthers = "nobody" | "managers" | "permission";
+export type RequestHistoryVisibility = "involved" | "readers";
+export interface RequestSettings {
+  justification_required: boolean;
+  justification_min_length: number;
+  /** Hours used when neither the person nor the item names a duration; null: until removed. */
+  default_hours: number | null;
+  /** The longest any request may last; null: only each item's limit applies. */
+  max_hours: number | null;
+  attachments_allowed: boolean;
+  history_visibility: RequestHistoryVisibility;
+  for_others: RequestForOthers;
+}
+export interface RequestSettingsView extends RequestSettings {
+  /** 0 until the tenant saves settings for the first time. */
+  version: number;
+  can_manage: boolean;
+  /** What the signed-in user may do under the policy. */
+  can_request_for_others: boolean;
+  max_justification_length: number;
+  max_attachments: number;
+  max_hours_limit: number;
+}
+export const requestSettingsPath = "/request-settings";
+export const requestSettings = {
+  save: (version: number, s: RequestSettings) => api<RequestSettingsView>(requestSettingsPath, { version, ...s }, "PUT"),
+};
+/** Questionnaires (Governance → Questionnaires, issue #298): forms asked at request time and in review decisions. */
+export type QuestionType = "short_text" | "long_text" | "single_choice" | "multi_choice" | "yes_no" | "date";
+export interface Question {
+  /** Stable across versions; the server assigns "q1", "q2"… to a question saved without one. */
+  id: string;
+  type: QuestionType;
+  text: string;
+  help?: string;
+  required: boolean;
+  /** Choice questions only. */
+  options?: string[];
+  /** Text questions only; 0 or absent: the type's default (200 short, 2000 long). */
+  max_length?: number;
+}
+export interface QuestionnaireSpec { title: string; description: string; questions: Question[] }
+export type QuestionnaireTargetKind = "catalog_item" | "business_role" | "review_campaign" | "privileged";
+export interface QuestionnaireTarget { kind: QuestionnaireTargetKind; target_id: string }
+export interface Questionnaire extends QuestionnaireSpec {
+  id: string;
+  status: "active" | "retired";
+  version: number;
+  targets: QuestionnaireTarget[];
+  created_at: string;
+  updated_by: string;
+  updated_at: string;
+}
+export interface QuestionnaireDetail extends Questionnaire { versions: (QuestionnaireSpec & { version: number })[] }
+export interface QuestionnaireList { questionnaires: Questionnaire[]; types: QuestionType[]; limits: Record<string, number> }
+/** A questionnaire someone must answer now, at its current version. */
+export interface QuestionnaireNeed { id: string; title: string; description: string; version: number; questions: Question[] }
+export type AnswerValue = string | boolean | string[];
+/** question id -> value */
+export type QuestionnaireAnswers = Record<string, AnswerValue>;
+/** questionnaire id -> its answers (what a request sends) */
+export type AnswersByQuestionnaire = Record<string, QuestionnaireAnswers>;
+/** What approvers see: the answers beside the questions, at the version they were given against. */
+export interface AnsweredQuestionnaire {
+  questionnaire_id: string;
+  title: string;
+  version: number;
+  answers_hash: string;
+  answered_by: string;
+  answered_at: string;
+  items: { question_id: string; text: string; type: QuestionType; answer: AnswerValue }[];
+}
+export const questionnairesPath = "/questionnaires";
+const questionnairePath = (id: string, rest = "") => questionnairesPath + "/" + encodeURIComponent(id) + rest;
+/** The query for what a form must ask: catalog items, a role, a review campaign or a review item. */
+export const neededPath = (q: { catalogItemIds?: string[]; roleId?: string; reviewCampaignId?: number; reviewItemId?: number }) => {
+  const p = new URLSearchParams();
+  if (q.catalogItemIds?.length) p.set("catalog_item_ids", q.catalogItemIds.join(","));
+  if (q.roleId) p.set("role_id", q.roleId);
+  if (q.reviewCampaignId) p.set("review_campaign_id", String(q.reviewCampaignId));
+  if (q.reviewItemId) p.set("review_item_id", String(q.reviewItemId));
+  return questionnairesPath + "/needed?" + p.toString();
+};
+export const questionnaires = {
+  create: (spec: QuestionnaireSpec) => api<Questionnaire>(questionnairesPath, spec),
+  edit: (id: string, version: number, spec: QuestionnaireSpec) => api<QuestionnaireDetail>(questionnairePath(id), { version, ...spec }, "PUT"),
+  retire: (id: string) => api<Questionnaire>(questionnairePath(id, "/retire"), {}),
+  attach: (id: string, targets: QuestionnaireTarget[]) => api<Questionnaire>(questionnairePath(id, "/attachments"), { targets }, "PUT"),
+};
+
 export type RequestStatus = "pending" | "approved" | "denied" | "cancelled" | "expired" | "removed";
 export interface RequestLine {
   id: string;
@@ -1310,13 +1411,15 @@ export interface RequestLine {
   expires_at: string | null;
   closed_at: string | null;
   events?: { event: string; actor: string; note: string | null; at: string }[];
+  /** The requester's answers, in the detail view only. */
+  questionnaires?: AnsweredQuestionnaire[];
   stages: RequestStage[];
   can_approve: boolean;
   can_cancel: boolean;
   can_remove: boolean;
 }
 
-export const submitRequest = (body: { beneficiary_ids: number[]; catalog_item_ids: string[]; justification: string; duration_hours?: number | null }) =>
+export const submitRequest = (body: { beneficiary_ids: number[]; catalog_item_ids: string[]; justification: string; duration_hours?: number | null; attachments?: string[]; answers?: AnswersByQuestionnaire }) =>
   api<{ batch_id: string; lines: RequestLine[] }>("/requests", body);
 const line = (id: string, action: string, body: object = {}) => api<RequestLine>(`/requests/${encodeURIComponent(id)}/${action}`, body);
 export const approveRequest = (id: string, reason?: string) => line(id, "approve", reason ? { reason } : {});
@@ -1603,6 +1706,7 @@ export interface RoleRequest {
   decision_reason: string | null;
   can_approve: boolean;
   can_cancel: boolean;
+  questionnaires?: AnsweredQuestionnaire[];
 }
 
 const rolePath = (id: string, rest = "") => `/roles/${encodeURIComponent(id)}${rest}`;
@@ -1617,14 +1721,87 @@ export const roles = {
     api<RoleChange>(rolePath(id, "/members" + dry(dryRun)), { identity_id: identityId, reason }),
   unassign: (id: string, identityId: number, reason: string, dryRun?: boolean) =>
     api<RoleChange>(rolePath(id, `/members/${identityId}/remove` + dry(dryRun)), { reason }),
-  request: (roleId: string, beneficiaryId: number, justification: string) =>
+  request: (roleId: string, beneficiaryId: number, justification: string, answers?: AnswersByQuestionnaire) =>
     // not resumable after a step-up: the body names a person, and a pending action is kept in browser storage
-    apiNoResume<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification }),
+    apiNoResume<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification, ...(answers ? { answers } : {}) }),
   approve: (id: string, reason?: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/approve`, reason ? { reason } : {}),
   deny: (id: string, reason: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/deny`, { reason }),
   cancel: (id: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/cancel`, {}),
 };
 export const rolePaths = { list: "/roles", one: (id: string) => rolePath(id), versions: (id: string) => rolePath(id, "/versions"), drift: (id: string) => rolePath(id, "/drift") };
+
+// ---------------------------------------------------------------- role mining (issue #298)
+
+export type MiningRunStatus = "queued" | "running" | "succeeded" | "failed";
+export interface MiningParams {
+  department: string[];
+  title: string[];
+  /** Identity type: human, service or ai_agent. */
+  type: string[];
+  min_members: number;
+  min_entitlements: number;
+  /** Jaccard similarity, percent. */
+  min_similarity: number;
+  max_candidates: number;
+}
+export interface MiningRun {
+  id: string;
+  status: MiningRunStatus;
+  params: MiningParams;
+  algorithm: string;
+  /** SHA-256 over the algorithm, the parameters and the filtered input: same hash and parameters, same candidates. */
+  snapshot_hash: string;
+  people: number;
+  entitlements: number;
+  candidates: number;
+  skipped_existing: number;
+  truncated: boolean;
+  error: string;
+  requested_by: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+export interface MiningRule { attribute: "department" | "title" | "type"; values: string[]; precision: number; recall: number }
+export interface MiningCandidate {
+  id: string;
+  run_id: string;
+  rank: number;
+  name: string;
+  entitlements: GroupRef[];
+  coverage: number;
+  outlier_count: number;
+  rule: MiningRule | null;
+  confidence: number;
+  cohesion: number;
+  similar_role: { id: string; name: string } | null;
+  similarity: number;
+  status: "open" | "accepted" | "dismissed";
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  role_id: string | null;
+  /** Only on GET /role-mining/candidates/{id}. */
+  members?: PersonRef[];
+  outliers?: { person: PersonRef; extra: GroupRef[] }[];
+}
+export interface MiningRunsView { can_manage: boolean; defaults: MiningParams; runs: MiningRun[] }
+export interface MiningRunDetail { run: MiningRun; candidates: MiningCandidate[] }
+export interface MiningAccept { name?: string; description?: string; risk?: Risk; entitlement_group_ids?: number[] }
+
+const miningCandidatePath = (id: string, rest = "") => `/role-mining/candidates/${encodeURIComponent(id)}${rest}`;
+export const miningPaths = {
+  runs: "/role-mining/runs",
+  run: (id: string) => `/role-mining/runs/${encodeURIComponent(id)}`,
+  candidate: (id: string) => miningCandidatePath(id),
+};
+export const roleMining = {
+  /** async: true queues the run as a job even for a small tenant. */
+  start: (p: Partial<MiningParams> & { async?: boolean }) => api<MiningRun>(miningPaths.runs, p),
+  /** Creates a draft role: no members, no rule, not requestable. Grants and removes nothing. */
+  accept: (id: string, edit: MiningAccept) => api<{ candidate: MiningCandidate; role: BusinessRole }>(miningCandidatePath(id, "/accept"), edit),
+  dismiss: (id: string, reason: string) => api<MiningCandidate>(miningCandidatePath(id, "/dismiss"), { reason }),
+};
 
 // ---------------------------------------------------------------- identity lifecycle (issue #159)
 
@@ -2217,9 +2394,14 @@ export interface SodFunction {
   /** Only on GET /sod/functions/{id} and after a change. */
   versions?: SodVersion[];
 }
+/** Where a risk's remediation options come from: its own list, its ruleset's, or the default of all four. */
+export type SodRemediationSource = "risk" | "ruleset" | "default";
 export interface SodRisk {
-  /** The remediation options the risk offers. */
+  /** The remediation options the risk offers (its own, else its ruleset's, else all four). */
   remediation: SodRemediation[];
+  remediation_source: SodRemediationSource;
+  /** Who an escalation goes to: the ruleset's approver, else the risk owner. */
+  escalate_to: SodPerson | null;
   id: string; key: string; name: string; description: string; priority: SodPriority; business_process: string; owner: SodPerson | null;
   ruleset: SodRef; functions: SodRef[]; subjects: SodSubjects; status: "active" | "retired"; version: number; created_at: string;
   updated_by: { id: string; display_name: string } | null; updated_at: string; violations?: number; versions?: SodVersion[];
@@ -2227,6 +2409,10 @@ export interface SodRisk {
 export interface SodRuleset {
   id: string; key: string; name: string; description: string; enabled: boolean; status: "active" | "retired"; version: number;
   created_at: string; updated_by: { id: string; display_name: string } | null; updated_at: string; risks: number; violations?: number;
+  /** What its risks offer unless they set options of their own. */
+  remediation: SodRemediation[];
+  /** The approver an escalation goes to; null sends it to the risk owner. */
+  escalate_to: SodPerson | null;
   versions?: SodVersion[];
 }
 export interface SodFunctionList { can_manage: boolean; attributes: SodAttribute[]; functions: SodFunction[] }
@@ -2247,6 +2433,8 @@ export interface SodViolation {
   status: SodViolationStatus; message: string; evidence: string[]; edges: [string, string][];
   /** The remediation options the risk offers on this violation. */
   remediation: SodRemediation[];
+  /** Who an escalation of this violation goes to. */
+  escalate_to?: SodPerson | null;
   mitigation?: SodCover;
 }
 export type SodViolationStatus = "open" | "mitigated" | "accepted" | "mitigation_pending";
@@ -2283,6 +2471,9 @@ export const sod = {
   exportRuleset: (id: string) => api<{ filename: string; version: number; yaml: string }>(sodPath("rulesets", id, "/export")),
   importRuleset: (yaml: string, opts: { prune?: boolean; dry_run?: boolean } = {}) => api<SodImportResult>("/sod/rulesets/import", { yaml, ...opts }),
   /** One-time import of the separation_of_duties policy files as a ruleset. */
+  /** What a ruleset's risks offer unless they set their own (none or all four: everything), and the escalation approver. */
+  setRulesetRemediation: (id: string, options: SodRemediation[], escalateToId: number | null) =>
+    api<SodRuleset>(sodPath("rulesets", id, "/remediation"), { options, escalate_to_id: escalateToId }, "PUT"),
   importLegacy: (dryRun = false) => api<SodImportResult>("/sod/import-legacy", { dry_run: dryRun }),
   /** Which risks would these requested items trigger? Changes nothing; used before an access request is submitted. */
   simulate: (beneficiaryIds: number[], catalogItemIds: string[], durationHours?: number) =>
@@ -2329,7 +2520,7 @@ export const sodMitigations = {
 };
 /** Remediation of a violation: send it to the risk owner, or remove a grant behind it (the risk must offer it). */
 export const sodRemediate = {
-  escalate: (riskId: string, identityId: number, note: string) => api<{ id: string }>("/sod/violations/escalate", { risk_id: riskId, identity_id: identityId, note }),
+  escalate: (riskId: string, identityId: number, note: string) => api<{ id: string; routed_to: SodPerson | null }>("/sod/violations/escalate", { risk_id: riskId, identity_id: identityId, note }),
   revoke: (riskId: string, identityId: number, edgeId: number, dryRun: boolean) =>
     api<SimResult>("/sod/violations/revoke", { risk_id: riskId, identity_id: identityId, edge_id: edgeId, dry_run: dryRun }),
 };
@@ -3152,6 +3343,122 @@ export interface SiemDeadLetter {
   created_at: string;
 }
 
+// ------------------------------------------------ Admin: certificates, branding, identity rules
+
+/** A certificate or key Tessera holds (GET /api/admin/certificates). Private keys are never part of it. */
+export interface CertificateEntry {
+  /** conn:<id> (a SAML connection's SP key), cert:<id> (uploaded), key:<kid> (a signing key), agent:<id> (a directory agent's pinned key). */
+  id: string;
+  source: "saml_connection" | "uploaded" | "signing_key" | "directory_agent";
+  purpose: "saml_sp" | "mtls_client" | "signing" | "encryption";
+  label: string;
+  /** `next` is published in the SP metadata beside the active certificate and waits to be promoted. */
+  status: "next" | "active" | "retired";
+  used_by: string;
+  subject: string;
+  issuer: string;
+  sans: string[];
+  not_before: string | null;
+  not_after: string | null;
+  days_left: number | null;
+  /** 30 or 7 when it is inside that expiry warning window, else 0. */
+  expiry_warning: 0 | 30 | 7;
+  fingerprint_sha256: string;
+  key_algorithm: string;
+  signature_algorithm: string;
+  /** The SAML connection of a saml_sp entry. */
+  connection_id: string | null;
+  can_promote: boolean;
+  can_retire: boolean;
+}
+
+export interface CertificateUpload {
+  purpose: "saml_sp" | "mtls_client" | "signing" | "encryption";
+  label: string;
+  certificate_pem: string;
+  private_key_pem: string;
+  /** saml_sp: the SAML connection; mtls_client: the connector (optional). */
+  connection_id?: string;
+}
+
+/** The id the certificate routes take (the inventory id without its `cert:` prefix). */
+export const certificateRowId = (id: string) => id.replace(/^cert:/, "");
+
+export const PURPOSE_LABEL: Record<CertificateEntry["purpose"], string> = {
+  saml_sp: "SAML SP signing", mtls_client: "Connector mutual TLS", signing: "Signing", encryption: "Encryption",
+};
+
+export const certificatesApi = {
+  /** The private key never goes through the resume-after-step-up store. */
+  upload: (b: CertificateUpload) => apiNoResume<CertificateEntry>("/admin/certificates", b),
+  generate: (connectionId: string) => api<CertificateEntry>("/admin/certificates/generate", { connection_id: connectionId }),
+  promote: (id: string) => api<CertificateEntry>(`/admin/certificates/${encodeURIComponent(certificateRowId(id))}/promote`, {}),
+  retire: (id: string) => api<CertificateEntry>(`/admin/certificates/${encodeURIComponent(certificateRowId(id))}/retire`, {}),
+};
+
+/** The saved branding (GET /api/admin/branding); the defaults when nothing is saved. */
+export interface BrandingSettings {
+  configured: boolean;
+  display_name: string;
+  primary_color: string;
+  on_primary_color: string;
+  logo: { content_type: "image/png" | "image/jpeg"; width: number; height: number; sha256: string } | null;
+  updated_by: string | null;
+  updated_at: string | null;
+  limits: { logo_max_bytes: number; logo_min_px: number; logo_max_px: number; logo_types: string[]; min_contrast: number };
+}
+
+export interface BrandingInput {
+  display_name: string;
+  primary_color: string;
+  /** Omitted or empty: Tessera picks white or black, whichever reads better. */
+  on_primary_color?: string;
+  logo?: { content_type: string; data_base64: string };
+  remove_logo?: boolean;
+}
+
+export const brandingApi = {
+  /** A logo can be hundreds of kilobytes: it is not kept for resuming after a step-up. */
+  save: (b: BrandingInput) => apiNoResume<BrandingSettings>("/admin/branding", b, "PUT"),
+};
+
+/** What the sign-in and claim pages show for a tenant (public). */
+export interface PublicBranding {
+  name: string;
+  configured: boolean;
+  primary_color: string;
+  on_primary_color: string;
+  logo_url: string | null;
+  logo_width?: number;
+  logo_height?: number;
+}
+
+/** The tenant's branding for the sign-in and claim pages; null if it cannot be read (the pages then show the default). */
+export async function publicBranding(tenant: string): Promise<PublicBranding | null> {
+  try {
+    const res = await fetch(`/api/auth/branding?${new URLSearchParams({ tenant })}`, { credentials: "same-origin" });
+    return res.ok ? ((await res.json()) as PublicBranding) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The identity rules the engines apply (GET /api/admin/identity-rules). */
+export interface IdentityRules {
+  matching: {
+    settings: MatchingSettings;
+    rules: { name: string; tier: "A" | "B" | "C" | "D"; description: string }[];
+    name_strong: number;
+    name_possible: number;
+    self_asserted: string;
+    changeable_with: string;
+  };
+  correlation: { proposals: { name: string; description: string }[]; decisions: string };
+  group_naming: { separator: string; allowed: string; max_segment: number; max_name: number; max_display: number; max_depth: number; case_insensitive: boolean };
+  dormancy: { identity_type: string; days: number; effect: string }[];
+  not_configurable: string[];
+}
+
 export const siemApi = {
   create: (body: SiemSinkInput) => api<SiemSink>("/siem/sinks", body),
   update: (id: string, body: SiemSinkInput) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}`, body, "PUT"),
@@ -3408,6 +3715,12 @@ export interface QueueSchedule {
   name: string; kind: string; spec: string; enabled: boolean; max_attempts: number; next_run_at: string; last_enqueued_at: string | null;
 }
 
+/** A queue worker as one tenant sees it (issue #302): a `tessera worker` or an API process running queue kinds. */
+export interface QueueWorker {
+  worker_id: string; mode: "worker" | "api"; status: "healthy" | "stale"; hostname: string; pid: number; version: string;
+  kinds: string[]; concurrency: number; running: number; started_at: string; last_heartbeat_at: string; lag_seconds: number;
+}
+
 export const queue = {
   /** Puts a dead job back in the queue with a fresh attempt budget (step-up, audited). */
   retry: (id: string) => api<QueueJob>(`/queue/jobs/${encodeURIComponent(id)}/retry`, {}),
@@ -3449,7 +3762,8 @@ export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rej
 /** The change types of design §15.2 that the API accepts. */
 export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
-  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke";
+  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
+  | "groups.loader.save" | "retention.update";
 
 export interface AdminPersonRef { id: string; display_name: string }
 
@@ -3498,6 +3812,65 @@ export interface PlatformHealth {
 }
 
 export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }
+
+// ------------------------------------------------------------ log retention and the archive (issue #298)
+
+/** The data classes with a retention setting, in the order the archival job runs them. */
+export type RetentionClass = "audit" | "review_campaigns" | "requests" | "job_runs" | "notifications";
+
+export interface RetentionSetting {
+  class: RetentionClass; label: string; days: number; custom: boolean; default_days: number; min_days: number; max_days: number;
+  /** What the age of a record is counted from. */
+  basis: string; updated_at?: string; updated_by?: string;
+}
+
+export interface ArchiveStatus { enabled: boolean; location: "local" | "remote" | ""; every_seconds: number }
+
+/** GET /api/admin/retention. */
+export interface RetentionView { archive: ArchiveStatus; settings: RetentionSetting[] }
+
+export type SegmentStatus = "written" | "verified" | "purged" | "failed";
+
+export interface ArchiveSegment {
+  id: string; class: RetentionClass; status: SegmentStatus; count: number;
+  /** Audit segments: the chain range they cover. */
+  seq_from?: number; seq_to?: number; range_from: string; range_to: string; first_hash?: string; last_hash?: string;
+  sha256: string; size_bytes: number; location: "local" | "remote"; created_at: string; verified_at: string | null; purged_at: string | null;
+}
+
+/** GET /api/admin/archive/segments. */
+export interface ArchiveList { archive: ArchiveStatus; segments: ArchiveSegment[] }
+
+/** POST /api/admin/archive/segments/{id}/verify: a segment that fails is the answer (ok false), not an error. */
+export interface SegmentCheck { segment_id: string; ok: boolean; checks: string[] | null; problem?: string; records: number; checked_at: string }
+
+export const archive = {
+  verify: (id: string) => api<SegmentCheck>(`/admin/archive/segments/${encodeURIComponent(id)}/verify`, {}),
+};
+
+/**
+ * The segment's records as NDJSON, for saving (the read-only restore). The server checks the segment first and
+ * refuses a tampered one (409). A step-up is asked for like any other action.
+ */
+export async function downloadArchiveSegment(id: string): Promise<Blob> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/admin/archive/segments/${encodeURIComponent(id)}/export`, { credentials: "same-origin" });
+  } catch {
+    throw new ApiError("Tessera can't reach its API right now.", 0, null);
+  }
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    if (res.status === 401 && j?.error === "step_up_required") window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+  }
+  return res.blob();
+}
 
 /** Admin-change workflow calls. Approving needs the hash of the payload the admin reviewed. */
 export const adminChanges = {

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/questionnaires"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -37,6 +38,8 @@ func (s *Server) registerRequestRoutes() {
 	create := need(auth.PermRequestsCreate)
 	s.handle(G, "/api/catalog", read, create, s.catalog)
 	s.handle(http.MethodPut, "/api/catalog/items/{group_id}", write, needStepUp(auth.PermCatalogManage, auth.StepUpPolicy), s.putCatalogItem)
+	s.handle(G, "/api/request-settings", read, create, s.getRequestSettings)
+	s.handle(http.MethodPut, "/api/request-settings", write, needStepUp(auth.PermCatalogManage, auth.StepUpPolicy), s.putRequestSettings)
 	s.handle(P, "/api/requests", write, create, s.submitRequest)
 	s.handle(G, "/api/requests", read, create, s.listRequestLines)
 	s.handle(G, "/api/requests/{request_id}", read, create, s.getRequestLine)
@@ -153,7 +156,9 @@ type lineView struct {
 	ExpiresAt      *time.Time  `json:"expires_at"`
 	ClosedAt       *time.Time  `json:"closed_at"`
 	Events         []lineEvent `json:"events,omitempty"`
-	Stages         []stageView `json:"stages"`
+	// Questionnaires are the requester's answers (issue #298), with the questions as asked.
+	Questionnaires []questionnaires.Answered `json:"questionnaires,omitempty"`
+	Stages         []stageView               `json:"stages"`
 	// What the signed-in user may do with the line (the API checks again).
 	CanApprove bool `json:"can_approve"`
 	CanCancel  bool `json:"can_cancel"`
@@ -320,6 +325,10 @@ func (s *Server) lineView(r *http.Request, v *viewer, l *store.RequestLine, me r
 	out.CanCancel = l.Status == store.RequestPending && l.RequestedBy == me.UserID.String()
 	out.CanRemove = l.Status == store.RequestApproved && (decider || mine)
 	if withEvents {
+		// what the requester answered, for the approvers (issue #298)
+		if out.Questionnaires, err = questionnaires.AnswersFor(v.tx, store.QSubjectRequestLine, l.ID); err != nil {
+			return out, err
+		}
 		evs, err := v.tx.RequestEvents(l.ID)
 		if err != nil {
 			return out, err
@@ -334,12 +343,38 @@ func (s *Server) lineView(r *http.Request, v *viewer, l *store.RequestLine, me r
 
 // visible reports whether the signed-in user may see a line.
 func (s *Server) visible(r *http.Request, l *store.RequestLine, me requests.Actor) (bool, error) {
-	if l.RequestedBy == me.UserID.String() || (me.IdentityID != nil && *me.IdentityID == l.BeneficiaryID) ||
-		me.Decider || s.can(r, auth.PermGraphRead) {
+	if l.RequestedBy == me.UserID.String() || (me.IdentityID != nil && *me.IdentityID == l.BeneficiaryID) || me.Decider {
 		return true, nil
+	}
+	if ok, err := s.readsRequestHistory(r); err != nil || ok {
+		return ok, err
 	}
 	// an approver of the line (a manager, an owner or a delegate)
 	return requests.CanDecide(store.TxFrom(r.Context()), l, me, s.clock().UTC())
+}
+
+// readsRequestHistory reports whether the signed-in user sees other people's
+// requests because they can read the graph, which the tenant's history
+// visibility setting allows or not.
+func (s *Server) readsRequestHistory(r *http.Request) (bool, error) {
+	if !s.can(r, auth.PermGraphRead) {
+		return false, nil
+	}
+	set, _, err := requests.LoadSettings(store.TxFrom(r.Context()))
+	return set.HistoryVisibility == requests.HistoryReaders, err
+}
+
+// mayRequestForOthers is whether the UI should offer to request for other
+// people. Submit decides for each beneficiary; with the managers policy anyone
+// may try, and only their reports are accepted.
+func (s *Server) mayRequestForOthers(r *http.Request, set requests.Settings) bool {
+	switch set.ForOthers {
+	case requests.ForOthersNobody:
+		return false
+	case requests.ForOthersManagers:
+		return true
+	}
+	return s.can(r, auth.PermRequestsCreateOthers)
 }
 
 // ---------------------------------------------------------------- catalog
@@ -355,7 +390,11 @@ func (s *Server) catalog(_ http.ResponseWriter, r *http.Request, p *params) (any
 		return nil, err
 	}
 	v := newViewer(tx)
-	out := catalogView{Items: make([]catalogEntry, 0, len(entries)), CanRequestForOthers: s.can(r, auth.PermRequestsCreateOthers),
+	set, _, err := requests.LoadSettings(tx)
+	if err != nil {
+		return nil, err
+	}
+	out := catalogView{Items: make([]catalogEntry, 0, len(entries)), CanRequestForOthers: s.mayRequestForOthers(r, set),
 		CanDecide: s.can(r, auth.PermRequestsDecide), CanManage: s.can(r, auth.PermCatalogManage)}
 	for _, e := range entries {
 		ce, err := v.entry(e)
@@ -450,6 +489,9 @@ type submitBody struct {
 	CatalogItemIDs []string `json:"catalog_item_ids"`
 	Justification  string   `json:"justification"`
 	DurationHours  *float64 `json:"duration_hours"`
+	Attachments    []string `json:"attachments"`
+	// answers to the questionnaires the items ask: questionnaire id -> question id -> value (issue #298)
+	Answers map[string]map[string]any `json:"answers"`
 }
 
 func (s *Server) submitRequest(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
@@ -463,7 +505,7 @@ func (s *Server) submitRequest(_ http.ResponseWriter, r *http.Request, _ *params
 	}
 	tx := store.TxFrom(r.Context())
 	batch, lines, err := requests.Submit(tx, requests.Submission{Beneficiaries: b.BeneficiaryIDs, Items: b.CatalogItemIDs,
-		Justification: b.Justification, DurationHours: b.DurationHours}, by, s.can(r, auth.PermRequestsCreateOthers), s.clock().UTC())
+		Justification: b.Justification, DurationHours: b.DurationHours, Attachments: b.Attachments, Answers: b.Answers}, by, s.can(r, auth.PermRequestsCreateOthers), s.clock().UTC())
 	if err != nil {
 		return nil, reqErr(err)
 	}
@@ -492,7 +534,11 @@ func (s *Server) listRequestLines(_ http.ResponseWriter, r *http.Request, p *par
 			f.InvolvingIdentity = *me.IdentityID
 		}
 	case "pending", "all":
-		if !s.can(r, auth.PermRequestsDecide) && !s.can(r, auth.PermGraphRead) {
+		reads, err := s.readsRequestHistory(r)
+		if err != nil {
+			return nil, err
+		}
+		if !s.can(r, auth.PermRequestsDecide) && !reads {
 			return nil, denial{auth.Check(principal(r), auth.PermRequestsDecide, nil, s.clock())}
 		}
 		if scope == "pending" {

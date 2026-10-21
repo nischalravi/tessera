@@ -292,6 +292,58 @@ func TestAnchorURL(t *testing.T) {
 	}
 }
 
+// TestArchiveSettings (issue #298): where the archive lives, and what prod refuses.
+func TestArchiveSettings(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "tessera.db")
+	dev, err := config.Load(env(map[string]string{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := dev.ArchiveDirFor(db), filepath.Join(dir, "var", "archive"); got != want {
+		t.Errorf("dev archive dir %q, want %q", got, want)
+	}
+	c, err := config.Load(env(map[string]string{"TESSERA_BACKUP_DIR": "/srv/backups"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.ArchiveDirFor(db); got != filepath.Join("/srv/backups", "archive") {
+		t.Errorf("archive dir with a backup dir %q", got)
+	}
+	c, err = config.Load(env(map[string]string{"TESSERA_BACKUP_DIR": "/srv/backups", "TESSERA_ARCHIVE_DIR": "/srv/arch"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.ArchiveDirFor(db); got != "/srv/arch" {
+		t.Errorf("archive dir %q", got)
+	}
+	// prod has no implicit archive: unset means off
+	p, err := config.Load(env(safeProd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.ArchiveDirFor(db); got != "" {
+		t.Errorf("prod archive dir %q, want none", got)
+	}
+	for _, bad := range []string{"ftp://x/y", "https://user:pw@host/p", "https://host/p?x=1", "https://host/p#f", "host/path", "https:///p"} {
+		if _, err := config.Load(env(map[string]string{"TESSERA_ARCHIVE_URL": bad})); err == nil {
+			t.Errorf("TESSERA_ARCHIVE_URL=%q accepted", bad)
+		}
+	}
+	if _, err := config.Load(env(map[string]string{"TESSERA_ARCHIVE_URL": "http://objects.internal:9000/archive"})); err != nil {
+		t.Errorf("an http archive URL is refused in dev: %v", err)
+	}
+	prod := safeProd()
+	prod["TESSERA_ARCHIVE_URL"] = "http://objects.internal:9000/archive"
+	if _, err := config.Load(env(prod)); err == nil {
+		t.Error("an http archive URL is accepted in prod")
+	}
+	prod["TESSERA_ARCHIVE_URL"] = "https://objects.example.com/archive"
+	if p, err := config.Load(env(prod)); err != nil || p.ArchiveURL != "https://objects.example.com/archive" {
+		t.Errorf("an https archive URL in prod: %v", err)
+	}
+}
+
 // TestPostgresDSN: a postgres:// TESSERA_DB works in dev (dev files go in the
 // working directory, not in a directory named after the URL), and production
 // refuses a DSN without TLS or without the app_role that makes row-level
@@ -523,6 +575,27 @@ func TestAgentListenerConfig(t *testing.T) {
 		if _, err := config.Load(env(with(safeProd(), kv...))); err == nil {
 			t.Errorf("%s accepted", name)
 		}
+	}
+}
+
+// TestExternalWorkerKinds (issue #302): serve stops running the listed worker
+// kinds in-process; an unknown kind is refused (a typo must not silently leave
+// work un-run), repeats collapse, and the default is to run everything here.
+// Prod still refuses the private-network allowlist that remote agents replace.
+func TestExternalWorkerKinds(t *testing.T) {
+	c, err := config.Load(env(with(safeProd(), "TESSERA_EXTERNAL_WORKER_KINDS", " provision_push, connector_sync,provision_push ",
+		"TESSERA_CONNECTOR_SYNC_SCHEDULE", "@every 15m")))
+	if err != nil || !slices.Equal(c.ExternalWorkerKinds, []string{"connector_sync", "provision_push"}) || c.ConnectorSyncSchedule != "@every 15m" {
+		t.Fatalf("prod with external kinds: %v %+v", err, c)
+	}
+	if c, err := config.Load(env(safeProd())); err != nil || len(c.ExternalWorkerKinds) != 0 || c.ConnectorSyncSchedule != "" {
+		t.Fatalf("default runs every kind in-process: %v %+v", err, c)
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_EXTERNAL_WORKER_KINDS", "connector_sync,jit_sweep"))); err == nil {
+		t.Error("an unknown worker kind was accepted")
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_SAFEDIAL_ALLOW", "10.0.0.0/8:389"))); err == nil {
+		t.Error("prod accepted a private-network allowlist (private directories are reached through a remote agent)")
 	}
 }
 

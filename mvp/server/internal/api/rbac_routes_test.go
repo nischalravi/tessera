@@ -68,6 +68,14 @@ POST   /api/siem/sinks                               siem.configure  STEP_UP_POL
 PUT    /api/siem/sinks/{sink_id}                     siem.configure  STEP_UP_POLICY  # issue #169
 POST   /api/siem/sinks/{sink_id}/rewind              siem.configure  -  # issue #169
 POST   /api/siem/sinks/{sink_id}/test                siem.configure  -  # issue #169
+GET    /api/admin/certificates                       connections.read    -
+POST   /api/admin/certificates                       connections.manage  STEP_UP_POLICY  # Admin > Certificates
+POST   /api/admin/certificates/generate              connections.manage  STEP_UP_POLICY
+POST   /api/admin/certificates/{certificate_id}/promote connections.manage  STEP_UP_POLICY
+POST   /api/admin/certificates/{certificate_id}/retire  connections.manage  STEP_UP_POLICY
+GET    /api/admin/branding                           admin.read      -  # Admin > Branding
+PUT    /api/admin/branding                           email.manage    STEP_UP_POLICY
+GET    /api/admin/identity-rules                     graph.read      -  # Admin > Identity rules
 GET    /api/siem/sinks/{sink_id}/dead-letters        siem.read       -  # issue #169
 GET    /api/alerts                                   alerts.read     -  # issue #168
 GET    /api/alerts/summary                           alerts.read     -  # issue #168
@@ -94,6 +102,10 @@ GET    /api/audit/checkpoints                        audit.read      -
 GET    /api/audit/keys                               audit.read      -
 POST   /api/audit/verify                             audit.verify    -
 GET    /api/audit/export                             audit.read      -
+GET    /api/admin/retention                          admin.read      -  # issue #298
+GET    /api/admin/archive/segments                   audit.read      -  # issue #298
+POST   /api/admin/archive/segments/{segment_id}/verify audit.verify  -  # issue #298
+GET    /api/admin/archive/segments/{segment_id}/export audit.read    STEP_UP_ADMIN  # issue #298
 GET    /api/readiness/templates                      connections.read   -
 GET    /api/readiness/templates/{type}               connections.read   -
 PUT    /api/readiness/overlays/{type}                connections.manage STEP_UP_POLICY
@@ -164,6 +176,15 @@ GET    /api/guest-recoveries                         guests.read     -  # issue 
 POST   /api/guest-recoveries/{case_id}/cancel        guests.sponsor  STEP_UP_POLICY  # issue #73 (the guest's sponsor, or guests.recover, in the handler)
 GET    /api/catalog                                  requests.create -  # issue #164 (?all=1: catalog.manage in the handler)
 PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
+GET    /api/request-settings                          requests.create  -  # issue #298
+PUT    /api/request-settings                          catalog.manage  STEP_UP_POLICY  # issue #298
+GET    /api/questionnaires                           catalog.manage  -  # issue #298
+POST   /api/questionnaires                           catalog.manage  -  # issue #298
+GET    /api/questionnaires/needed                    requests.create -  # issue #298
+GET    /api/questionnaires/{id}                      catalog.manage  -  # issue #298
+PUT    /api/questionnaires/{id}                      catalog.manage  -  # issue #298
+POST   /api/questionnaires/{id}/retire               catalog.manage  -  # issue #298
+PUT    /api/questionnaires/{id}/attachments          catalog.manage  -  # issue #298
 POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
 GET    /api/requests                                 requests.create -  # issue #164 (scope=pending|all: requests.decide or graph.read)
 GET    /api/requests/{request_id}                    requests.create -  # issue #164
@@ -171,6 +192,12 @@ POST   /api/requests/{request_id}/approve            requests.create STEP_UP_POL
 POST   /api/requests/{request_id}/deny               requests.create -  # issue #164 (#165: the line's routing decides who)
 POST   /api/requests/{request_id}/cancel             requests.create -  # issue #164 (the requester)
 POST   /api/requests/{request_id}/remove             requests.create -  # issue #164 (requests.decide, or the beneficiary)
+GET    /api/role-mining/runs                         graph.read      -  # issue #298
+POST   /api/role-mining/runs                         roles.manage    -  # issue #298 (analysis only; changes nothing)
+GET    /api/role-mining/runs/{run_id}                graph.read      -  # issue #298
+GET    /api/role-mining/candidates/{candidate_id}    graph.read      -  # issue #298
+POST   /api/role-mining/candidates/{candidate_id}/accept roles.manage STEP_UP_POLICY  # issue #298 (creates a draft role, like POST /api/roles)
+POST   /api/role-mining/candidates/{candidate_id}/dismiss roles.manage -  # issue #298
 GET    /api/roles                                    requests.create -  # issue #161
 POST   /api/roles                                    roles.manage    STEP_UP_POLICY  # issue #161
 GET    /api/roles/{role_id}                          graph.read      -  # issue #161
@@ -347,6 +374,7 @@ POST   /api/sod/rulesets/import                      sod.manage      STEP_UP_POL
 GET    /api/sod/rulesets/{ruleset_id}                graph.read      -  # issue #298
 PUT    /api/sod/rulesets/{ruleset_id}                sod.manage      STEP_UP_POLICY  # issue #298
 POST   /api/sod/rulesets/{ruleset_id}/retire         sod.manage      STEP_UP_POLICY  # issue #298
+PUT    /api/sod/rulesets/{ruleset_id}/remediation     sod.manage      STEP_UP_POLICY  # issue #298
 GET    /api/sod/rulesets/{ruleset_id}/export         graph.read      -  # issue #298
 POST   /api/sod/import-legacy                        sod.manage      STEP_UP_POLICY  # issue #298
 GET    /api/sod/violations                           graph.read      -  # issue #298
@@ -370,6 +398,7 @@ GET    /api/jobs/{job_id}                            jobs.read       -  #
 POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)
 GET    /api/queue/jobs                               jobs.read       -  # issue #300
 GET    /api/queue/schedules                          jobs.read       -  #
+GET    /api/queue/workers                            jobs.read       -  # issue #302
 POST   /api/queue/jobs/{job_id}/retry                jobs.manage     STEP_UP_POLICY  #
 GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
 PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
@@ -497,6 +526,7 @@ GET    /api/groups/reports/runs/{run_id}             groups.read     -  # issue 
 POST   /api/groups/reports/run                       groups.write    -  # issue #57: the privilege the report's object needs
 GET    /api/groups/{id}/graph                        groups.read     -  # issue #57: view; nodes filtered by view
 GET    /api/groups/graph/identity/{identity_id}      groups.read     -  # issue #57: nodes filtered by view
+GET    /api/groups/users/identity-requests           groups.admin    -               # issue #376
 PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POLICY  # issue #47
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
@@ -586,6 +616,8 @@ GET    /api/auth/sessions                            auth.self       -
 GET    /api/auth/step-up                             auth.self       -
 DELETE /api/auth/sessions/{session_id}               auth.self       -  (another user's: admin.sessions.revoke + STEP_UP_ADMIN in the handler)
 GET    /api/auth/discover                            public
+GET    /api/auth/branding                            public
+GET    /api/auth/branding/logo                       public
 GET    /api/auth/login                               public
 GET    /api/auth/oidc/{connection_id}/callback       public
 GET    /api/auth/saml/{connection_id}/metadata       public

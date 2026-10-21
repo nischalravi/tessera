@@ -145,6 +145,29 @@ func (c *Client) Poll(ctx context.Context) (*Job, error) {
 	return &j, nil
 }
 
+// Claim waits for the next pulled job (a sync). It returns (nil, nil) when
+// none arrived. The job is decoded strictly.
+func (c *Client) Claim(ctx context.Context) (*PulledJob, error) {
+	var j PulledJob
+	status, err := c.post(ctx, PathClaim, nil, &j, MaxRequestBytes)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNoContent {
+		return nil, nil
+	}
+	return &j, nil
+}
+
+// Report returns a pulled job's result or error.
+func (c *Client) Report(ctx context.Context, r PullResult) error {
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	_, err := c.post(ctx, PathReport, r, &out, MaxRequestBytes)
+	return err
+}
+
 // SendResult returns a job's result.
 func (c *Client) SendResult(ctx context.Context, r Result) error {
 	var out struct {

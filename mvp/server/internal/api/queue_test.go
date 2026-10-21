@@ -47,7 +47,7 @@ func TestQueueAPI(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
-	for range 5 { // seven jobs per tenant, four run at a time
+	for range 8 { // twelve schedules per tenant, eleven fire at once (certificate_expiry waits for its daily window); four run at a time
 		if err := srv.Queue().Tick(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -64,17 +64,23 @@ func TestQueueAPI(t *testing.T) {
 	// The schedules exist for both tenants and fired once: every sweep ran.
 	var scheds []queueScheduleView
 	rec := corrDo(h, auditor, "GET", "/api/queue/schedules", "")
-	if err := json.Unmarshal(rec.Body.Bytes(), &scheds); err != nil || rec.Code != 200 || len(scheds) != 10 {
+	if err := json.Unmarshal(rec.Body.Bytes(), &scheds); err != nil || rec.Code != 200 || len(scheds) != 12 {
 		t.Fatalf("schedules: %d %s", rec.Code, rec.Body)
 	}
 	for _, s := range scheds {
+		if s.Name == jobs.CertificateExpiry { // a daily cron: waits for its next window instead of firing at once
+			if !s.Enabled || s.Spec != certificateExpirySchedule || s.LastEnqueuedAt != nil || s.NextRunAt == "" {
+				t.Errorf("certificate expiry schedule %+v", s)
+			}
+			continue
+		}
 		if !s.Enabled || s.LastEnqueuedAt == nil || !strings.HasPrefix(s.Spec, "@every ") {
 			t.Errorf("schedule %+v", s)
 		}
 	}
 	var list []queueJobView
 	rec = corrDo(h, auditor, "GET", "/api/queue/jobs?limit=100", "")
-	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || rec.Code != 200 || len(list) != 10 {
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || rec.Code != 200 || len(list) != 11 {
 		t.Fatalf("jobs: %d %s", rec.Code, rec.Body)
 	}
 	seen := map[string]bool{}
@@ -176,14 +182,19 @@ func TestQueueRecordsJobRuns(t *testing.T) {
 	if _, err := srv.Queue().Enqueue(context.Background(), f.A.ID, "always_fails", "", "", time.Time{}, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.Queue().Tick(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	srv.Queue().Wait()
+	// A tick claims at most Concurrency due jobs, oldest run_at first, so
+	// scheduled sweeps still due (or newly due at a minute boundary) can take
+	// every slot ahead of it. Tick until it has run, with a bound.
 	var failed *store.JobRun
-	for _, r := range runs(f.A.ID) {
-		if r.Kind == "always_fails" {
-			failed = r
+	for i := 0; i < 50 && failed == nil; i++ {
+		if err := srv.Queue().Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		srv.Queue().Wait()
+		for _, r := range runs(f.A.ID) {
+			if r.Kind == "always_fails" {
+				failed = r
+			}
 		}
 	}
 	if failed == nil || failed.Status != "failed" || failed.Error == nil || !strings.Contains(*failed.Error, "nope") {

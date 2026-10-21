@@ -20,5 +20,10 @@
 - Revoke option reuses `revokeEdge` (the least-privilege revoke); review items get SoD context from `/api/sod/review-context` (a new endpoint, so the review parity fixtures are unchanged).
 - Config: `TESSERA_SOD_MAX_MITIGATION_DAYS` (365), `TESSERA_SOD_WARN_DAYS` (14).
 
+## Part 2 (`agent/298-sod-remediation-request-settings`)
+- Schema `0381_sod_remediation.sql`: `sod_ruleset_remediation` (ruleset default options as a JSON list, escalation approver). Effective options: the risk's own `sod_risk_options` rows, else its ruleset's, else all four (`sod.LoadRemediation`, `Remediation.Target`). `PUT /api/sod/rulesets/{id}/remediation` (`sod.manage` + step-up).
+- Escalation goes to the ruleset approver, else the risk owner, as a notification (inbox item). Approving an accept or control mitigation queues `sod_mitigation_expire` at the end date in the same transaction (`Writer.OnActivate`); `sod.ExpireOne` re-opens the violation, the sweeper stays the backstop.
+- Request settings, schema `0380_request_settings.sql` (`request_settings`, one row per tenant): `internal/requests/settings.go`, enforced in `requests.Submit`; `GET|PUT /api/request-settings` (PUT `catalog.manage` + step-up); Admin page `/admin/request-settings`.
+
 ## Read when changing this
 `internal/sod/{model,detect,service,bundle,compile}.go`, `internal/policy/sod.go`, `internal/api/sod.go`, `frontend/src/features/governance/{SodModel.tsx,sodModel.ts}`, `frontend/src/features/insights/SodConflicts.tsx`, `internal/sod/{controls,mitigation}.go`, `internal/api/sod_controls.go`, `frontend/src/features/governance/{Mitigations,MitigateDrawers}.tsx`, `frontend/tests/sod.test.ts`.

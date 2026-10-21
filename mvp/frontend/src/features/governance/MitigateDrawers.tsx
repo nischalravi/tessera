@@ -82,7 +82,7 @@ export function MitigateDrawer({ target, kind: initial = "control", offerControl
   );
 }
 
-export function EscalateDrawer({ target, onClose, onDone }: { target: Target; onClose: () => void; onDone: () => void }) {
+export function EscalateDrawer({ target, routeTo, onClose, onDone }: { target: Target; /** Who it goes to, when known (the ruleset's approver or the risk owner). */ routeTo?: string | null; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -93,8 +93,8 @@ export function EscalateDrawer({ target, onClose, onDone }: { target: Target; on
     setBusy(true);
     setErr(null);
     try {
-      await sodRemediate.escalate(target.riskId, target.identityId, note.trim());
-      toast("Sent to the risk owner");
+      const sent = await sodRemediate.escalate(target.riskId, target.identityId, note.trim());
+      toast(sent.routed_to ? `Sent to ${sent.routed_to.name}, who has an inbox item` : "Sent to the approver");
       onDone();
       onClose();
     } catch (e2) {
@@ -104,10 +104,10 @@ export function EscalateDrawer({ target, onClose, onDone }: { target: Target; on
     }
   };
   return (
-    <Drawer title="Escalate to the risk owner" sub={`${target.identityName}: ${target.riskName}`} onClose={onClose}
+    <Drawer title={routeTo ? `Escalate to ${routeTo}` : "Escalate to the approver"} sub={`${target.identityName}: ${target.riskName}`} onClose={onClose}
       footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" form="sod-esc-form" variant="primary" disabled={!note.trim() || busy}>Send</Button></>}>
       <form id="sod-esc-form" className="stack" onSubmit={submit}>
-        <p className="small muted">The owner of the risk is notified and can decide: revoke, mitigate or accept.</p>
+        <p className="small muted">{routeTo ? `${routeTo} gets an inbox item` : "The ruleset's approver, or the owner of the risk, gets an inbox item"} and can decide: revoke, mitigate or accept.</p>
         <label className="field">Note<textarea className="input" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} data-autofocus /></label>
         {err && <Callout tone="bad">{err}</Callout>}
       </form>

@@ -96,6 +96,43 @@ func ldapProber(s agent.ProberSpec) (connectors.Prober, error) {
 		RootCAs: s.RootCAs, Dialer: s.Dialer})
 }
 
+// ldapSyncer is the agent's SyncerFactory product: it reads the directory's
+// people, groups and memberships (read-only) for a pulled sync job.
+type ldapSyncer struct{ p *ldap.Prober }
+
+func ldapSync(s agent.ProberSpec) (agent.Syncer, error) {
+	p, err := ldap.New(ldap.Config{Host: s.Target.Host, Port: s.Target.Port, BindDN: s.Config.BindDN,
+		Password: ldap.Secret(s.Password), BaseDNs: s.Config.BaseDNs, UserFilter: s.Config.UserFilter,
+		RootCAs: s.RootCAs, Dialer: s.Dialer})
+	if err != nil {
+		return nil, err
+	}
+	return ldapSyncer{p}, nil
+}
+
+func (l ldapSyncer) Discover(ctx context.Context, lim agent.SyncLimits) (*agent.SyncResult, error) {
+	ls, err := l.p.Discover(ctx, lim.Accounts, lim.Groups, lim.Members)
+	if err != nil {
+		return nil, err
+	}
+	out := &agent.SyncResult{Accounts: make([]agent.SyncAccount, 0, len(ls.Accounts)),
+		Groups: make([]agent.SyncGroup, 0, len(ls.Groups)), Members: make([]agent.SyncMember, 0, len(ls.Members))}
+	for _, a := range ls.Accounts {
+		st := "active"
+		if a.Disabled {
+			st = "disabled"
+		}
+		out.Accounts = append(out.Accounts, agent.SyncAccount{ExternalID: a.ExternalID, Username: a.Username, Email: a.Email, Status: st})
+	}
+	for _, g := range ls.Groups {
+		out.Groups = append(out.Groups, agent.SyncGroup{ExternalID: g.ExternalID, Name: g.Name})
+	}
+	for _, m := range ls.Members {
+		out.Members = append(out.Members, agent.SyncMember{Account: m.Account, Group: m.Group})
+	}
+	return out, nil
+}
+
 func telemetry(cfg *agent.Config) agent.Telemetry {
 	host, _ := os.Hostname()
 	return agent.Telemetry{Hostname: host, OS: runtime.GOOS, Version: agent.Version, AllowlistHash: cfg.AllowlistHash()}
@@ -133,7 +170,7 @@ func runAgent(cfg *agent.Config, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	r := &agent.Runner{Client: c, Telemetry: telemetry(cfg), Log: log,
-		Exec: &agent.Executor{Allow: cfg.Allow(), Creds: creds, New: ldapProber}}
+		Exec: &agent.Executor{Allow: cfg.Allow(), Creds: creds, New: ldapProber, NewSyncer: ldapSync}}
 	log.Info("tessera-agent started", "version", agent.Version, "server", cfg.ServerURL, "allowlist_hash", cfg.AllowlistHash())
 	return r.Run(ctx)
 }

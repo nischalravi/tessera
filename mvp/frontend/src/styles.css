@@ -863,6 +863,7 @@ html { scroll-padding-top: calc(var(--topbar-h) + 8px); }
   /* touch targets: at least 44 x 44 CSS px (WCAG 2.5.5 enhanced; Apple and Material guidance) */
   .btn, button.btn, .btn.sm, .tb-btn, .fchip, .seg button { min-height: 44px; }
   .btn, button.btn, .tb-btn { min-width: 44px; }
+  .fchip, .seg button { min-width: 44px; justify-content: center; } /* a short label ("All") stays 44 wide */
   .tabs [role="tab"], .tabs a { min-height: 44px; display: inline-flex; align-items: center; }
   .cmdbar .cmd { min-height: 44px; min-width: 44px; }
   .input, select.input, textarea.input { min-height: 44px; font-size: 16px; } /* 16px stops iOS zooming into the field */
@@ -907,6 +908,11 @@ html { scroll-padding-top: calc(var(--topbar-h) + 8px); }
 .claim-wrap { min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 24px 12px; background: var(--surface-2); color: var(--text); }
 .claim { width: 100%; max-width: 32rem; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-md); padding: 20px 16px; display: flex; flex-direction: column; gap: 14px; }
 .claim-brand { margin: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: .04em; }
+.brand-mark { display: inline-flex; align-items: center; gap: 10px; min-width: 0; font-weight: 600; }
+.brand-logo { max-width: 160px; max-height: 40px; width: auto; height: auto; object-fit: contain; }
+@media (max-width: 400px) { .brand-logo { max-width: 120px; } }
+.brand-preview { border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px; background: var(--bg); display: flex; flex-direction: column; gap: 10px; max-width: 360px; }
+label.btn:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
 .claim-h { margin: 0; font-size: 1.35rem; line-height: 1.25; }
 .claim-h:focus { outline: none; }
 .claim-h:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }

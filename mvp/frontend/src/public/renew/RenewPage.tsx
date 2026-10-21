@@ -11,6 +11,7 @@ import { requestRenewal } from "../../api";
 import { Button } from "../../components/Button";
 import { Callout } from "../../components/Feedback";
 import { t } from "../../i18n";
+import { usePublicBranding } from "../useBranding";
 import { ErrorAlert, PublicHeading, PublicShell } from "../PublicShell";
 import { tenantSlug } from "../claim/model";
 
@@ -23,6 +24,7 @@ export const renewalTokenFromHash = (hash: string): string => {
 
 export default function RenewPage() {
   const slug = tenantSlug(window.location.hostname, import.meta.env.VITE_TESSERA_TENANT as string | undefined);
+  const branding = usePublicBranding(slug);
   const token = useRef("");
   const [state, setState] = useState<"ready" | "sending" | "sent" | "error" | "nolink">("ready");
   const [error, setError] = useState("");
@@ -43,7 +45,7 @@ export default function RenewPage() {
     }
   };
   return (
-    <PublicShell titleKey="renew.title">
+    <PublicShell titleKey="renew.title" branding={branding}>
       <PublicHeading>{t("renew.title")}</PublicHeading>
       {state === "nolink" && <Callout tone="info">{t("renew.nolink")}</Callout>}
       {(state === "ready" || state === "sending" || state === "error") && (
