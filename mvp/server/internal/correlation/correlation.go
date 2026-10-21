@@ -170,24 +170,34 @@ type Decision struct {
 	Link     *store.AccountLink
 }
 
-// Link pins an account to an identity and applies it.
-func Link(tx *store.TenantTx, accountID, identityID int64, reason, actor string, now time.Time) (*Decision, error) {
+// CheckLink validates a pin of an account to an identity without applying it
+// (the four-eyes request step runs the same checks as the apply step).
+func CheckLink(tx *store.TenantTx, accountID, identityID int64, reason string) (*store.Account, *store.Identity, error) {
 	if err := checkReason(reason); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	a, err := account(tx, accountID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	i, err := identity(tx, identityID, "identity_not_found")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	switch {
 	case i.Status == store.IdentityStatusMerged:
-		return nil, refuse(409, "identity_merged", "the identity was merged into another; link to the survivor")
+		return nil, nil, refuse(409, "identity_merged", "the identity was merged into another; link to the survivor")
 	case a.Kind == "user" && i.Type != "human":
-		return nil, refuse(409, "type_mismatch", "a user account links only to a person")
+		return nil, nil, refuse(409, "type_mismatch", "a user account links only to a person")
+	}
+	return a, i, nil
+}
+
+// Link pins an account to an identity and applies it.
+func Link(tx *store.TenantTx, accountID, identityID int64, reason, actor string, now time.Time) (*Decision, error) {
+	a, i, err := CheckLink(tx, accountID, identityID, reason)
+	if err != nil {
+		return nil, err
 	}
 	return pin(tx, a, &store.AccountLink{AccountID: a.ID, Decision: store.LinkDecisionLink, IdentityID: &i.ID,
 		Reason: strings.TrimSpace(reason), DecidedBy: actor, DecidedAt: now})
@@ -226,18 +236,28 @@ func pin(tx *store.TenantTx, a *store.Account, l *store.AccountLink) (*Decision,
 	return &Decision{Account: a, Previous: prev, Link: l}, nil
 }
 
+// CheckRelease returns the account and the decision a release would remove,
+// or the refusal, without changing anything.
+func CheckRelease(tx *store.TenantTx, accountID int64) (*store.Account, *store.AccountLink, error) {
+	a, err := account(tx, accountID)
+	if err != nil {
+		return nil, nil, err
+	}
+	l, err := tx.AccountLink(a.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil, refuse(404, "no_decision", "the account has no correlation decision")
+	} else if err != nil {
+		return nil, nil, err
+	}
+	return a, l, nil
+}
+
 // Release removes an account's decision and gives it back the identity it
 // had before the first decision (the connector's mapping; the next sync
 // recomputes it anyway).
 func Release(tx *store.TenantTx, accountID int64) (*Decision, error) {
-	a, err := account(tx, accountID)
+	a, l, err := CheckRelease(tx, accountID)
 	if err != nil {
-		return nil, err
-	}
-	l, err := tx.AccountLink(a.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, refuse(404, "no_decision", "the account has no correlation decision")
-	} else if err != nil {
 		return nil, err
 	}
 	if err := tx.DeleteAccountLink(a.ID); err != nil {
