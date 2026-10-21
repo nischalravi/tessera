@@ -99,6 +99,10 @@ func (s *Server) putReviewType(_ http.ResponseWriter, r *http.Request, p *params
 		return nil, err
 	}
 	b.TypeSettings.Type = p.path["review_type"]
+	if b.OnIncomplete != reviews.IncompleteEscalate && b.EscalationDays == 0 {
+		// escalation_days only matters when an incomplete review escalates; keep and revoke store the default
+		b.EscalationDays = reviews.DefaultTypeSettings(b.Type).EscalationDays
+	}
 	tx := store.TxFrom(r.Context())
 	saved, ver, err := reviews.SaveType(tx, b.TypeSettings, b.Version, principal(r).Display, s.clock().UTC())
 	if err != nil {

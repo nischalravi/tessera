@@ -6,7 +6,12 @@ import { ALICE, settle } from "./helpers";
 // focus not obscured by the sticky top bar (2.4.11).
 test.use({ storageState: ALICE, reducedMotion: "reduce" });
 
-const ROUTES = ["/", "/inbox", "/access/request", "/directory/people", "/insights/risk", "/governance/reviews", "/admin/connections"];
+const ROUTES = [
+  "/", "/inbox", "/access/request", "/directory/people", "/insights/risk", "/governance/reviews", "/admin/connections",
+  // issue #420: the pages added since
+  "/governance/workflows", "/security/oauth-apps", "/admin/request-settings", "/admin/step-up", "/admin/sod-page",
+  "/governance/review-types", "/account/preferences", "/access/request/service-account",
+];
 
 const noHorizontalScroll = () => document.documentElement.scrollWidth <= window.innerWidth + 1;
 

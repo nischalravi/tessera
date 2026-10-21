@@ -32,10 +32,12 @@ async function focused(page: Page) {
 async function expectFocusVisible(page: Page) {
   const ring = await page.evaluate(() => {
     const a = document.activeElement as HTMLElement;
-    const s = getComputedStyle(a);
-    return (s.outlineStyle !== "none" && parseFloat(s.outlineWidth) > 0) || (s.boxShadow !== "none" && s.boxShadow !== "");
+    // the top bar's search box draws its ring on the surrounding box (:focus-within)
+    const s = getComputedStyle(a.closest(".search-trigger") ?? a);
+    const ok = (s.outlineStyle !== "none" && parseFloat(s.outlineWidth) > 0) || (s.boxShadow !== "none" && s.boxShadow !== "");
+    return ok ? "" : `${a.tagName.toLowerCase()}.${a.className} type=${a.getAttribute("type")} "${(a.getAttribute("aria-label") ?? a.innerText ?? "").slice(0, 40)}"`;
   });
-  expect(ring, "the focused element has no visible focus indicator").toBe(true);
+  expect(ring, "the focused element has no visible focus indicator").toBe("");
 }
 
 async function toasts(page: Page) {
@@ -139,3 +141,29 @@ test("dialogs trap focus and Escape closes them", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(palette).toBeHidden();
 });
+
+// The pages added since the first walkthrough (issue #420): Workflows, OAuth apps, the settings
+// pages, preferences and service-account requests. Tab through each: every stop shows a focus
+// indicator, focus stays on the page, and the content is reachable.
+for (const route of [
+  "/governance/workflows", "/security/oauth-apps", "/admin/request-settings", "/admin/step-up", "/admin/sod-page",
+  "/governance/review-types", "/account/preferences", "/access/request/service-account",
+]) {
+  test(`${route} is keyboard operable with a visible focus indicator`, async ({ page }) => {
+    await signInByKeyboard(page, "Alice");
+    await page.goto(route);
+    await expect(page.locator("main h1").first()).toBeVisible();
+    // the skip link moves focus to the content; Tab then walks the page's own controls until focus leaves it
+    await page.keyboard.press("Tab");
+    await page.getByRole("link", { name: /skip to content/i }).or(page.locator(":focus")).first().press("Enter");
+    expect(await page.evaluate(() => document.activeElement?.id), `${route}: the skip link did not reach the content`).toBe("main");
+    let inMain = 0;
+    for (let i = 0; i < 60; i++) {
+      await page.keyboard.press("Tab");
+      if (!(await page.evaluate(() => !!document.activeElement?.closest("main")))) break;
+      inMain++;
+      await expectFocusVisible(page);
+    }
+    expect(inMain, `${route}: no control in the page content is reachable by Tab`).toBeGreaterThan(0);
+  });
+}
