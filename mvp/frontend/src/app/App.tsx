@@ -29,6 +29,7 @@ const Home = named(() => import("../features/home/Home"), "Home");
 const Inbox = named(() => import("../features/inbox/Inbox"), "Inbox");
 const Notifications = named(() => import("../features/notifications/Notifications"), "Notifications");
 const RequestAccess = named(access, "RequestAccess");
+const ServiceAccountForm = named(access, "ServiceAccountForm");
 const MyAccess = named(access, "MyAccess");
 const Requests = named(access, "Requests");
 const JIT = named(access, "JIT");
@@ -191,6 +192,7 @@ export default function App() {
 
                     <Route path="/access" element={<Navigate to="/access/request" replace />} />
                     <Route path="/access/request" element={<RequestAccess />} />
+                    <Route path="/access/request/service-account" element={<ServiceAccountForm />} />
                     <Route path="/access/mine" element={<MyAccess />} />
                     <Route path="/access/requests" element={<Requests />} />
                     <Route path="/access/jit" element={<JIT />} />

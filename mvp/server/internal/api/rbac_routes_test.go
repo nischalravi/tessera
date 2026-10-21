@@ -199,6 +199,20 @@ GET    /api/questionnaires/{id}                      catalog.manage  -  # issue 
 PUT    /api/questionnaires/{id}                      catalog.manage  -  # issue #298
 POST   /api/questionnaires/{id}/retire               catalog.manage  -  # issue #298
 PUT    /api/questionnaires/{id}/attachments          catalog.manage  -  # issue #298
+GET    /api/workflows                                graph.read      -  # issue #298
+POST   /api/workflows                                workflows.manage STEP_UP_POLICY  # issue #298
+POST   /api/workflows/validate                       workflows.manage -  # issue #298
+GET    /api/workflows/{id}                           graph.read      -  # issue #298
+PUT    /api/workflows/{id}                           workflows.manage STEP_UP_POLICY  # issue #298
+POST   /api/workflows/{id}/retire                    workflows.manage STEP_UP_POLICY  # issue #298
+PUT    /api/workflows/{id}/assignments               workflows.manage STEP_UP_POLICY  # issue #298
+GET    /api/service-accounts                         requests.create -  # issue #298
+POST   /api/service-account-requests                 requests.create -  # issue #298
+GET    /api/service-account-requests                 requests.create -  # issue #298 (scope=all: requests.decide or graph.read)
+GET    /api/service-account-requests/{id}            requests.create -  # issue #298
+POST   /api/service-account-requests/{id}/approve    requests.create STEP_UP_POLICY  # issue #298 (the stage's approvers: checked in the handler)
+POST   /api/service-account-requests/{id}/deny       requests.create -  # issue #298
+POST   /api/service-account-requests/{id}/cancel     requests.create -  # issue #298
 POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
 GET    /api/requests                                 requests.create -  # issue #164 (scope=pending|all: requests.decide or graph.read)
 GET    /api/requests/{request_id}                    requests.create -  # issue #164

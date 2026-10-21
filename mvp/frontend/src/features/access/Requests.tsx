@@ -8,6 +8,7 @@ import {
 } from "../../components";
 import { Stages } from "./stages";
 import { AnswersView } from "./Answers";
+import { ServiceAccountRequestsSection } from "./ServiceAccountRequests";
 
 /**
  * Access requests (issue #164): your requests and the ones made for you, the approval queue for
@@ -55,6 +56,9 @@ export function Requests() {
       )}
       {(tab === "mine" || tab === "all" || (tab === "approvals" && decider)) && (
         <RoleRequests scope={tab === "approvals" ? "pending" : scope} onChange={rolesPending.reload} />
+      )}
+      {(tab === "mine" || tab === "all" || tab === "approvals") && (
+        <ServiceAccountRequestsSection scope={tab === "approvals" ? "pending" : scope} />
       )}
     </Page>
   );

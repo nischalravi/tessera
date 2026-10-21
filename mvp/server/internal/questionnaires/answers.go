@@ -32,8 +32,16 @@ func need(tx *store.TenantTx, kind, target string) (*Need, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	q, err := tx.Questionnaire(at.QuestionnaireID)
-	if err != nil {
+	return Current(tx, at.QuestionnaireID)
+}
+
+// Current returns an active questionnaire at its current version (nil: it is retired or does not
+// exist). A workflow's questionnaire step asks it by id (issue #298).
+func Current(tx *store.TenantTx, id string) (*Need, error) {
+	q, err := tx.Questionnaire(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	} else if err != nil {
 		return nil, err
 	}
 	if q.Status != "active" {

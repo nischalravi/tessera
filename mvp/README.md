@@ -582,7 +582,9 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
 `GET|PUT /api/sod/view-settings` (SoD page columns and filters; PUT: sod.manage + step-up) · `GET /api/review-types` · `PUT /api/review-types/{type}` (campaign configuration per review type; PUT: reviews.manage + step-up) · `GET|PUT /api/stepup-policy` (step-up per action; GET: admin.read, PUT: admin.change.request + STEP_UP_ADMIN) · `GET|PUT /api/me/preferences` (the caller's own time zone, date format, locale, landing page; auth.self) · `GET|PUT /api/orgs/{org_id}/settings` · `GET|PUT /api/org-hierarchy-source` (organization owners, policies and hierarchy source; PUT: catalog.manage + step-up) ·
-`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=|service_account_kind=&primary_owner_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`GET|POST /api/workflows` · `POST /api/workflows/validate` · `GET|PUT /api/workflows/{id}` · `POST /api/workflows/{id}/retire` · `PUT /api/workflows/{id}/assignments` (workflow designer; reads `graph.read`, writes `workflows.manage` + step-up, `validate` saves nothing) ·
+`GET /api/service-accounts` · `GET|POST /api/service-account-requests[?scope=mine|pending|all&status=]` · `GET /api/service-account-requests/{id}` · `POST /api/service-account-requests/{id}/approve|deny|cancel` (service-account requests: `requests.create`, approvers per stage as for access requests; approve needs step-up) ·
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?, answers?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
@@ -634,7 +636,9 @@ when a second reviewer is needed) ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
 `GET|PUT /api/sod/view-settings` (SoD page columns and filters; PUT: sod.manage + step-up) · `GET /api/review-types` · `PUT /api/review-types/{type}` (campaign configuration per review type; PUT: reviews.manage + step-up) · `GET|PUT /api/stepup-policy` (step-up per action; GET: admin.read, PUT: admin.change.request + STEP_UP_ADMIN) · `GET|PUT /api/me/preferences` (the caller's own time zone, date format, locale, landing page; auth.self) · `GET|PUT /api/orgs/{org_id}/settings` · `GET|PUT /api/org-hierarchy-source` (organization owners, policies and hierarchy source; PUT: catalog.manage + step-up) ·
-`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=|service_account_kind=&primary_owner_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`GET|POST /api/workflows` · `POST /api/workflows/validate` · `GET|PUT /api/workflows/{id}` · `POST /api/workflows/{id}/retire` · `PUT /api/workflows/{id}/assignments` (workflow designer; reads `graph.read`, writes `workflows.manage` + step-up, `validate` saves nothing) ·
+`GET /api/service-accounts` · `GET|POST /api/service-account-requests[?scope=mine|pending|all&status=]` · `GET /api/service-account-requests/{id}` · `POST /api/service-account-requests/{id}/approve|deny|cancel` (service-account requests: `requests.create`, approvers per stage as for access requests; approve needs step-up) ·
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?, answers?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
@@ -1622,7 +1626,7 @@ format, and opening the app at the root redirects once to the landing page. Audi
 tree stays derived from the HR data. On an organization's page: assigned owners (up to 5 active people; they
 replace the derived owners while one is active, and `organization_owner` reviews go to them), a default approval
 workflow (stages and escalation, used for a request line whose catalog item has no approval policy of its own,
-for beneficiaries in the organization) and request settings overrides that only tighten the tenant's
+for beneficiaries in the organization; a workflow from the designer, when one applies, routes first and this default is only the fallback) and request settings overrides that only tighten the tenant's
 (always require a justification, a longer minimum, a shorter default or maximum duration). On the list: the
 hierarchy source, which limits the tree to people ingested from one source (`system`). Only `hr_department` is
 available as the source kind. Audit actions `org.settings.update`, `org.hierarchy_source.update`. Needs `catalog.manage`.
@@ -1666,6 +1670,68 @@ available as the source kind. Audit actions `org.settings.update`, `org.hierarch
   answers JSON, listed under SOC 2 CC6.2, SOX ITGC-Provisioning and ISO A.5.18.
 - Not covered: onboarding (joiner) has no hook for a form (HRIS-driven, no person to answer); answers are not saved
   in request drafts; removal requests, JIT and SoD mitigation requests ask nothing.
+
+### Workflow designer and service-account requests
+
+**Governance → Workflows** (`/governance/workflows`, issue #298) holds configurable, versioned workflow definitions that
+route approvals; **Access → Request access → Service account** (`/access/request/service-account`) files requests to
+create, change or transfer a service account, approved through those workflows. Tables `workflows`, `workflow_versions`
+(append-only), `workflow_assignments` (schema `0480`), `service_account_requests` (`0481`), `workflow_runs` and
+`workflow_stages` (`0482`).
+
+- **Definition.** An ordered list of at most 20 steps, edited as a list (no canvas). Step types: `approval` (approver
+  `manager`, `owner`, `group` (a native group), `decider`, and for service accounts `old_owner` and `new_owner`; optional
+  `escalate_after_hours`, default 48), `questionnaire` (#397: the requester answers it when filing), `notify`
+  (requester, beneficiary, owner or a group), `wait` (holds the next approval that many hours), `condition` (attribute,
+  `eq|ne|in|not_in`, values, `then` and `else` step ids) and `provisioning`. A step runs the following step unless
+  `next` (or a condition's branch) names another step id or `end`. Condition attributes: access `risk`, `item`,
+  `privileged`, `system`, `requester_org`, `beneficiary_org`; service accounts `kind`, `system`, `requester_org`,
+  `owner_org`. A request without the attribute does not match.
+- **Validation** (`POST /api/workflows/validate` shows every issue; create and edit refuse with `422 invalid_workflow`
+  and `issues`): unique ids, every reference resolves, no cycle, every step reachable from the first, every path reaches
+  the end, at most 8 approvals on a path, and **four eyes kept**: every path has an approval, provisioning comes after an
+  approval on every path and only notices follow it, a questionnaire comes before the first approval, a wait is followed
+  by an approval. Who may decide a stage, and that nobody decides a request they made or two stages of one request, is
+  the existing approval routing's rule (#165), not the definition's. Questionnaires and groups it names must exist.
+- **Versions and assignment.** `PUT /api/workflows/{id} {version, name, description, steps}` appends the next version
+  (`409 version_conflict` if the caller read an older one); a request keeps the version it started with. A workflow is
+  assigned (`PUT .../assignments {targets:[{kind,target_id}]}`) to catalog items (`catalog_item`) and request types
+  (`request_type`: `access`, `service_account_create`, `service_account_change`, `service_account_transfer`), one
+  workflow per target (`409 target_taken`); an item's own workflow wins over the `access` one. A transfer workflow must ask
+  `old_owner` and `new_owner` on every path (`422 transfer_needs_both_owners`). Retiring removes the assignments.
+  Create, edit, retire and assign need `workflows.manage` (policy admin) and a fresh phishing-resistant sign-in and are
+  audited (`workflow.create|update|retire|assign`, with the definition's SHA-256).
+- **Engine, access requests.** An item with no workflow is routed by its approval policy exactly as before. With one,
+  `Submit` resolves the path the conditions select for the line's attributes, copies it into the same
+  `access_request_stages` (an owner stage with an assignee, or a group, is the approver; a wait opens the stage later),
+  and keeps the plan in `workflow_runs`. Delegation, escalation to deciders, four eyes, notifications and the audit trail
+  are the existing ones. A group stage is decided by an effective member of the native group; deciders after
+  escalation; delegations do not apply to group stages. `notify` steps fire when the request is filed or after the stage
+  they follow is approved (kind *Workflow notices*); `provisioning` asks the provisioning engine for an
+  `add_entitlement` after the last approval when the target has write-back on (otherwise the grant lives in Tessera, as
+  before). A held stage is not announced when it opens (there is no scheduler for it); it shows in the inbox.
+- **Service-account requests.** `POST /api/service-account-requests {kind, identity_id?, name?, system?, username?,
+  purpose?, description?, primary_owner_id?, backup_owner_id?, justification, answers?}`. Owners are mandatory (#179,
+  #167): a primary and a backup, both active people, different people (`422 primary_owner_required`,
+  `backup_owner_required`, `same_owner`, `409 *_owner_not_active`). A create names both and the application and account
+  name; a change keeps the primary owner and changes the purpose or the backup; a transfer names the new primary
+  (the backup stays unless given). One open request per account (`409 request_open`). Default routing (no workflow
+  assigned): create asks the new owner then a decider; change the current owner then a decider; transfer the **old owner,
+  the new owner, then a decider**. A stage whose owner is the requester is approved by the request itself, and the
+  request is refused (`409 needs_another_approver`) if no other approval would remain. The last approval makes the
+  change: a create makes the `service` identity, its ownership (`ownership.set` is audited) and its account; a change or
+  transfer writes the ownership and the identity's owner. Provisioning goes through the existing engine: a create queues
+  `create_account` and the request stays *approved* until the target confirms it (a completion makes the account row
+  and marks it fulfilled); a change or transfer queues `update_account` (`description` or `owner` attribute) per active
+  account. With no write-back the change is made in Tessera at once. Audit: `service_account.request.submit|stage.approve|
+  approve|deny|cancel|fulfill`. Visible to the requester, the owners named, deciders, graph readers (as the tenant's
+  history setting allows) and the stage's approvers. UI: the request form (with the questions its workflow asks), a
+  *Service-account requests* section on Access → My requests (mine, waiting for me, all) and a detail panel with the owners,
+  the stages, the answers and approve, deny and cancel.
+- Not covered: workflows for review campaigns, joiner/mover/leaver, JIT, removal and role requests (only access lines and
+  service-account requests); a wait does not email the approvers when it ends; no parallel approvals or loops (the
+  path is chosen once, when the request is filed); a service-account request keeps no draft; the conditions test
+  request attributes only (not the beneficiary's other access).
 
 ### Contractors, guests and end dates
 
@@ -3736,7 +3802,7 @@ the right. Arrow keys move between items.
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles (with a *Mining* tab), Organizations (live, read-only, derived from departments) |
-| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
+| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle*, *Questionnaires* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*, *Request settings*, *Step-up per action* and *SoD page*) |
 
@@ -3830,7 +3896,7 @@ back a step and `Esc` to close. `/` focuses the top-bar search.
 | Directory > Organizations | `GET /api/orgs`, `GET /api/orgs/{org_id}`, `GET|PUT /api/orgs/{org_id}/settings`, `GET|PUT /api/org-hierarchy-source` | The tree is derived: a root and one organization per department. Owners are assigned on the organization, else the active people at the top of a department's reporting lines who lead others in it. Policies and the hierarchy source are set on the page (see *Configurable settings*). No cost centers (the HR data has none). |
 | Home recent activity | `GET /api/activity` | The signed-in user's own audit events (action, target, outcome, time; no detail). "Your recent requests" reads real request lines. |
 
-**Preview features.** Some screens have no backend endpoint yet: workflows, reset password, generic
+**Preview features.** Some screens have no backend endpoint yet: reset password, generic
 object create / edit / import (accounts, machine identities, rotate secret) and most admin settings
 (Export / import configuration; Identity rules, Branding & labels and Certificates are live, see "Certificates, branding and identity rules"). They run on typed mock data in `src/mocks/`, keep their state in the
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to

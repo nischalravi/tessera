@@ -13,6 +13,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/workflow"
 )
 
 // The access request service (issue #164):
@@ -159,6 +160,8 @@ type lineView struct {
 	// Questionnaires are the requester's answers (issue #298), with the questions as asked.
 	Questionnaires []questionnaires.Answered `json:"questionnaires,omitempty"`
 	Stages         []stageView               `json:"stages"`
+	// Workflow is the workflow that routed the line (issue #298); nil: its item's approval policy did.
+	Workflow *workflowRef `json:"workflow,omitempty"`
 	// What the signed-in user may do with the line (the API checks again).
 	CanApprove bool `json:"can_approve"`
 	CanCancel  bool `json:"can_cancel"`
@@ -166,8 +169,11 @@ type lineView struct {
 }
 
 type stageView struct {
-	Index      int        `json:"index"`
-	Kind       string     `json:"kind"`
+	Index int    `json:"index"`
+	Kind  string `json:"kind"`
+	// Label names the step of the workflow that made the stage (issue #298); empty for a policy stage.
+	Label      string     `json:"label,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"` // a workflow wait can hold a stage: it opens at this time
 	Status     string     `json:"status"`
 	Assignee   *personRef `json:"assignee"`
 	DueAt      *time.Time `json:"due_at"`
@@ -302,9 +308,26 @@ func (s *Server) lineView(r *http.Request, v *viewer, l *store.RequestLine, me r
 		return out, err
 	}
 	out.Stages = make([]stageView, 0, len(stages))
+	plan, err := workflow.PlanFor(v.tx, store.WFSubjectAccessLine, l.ID)
+	if err != nil {
+		return out, err
+	}
+	if plan != nil {
+		name, ver, err := workflow.Names(v.tx, store.WFSubjectAccessLine, l.ID)
+		if err != nil {
+			return out, err
+		}
+		out.Workflow = &workflowRef{plan.Workflow, name, ver}
+	}
 	for _, st := range stages {
 		sv := stageView{Index: st.Idx, Kind: st.Kind, Status: st.Status, DueAt: st.DueAt, DecidedAt: st.DecidedAt, Reason: st.Reason,
 			Escalated: st.Status == store.StageWaiting && st.DueAt != nil && !s.clock().Before(*st.DueAt)}
+		if sp := plan.StageAt(st.Idx); sp != nil {
+			sv.Label = sp.Label
+			if sp.HoldHours > 0 {
+				sv.StartedAt = st.StartedAt
+			}
+		}
 		if st.AssigneeID != nil {
 			p, err := v.person(*st.AssigneeID)
 			if err != nil {

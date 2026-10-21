@@ -1,12 +1,4 @@
-import type { AdminSection, Workflow } from "./types";
-
-export const WORKFLOWS: Workflow[] = [
-  { id: "wf-low", name: "Low-risk request", trigger: "Access request, risk low", steps: ["Manager approves", "Auto-provision", "Verify by re-aggregation"], appliesTo: "Non-privileged groups and roles", enabled: true, sla: "2 business days" },
-  { id: "wf-priv", name: "Privileged request", trigger: "Access request, privileged or high risk", steps: ["Manager approves", "Resource owner approves", "Security approves", "Time-bound grant (JIT)"], appliesTo: "Privileged roles, prod, PII", enabled: true, sla: "4 hours" },
-  { id: "wf-sod", name: "SoD exception", trigger: "Request introduces an SoD conflict", steps: ["Risk owner accepts", "Select mitigating control", "Set expiry"], appliesTo: "SoD policies", enabled: true, sla: "3 business days" },
-  { id: "wf-mover", name: "Mover micro-review", trigger: "HRIS mover event", steps: ["New manager reviews retained access", "Remove unreviewed after 14 days"], appliesTo: "All movers", enabled: false, sla: "14 days" },
-  { id: "wf-owner", name: "Machine identity owner change", trigger: "Owner leaves or changes team", steps: ["Reassign owner", "Rotate secrets", "Owner certifies scopes"], appliesTo: "Service accounts and AI agents", enabled: true, sla: "5 business days" },
-];
+import type { AdminSection } from "./types";
 
 export const ADMIN_SECTIONS: AdminSection[] = [
   { id: "connections", title: "Connections & integrations", icon: "Plug", summary: "Source and target systems, sync status and connector health.", will: ["Add a connector (Okta, AWS, GitHub, Snowflake, Workday, SCIM, CSV)", "Schedule full and delta syncs", "Show per-connector record counts and last run"], keywords: ["connector", "okta", "aws", "github", "snowflake", "workday", "sync", "scim", "endpoint"], live: true },
