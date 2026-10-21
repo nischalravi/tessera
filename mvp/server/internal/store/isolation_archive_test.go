@@ -97,7 +97,7 @@ func TestIsolation_RetentionAndArchive(t *testing.T) {
 			t.Errorf("ArchiveDelete(A's campaign) = %v", err)
 		}
 		// B has no verified audit segment, so even its own events cannot go
-		if err := c.PurgeArchivedAudit(1 << 40); err == nil {
+		if err := c.PurgeArchivedAudit("seg-a"); err == nil {
 			t.Error("PurgeArchivedAudit without a verified segment succeeded")
 		}
 		return nil

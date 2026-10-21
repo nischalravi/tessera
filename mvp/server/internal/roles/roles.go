@@ -1364,8 +1364,12 @@ func Approve(tx *store.TenantTx, id, reason string, by Actor, now time.Time) (*s
 	if err != nil {
 		return nil, nil, err
 	}
+	own, err := tx.SameActor(q.RequestedBy, by.UserID.String())
+	if err != nil {
+		return nil, nil, err
+	}
 	switch {
-	case q.RequestedBy == by.UserID.String():
+	case own:
 		return nil, nil, refuse(403, "self_approval", "you cannot approve a request you made")
 	case by.IdentityID != nil && *by.IdentityID == q.BeneficiaryID:
 		return nil, nil, refuse(403, "self_approval", "you cannot approve access for yourself")

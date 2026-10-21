@@ -332,7 +332,9 @@ func Approve(tx *store.TenantTx, requestID string, actor Actor, now time.Time) (
 	if q.Status != store.MergeReqPending {
 		return nil, refuse(409, "request_decided", "the request was already decided")
 	}
-	if q.RequestedBy == actor.UserID {
+	if same, err := tx.SameActor(q.RequestedBy, actor.UserID); err != nil {
+		return nil, err
+	} else if same {
 		return nil, refuse(403, "second_reviewer_required", "a different reviewer must approve; you asked for this change")
 	}
 	in := Input{MergedID: q.MergedID, SurvivorID: q.SurvivorID, Reason: q.Reason, Basis: BasisReviewer}

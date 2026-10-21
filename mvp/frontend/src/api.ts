@@ -3715,9 +3715,10 @@ export interface QueueSchedule {
   name: string; kind: string; spec: string; enabled: boolean; max_attempts: number; next_run_at: string; last_enqueued_at: string | null;
 }
 
-/** A queue worker as one tenant sees it (issue #302): a `tessera worker` or an API process running queue kinds. */
+/** A queue worker as one tenant sees it (issue #302): a `tessera worker` or an API process running queue kinds.
+ * `worker_id` is an opaque label; workers are shared, so there is no host name, PID or build (issue #403). */
 export interface QueueWorker {
-  worker_id: string; mode: "worker" | "api"; status: "healthy" | "stale"; hostname: string; pid: number; version: string;
+  worker_id: string; mode: "worker" | "api"; status: "healthy" | "stale";
   kinds: string[]; concurrency: number; running: number; started_at: string; last_heartbeat_at: string; lag_seconds: number;
 }
 

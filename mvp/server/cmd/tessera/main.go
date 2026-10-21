@@ -8,6 +8,7 @@
 //	tessera groups policy validate [-dir path]   check the policy group files (*.cedar) offline (see groups.go)
 //	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
 //	tessera notify seal-password             seal an SMTP password (stdin) for TESSERA_SMTP_PASSWORD_SEALED
+//	tessera archive seal-token               seal the archive store bearer token (stdin) for TESSERA_ARCHIVE_TOKEN_SEALED
 //	tessera admin create-tenant|add-idp|invite-admin   operator bootstrap of a tenant (see admin.go)
 //	tessera catalog refresh|compile   fetch and compile the AWS action catalog (see catalog.go)
 //	tessera admin gen-rls [-out path] [-check]   render the Postgres row-level-security file (see genrls.go)
@@ -163,6 +164,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	if cmd == "backup" {
 		return backupCmd(ctx, args, stdout, stderr)
+	}
+	if cmd == "archive" {
+		return archiveCmd(ctx, args, stdout, stderr)
 	}
 	if cmd == "notify" {
 		return notifyCmd(ctx, args, stdout, stderr)

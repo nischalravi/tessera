@@ -339,8 +339,19 @@ func TestArchiveSettings(t *testing.T) {
 		t.Error("an http archive URL is accepted in prod")
 	}
 	prod["TESSERA_ARCHIVE_URL"] = "https://objects.example.com/archive"
+	if _, err := config.Load(env(prod)); err == nil || !strings.Contains(err.Error(), "TESSERA_ARCHIVE_TOKEN_SEALED") {
+		t.Errorf("an archive URL without credentials is accepted in prod: %v", err)
+	}
+	prod["TESSERA_ARCHIVE_TOKEN_SEALED"] = "%%%"
+	if _, err := config.Load(env(prod)); err == nil {
+		t.Error("a non-base64 sealed token is accepted")
+	}
+	prod["TESSERA_ARCHIVE_TOKEN_SEALED"] = "c2VhbGVk"
 	if p, err := config.Load(env(prod)); err != nil || p.ArchiveURL != "https://objects.example.com/archive" {
-		t.Errorf("an https archive URL in prod: %v", err)
+		t.Errorf("an https archive URL with a token in prod: %v", err)
+	}
+	if _, err := config.Load(env(map[string]string{"TESSERA_ARCHIVE_TOKEN_SEALED": "c2VhbGVk"})); err == nil {
+		t.Error("a token without an archive URL is accepted")
 	}
 }
 
