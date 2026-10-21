@@ -259,6 +259,14 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 		if err := set.checkForOthers(ben, by, forOthers); err != nil {
 			return "", nil, err
 		}
+		// the beneficiary's organization can tighten the tenant's settings (issue #298)
+		bset, err := set.forBeneficiary(tx, ben)
+		if err != nil {
+			return "", nil, err
+		}
+		if err := bset.checkJustification(just); err != nil {
+			return "", nil, err
+		}
 		if ben.Status != "active" {
 			return "", nil, refuse(409, "beneficiary_not_active", "%s is not active", ben.Name)
 		}
@@ -268,7 +276,7 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 				continue
 			}
 			seen[k] = true
-			l, err := line(tx, batch, ben, iid, s.DurationHours, just, by, set, now)
+			l, err := line(tx, batch, ben, iid, s.DurationHours, just, by, bset, now)
 			if err != nil {
 				return "", nil, err
 			}

@@ -5,6 +5,7 @@ import { Network, Pencil, RefreshCw, Settings, ShoppingCart, Timer } from "lucid
 import { AccountRow, ConnectorRow, Group, OrgDetail, ResourceRow, RolesView, api, orgPath, relTime, useApi } from "../../api";
 import { Badge, Button, Callout, Chip, EmptyState, IdLink, Loading, Page, Status, useToast } from "../../components";
 import { PreviewFormDrawer } from "./shared";
+import { OrgSettingsPanel } from "./orgSettings";
 
 function ObjectHead({ icon, meta, actions }: { icon?: ReactNode; meta: ReactNode; actions: ReactNode }) {
   return (
@@ -181,7 +182,7 @@ export function OrgPage() {
   return (
     <Page title={org.name} crumbs={[["Identity"], ["Organizations", "/directory/orgs"], [org.name]]}>
       <ObjectHead
-        meta={<div className="row"><span>Owners {org.owners.length ? org.owners.map((o) => o.name).join(", ") : "none found"}</span>{org.parent && <span>Part of <Link to={`/directory/orgs/${org.parent.id}`}>{org.parent.name}</Link></span>}</div>}
+        meta={<div className="row"><span>Owners {org.owners.length ? org.owners.map((o) => o.name).join(", ") : "none found"}{org.owners.length > 0 && <span className="faint"> ({org.owners_source})</span>}</span>{org.parent && <span>Part of <Link to={`/directory/orgs/${org.parent.id}`}>{org.parent.name}</Link></span>}</div>}
         actions={
           <Button size="sm" variant="primary" icon={<ShoppingCart size={14} />} disabled={!active.length} onClick={() => nav(`/access/request?for=${active.map((m) => m.id).join(",")}`)}>Request access for everyone</Button>
         }
@@ -209,7 +210,8 @@ export function OrgPage() {
           </div>
         )}
       </div>
-      <div className="mt"><Callout tone="neutral">Organizations are derived from the HR source's departments and managers. They are read-only here.</Callout></div>
+      <OrgSettingsPanel org={org} onChanged={reload} />
+      <div className="mt"><Callout tone="neutral">The organizations and their people come from the HR source's departments and managers. Owners and policies are set above.</Callout></div>
     </Page>
   );
 }

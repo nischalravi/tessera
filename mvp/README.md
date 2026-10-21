@@ -585,6 +585,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/provisioning/findings[?status=open|resolved]` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
+`GET|PUT /api/sod/view-settings` (SoD page columns and filters; PUT: sod.manage + step-up) · `GET /api/review-types` · `PUT /api/review-types/{type}` (campaign configuration per review type; PUT: reviews.manage + step-up) · `GET|PUT /api/stepup-policy` (step-up per action; GET: admin.read, PUT: admin.change.request + STEP_UP_ADMIN) · `GET|PUT /api/me/preferences` (the caller's own time zone, date format, locale, landing page; auth.self) · `GET|PUT /api/orgs/{org_id}/settings` · `GET|PUT /api/org-hierarchy-source` (organization owners, policies and hierarchy source; PUT: catalog.manage + step-up) ·
 `GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=|service_account_kind=&primary_owner_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
 `GET|POST /api/workflows` · `POST /api/workflows/validate` · `GET|PUT /api/workflows/{id}` · `POST /api/workflows/{id}/retire` · `PUT /api/workflows/{id}/assignments` (workflow designer; reads `graph.read`, writes `workflows.manage` + step-up, `validate` saves nothing) ·
 `GET /api/service-accounts` · `GET|POST /api/service-account-requests[?scope=mine|pending|all&status=]` · `GET /api/service-account-requests/{id}` · `POST /api/service-account-requests/{id}/approve|deny|cancel` (service-account requests: `requests.create`, approvers per stage as for access requests; approve needs step-up) ·
@@ -638,6 +639,7 @@ when a second reviewer is needed) ·
 `POST /api/affiliations/{id}/end {reason}` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
+`GET|PUT /api/sod/view-settings` (SoD page columns and filters; PUT: sod.manage + step-up) · `GET /api/review-types` · `PUT /api/review-types/{type}` (campaign configuration per review type; PUT: reviews.manage + step-up) · `GET|PUT /api/stepup-policy` (step-up per action; GET: admin.read, PUT: admin.change.request + STEP_UP_ADMIN) · `GET|PUT /api/me/preferences` (the caller's own time zone, date format, locale, landing page; auth.self) · `GET|PUT /api/orgs/{org_id}/settings` · `GET|PUT /api/org-hierarchy-source` (organization owners, policies and hierarchy source; PUT: catalog.manage + step-up) ·
 `GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=|service_account_kind=&primary_owner_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
 `GET|POST /api/workflows` · `POST /api/workflows/validate` · `GET|PUT /api/workflows/{id}` · `POST /api/workflows/{id}/retire` · `PUT /api/workflows/{id}/assignments` (workflow designer; reads `graph.read`, writes `workflows.manage` + step-up, `validate` saves nothing) ·
 `GET /api/service-accounts` · `GET|POST /api/service-account-requests[?scope=mine|pending|all&status=]` · `GET /api/service-account-requests/{id}` · `POST /api/service-account-requests/{id}/approve|deny|cancel` (service-account requests: `requests.create`, approvers per stage as for access requests; approve needs step-up) ·
@@ -1581,6 +1583,64 @@ cannot bypass them:
 | `attachments_allowed` | off | `attachments` on `POST /api/requests`: `422 attachments_not_allowed`. An attachment is a reference (a link or ticket id, at most 5); Tessera stores no files, the references are in the `request.submit` audit event |
 | `history_visibility` | `readers` | `involved`: graph readers no longer see other people's requests (the people on a request, its approvers and deciders still do) |
 | `for_others` | `permission` | `nobody`, `managers` (the beneficiary's manager only) or `permission` (`requests.create_for_others`): `403 for_others_not_allowed`. Business-role requests (`/api/role-requests`) are not covered |
+
+### Configurable settings (issue #298)
+
+Five more tenant settings that were fixed in code, each in its own table (schema `0490` to `0495`), each
+versioned (`409 version_conflict` on a stale version), validated at the API boundary, scoped to the tenant,
+and audited in the same transaction with the values they replaced.
+
+**SoD page** (Admin → SoD page, `sod_view_settings`). Which of risk, function, entitlement, ruleset, mitigating
+control and business process the SoD conflicts page shows as columns and as filters. No row means all of them.
+The conflicts page reads `GET /api/sod/view-settings` and shows exactly those next to the always-shown person,
+priority, system and status. It is a display choice, not an access control: `GET /api/sod/violations` is
+unchanged. Audit action `sod.view.update`.
+
+**Review types** (Governance → Review types, `review_type_settings`, `review_template_types`). Types:
+`user_manager`, `application_owner`, `entitlement_owner`, `role_owner`, `organization_owner`,
+`service_account`. Each has `reviewer_source` (`owner`, `owner_or_backup`, `fixed` + `reviewer_id`), a
+`fallback_reviewer_id` for grants whose owner cannot be reached (no owner on record, or not active), and
+`on_incomplete` for items undecided at the due date: `revoke` (what every review did before), `escalate` (to the
+fallback for `escalation_days`, then revoke) or `keep` (leave the access, close the review incomplete; the
+`review.close` event records `kept`). Owners come from the ownership model (#167): the application's owner by
+the grant's system, the entitlement's by group or resource id, the machine identity's owner, the role's owner
+for memberships (a `role_owner` schedule with no roles picked reviews every active role), an organization's
+owners (assigned, else derived). A review schedule runs as a type through `review_type` on
+`/api/reviews/schedules`: `reviews.GenerateScopedCampaign` then picks reviewers with the type's resolver
+(falling back to the original reviewer when nobody is reachable), `user_manager` covers people and
+`service_account` covers machine identities only, and the type's `on_incomplete` replaces the schedule's own
+close-out. A turned-off type cannot be chosen and a schedule already on it is skipped (`review.schedule.skipped`).
+Audit action `review.type.update`.
+
+**Step-up per action** (Admin → Step-up per action, `stepup_policy`). The code's `needStepUp` declarations are
+the floor. `GET /api/stepup-policy` lists the actions (a permission with a state-changing route), the floor the
+code requires, the tenant's entry and the effective result. `PUT` takes `{version, entries: {permission: {acr,
+max_age_s}}}` with `acr` one of the multi-factor, phishing-resistant or device-bound ACRs and `max_age_s` 60 to
+3600. The requirement a route is held to is the stricter of its own and the entry (`AuthnRequirement.Merge`), so
+an admin can add step-up to an action that has none or tighten one and never remove or weaken it:
+an entry below the floor is `422 weaker_than_required`, and the lookup keeps the floor even if one got stored. Only
+state-changing calls are covered (never reads, never `auth.self`, never the computed-answer POSTs), and a machine
+client cannot step up, so an action with an entry refuses it (`interactive_authentication_required`). The
+policy's own routes are exempt, so it cannot lock its admins out. Changing it needs `admin.change.request` and a
+fresh phishing-resistant sign-in within five minutes. `TESSERA_STEPUP_ALLOW_WEAKER=true` (dev and test only,
+default false) lets an entry replace the floor; **production refuses to start with it set**. Admin routes in
+`internal/admin` and the device-approval route check their (already strictest) requirement directly and are not
+covered by the tenant policy. Audit action `stepup.policy.update`.
+
+**User preferences** (My account → Preferences, `user_preferences`). `GET|PUT /api/me/preferences` act on the
+caller's own row only: `time_zone` (an IANA name), `date_format` (`iso`, `dmy`, `mdy`, `long`), `locale` (a fixed
+list) and `landing_page` (a path from the server's list, so it cannot be an open redirect). Empty is the default.
+The UI loads them before it renders (`PrefsGate`): `fmtDate` and `fmtDay` show every date in the user's zone and
+format, and opening the app at the root redirects once to the landing page. Audit action `user.preferences.update`.
+
+**Organization settings** (Directory → Organizations, `org_owners`, `org_settings`, `org_hierarchy_source`). The
+tree stays derived from the HR data. On an organization's page: assigned owners (up to 5 active people; they
+replace the derived owners while one is active, and `organization_owner` reviews go to them), a default approval
+workflow (stages and escalation, used for a request line whose catalog item has no approval policy of its own,
+for beneficiaries in the organization; a workflow from the designer, when one applies, routes first and this default is only the fallback) and request settings overrides that only tighten the tenant's
+(always require a justification, a longer minimum, a shorter default or maximum duration). On the list: the
+hierarchy source, which limits the tree to people ingested from one source (`system`). Only `hr_department` is
+available as the source kind. Audit actions `org.settings.update`, `org.hierarchy_source.update`. Needs `catalog.manage`.
 
 ### Questionnaires
 
@@ -3823,7 +3883,7 @@ the right. Arrow keys move between items.
 | **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles (with a *Mining* tab), Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle*, *Questionnaires* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities* and *Request settings*) |
+| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*, *Request settings*, *Step-up per action* and *SoD page*) |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
@@ -3912,7 +3972,7 @@ back a step and `Esc` to close. `/` focuses the top-bar search.
 | Identity Disable / Enable (identity page, panel, bulk, palette) | `POST /api/identities/{id}/disable`, `.../enable`, `GET .../disables` | `identities.contain` and a fresh phishing-resistant sign-in. Disable runs the kill switch's containment (revoke sessions, tokens, OAuth grants at connected providers), then sets the active accounts and the identity to disabled in one audited transaction (`identity.disable`). A failed provider step is retried and reported. Tessera does not suspend the account inside the provider. Any Tessera user linked to the identity is signed out in the same transaction (sessions revoked with reason `identity_disabled`, counted in the event) and refused at sign-in, step-up and on every request while the identity is not active (disabled, terminated or merged: the check allows only `active`, #331). A leaver (any path that terminates the identity) revokes the linked users' sessions in the same transaction (reason `identity_terminated`); Enable cannot bring back a terminated identity, and its open disable record stays open. Disable is refused (403 `self_disable_not_allowed`, `identity.disable.refused`) for the identity linked to the caller's own user (#335). Enable (`identity.enable`) sets back only the accounts Disable disabled and that are still disabled. Enable is refused (403, `identity.enable.refused`) for a user linked to the identity (`self_enable_not_allowed`) and, when the identity is linked to a Tessera user, for the admin who disabled it (`four_eyes_required`: a second admin enables it). It cannot restore revoked sessions and grants, and says so. No Undo. |
 | My access > Request removal | `POST /api/removal-requests`, `GET ?scope=mine\|approvals\|pending\|all`, `.../{id}/approve\|deny\|cancel` | Shows in My requests and the approver's Inbox (the person's manager, a delegate, or `requests.decide`). Approval needs step-up and removes the grant (through `requests.Remove` when an approved request granted it, else a revoked grant with a tombstone). Just-in-time and role-held grants are refused. |
 | Request access drafts | `GET/POST /api/request-drafts`, `GET/PUT/DELETE .../{id}` | Private to the user, at most 50, checked for existence but never against policy. A draft never submits itself. |
-| Directory > Organizations | `GET /api/orgs`, `GET /api/orgs/{org_id}` | Read-only and derived: a root and one organization per department. Owners are the active people at the top of a department's reporting lines who lead others in it. No cost centers (the HR data has none). |
+| Directory > Organizations | `GET /api/orgs`, `GET /api/orgs/{org_id}`, `GET|PUT /api/orgs/{org_id}/settings`, `GET|PUT /api/org-hierarchy-source` | The tree is derived: a root and one organization per department. Owners are assigned on the organization, else the active people at the top of a department's reporting lines who lead others in it. Policies and the hierarchy source are set on the page (see *Configurable settings*). No cost centers (the HR data has none). |
 | Home recent activity | `GET /api/activity` | The signed-in user's own audit events (action, target, outcome, time; no detail). "Your recent requests" reads real request lines. |
 
 **Preview features.** Some screens have no backend endpoint yet: reset password, generic

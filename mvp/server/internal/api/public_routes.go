@@ -26,6 +26,11 @@ type Route struct {
 	// that denies the admin's own network must not lock the admin out of
 	// fixing it.
 	NoConditionalAccess bool
+	// NoTenantStepUp exempts a route from the tenant's step-up policy (still its
+	// own permission and step-up). Only the policy's own routes set it: a policy
+	// that demands more than its admins can present must not lock them out of
+	// fixing it.
+	NoTenantStepUp bool
 }
 
 // publicRoute is the requirement of a route on the allow-list.

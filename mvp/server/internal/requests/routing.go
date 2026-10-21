@@ -11,6 +11,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/orgs"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/internal/workflow"
@@ -103,6 +104,21 @@ func startStages(tx *store.TenantTx, l *store.RequestLine, ben *store.Identity, 
 	kinds, hours, err := Policy(tx, it.ID)
 	if err != nil {
 		return err
+	}
+	// an item with no approval policy of its own follows the beneficiary's organization's default workflow (issue #298)
+	if _, perr := tx.ApprovalPolicy(it.ID); errors.Is(perr, store.ErrNotFound) {
+		op, err := orgs.PoliciesFor(tx, ben)
+		if err != nil {
+			return err
+		}
+		if op.DefaultStages != nil {
+			kinds = op.DefaultStages
+			if op.DefaultEscalateHours != nil {
+				hours = *op.DefaultEscalateHours
+			}
+		}
+	} else if perr != nil {
+		return perr
 	}
 	// a guest's request goes to their sponsor first (guest access, issue #75)
 	var sponsor *int64

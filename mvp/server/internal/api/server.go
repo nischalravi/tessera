@@ -16,6 +16,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
@@ -63,6 +64,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/ssf"
+	"github.com/nischalravi/tessera/mvp/server/internal/stepup"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -207,6 +209,9 @@ type Config struct {
 	// RotationFake admits the simulated rotation adapter
 	// (TESSERA_ROTATION_FAKE_ADAPTERS; config refuses it in prod).
 	RotationFake bool
+	// StepUpAllowWeaker lets a tenant step-up policy weaken the code's own
+	// requirements (config.StepUpAllowWeaker; never in prod).
+	StepUpAllowWeaker bool
 	// RotationNotifier tells secret owners about rotations; nil: the audit-event notifier.
 	RotationNotifier rotation.Notifier
 	// Containment runs the kill switch's provider calls (revoke sessions and
@@ -264,9 +269,13 @@ type Server struct {
 	clock  timeutil.Clock
 	log    *slog.Logger
 	routes []*route
-	authn  *auth.Authenticator
-	limits *limiters
-	guests *sponsorship.Service
+	// stepUps is the catalog of actions the tenant step-up policy may name,
+	// built from the routes on first use (stepup_policy.go).
+	stepUps     stepup.Catalog
+	stepUpsOnce sync.Once
+	authn       *auth.Authenticator
+	limits      *limiters
+	guests      *sponsorship.Service
 	// guestLife runs the guest lifecycle: reminders, transfer tasks, conversion, deprovisioning (issue #74)
 	guestLife *guestlife.Service
 
@@ -489,6 +498,11 @@ func New(cfg Config) *Server {
 	s.registerWorkflowRoutes()
 	s.registerServiceAccountRoutes()
 	s.registerOrgRoutes()
+	s.registerOrgSettingsRoutes()
+	s.registerSodViewRoutes()
+	s.registerReviewTypeRoutes()
+	s.registerStepUpPolicyRoutes()
+	s.registerPreferenceRoutes()
 	s.registerActivityRoutes()
 	s.registerRoleRoutes()
 	s.registerRoleMiningRoutes()

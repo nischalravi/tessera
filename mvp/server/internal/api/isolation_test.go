@@ -418,6 +418,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/admin/") {
 			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/orgs/{org_id}/") || rt.Pattern == "/api/review-types/{review_type}" {
+			continue // TestSettingsAPI_CrossTenant (derived ids and type names, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/oauth-apps/") {
 			continue // TestOAuthAppsAPI (UUIDs, not fixture ids: tenant B gets 404 on A's app and grants)
 		}
@@ -564,6 +567,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if (strings.HasPrefix(path, "/api/groups/") || path == "/scim/v2/Groups/{id}") && strings.Contains(path, "{") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
+		}
+		if path == "/api/orgs/{org_id}/settings" {
+			continue // TestSettingsAPI_CrossTenant (derived ids, not fixture ids)
 		}
 		if strings.HasPrefix(path, "/api/sod/") && strings.Contains(path, "{") {
 			continue // TestSodAPI_CrossTenant (UUIDs, not fixture ids)

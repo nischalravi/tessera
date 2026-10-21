@@ -96,7 +96,12 @@ type Config struct {
 	ConnectorSyncSchedule string
 	// RotationFakeAdapters admits the simulated secret-rotation adapter
 	// (TESSERA_ROTATION_FAKE_ADAPTERS; dev and test only).
-	RotationFakeAdapters   bool
+	RotationFakeAdapters bool
+	// StepUpAllowWeaker lets a tenant's step-up policy replace the code's own
+	// step-up requirements with weaker ones (TESSERA_STEPUP_ALLOW_WEAKER; off by
+	// default, a dev convenience for an IdP that cannot do the stronger methods).
+	// Without it a policy can only add or strengthen step-up. Refused in prod.
+	StepUpAllowWeaker      bool
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
@@ -307,6 +312,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.CORSOrigins = corsOrigins(getenv("TESSERA_CORS_ORIGINS"), getenv("UI_PORT"), prod)
 	c.OutboundAllowLoopback = boolean("TESSERA_OUTBOUND_ALLOW_LOOPBACK", true, false)
 	c.RotationFakeAdapters = boolean("TESSERA_ROTATION_FAKE_ADAPTERS", true, false)
+	c.StepUpAllowWeaker = boolean("TESSERA_STEPUP_ALLOW_WEAKER", false, false)
 	// dev default: var/audit-anchors.jsonl next to the database (AnchorURL)
 	c.SafedialAllow = strings.TrimSpace(getenv("TESSERA_SAFEDIAL_ALLOW"))
 	c.AgentAddr = strings.TrimSpace(getenv("TESSERA_AGENT_ADDR"))
@@ -486,6 +492,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.RotationFakeAdapters {
 			bad("TESSERA_ROTATION_FAKE_ADAPTERS must be false with TESSERA_ENV=prod: the simulated rotation adapter would report success without touching any credential")
+		}
+		if c.StepUpAllowWeaker {
+			bad("TESSERA_STEPUP_ALLOW_WEAKER must be false with TESSERA_ENV=prod: a tenant policy could then weaken the step-up the code requires")
 		}
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")
