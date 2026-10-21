@@ -157,8 +157,15 @@ func Gate(tx *store.TenantTx, plan *Plan, by uuid.UUID, byName, reason string, n
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return "", nil, err
 	}
+	same := false
+	if pend != nil {
+		// People, not user ids: two users linked to one identity are one admin (#416, #402).
+		if same, err = tx.SameActor(pend.RequestedByUserID.String(), by.String()); err != nil {
+			return "", nil, err
+		}
+	}
 	switch {
-	case pend != nil && pend.RequestedByUserID == by:
+	case pend != nil && same:
 		return GateSameApprover, pend, nil
 	case pend != nil:
 		if err := tx.ExecuteOAuthRevokeRequest(pend.ID, by, byName, now); err != nil {
