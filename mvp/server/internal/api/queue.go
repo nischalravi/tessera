@@ -84,6 +84,7 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
 	q.Register(jobs.CertificateExpiry, queue.Kind{Handler: s.queueCertificateExpiry, Actor: "certificate.sweeper"})
 	q.Register(jobs.ArchiveSweep, queue.Kind{Handler: s.queueArchive, Actor: archive.Actor})
+	q.Register(jobs.OAuthSync, queue.Kind{Handler: s.queueOAuthSync, Actor: oauthSyncActor})
 	// The worker kinds (issue #302): run here unless a `tessera worker` is
 	// meant to. provision_push is not registered here: the process keeps the
 	// provisioning loop (RunProvisioning), which the serve wiring skips when
@@ -101,6 +102,7 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Schedule(jobs.Maintenance, jobs.Maintenance, "@every "+jobMaintainGap.String(), 1)
 	q.Schedule(jobs.CertificateExpiry, jobs.CertificateExpiry, certificateExpirySchedule, maxSweepAttempts)
 	q.Schedule(jobs.ArchiveSweep, jobs.ArchiveSweep, "@every "+archiveEvery.String(), maxArchiveAttempts)
+	q.Schedule(jobs.OAuthSync, jobs.OAuthSync, "@every "+oauthSyncEvery.String(), maxOAuthSyncAttempts)
 	return q
 }
 

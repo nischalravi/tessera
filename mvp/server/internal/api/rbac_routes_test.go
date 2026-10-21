@@ -104,6 +104,13 @@ POST   /api/audit/verify                             audit.verify    -
 GET    /api/audit/export                             audit.read      -
 GET    /api/admin/retention                          admin.read      -  # issue #298
 GET    /api/admin/archive/segments                   audit.read      -  # issue #298
+GET    /api/oauth-apps                               graph.read      -  # issue #107
+GET    /api/oauth-apps/{app_id}                      graph.read      -  # issue #107
+POST   /api/oauth-apps/sync                          oauthapps.manage -  # issue #107
+PUT    /api/oauth-apps/{app_id}/owner                oauthapps.manage -  # issue #107
+POST   /api/oauth-apps/revoke-vendor                 oauthapps.revoke STEP_UP_POLICY  # issue #107
+POST   /api/oauth-apps/{app_id}/revoke               oauthapps.revoke STEP_UP_POLICY  # issue #107
+POST   /api/oauth-apps/{app_id}/grants/{grant_id}/revoke oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/admin/archive/segments/{segment_id}/verify audit.verify  -  # issue #298
 GET    /api/admin/archive/segments/{segment_id}/export audit.read    STEP_UP_ADMIN  # issue #298
 GET    /api/readiness/templates                      connections.read   -

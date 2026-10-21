@@ -1983,3 +1983,10 @@ DROP POLICY IF EXISTS tenant_isolation ON agent_jobs;
 CREATE POLICY tenant_isolation ON agent_jobs
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE oauth_revoke_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE oauth_revoke_requests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON oauth_revoke_requests;
+CREATE POLICY tenant_isolation ON oauth_revoke_requests
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

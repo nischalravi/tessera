@@ -1,0 +1,500 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/oauthapps"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/queue"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+)
+
+// Third-party OAuth apps and grants (issue #107):
+//
+//	GET  /api/oauth-apps?provider=&severity=&status=&flag=&vendor=&q=&unused_days=   the inventory with risk, flags, sync state
+//	GET  /api/oauth-apps/{app_id}                                                    one app: its grants, each scope's risk
+//	POST /api/oauth-apps/sync                       {provider?}: refresh from the providers now
+//	PUT  /api/oauth-apps/{app_id}/owner             {identity_id|null}
+//	POST /api/oauth-apps/{app_id}/revoke            {reason}: every live grant of the app
+//	POST /api/oauth-apps/{app_id}/grants/{grant_id}/revoke   {reason}
+//	POST /api/oauth-apps/revoke-vendor              {vendor, reason, dry_run?}: every app of a breached vendor
+//
+// Revoking needs oauthapps.revoke and a fresh phishing-resistant sign-in. A
+// revoke that covers more than one grant of an app holding a high or critical
+// scope, and every vendor revoke of such apps, needs two admins: the first
+// request answers 202 pending_second_admin, the same admin repeating it is
+// refused (four_eyes_required), and a second admin's identical request
+// executes. A revoke calls the providers, so it is phased: it plans, then calls
+// with no transaction open, then records grant statuses and the audit event in
+// one transaction. Each grant is re-read at the provider; the answer is 200
+// with the report, or 502 oauth_revoke_incomplete with the same report when a
+// grant could not be revoked or verified (a grant no API can revoke is a
+// manual task, never a success).
+
+const (
+	// oauthSyncEvery is how often each tenant's inventory is refreshed.
+	oauthSyncEvery = time.Hour
+	// maxOAuthSyncAttempts: a failed sync is retried once; the next window tries again anyway.
+	maxOAuthSyncAttempts = 2
+	oauthSyncActor       = "oauthapps.sync"
+)
+
+func (s *Server) registerOAuthAppsRoutes() {
+	G, P := http.MethodGet, http.MethodPost
+	s.handle(G, "/api/oauth-apps", read, need(auth.PermGraphRead), s.listOAuthApps)
+	s.handle(G, "/api/oauth-apps/{app_id}", read, need(auth.PermGraphRead), s.getOAuthApp)
+	s.handle(P, "/api/oauth-apps/sync", phased, need(auth.PermOAuthAppsManage), s.syncOAuthApps)
+	s.handle(http.MethodPut, "/api/oauth-apps/{app_id}/owner", write, need(auth.PermOAuthAppsManage), s.setOAuthAppOwner)
+	s.handle(P, "/api/oauth-apps/revoke-vendor", phased, needStepUp(auth.PermOAuthAppsRevoke, auth.StepUpPolicy), s.revokeOAuthVendor)
+	s.handle(P, "/api/oauth-apps/{app_id}/revoke", phased, needStepUp(auth.PermOAuthAppsRevoke, auth.StepUpPolicy), s.revokeOAuthApp)
+	s.handle(P, "/api/oauth-apps/{app_id}/grants/{grant_id}/revoke", phased, needStepUp(auth.PermOAuthAppsRevoke, auth.StepUpPolicy), s.revokeOAuthGrant)
+}
+
+// queueOAuthSync is the queue handler of the inventory refresh. A tenant with
+// no provider credential leaves no job run.
+func (s *Server) queueOAuthSync(ctx context.Context, j queue.Job) (any, error) {
+	rep, err := s.oauthapps.Sync(audit.WithSystemActor(ctx, oauthSyncActor), s.store, j.Tenant, oauthSyncActor)
+	if err != nil {
+		return nil, err
+	}
+	if !rep.Changed() {
+		return nil, nil
+	}
+	var failed []string
+	for _, p := range rep.Providers {
+		if p.Status == oauthapps.SyncFailed {
+			failed = append(failed, p.Provider)
+		}
+	}
+	if len(failed) > 0 {
+		return rep, fmt.Errorf("oauth sync failed for %s", strings.Join(failed, ", "))
+	}
+	return rep, nil
+}
+
+// ---------------------------------------------------------------- views
+
+type oauthOwnerView struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+type oauthAppView struct {
+	ID          string          `json:"id"`
+	Provider    string          `json:"provider"`
+	ClientID    string          `json:"client_id"`
+	Name        string          `json:"name"`
+	Publisher   string          `json:"publisher"`
+	Verified    bool            `json:"verified"`
+	Status      string          `json:"status"`
+	RiskScore   int             `json:"risk_score"`
+	Severity    string          `json:"severity"`
+	RiskReasons []string        `json:"risk_reasons"`
+	Flags       []string        `json:"flags"`
+	Grants      int             `json:"grants"`
+	Users       int             `json:"users"`
+	Owner       *oauthOwnerView `json:"owner"`
+	FirstSeen   string          `json:"first_seen"`
+	LastSeen    string          `json:"last_seen"`
+	LastUsed    *string         `json:"last_used"`
+	RevokedAt   *string         `json:"revoked_at"`
+	RevokedBy   *string         `json:"revoked_by"`
+}
+
+type oauthGrantView struct {
+	ID          string                `json:"id"`
+	Kind        string                `json:"kind"`
+	User        string                `json:"user"`
+	Identity    *oauthOwnerView       `json:"identity"`
+	Admin       bool                  `json:"granter_admin"`
+	Consent     string                `json:"consent_type"`
+	Scopes      []oauthapps.ScopeView `json:"scopes"`
+	GrantedAt   *string               `json:"granted_at"`
+	LastUsed    *string               `json:"last_used"`
+	Status      string                `json:"status"`
+	RevokedAt   *string               `json:"revoked_at"`
+	RevokedBy   *string               `json:"revoked_by"`
+	RevokeError string                `json:"revoke_error,omitempty"`
+}
+
+func viewOAuthApp(tx *store.TenantTx, a *store.OAuthApp, grants []*store.OAuthGrant, now time.Time, unusedDays int, names map[int64]string) (oauthAppView, error) {
+	as, n := oauthapps.AssessApp(a, grants, now)
+	users := map[string]bool{}
+	for _, g := range grants {
+		if (g.Status == store.OAuthActive || g.Status == store.OAuthRevokeFailed) && g.UserRef != "" {
+			users[g.UserRef] = true
+		}
+	}
+	v := oauthAppView{ID: a.ID, Provider: a.Provider, ClientID: a.ClientID, Name: a.Name, Publisher: a.Publisher, Verified: a.Verified,
+		Status: a.Status, RiskScore: a.RiskScore, Severity: as.Severity, RiskReasons: a.RiskReasons,
+		Flags: oauthapps.Flags(a, grants, now, unusedDays), Grants: n, Users: len(users),
+		FirstSeen: a.FirstSeen.UTC().Format(time.RFC3339), LastSeen: a.LastSeen.UTC().Format(time.RFC3339), LastUsed: isoPtr(a.LastUsed),
+		RevokedAt: isoPtr(a.RevokedAt), RevokedBy: a.RevokedBy}
+	if a.Status == store.OAuthRevoked || a.Status == store.OAuthRemoved {
+		v.Severity = "none"
+	}
+	if a.OwnerIdentityID != nil {
+		name, ok := names[*a.OwnerIdentityID]
+		if !ok {
+			if id, err := tx.Identity(*a.OwnerIdentityID); err == nil {
+				name = id.Name
+			} else if !errors.Is(err, store.ErrNotFound) {
+				return v, err
+			}
+			names[*a.OwnerIdentityID] = name
+		}
+		v.Owner = &oauthOwnerView{ID: *a.OwnerIdentityID, Name: name}
+	}
+	return v, nil
+}
+
+func viewOAuthGrant(tx *store.TenantTx, g *store.OAuthGrant, provider string) (oauthGrantView, error) {
+	v := oauthGrantView{ID: g.ID, Kind: g.Kind, User: g.UserRef, Admin: g.GranterAdmin, Consent: g.ConsentType,
+		Scopes: oauthapps.Scopes(provider, g.Scopes), GrantedAt: isoPtr(g.GrantedAt), LastUsed: isoPtr(g.LastUsed), Status: g.Status,
+		RevokedAt: isoPtr(g.RevokedAt), RevokedBy: g.RevokedBy, RevokeError: g.RevokeError}
+	if g.IdentityID != nil {
+		if id, err := tx.Identity(*g.IdentityID); err == nil {
+			v.Identity = &oauthOwnerView{ID: id.ID, Name: id.Name}
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return v, err
+		}
+	}
+	return v, nil
+}
+
+// ---------------------------------------------------------------- reads
+
+var (
+	oauthStatuses  = []string{"all", store.OAuthActive, store.OAuthRevoked, store.OAuthRemoved}
+	oauthSeverties = []string{oauthapps.SevCritical, oauthapps.SevHigh, oauthapps.SevMedium, oauthapps.SevLow}
+	oauthFlags     = []string{oauthapps.FlagHighRiskNonAdmin, oauthapps.FlagUnused, oauthapps.FlagUnverified}
+)
+
+func (s *Server) listOAuthApps(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	enum := func(name string, allowed []string) string {
+		v, _ := p.query(name)
+		if v != "" && !slices.Contains(allowed, v) {
+			p.errs = append(p.errs, verr{Type: "enum", Loc: []any{"query", name}, Msg: "must be one of " + strings.Join(allowed, ", "), Input: v})
+		}
+		return v
+	}
+	provider := enum("provider", oauthapps.Providers)
+	severity := enum("severity", oauthSeverties)
+	status := enum("status", oauthStatuses)
+	flag := enum("flag", oauthFlags)
+	vendor, _ := p.query("vendor")
+	q, _ := p.query("q")
+	if len(vendor) > 200 || len(q) > 200 {
+		p.errs = append(p.errs, verr{Type: "string_too_long", Loc: []any{"query", "q"}, Msg: "must be at most 200 characters"})
+	}
+	unused := int(p.queryInt("unused_days", oauthapps.DefaultUnusedDays, ptr(int64(1)), ptr(int64(3650))))
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	if status == "" {
+		status = store.OAuthActive
+	}
+	q = strings.ToLower(strings.TrimSpace(q))
+	now := s.clock()
+	c := store.TxFrom(r.Context())
+	apps, err := c.OAuthApps()
+	if err != nil {
+		return nil, err
+	}
+	all, err := c.OAuthGrants()
+	if err != nil {
+		return nil, err
+	}
+	byApp := map[string][]*store.OAuthGrant{}
+	for _, g := range all {
+		byApp[g.AppID] = append(byApp[g.AppID], g)
+	}
+	names := map[int64]string{}
+	out := []oauthAppView{}
+	sum := map[string]int{"apps": 0, "high_risk": 0, "high_risk_non_admin": 0, "unused": 0, "grants": 0}
+	for _, a := range apps {
+		if a.Status != store.OAuthActive {
+			continue // the summary counts what is live
+		}
+		v, err := viewOAuthApp(c, a, byApp[a.ID], now, unused, names)
+		if err != nil {
+			return nil, err
+		}
+		sum["apps"]++
+		sum["grants"] += v.Grants
+		if oauthapps.IsHighRisk(v.Severity) {
+			sum["high_risk"]++
+		}
+		if slices.Contains(v.Flags, oauthapps.FlagHighRiskNonAdmin) {
+			sum["high_risk_non_admin"]++
+		}
+		if slices.Contains(v.Flags, oauthapps.FlagUnused) {
+			sum["unused"]++
+		}
+	}
+	for _, a := range apps {
+		switch {
+		case status != "all" && a.Status != status,
+			provider != "" && a.Provider != provider,
+			vendor != "" && !oauthapps.MatchesVendor(a, vendor),
+			q != "" && !strings.Contains(strings.ToLower(a.Name+" "+a.Publisher+" "+a.ClientID), q):
+			continue
+		}
+		v, err := viewOAuthApp(c, a, byApp[a.ID], now, unused, names)
+		if err != nil {
+			return nil, err
+		}
+		if (severity != "" && v.Severity != severity) || (flag != "" && !slices.Contains(v.Flags, flag)) {
+			continue
+		}
+		out = append(out, v)
+	}
+	states, err := c.OAuthSyncStates()
+	if err != nil {
+		return nil, err
+	}
+	type stateView struct {
+		Provider    string  `json:"provider"`
+		Status      string  `json:"status"`
+		AttemptedAt string  `json:"attempted_at"`
+		SucceededAt *string `json:"succeeded_at"`
+		Apps        int     `json:"apps"`
+		Grants      int     `json:"grants"`
+		Error       string  `json:"error"`
+	}
+	sync := make([]stateView, 0, len(states))
+	for _, st := range states {
+		sync = append(sync, stateView{st.Provider, st.Status, st.AttemptedAt.UTC().Format(time.RFC3339), isoPtr(st.SucceededAt), st.Apps, st.Grants, st.Error})
+	}
+	pending, err := c.PendingOAuthRevokeRequests(now)
+	if err != nil {
+		return nil, err
+	}
+	type pendingView struct {
+		ID          string `json:"id"`
+		Scope       string `json:"scope"`
+		Target      string `json:"target"`
+		Apps        int    `json:"apps"`
+		Grants      int    `json:"grants"`
+		Reason      string `json:"reason"`
+		RequestedBy string `json:"requested_by"`
+		ExpiresAt   string `json:"expires_at"`
+	}
+	pv := make([]pendingView, 0, len(pending))
+	for _, x := range pending {
+		pv = append(pv, pendingView{x.ID, x.Scope, x.Target, x.Apps, x.Grants, x.Reason, x.RequestedBy, x.ExpiresAt.UTC().Format(time.RFC3339)})
+	}
+	return map[string]any{"apps": out, "summary": sum, "sync": sync, "pending_requests": pv, "unused_days": unused,
+		"catalog_version": oauthapps.CatalogVersion}, nil
+}
+
+func oauthAppID(p *params, name string) (string, error) {
+	id := p.path[name]
+	if !idRE.MatchString(id) {
+		return "", errStatus(http.StatusNotFound, "no such app or grant")
+	}
+	return id, nil
+}
+
+func (s *Server) getOAuthApp(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id, err := oauthAppID(p, "app_id")
+	if err != nil {
+		return nil, err
+	}
+	c := store.TxFrom(r.Context())
+	a, err := c.OAuthApp(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, errStatus(http.StatusNotFound, "no such app or grant")
+	}
+	if err != nil {
+		return nil, err
+	}
+	grants, err := c.OAuthGrantsOf(id)
+	if err != nil {
+		return nil, err
+	}
+	v, err := viewOAuthApp(c, a, grants, s.clock(), oauthapps.DefaultUnusedDays, map[int64]string{})
+	if err != nil {
+		return nil, err
+	}
+	gv := make([]oauthGrantView, 0, len(grants))
+	for _, g := range grants {
+		x, err := viewOAuthGrant(c, g, a.Provider)
+		if err != nil {
+			return nil, err
+		}
+		gv = append(gv, x)
+	}
+	return map[string]any{"app": v, "grants": gv}, nil
+}
+
+// ---------------------------------------------------------------- writes
+
+func (s *Server) syncOAuthApps(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	var b struct {
+		Provider string `json:"provider"`
+	}
+	if err := decodeBody(r, &b, true); err != nil {
+		return nil, err
+	}
+	if b.Provider != "" && !slices.Contains(oauthapps.Providers, b.Provider) {
+		return nil, badRequest("invalid_provider", "provider is google, entra, salesforce or github")
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), containTimeout)
+	defer cancel()
+	var only []string
+	if b.Provider != "" {
+		only = []string{b.Provider}
+	}
+	return s.oauthapps.Sync(ctx, s.store, principal(r).TenantID, actor(r), only...)
+}
+
+func (s *Server) setOAuthAppOwner(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id, err := oauthAppID(p, "app_id")
+	if err != nil {
+		return nil, err
+	}
+	var b struct {
+		IdentityID *int64 `json:"identity_id"`
+	}
+	if err := decodeBody(r, &b, false); err != nil {
+		return nil, err
+	}
+	if b.IdentityID != nil && *b.IdentityID < 1 {
+		return nil, badRequest("invalid_identity", "identity_id is an identity id, or null to clear the owner")
+	}
+	c := store.TxFrom(r.Context())
+	if b.IdentityID != nil {
+		if _, err := c.Identity(*b.IdentityID); errors.Is(err, store.ErrNotFound) {
+			return nil, badRequest("invalid_identity", "no such identity")
+		} else if err != nil {
+			return nil, err
+		}
+	}
+	if err := c.SetOAuthAppOwner(id, b.IdentityID); errors.Is(err, store.ErrNotFound) {
+		return nil, errStatus(http.StatusNotFound, "no such app or grant")
+	} else if err != nil {
+		return nil, err
+	}
+	if err := c.Audit(s.clock(), actor(r), "oauthapps.owner_set", ojson.Object{{Key: "app_id", Value: id},
+		{Key: "identity_id", Value: b.IdentityID}}); err != nil {
+		return nil, err
+	}
+	return map[string]any{"app_id": id, "identity_id": b.IdentityID}, nil
+}
+
+type oauthRevokeBody struct {
+	Reason string `json:"reason"`
+	Vendor string `json:"vendor"`
+	DryRun bool   `json:"dry_run"`
+}
+
+func (s *Server) revokeOAuthApp(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id, err := oauthAppID(p, "app_id")
+	if err != nil {
+		return nil, err
+	}
+	return s.revokeOAuth(r, p, oauthapps.ScopeApp, id, "", &oauthRevokeBody{})
+}
+
+func (s *Server) revokeOAuthGrant(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id, err := oauthAppID(p, "app_id")
+	if err != nil {
+		return nil, err
+	}
+	gid, err := oauthAppID(p, "grant_id")
+	if err != nil {
+		return nil, err
+	}
+	return s.revokeOAuth(r, p, oauthapps.ScopeGrant, id, gid, &oauthRevokeBody{})
+}
+
+func (s *Server) revokeOAuthVendor(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	b := &oauthRevokeBody{}
+	if err := decodeBody(r, b, false); err != nil {
+		return nil, err
+	}
+	v := strings.TrimSpace(b.Vendor)
+	if v == "" || len(v) > 200 {
+		return nil, badRequest("invalid_vendor", "vendor is required: the publisher or app name, at most 200 characters")
+	}
+	return s.revokeOAuth(r, p, oauthapps.ScopeVendor, "", v, b)
+}
+
+// revokeOAuth is the shared flow: validate, plan, gate (four-eyes), execute.
+func (s *Server) revokeOAuth(r *http.Request, p *params, scope, appID, target string, b *oauthRevokeBody) (any, error) {
+	if scope != oauthapps.ScopeVendor {
+		if err := decodeBody(r, b, false); err != nil {
+			return nil, err
+		}
+	}
+	if err := checkReason(b.Reason); err != nil {
+		return nil, err
+	}
+	reason := strings.TrimSpace(b.Reason)
+	ctx := r.Context()
+	now := s.clock()
+	var plan *oauthapps.Plan
+	err := p.scope.Read(ctx, func(c *store.TenantTx) error {
+		var err error
+		plan, err = oauthapps.BuildPlan(c, scope, appID, target, now)
+		return err
+	})
+	switch {
+	case errors.Is(err, oauthapps.ErrNotFound):
+		return nil, errStatus(http.StatusNotFound, "no such app, grant or vendor")
+	case errors.Is(err, oauthapps.ErrNothingToRevoke):
+		return nil, errStatus(http.StatusConflict, "nothing to revoke: no live grant")
+	case err != nil:
+		return nil, err
+	}
+	if b.DryRun {
+		return map[string]any{"dry_run": true, "scope": plan.Scope, "target": plan.Target, "apps": plan.Apps, "grants": len(plan.Items),
+			"four_eyes_required": plan.FourEyes()}, nil
+	}
+	by := principal(r).User()
+	if plan.FourEyes() && by.ID == uuid.Nil {
+		return nil, &readiness.Error{Status: http.StatusForbidden, Code: "forbidden",
+			Msg: "this revoke needs two admins; a signed-in admin user makes it"}
+	}
+	var decision string
+	var req *store.OAuthRevokeRequest
+	if err := p.scope.Write(ctx, func(c *store.TenantTx) error {
+		var err error
+		decision, req, err = oauthapps.Gate(c, plan, by.ID, actor(r), reason, now)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	switch decision {
+	case oauthapps.GateSameApprover:
+		return nil, &readiness.Error{Status: http.StatusForbidden, Code: "four_eyes_required",
+			Msg: "this revoke needs a second admin: another tenant admin must make the same request"}
+	case oauthapps.GatePending:
+		return statusBody{http.StatusAccepted, map[string]any{"status": "pending_second_admin", "request_id": req.ID, "scope": plan.Scope,
+			"target": plan.Target, "apps": plan.Apps, "grants": len(plan.Items), "expires_at": req.ExpiresAt.UTC().Format(time.RFC3339)}}, nil
+	}
+	ectx, cancel := context.WithTimeout(ctx, containTimeout)
+	defer cancel()
+	rep, err := s.oauthapps.Execute(ectx, s.store, principal(r).TenantID, plan, actor(r), reason)
+	if err != nil {
+		return nil, err
+	}
+	if !rep.OK {
+		return nil, &readiness.Error{Status: http.StatusBadGateway, Code: "oauth_revoke_incomplete",
+			Msg: fmt.Sprintf("%d of %d grants revoked; %d failed, %d need a person, %d were not attempted", rep.Revoked, rep.Total,
+				rep.Failed, rep.Manual, rep.Skipped), Extra: map[string]any{"report": rep}}
+	}
+	return rep, nil
+}

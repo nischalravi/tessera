@@ -4300,3 +4300,55 @@ export const groupSinks = {
   redeliver: (id: string, seq: number) => api(`${SINKS_PATH}/${id}/dead-letters/${seq}/redeliver`, {}),
   discard: (id: string, seq: number) => api(`${SINKS_PATH}/${id}/dead-letters/${seq}/discard`, {}),
 };
+
+// ---- Third-party OAuth apps and grants (issue #107)
+
+export type OAuthSeverity = "critical" | "high" | "medium" | "low" | "none";
+export type OAuthFlag = "high_risk_non_admin" | "unused" | "unverified";
+
+export interface OAuthApp {
+  id: string; provider: "google" | "entra" | "salesforce" | "github"; client_id: string; name: string; publisher: string;
+  verified: boolean; status: "active" | "revoked" | "removed"; risk_score: number; severity: OAuthSeverity; risk_reasons: string[];
+  flags: OAuthFlag[]; grants: number; users: number; owner: { id: number; name: string } | null;
+  first_seen: string; last_seen: string; last_used: string | null; revoked_at: string | null; revoked_by: string | null;
+}
+
+export interface OAuthSyncState { provider: string; status: "ok" | "failed"; attempted_at: string; succeeded_at: string | null; apps: number; grants: number; error: string }
+
+export interface OAuthPendingRevoke { id: string; scope: "app" | "vendor"; target: string; apps: number; grants: number; reason: string; requested_by: string; expires_at: string }
+
+export interface OAuthAppList {
+  apps: OAuthApp[]; summary: { apps: number; grants: number; high_risk: number; high_risk_non_admin: number; unused: number };
+  sync: OAuthSyncState[]; pending_requests: OAuthPendingRevoke[]; unused_days: number; catalog_version: string;
+}
+
+export interface OAuthScope { scope: string; severity: Exclude<OAuthSeverity, "none">; reason: string }
+
+export interface OAuthGrant {
+  id: string; kind: string; user: string; identity: { id: number; name: string } | null; granter_admin: boolean; consent_type: "user" | "admin";
+  scopes: OAuthScope[]; granted_at: string | null; last_used: string | null; status: "active" | "removed" | "revoked" | "revoke_failed";
+  revoked_at: string | null; revoked_by: string | null; revoke_error?: string;
+}
+
+export interface OAuthRevokeReport {
+  scope: string; target: string; total: number; revoked: number; failed: number; manual: number; skipped: number; ok: boolean;
+  items: { app_id: string; app: string; grant_id: string; user: string; outcome: "revoked" | "failed" | "manual" | "skipped"; detail?: string }[];
+}
+
+export interface OAuthRevokePending { status: "pending_second_admin"; request_id: string; apps: number; grants: number; expires_at: string }
+
+/** A revoke answers a report, or a pending request when a second admin must make the same request. */
+export type OAuthRevokeResult = OAuthRevokeReport | OAuthRevokePending;
+
+export const isPendingRevoke = (r: OAuthRevokeResult): r is OAuthRevokePending => "status" in r;
+
+export const oauthApps = {
+  listPath: "/oauth-apps",
+  detailPath: (id: string) => `/oauth-apps/${encodeURIComponent(id)}`,
+  sync: (provider?: string) => api<{ providers: { provider: string; status: string; error?: string; apps: number; grants: number }[] }>("/oauth-apps/sync", provider ? { provider } : {}),
+  setOwner: (id: string, identityId: number | null) => api(`/oauth-apps/${encodeURIComponent(id)}/owner`, { identity_id: identityId }, "PUT"),
+  revokeApp: (id: string, reason: string) => api<OAuthRevokeResult>(`/oauth-apps/${encodeURIComponent(id)}/revoke`, { reason }),
+  revokeGrant: (id: string, grantId: string, reason: string) =>
+    api<OAuthRevokeResult>(`/oauth-apps/${encodeURIComponent(id)}/grants/${encodeURIComponent(grantId)}/revoke`, { reason }),
+  revokeVendor: (vendor: string, reason: string) => api<OAuthRevokeResult>("/oauth-apps/revoke-vendor", { vendor, reason }),
+};
