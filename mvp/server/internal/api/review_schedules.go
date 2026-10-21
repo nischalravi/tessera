@@ -47,6 +47,10 @@ type scheduleBody struct {
 	// RoleIDs scopes the review to these business roles' memberships (issue
 	// #214). Omitted: kept on update, none on create. An empty list clears it.
 	RoleIDs *[]string `json:"role_ids"`
+	// ReviewType runs the schedule as a review type (issue #298): reviewers and
+	// close-out then follow the type's settings. Omitted: kept on update, none on
+	// create. "" clears it.
+	ReviewType *string `json:"review_type"`
 }
 
 func intOr(p *int, d int) int {
@@ -100,6 +104,7 @@ type scheduleView struct {
 	UpdatedAt          time.Time    `json:"updated_at"`
 	Launches           []launchView `json:"launches"`
 	RoleIDs            []string     `json:"role_ids"`
+	ReviewType         *string      `json:"review_type"`
 }
 
 type personBrief struct {
@@ -121,6 +126,11 @@ func scheduleViewOf(tx *store.TenantTx, t *store.ReviewTemplate) (scheduleView, 
 			return v, err
 		}
 		v.EscalationReviewer = &personBrief{i.ID, i.Name}
+	}
+	if rt, err := reviews.TemplateType(tx, t.ID); err != nil {
+		return v, err
+	} else if rt != "" {
+		v.ReviewType = &rt
 	}
 	ls, err := tx.ReviewLaunches(t.ID)
 	if err != nil {
@@ -189,6 +199,11 @@ func (s *Server) putSchedule(r *http.Request, t *store.ReviewTemplate, b schedul
 			return nil, err
 		}
 	}
+	if b.ReviewType != nil {
+		if err := reviews.SetTemplateType(tx, t.ID, strings.TrimSpace(*b.ReviewType)); err != nil {
+			return nil, scheduleErr(err)
+		}
+	}
 	next := ""
 	if t.NextRunAt != nil {
 		next = timeutil.ISO(*t.NextRunAt)
@@ -196,7 +211,7 @@ func (s *Server) putSchedule(r *http.Request, t *store.ReviewTemplate, b schedul
 	if err := tx.Audit(now, principal(r).Display, "review.schedule.put", ojson.Object{{Key: "schedule_id", Value: t.ID},
 		{Key: "name", Value: t.Name}, {Key: "recurrence", Value: t.Recurrence}, {Key: "next_run_at", Value: next},
 		{Key: "close_out", Value: t.CloseOut}, {Key: "enabled", Value: t.Enabled},
-		{Key: "role_ids", Value: roleScopeForAudit(tx, t.ID)}}); err != nil {
+		{Key: "role_ids", Value: roleScopeForAudit(tx, t.ID)}, {Key: "review_type", Value: scheduleTypeForAudit(tx, t.ID)}}); err != nil {
 		return nil, err
 	}
 	v, err := scheduleViewOf(tx, t)
@@ -268,4 +283,10 @@ func (s *Server) runReviewSchedule(_ http.ResponseWriter, r *http.Request, p *pa
 	}
 	return statusBody{http.StatusCreated, launchView{l.ID, l.PeriodKey, l.CampaignID, l.LaunchedAt, l.DueAt, l.RemindedAt,
 		l.EscalatedAt, l.ClosedAt, l.Revoked}}, nil
+}
+
+// scheduleTypeForAudit is the review type of a schedule as the audit event records it ("" for none).
+func scheduleTypeForAudit(tx *store.TenantTx, id string) string {
+	t, _ := reviews.TemplateType(tx, id)
+	return t
 }

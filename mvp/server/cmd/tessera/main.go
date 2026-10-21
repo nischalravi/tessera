@@ -59,6 +59,8 @@
 //	                      runs instead of serve; TESSERA_CONNECTOR_SYNC_SCHEDULE schedules connector_sync (see mvp/README.md "Connector workers")
 //	TESSERA_ROTATION_FAKE_ADAPTERS  true (the dev and test default) admits the simulated secret-rotation
 //	                      adapter, which the demo policies use; prod refuses it
+//	TESSERA_STEPUP_ALLOW_WEAKER  dev and test only, default false: lets a tenant's step-up policy replace the code's
+//	                      step-up requirements with weaker ones; prod refuses it
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
@@ -582,7 +584,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, Agents: agents, AuditAnchor: anchorURL,
 		Siem: siemSvc, Alerts: alertSvc, AWSCatalog: awsCatalogLoader(cfg),
 		SoD:          sod.Settings{MaxDays: cfg.SoDMaxMitigationDays, WarnDays: cfg.SoDWarnDays},
-		RotationFake: cfg.RotationFakeAdapters})
+		RotationFake: cfg.RotationFakeAdapters, StepUpAllowWeaker: cfg.StepUpAllowWeaker})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
 		return err

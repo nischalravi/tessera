@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react";
 import { CalendarClock, Play, Plus } from "lucide-react";
 import {
-  ConnectorRow, IdentityRow, Recurrence, ReviewSchedule, ReviewScheduleInput, RolesView, createReviewSchedule, fmtDate, runReviewSchedule,
+  ConnectorRow, IdentityRow, Recurrence, ReviewSchedule, ReviewScheduleInput, ReviewTypeList, RolesView, reviewTypesPath, createReviewSchedule, fmtDate, runReviewSchedule,
   updateReviewSchedule, useApi,
 } from "../../api";
 import { useSession } from "../../app/auth";
@@ -49,7 +49,7 @@ export function ReviewSchedules({ onLaunched }: { onLaunched: (campaignId: numbe
                   return (
                     <tr key={s.id}>
                       <td>
-                        <b>{s.name}</b> {!s.enabled && <Badge tone="outline">Paused</Badge>}
+                        <b>{s.name}</b> {!s.enabled && <Badge tone="outline">Paused</Badge>} {s.review_type && <Badge tone="info">{s.review_type.replace(/_/g, " ")}</Badge>}
                         <div className="xs faint">{REC_LABEL[s.recurrence]} · {s.duration_days} days to review · {s.close_out === "revoke" ? "undecided items are revoked" : `undecided items go to ${s.escalation_reviewer?.name ?? "?"} for ${s.escalation_days} days, then are revoked`}</div>
                       </td>
                       <td className="small hide-narrow">
@@ -85,6 +85,7 @@ function ScheduleForm({ schedule, onClose, onSaved }: { schedule: ReviewSchedule
   const { data: conns } = useApi<ConnectorRow[]>("/connectors");
   const { data: people } = useApi<IdentityRow[]>("/identities?type=human");
   const { data: rv } = useApi<RolesView>("/roles");
+  const { data: types } = useApi<ReviewTypeList>(reviewTypesPath);
   const toast = useToast();
   const s = schedule;
   const [roleIds, setRoleIds] = useState<string[]>(s?.role_ids ?? []);
@@ -93,7 +94,7 @@ function ScheduleForm({ schedule, onClose, onSaved }: { schedule: ReviewSchedule
     unused: String(s?.unused_days ?? 60), duration: String(s?.duration_days ?? 14), reminder: String(s?.reminder_days ?? 3),
     closeOut: s?.close_out ?? "revoke", escalation: s?.escalation_reviewer ? String(s.escalation_reviewer.id) : "",
     escalationDays: String(s?.escalation_days ?? 7), recurrence: (s?.recurrence ?? "quarterly") as Recurrence,
-    first: localInput(s?.next_run_at ?? null), enabled: s?.enabled ?? true,
+    first: localInput(s?.next_run_at ?? null), enabled: s?.enabled ?? true, reviewType: s?.review_type ?? "",
   });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -106,7 +107,7 @@ function ScheduleForm({ schedule, onClose, onSaved }: { schedule: ReviewSchedule
       name: f.name, system: f.system || null, privileged_only: f.privileged, unused_days: Number(f.unused), duration_days: Number(f.duration),
       reminder_days: Number(f.reminder), close_out: f.closeOut as "revoke" | "escalate", escalation_identity_id: f.escalation ? Number(f.escalation) : null,
       escalation_days: Number(f.escalationDays), recurrence: f.recurrence, first_run_at: new Date(f.first).toISOString(), enabled: f.enabled,
-      role_ids: roleIds,
+      role_ids: roleIds, review_type: f.reviewType,
     };
     try {
       if (s) await updateReviewSchedule(s.id, body);
@@ -123,6 +124,13 @@ function ScheduleForm({ schedule, onClose, onSaved }: { schedule: ReviewSchedule
     <Drawer title={s ? `Edit ${s.name}` : "New review schedule"} onClose={onClose}>
       <form className="stack" onSubmit={submit}>
         <label className="field">Name<input className="input" value={f.name} onChange={set("name")} required maxLength={200} /></label>
+        <label className="field">Review type
+          <select className="input" value={f.reviewType} onChange={set("reviewType")}>
+            <option value="">Original: the person's manager, a machine identity's owner, else the security lead</option>
+            {(types?.types ?? []).filter((t) => t.enabled || t.type === s?.review_type).map((t) => <option key={t.type} value={t.type}>{t.label}: {t.reviewer}</option>)}
+          </select>
+          <span className="hint">A type picks the reviewers and what happens to undecided items (Governance, Review types). Its close-out replaces the one below.</span>
+        </label>
         <label className="field">Scope
           <select className="input" value={f.system} onChange={set("system")}>
             <option value="">All systems</option>

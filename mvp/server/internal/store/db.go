@@ -142,6 +142,12 @@ var tables = []string{
 	"sod_ruleset_remediation",
 	// tenant request settings (schema/0380_request_settings.sql)
 	"request_settings",
+	// configurable settings (issue #298): SoD page, review types, step-up policy, user preferences, organizations
+	"sod_view_settings",                             // schema/0490_sod_view_settings.sql
+	"review_type_settings", "review_template_types", // schema/0491_review_types.sql
+	"stepup_policy",                                      // schema/0493_stepup_policy.sql
+	"user_preferences",                                   // schema/0494_user_preferences.sql
+	"org_owners", "org_settings", "org_hierarchy_source", // schema/0495_org_settings.sql
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)

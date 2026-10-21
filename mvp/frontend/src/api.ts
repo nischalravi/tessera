@@ -6,6 +6,8 @@
  * every mounted `useApi` refetches, so counts (Inbox badge, KPIs) stay consistent.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatDateTime, formatDay, preferencesPath } from "./prefs.ts";
+import type { Preferences, PreferencesView } from "./prefs.ts";
 
 const cache = new Map<string, unknown>();
 export const CHANGED = "tessera:api-changed";
@@ -962,6 +964,8 @@ export interface ReviewSchedule {
   launches: ReviewLaunch[];
   /** Business roles whose memberships it reviews (none: grants). */
   role_ids: string[];
+  /** The review type it runs as (reviewers and close-out follow the type's settings); null: the original schedule. */
+  review_type: string | null;
 }
 export interface ReviewScheduleInput {
   name: string; system: string | null; privileged_only: boolean; unused_days: number; duration_days: number; reminder_days: number;
@@ -969,6 +973,8 @@ export interface ReviewScheduleInput {
   first_run_at?: string; enabled: boolean;
   /** Omitted: kept on update. */
   role_ids?: string[];
+  /** Omitted: kept on update; "" clears it. */
+  review_type?: string;
 }
 export const createReviewSchedule = (b: ReviewScheduleInput) => api<ReviewSchedule>("/reviews/schedules", b);
 export const updateReviewSchedule = (id: string, b: ReviewScheduleInput) => api<ReviewSchedule>(`/reviews/schedules/${encodeURIComponent(id)}`, b, "PUT");
@@ -1329,6 +1335,88 @@ export const requestSettingsPath = "/request-settings";
 export const requestSettings = {
   save: (version: number, s: RequestSettings) => api<RequestSettingsView>(requestSettingsPath, { version, ...s }, "PUT"),
 };
+
+/** SoD page configuration (Admin → SoD page): which optional columns and filters SoD reviewers see on the conflicts page. */
+export type SodViewKey = "risk" | "function" | "entitlement" | "ruleset" | "mitigating_control" | "business_process";
+export interface SodViewSettings {
+  columns: SodViewKey[];
+  filters: SodViewKey[];
+}
+export interface SodViewView extends SodViewSettings {
+  /** 0 until the tenant saves it for the first time (everything shown). */
+  version: number;
+  available: SodViewKey[];
+  can_manage: boolean;
+}
+export const sodViewPath = "/sod/view-settings";
+export const sodView = {
+  save: (version: number, s: SodViewSettings) => api<SodViewView>(sodViewPath, { version, ...s }, "PUT"),
+};
+
+/** Step-up per action (Admin → Step-up): what the code requires of each sensitive action, and what the tenant adds. */
+export interface StepUpRequirement { acr: string; max_age_s: number }
+export interface StepUpAction {
+  /** The permission whose state-changing routes the entry covers. */
+  action: string;
+  /** What the code requires (the weakest of the action's routes with a step-up); null: nothing. */
+  floor: StepUpRequirement | null;
+  /** Some route of the action has no step-up in code, so an entry adds one there. */
+  unguarded: boolean;
+  routes: number;
+  policy: StepUpRequirement | null;
+  effective: StepUpRequirement | null;
+}
+export interface StepUpPolicyView {
+  version: number;
+  actions: StepUpAction[];
+  acrs: string[];
+  min_max_age_s: number;
+  max_max_age_s: number;
+  allow_weaker: boolean;
+  can_manage: boolean;
+}
+export const stepUpPolicyPath = "/stepup-policy";
+export const stepUpPolicy = {
+  save: (version: number, entries: Record<string, StepUpRequirement>) =>
+    api<StepUpPolicyView>(stepUpPolicyPath, { version, entries }, "PUT"),
+};
+
+/** Campaign configuration per review type (Governance → Review types, issue #298). */
+export type ReviewerSource = "owner" | "owner_or_backup" | "fixed";
+export type OnIncomplete = "revoke" | "escalate" | "keep";
+export interface ReviewTypeSettings {
+  enabled: boolean;
+  reviewer_source: ReviewerSource;
+  reviewer_id: number | null;
+  fallback_reviewer_id: number | null;
+  on_incomplete: OnIncomplete;
+  escalation_days: number;
+}
+export interface ReviewTypeRow extends ReviewTypeSettings {
+  type: string;
+  label: string;
+  reviewer: string;
+  scope: string;
+  version: number;
+  reviewer_person: { id: number; name: string } | null;
+  fallback_reviewer_person: { id: number; name: string } | null;
+  /** schedules that run as this type */
+  schedules: number;
+}
+export interface ReviewTypeList { types: ReviewTypeRow[]; can_manage: boolean }
+export const reviewTypesPath = "/review-types";
+export const reviewTypes = {
+  save: (type: string, version: number, s: ReviewTypeSettings) =>
+    api<ReviewTypeRow>(`${reviewTypesPath}/${encodeURIComponent(type)}`, { version, ...s }, "PUT"),
+};
+
+/** User preferences, under My account (issue #298): see prefs.ts for what they do. */
+export const preferences = {
+  save: (p: Preferences) => api<PreferencesView>(preferencesPath, p, "PUT"),
+};
+export { preferencesPath };
+export type { Preferences, PreferencesView };
+
 /** Questionnaires (Governance → Questionnaires, issue #298): forms asked at request time and in review decisions. */
 export type QuestionType = "short_text" | "long_text" | "single_choice" | "multi_choice" | "yes_no" | "date";
 export interface Question {
@@ -1454,9 +1542,48 @@ export interface OrgRow {
 export interface OrgDetail extends OrgRow {
   parent: OrgRow | null;
   owners: OrgPerson[];
+  /** assigned: administrators named the owners (Organization settings); derived: the top of the reporting lines */
+  owners_source: "assigned" | "derived";
   child_orgs: OrgRow[];
   people: (OrgPerson & { manager: OrgPerson | null; email: string | null })[];
 }
+/** Organization settings (issue #298): assigned owners, policies that apply to the organization's people, and the hierarchy source. */
+export interface OrgPolicies {
+  /** Approval stages for a request whose item has no approval policy of its own; null: none. */
+  default_stages: ("manager" | "owner" | "decider")[] | null;
+  default_escalate_hours: number | null;
+  /** Request settings overrides; they only tighten the tenant's. */
+  justification_required: true | null;
+  justification_min_length: number | null;
+  default_hours: number | null;
+  max_hours: number | null;
+}
+export interface OrgSettingsView {
+  org_id: string;
+  owner_ids: number[];
+  owners: OrgPerson[];
+  policies: OrgPolicies;
+  version: number;
+  can_manage: boolean;
+}
+export interface OrgHierarchySourceView {
+  source: "hr_department";
+  /** Only people ingested from this source form the hierarchy; null: everyone. */
+  system: string | null;
+  version: number;
+  /** the sources people were ingested from */
+  sources: string[];
+  available: string[];
+  can_manage: boolean;
+}
+export const orgSettingsPath = (id: string) => `/orgs/${encodeURIComponent(id)}/settings`;
+export const orgHierarchySourcePath = "/org-hierarchy-source";
+export const orgSettings = {
+  save: (id: string, version: number, owner_ids: number[], policies: OrgPolicies) =>
+    api<OrgSettingsView>(orgSettingsPath(id), { version, owner_ids, policies }, "PUT"),
+  saveSource: (version: number, system: string | null) =>
+    api<OrgHierarchySourceView>(orgHierarchySourcePath, { version, source: "hr_department", system }, "PUT"),
+};
 export const orgsPath = "/orgs";
 export const orgPath = (id: string) => `${orgsPath}/${encodeURIComponent(id)}`;
 
@@ -2924,8 +3051,9 @@ export const asOfPath = (resourceId: number | string, date: string) =>
 
 // ------------------------------------------------------------ formatting
 const asUtc =(s: string) => new Date(s + (s.endsWith("Z") ? "" : "Z"));
-export const fmtDate = (s?: string | null) => (s ? asUtc(s).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "Never");
-export const fmtDay = (s?: string | null) => (s ? asUtc(s).toLocaleDateString(undefined, { dateStyle: "medium" }) : "Never");
+/** Dates and times in the signed-in user's time zone and format (My account > Preferences, see prefs.ts). */
+export const fmtDate = (s?: string | null) => (s ? formatDateTime(asUtc(s)) : "Never");
+export const fmtDay = (s?: string | null) => (s ? formatDay(asUtc(s)) : "Never");
 export const ago = (days?: number | null) =>
   days === null || days === undefined ? "never" : days === 0 ? "today" : days === 1 ? "1 day ago" : `${days} days ago`;
 export function relTime(s?: string | null) {

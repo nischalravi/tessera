@@ -18,6 +18,7 @@ import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel } from "./P
 import { BulkOwnerDrawer } from "./owners";
 import { ViewToggle } from "./groups/ViewToggle";
 import { ImportDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
+import { HierarchySourceCard } from "./orgSettings";
 import { AFFILIATION_LABEL, STATE_LABEL as PERSON_STATE_LABEL } from "./affiliationModel";
 
 /** Identity lists each render their own page header; the layout only hosts them. */
@@ -486,7 +487,7 @@ export function Orgs() {
   const byId = useMemo(() => new Map((data ?? []).map((o) => [o.id, o])), [data]);
   return (
     <Page title="Organizations" count={data ? plural(data.length, "organization") : undefined} crumbs={[IDENTITY, ["Organizations"]]}
-      sub="One organization per department in your HR source, under one root for the company. Owners are the people at the top of a department's reporting lines. Read-only: change departments and managers in the HR source.">
+      sub="One organization per department in your HR source, under one root for the company. Owners are named on the organization, else the people at the top of the department's reporting lines. Departments and managers come from the HR source.">
       <DataTable
         id="orgs"
         rows={data}
@@ -506,6 +507,7 @@ export function Orgs() {
         activeKey={selected}
       />
       {selected && byId.has(selected) && <OrgPanel id={selected} onClose={() => setSelected(null)} />}
+      <HierarchySourceCard onSaved={reload} />
     </Page>
   );
 }

@@ -75,6 +75,8 @@ type roleView struct {
 	groups  map[string]map[int64]bool // role -> group ids
 	members map[int64]map[string]*store.RoleMember
 	acc     map[memberKey]*membership
+	// resolver, when set, picks the reviewer under a review type (types.go).
+	resolver *Resolver
 }
 
 func (v *roleView) scoped() bool { return v.only != nil }
@@ -109,6 +111,7 @@ func loadRoleView(c *store.TenantTx, scope Scope) (*roleView, error) {
 		}
 		v.members[m.IdentityID][m.RoleID] = m
 	}
+	v.resolver = scope.Resolver
 	if len(scope.RoleIDs) > 0 {
 		v.only = map[string]bool{}
 		for _, id := range scope.RoleIDs {
@@ -266,6 +269,11 @@ func (v *roleView) build(now time.Time, people map[int64]*store.Identity,
 			}
 		} else if ident.OwnerID != nil && people[*ident.OwnerID] != nil && people[*ident.OwnerID].Status == "active" {
 			reviewer = people[*ident.OwnerID]
+		}
+		if v.resolver != nil {
+			if rr := v.resolver.ForRole(role); rr != nil {
+				reviewer = rr
+			}
 		}
 		var reviewerID *int64
 		if reviewer != nil {

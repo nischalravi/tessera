@@ -7,6 +7,7 @@ import { SessionProvider, useSession } from "./auth";
 import { PaletteProvider } from "./CommandPalette";
 import { PersonaProvider } from "./persona";
 import { Shell } from "./Shell";
+import { PrefsGate } from "./PrefsGate";
 import { ThemeProvider } from "./theme";
 
 /**
@@ -93,6 +94,10 @@ const VendorCompromised = named(rotationPages, "VendorCompromised");
 const SharedSignals = named(() => import("../features/admin/SharedSignals"), "SharedSignals");
 const EventSinks = named(() => import("../features/admin/EventSinks"), "EventSinks");
 const RequestSettings = named(() => import("../features/admin/RequestSettings"), "RequestSettings");
+const StepUpPolicy = named(() => import("../features/admin/StepUpPolicy"), "StepUpPolicy");
+const SodViewSettings = named(() => import("../features/admin/SodViewSettings"), "SodViewSettings");
+const ReviewTypes = named(() => import("../features/governance/ReviewTypes"), "ReviewTypes");
+const Preferences = named(() => import("../features/account/Preferences"), "Preferences");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
 const AdminUsers = named(() => import("../features/admin/Users"), "Users");
@@ -168,6 +173,7 @@ export default function App() {
       <ToastProvider>
         <ConfirmProvider>
           <SessionProvider>
+          <PrefsGate>
           <PersonaProvider>
             <PaletteProvider>
               <Shell>
@@ -265,6 +271,10 @@ export default function App() {
                     <Route path="/admin/platform-health" element={<PlatformHealth />} />
                     <Route path="/admin/event-sinks" element={<EventSinks />} />
                     <Route path="/admin/request-settings" element={<RequestSettings />} />
+                    <Route path="/admin/step-up" element={<StepUpPolicy />} />
+                    <Route path="/admin/sod-page" element={<SodViewSettings />} />
+                    <Route path="/governance/review-types" element={<ReviewTypes />} />
+                    <Route path="/account/preferences" element={<Preferences />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}
@@ -285,6 +295,7 @@ export default function App() {
               </Shell>
             </PaletteProvider>
           </PersonaProvider>
+          </PrefsGate>
           </SessionProvider>
         </ConfirmProvider>
       </ToastProvider>

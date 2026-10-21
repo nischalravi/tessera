@@ -144,8 +144,40 @@ func Launch(tx *store.TenantTx, t *store.ReviewTemplate, period string, now time
 	if err != nil {
 		return nil, err
 	}
-	campID, err := GenerateScopedCampaign(tx, now, name, t.UnusedDays, policies,
-		Scope{System: sys, PrivilegedOnly: t.PrivilegedOnly, SkipEmpty: true, RoleIDs: roleIDs})
+	scope := Scope{System: sys, PrivilegedOnly: t.PrivilegedOnly, SkipEmpty: true, RoleIDs: roleIDs}
+	typ, err := TemplateType(tx, t.ID)
+	if err != nil {
+		return nil, err
+	}
+	if typ != "" {
+		set, _, err := LoadType(tx, typ)
+		if err != nil {
+			return nil, err
+		}
+		if !set.Enabled {
+			return nil, tx.Audit(now, actor, "review.schedule.skipped", ojson.Object{{Key: "template_id", Value: t.ID},
+				{Key: "period", Value: period}, {Key: "reason", Value: "the " + typ + " review type is turned off"}})
+		}
+		people, _, err := tx.IdentityMap()
+		if err != nil {
+			return nil, err
+		}
+		if scope.Resolver, err = NewResolver(tx, set, people); err != nil {
+			return nil, err
+		}
+		if typ == TypeRoleOwner && len(scope.RoleIDs) == 0 { // role owners review role memberships: every active role
+			roles, err := tx.BusinessRoles()
+			if err != nil {
+				return nil, err
+			}
+			for _, r := range roles {
+				if r.Status == store.RoleActive {
+					scope.RoleIDs = append(scope.RoleIDs, r.ID)
+				}
+			}
+		}
+	}
+	campID, err := GenerateScopedCampaign(tx, now, name, t.UnusedDays, policies, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -274,21 +306,34 @@ func progress(tx *store.TenantTx, l *store.ReviewLaunch, now time.Time, res *Tic
 	if now.Before(l.DueAt) {
 		return nil
 	}
-	if t.CloseOut == "escalate" && l.EscalatedAt == nil && t.EscalationIdentityID != nil {
+	co, err := closeOutOf(tx, t)
+	if err != nil {
+		return err
+	}
+	if co.How == IncompleteEscalate && l.EscalatedAt == nil && co.EscalateTo != nil {
 		for _, it := range open {
-			if err := tx.SetItemReviewer(it.ID, *t.EscalationIdentityID); err != nil {
+			if err := tx.SetItemReviewer(it.ID, *co.EscalateTo); err != nil {
 				return err
 			}
 		}
 		l.EscalatedAt = &now
-		l.DueAt = now.Add(time.Duration(t.EscalationDays) * 24 * time.Hour)
+		l.DueAt = now.Add(time.Duration(co.EscalationDays) * 24 * time.Hour)
 		if err := tx.SaveReviewLaunch(l); err != nil {
 			return err
 		}
 		res.Escalated++
 		return tx.Audit(now, Scheduler, "review.escalate", ojson.Object{{Key: "campaign_id", Value: l.CampaignID},
-			{Key: "items", Value: len(open)}, {Key: "reviewer_id", Value: *t.EscalationIdentityID},
+			{Key: "items", Value: len(open)}, {Key: "reviewer_id", Value: *co.EscalateTo},
 			{Key: "due_at", Value: timeutil.ISO(l.DueAt)}})
+	}
+	if co.How == IncompleteKeep { // the review type leaves the access and closes the review incomplete
+		l.ClosedAt = &now
+		if err := tx.SaveReviewLaunch(l); err != nil {
+			return err
+		}
+		res.Closed++
+		return tx.Audit(now, Scheduler, "review.close", ojson.Object{{Key: "campaign_id", Value: l.CampaignID},
+			{Key: "revoked", Value: 0}, {Key: "kept", Value: len(open)}, {Key: "outcome", Value: "incomplete_kept"}})
 	}
 	note := "not reviewed by the deadline"
 	for _, it := range open {
