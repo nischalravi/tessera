@@ -24,7 +24,7 @@ import (
 )
 
 // Token is the bearer token every fake accepts.
-const Token = "tok-oauthfake"
+const Token = "tok-oauthfake" // #nosec G101 -- fixed token of an in-process test fake, not a credential
 
 // Fake is the shared part of a provider fake.
 type Fake struct {
