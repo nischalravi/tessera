@@ -1039,7 +1039,7 @@ the way the old sweepers did (active tenant list), then works each one in its ow
   (queued again, attempt given back). `tessera serve` runs it as `Server.RunQueue`.
 * **On the queue now.** The sweepers that `RunSweeper` ran, as per-tenant schedules every 30 s:
   `jit_sweep`, `sweep_requests`, `sweep_lifecycle` (sponsorships, then lifecycle: one job so the order
-  holds), `sweep_admin_changes`, and `containment_retries`, plus `job_maintenance` every 10 min (stale
+  holds), `sweep_admin_changes`, and `containment_retries`, plus `oauth_sync` hourly and `job_maintenance` every 10 min (stale
   `job_runs`, retention, pruning succeeded queue jobs after 7 days). The containment retry sweep runs
   `RunRetries` under a lease; each `containment_retries` row keeps its own backoff (1m, 5m, 15m, 1h) and
   24 h give-up, which are tested domain rules, so the queue adds exclusion, not a second backoff.
@@ -2178,6 +2178,52 @@ the run failed. Provider calls go through `internal/safehttp`.
 - **Still manual or not covered.** Okta has no API that lists IdP sessions and Google none for
   sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
   still only stamps a timestamp.
+
+### Third-party OAuth apps and grants (issue #107)
+
+Security's SaaS-to-SaaS token theft (Salesloft Drift, Gainsight, Klue) is access through an app's
+grant, not a password. Protection → **OAuth apps** lists every third-party app and grant at Google
+Workspace, Microsoft Entra ID, Salesforce and GitHub, scores each app by the scopes it holds, and
+revokes a grant, an app, or every app of a breached vendor (package `server/internal/oauthapps`,
+schema 0361 for apps, grants and sync state and 0470 for pending four-eyes revokes).
+
+- **Readers.** One per provider, read-only, through `internal/safehttp` with the **containment
+  credential** of the provider's live connection (set it with `PUT /api/connections/{id}/containment-credential`;
+  Salesforce takes `base_url` = the instance URL and an API-enabled bearer token, GitHub `org`). Google lists
+  each user's tokens; Entra lists service principals, `oauth2PermissionGrants` (per user and tenant-wide) and
+  `appRoleAssignments` (role ids resolved to values); Salesforce lists `OauthToken` rows; GitHub lists the
+  organization's installed apps and SAML SSO credential authorizations. A read that fails part-way stores
+  nothing (the failure is in the provider's sync state and the audit log); a grant a complete read no longer
+  lists is marked `removed`, never deleted. A provider names no last use or grant date where it has none:
+  the sync report's notes say what each one does not offer. Okta is not covered (its grants are per-user
+  consents, already revoked by the kill switch).
+- **Risk.** A versioned scope catalog (`risk.go`, `CatalogVersion`) rates each scope critical, high, medium or
+  low; an app scores 0-100 from its worst scope plus unverified publisher, tenant-wide admin consent, unused
+  90+ days and number of users. Each app has an owner (default: the identity that granted first, set with
+  `PUT /api/oauth-apps/{id}/owner`). Flags: `high_risk_non_admin` (a high or critical scope on a non-admin's own
+  consent), `unused` (N days, `unused_days`, default 90; an unknown last use is never "unused") and `unverified`.
+- **Sync.** Queue job `oauth_sync` (hourly per tenant; a tenant with no credentials leaves no run), or
+  `POST /api/oauth-apps/sync {provider?}` (`oauthapps.manage`).
+- **Revoke.** `POST /api/oauth-apps/{id}/revoke`, `.../grants/{grant_id}/revoke` and
+  `POST /api/oauth-apps/revoke-vendor {vendor, reason, dry_run?}` (`oauthapps.revoke`, policy admin, step-up,
+  reason of 10 to 500 characters). A vendor matches an app's publisher or name. Each grant is revoked at the
+  provider, then **re-read**: it counts as revoked only when the provider no longer shows it. What no API can
+  do (a GitHub App installation: an organization owner cannot uninstall it by API) or a provider with no
+  credential is a **manual** outcome, never a success. The answer is `200` with the report, or `502
+  oauth_revoke_incomplete` with the same report. A revoke covering more than one grant of an app with a high
+  or critical scope needs **two admins**: the first request answers `202 pending_second_admin`, the same
+  admin repeating it gets `403 four_eyes_required`, and a second admin's identical request (within 24 hours)
+  runs it. Audit events: `oauthapps.synced|sync_failed|owner_set|revoke_requested|revoke_approved|revoke_started|revoked`
+  (`revoke_started` is written before the first provider call, the outcome event in the transaction that sets
+  the grant and app statuses).
+- **Read API.** `GET /api/oauth-apps?provider=&severity=&status=&flag=&vendor=&q=&unused_days=` and
+  `GET /api/oauth-apps/{id}` (graph.read).
+- **Tests and fakes.** `internal/oauthapps/oauthfake` holds stateful fakes of the four provider APIs (paging, a
+  delete that really deletes, and switches for refusing, ignoring a delete and failing reads); the reader,
+  sync, revoke and four-eyes tests run them through a real safehttp client. The Salesforce `OauthToken`
+  query is checked against the fake only, not a live org.
+- **Not built yet.** The apps are not yet rows of the Machine identities inventory (`/api/nhi`); a policy
+  type for the flags (alerts and review campaigns) is not wired.
 
 ### MCP authorization server (agent authorization)
 
