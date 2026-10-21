@@ -395,7 +395,7 @@ func (s *Server) setOAuthAppOwner(_ http.ResponseWriter, r *http.Request, p *par
 		{Key: "identity_id", Value: b.IdentityID}}); err != nil {
 		return nil, err
 	}
-	return map[string]any{"app_id": id, "identity_id": b.IdentityID}, nil
+	return map[string]any{"app_id": echoSafe(id), "identity_id": b.IdentityID}, nil
 }
 
 type oauthRevokeBody struct {
@@ -464,7 +464,7 @@ func (s *Server) revokeOAuth(r *http.Request, p *params, scope, appID, target st
 		return nil, err
 	}
 	if b.DryRun {
-		return map[string]any{"dry_run": true, "scope": plan.Scope, "target": plan.Target, "apps": plan.Apps, "grants": len(plan.Items),
+		return map[string]any{"dry_run": true, "scope": plan.Scope, "target": echoSafe(plan.Target), "apps": plan.Apps, "grants": len(plan.Items),
 			"four_eyes_required": plan.FourEyes()}, nil
 	}
 	by := principal(r).User()
@@ -487,7 +487,7 @@ func (s *Server) revokeOAuth(r *http.Request, p *params, scope, appID, target st
 			Msg: "this revoke needs a second admin: another tenant admin must make the same request"}
 	case oauthapps.GatePending:
 		return statusBody{http.StatusAccepted, map[string]any{"status": "pending_second_admin", "request_id": req.ID, "scope": plan.Scope,
-			"target": plan.Target, "apps": plan.Apps, "grants": len(plan.Items), "expires_at": req.ExpiresAt.UTC().Format(time.RFC3339)}}, nil
+			"target": echoSafe(plan.Target), "apps": plan.Apps, "grants": len(plan.Items), "expires_at": req.ExpiresAt.UTC().Format(time.RFC3339)}}, nil
 	}
 	ectx, cancel := context.WithTimeout(ctx, containTimeout)
 	defer cancel()
@@ -495,10 +495,27 @@ func (s *Server) revokeOAuth(r *http.Request, p *params, scope, appID, target st
 	if err != nil {
 		return nil, err
 	}
+	rep.Target = echoSafe(rep.Target)
 	if !rep.OK {
 		return nil, &readiness.Error{Status: http.StatusBadGateway, Code: "oauth_revoke_incomplete",
 			Msg: fmt.Sprintf("%d of %d grants revoked; %d failed, %d need a person, %d were not attempted", rep.Revoked, rep.Total,
 				rep.Failed, rep.Manual, rep.Skipped), Extra: map[string]any{"report": rep}}
 	}
 	return rep, nil
+}
+
+// echoAlphabet is every character a response may repeat from a request
+// value (an app id, a vendor name): letters, digits and a few separators.
+const echoAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .-_&,"
+
+// echoSafe copies s through echoAlphabet, so a value echoed in a response
+// is built from constant characters and never carries markup.
+func echoSafe(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if i := strings.IndexRune(echoAlphabet, r); i >= 0 {
+			b.WriteByte(echoAlphabet[i])
+		}
+	}
+	return b.String()
 }
