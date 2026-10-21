@@ -91,6 +91,13 @@ type Config struct {
 	// Connectors returns the configured connectors (defaults to connectors.Load("", now)).
 	Connectors func(now time.Time) ([]connectors.Connector, error)
 	Logger     *slog.Logger // defaults to slog.Default()
+	// ExternalKinds are the worker kinds (internal/worker.Kinds) this process
+	// does not run: a `tessera worker` does (issue #302). Empty runs them all,
+	// as a single node always has.
+	ExternalKinds []string
+	// ConnectorSyncSchedule, when set, schedules connector_sync (a queue spec,
+	// TESSERA_CONNECTOR_SYNC_SCHEDULE) for every tenant.
+	ConnectorSyncSchedule string
 	// AllowedOrigins are the browser origins allowed by CORS (exact match,
 	// credentials allowed): TESSERA_CORS_ORIGINS, empty in production.
 	AllowedOrigins []string

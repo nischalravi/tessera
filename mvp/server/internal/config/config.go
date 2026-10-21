@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +85,15 @@ type Config struct {
 	AgentAddr    string
 	AgentTLSCert string
 	AgentTLSKey  string
+	// ExternalWorkerKinds is TESSERA_EXTERNAL_WORKER_KINDS: the worker kinds
+	// (WorkerKinds) that `tessera serve` does not run in-process because
+	// `tessera worker` processes do (issue #302). Empty: serve runs them all.
+	ExternalWorkerKinds []string
+	// ConnectorSyncSchedule is TESSERA_CONNECTOR_SYNC_SCHEDULE: a queue spec
+	// ("@every 15m" or five cron fields) that schedules connector_sync for
+	// every tenant, run by whichever process runs that kind. Empty: syncs run
+	// on demand only. The spec itself is validated where it is registered.
+	ConnectorSyncSchedule string
 	// RotationFakeAdapters admits the simulated secret-rotation adapter
 	// (TESSERA_ROTATION_FAKE_ADAPTERS; dev and test only).
 	RotationFakeAdapters   bool
@@ -304,6 +314,18 @@ func Load(getenv func(string) string) (*Config, error) {
 	if c.AgentAddr == "" && (c.AgentTLSCert != "" || c.AgentTLSKey != "") {
 		bad("TESSERA_AGENT_TLS_CERT and TESSERA_AGENT_TLS_KEY are set without TESSERA_AGENT_ADDR")
 	}
+	for _, k := range strings.Split(getenv("TESSERA_EXTERNAL_WORKER_KINDS"), ",") {
+		if k = strings.TrimSpace(k); k == "" || slices.Contains(c.ExternalWorkerKinds, k) {
+			continue
+		}
+		if !slices.Contains(WorkerKinds, k) {
+			bad("TESSERA_EXTERNAL_WORKER_KINDS: unknown kind %q (want %s)", k, strings.Join(WorkerKinds, ", "))
+			continue
+		}
+		c.ExternalWorkerKinds = append(c.ExternalWorkerKinds, k)
+	}
+	slices.Sort(c.ExternalWorkerKinds)
+	c.ConnectorSyncSchedule = strings.TrimSpace(getenv("TESSERA_CONNECTOR_SYNC_SCHEDULE"))
 	c.AuditAnchor = str("TESSERA_AUDIT_ANCHOR", "", "")
 	if a := c.AuditAnchor; a != "" && !strings.HasPrefix(a, "file://") && !strings.HasPrefix(a, "s3://") {
 		bad("TESSERA_AUDIT_ANCHOR: %q is not a file:// or s3:// URL", a)
@@ -502,6 +524,10 @@ func (c *Config) ArchiveDirFor(dbPath string) string {
 
 // MetricsDefaultAddr is the dev and test /metrics listener (loopback).
 const MetricsDefaultAddr = "127.0.0.1:9464"
+
+// WorkerKinds are the queue kinds that can run outside the API process
+// (internal/worker.Kinds, which a test keeps equal).
+var WorkerKinds = []string{"connector_sync", "provision_push"}
 
 // loadMetricsAddr reads TESSERA_METRICS_ADDR ("off" disables it). Outside
 // production the listener must be loopback. In production it is off unless

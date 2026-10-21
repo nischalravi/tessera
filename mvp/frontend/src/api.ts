@@ -3715,6 +3715,12 @@ export interface QueueSchedule {
   name: string; kind: string; spec: string; enabled: boolean; max_attempts: number; next_run_at: string; last_enqueued_at: string | null;
 }
 
+/** A queue worker as one tenant sees it (issue #302): a `tessera worker` or an API process running queue kinds. */
+export interface QueueWorker {
+  worker_id: string; mode: "worker" | "api"; status: "healthy" | "stale"; hostname: string; pid: number; version: string;
+  kinds: string[]; concurrency: number; running: number; started_at: string; last_heartbeat_at: string; lag_seconds: number;
+}
+
 export const queue = {
   /** Puts a dead job back in the queue with a fresh attempt budget (step-up, audited). */
   retry: (id: string) => api<QueueJob>(`/queue/jobs/${encodeURIComponent(id)}/retry`, {}),

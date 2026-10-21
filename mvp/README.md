@@ -422,6 +422,84 @@ commands, no raw LDAP, no proxying). The server sends typed jobs; the agent open
 - API: `GET /api/agents`, `POST /api/agents` (step-up; returns the code once), `POST /api/agents/{id}/revoke`
   (step-up). Table `directory_agents`, `agent_enrolments` (schema 0250).
 - The Windows DPAPI store is cross-compiled and vetted (`GOOS=windows go vet`) but not run on Windows.
+
+##### Remote agents that pull syncs (issue #302)
+
+An enrolled agent can also be the worker for a connection in its own network: Tessera never dials in,
+the agent **pulls**. It long-polls `POST /agent/v1/jobs/claim` on the same mutual-TLS listener (the client
+key pin decides the tenant and the agent; nothing in the request does), receives the sync jobs addressed to
+it, reads its directory and posts a typed listing to `POST /agent/v1/jobs/report`. There is nothing to
+open inbound at the customer; the agent needs only HTTPS out to `TESSERA_AGENT_ADDR`.
+
+- **Registering one.** As above (enrol, `tessera-agent credential … set svc`, run). Bind an LDAP connection
+  to it by giving the connection's credential reference `agent:<agent id>/svc`. Run `tessera-agent run`
+  with a build that has a syncer (the shipped one reads LDAP: people by the connection's user filter,
+  groups by `member`/`uniqueMember`, under its base DNs). Nothing else is configured on Tessera.
+- **What gets queued.** The `connector_sync` job (below) also queues one `sync` job per live connection that
+  is bound to an active agent of the tenant, addressed to that agent, unless one is already open
+  (`agent_jobs`, schema 0461). An agent only ever sees rows addressed to its own `(tenant, agent id)`, and a
+  report for any other row, another agent's, another tenant's, or one that is not leased to it, is
+  `404 unknown_job`. Revoking an agent cancels its open jobs.
+- **Leases.** A claimed job is leased for 10 minutes and handed out again if no report arrives (3 attempts,
+  then `failed`). A transient failure (`failed`, `rate_limited`) is retried; a refused target, a missing
+  credential or a bad request is not. The agent runs one sync at a time.
+- **Recording.** The report is validated (bounded: 20 000 accounts, 5 000 groups, 100 000 memberships;
+  every membership must name an account and a group of the same listing), then ingested with `ingest.Discovery`
+  into the connection's own system, drift is reconciled, and the job is finished, in one transaction, with
+  `connectors.sync` and `agent.job_done` audited (`agent.job_failed` for failures).
+- **Secrets.** The directory password is never sent to the agent for a job: it stays in the agent's local
+  credential store (the existing Directory Agent design), and a job carries only its name. Sealing a
+  server-held secret to an agent key would need a key-agreement design that does not exist yet.
+- **Not covered.** Provisioning pushes to a private target and per-target rate limits or circuit breakers do
+  not go through agents yet (see "Connector workers").
+
+### Connector workers (issue #302)
+
+Syncs and provisioning pushes can run outside the API process. `internal/worker` holds the two queue kinds
+and `tessera worker` runs them with no HTTP API and no listener, over the same database and the same
+`internal/queue` lease, heartbeat, backoff and dead-letter rules as the API's own queue:
+
+- `connector_sync` reads the configured connectors into a tenant (the code of `POST /api/connectors/sync`,
+  except that the sources are read with **no transaction open**: a slow source holds neither SQLite's write
+  lock nor a Postgres transaction, and cannot stop the lease heartbeat; the checkpoints the connectors move
+  are written with the records, so a failed sync keeps none), then queues the remote agents' syncs.
+  `POST /api/connectors/sync?async=true[&mode=full]` queues it and returns `{"queued":true}` (audited as
+  `connectors.sync_queued`); without `async` the call is as before. `TESSERA_CONNECTOR_SYNC_SCHEDULE`
+  (`@every 15m` or five cron fields) schedules it for every tenant; unset, syncs run on demand only.
+- `provision_push` is one tenant's pass of the provisioning engine (`provision.Engine.RunTenant`), scheduled
+  every 5 s per tenant. It records a `provision` run only when it found work, like the in-process loop.
+
+```
+TESSERA_ENV=prod TESSERA_DB=postgres://… TESSERA_KEK=… \
+  tessera worker -kinds connector_sync,provision_push -concurrency 8 -shutdown-grace 30s
+tessera serve -external-kinds connector_sync,provision_push      # or TESSERA_EXTERNAL_WORKER_KINDS
+```
+
+Flags of `tessera worker`: `-db`, `-kinds` (default both), `-concurrency` (1 to 64, default 4), `-id` (the
+name in leases and in Admin → Jobs), `-poll` (2 s), `-lease` (60 s; the heartbeat runs every third of it),
+`-shutdown-grace` (30 s). It needs the same `TESSERA_ENV`, key (`TESSERA_KEK`) and connector settings as the
+API (`TESSERA_CONNECTORS`, `TESSERA_OKTA_*`, …) because it opens the credentials itself, and every outbound
+call goes through `safehttp`. Default behaviour is unchanged: `tessera serve` runs `connector_sync` on its
+own queue and keeps its provisioning loop; `-external-kinds` / `TESSERA_EXTERNAL_WORKER_KINDS` hands a kind
+to workers (a kind nobody runs just waits in the queue; do not name a kind external and also run it on a
+worker you did not intend, though a duplicate is harmless: claims and operation states are in the database).
+
+- **Crashes and shutdown.** A worker that dies mid-job leaves a lease that expires (`-lease`); another worker
+  claims the job and retries it (the attempt counts; after `max_attempts` it is dead and audited). SIGTERM
+  stops claiming, lets running jobs finish for `-shutdown-grace`, then cancels the rest and releases their
+  leases at once (queued again, attempt given back). Handlers are at-least-once, so a sync converges and a
+  provisioning operation is claimed by an optimistic state change.
+- **Health.** Each worker, and an API process running queue kinds, beats every 10 s into `queue_workers`
+  (schema 0460; one row per tenant it serves, removed on a clean stop, forgotten a day after a crash).
+  `GET /api/queue/workers` (`jobs.read`) and the Workers table of Admin → Jobs show host, version, kinds,
+  running / concurrency and the last heartbeat; a worker silent for 30 s is `stale`.
+- **High availability.** Run N workers (2 or more, on different hosts) against **Postgres**: a job is leased by
+  `FOR UPDATE SKIP LOCKED`, so each runs on one worker at a time, a worker that disappears costs one lease
+  period of delay, and schedules fire once per window however many workers poll. Size `-lease` above the
+  longest pause you expect (it is renewed every third of it) and `-concurrency` to the sources' rate limits. On
+  SQLite, workers on one host share the file and work, but there is one writer at a time; use it for
+  development only. Worker health rows cost tenants × workers every 10 s.
+
 ### Config transport (dev → test → prod)
 
 Admin → Export / import configuration moves a tenant's connections (config, owners, credential
@@ -954,7 +1032,9 @@ the way the old sweepers did (active tenant list), then works each one in its ow
   (kind = the queue kind, trigger `schedule`, or `retry` from the second attempt), so the run history of
   #172 and Admin → Jobs show it, and a failure appends `job.failed`. A sweep that finds nothing returns no
   result and records nothing, as before. `GET /api/queue/jobs?status=&kind=` and `GET
-  /api/queue/schedules` (`jobs.read`) feed the Queue section of Admin → Jobs.
+  /api/queue/schedules` and `GET /api/queue/workers` (`jobs.read`) feed the Queue section of Admin → Jobs.
+* **Workers.** `connector_sync` and `provision_push` can run in `tessera worker` processes instead (issue
+  #302; see "Connector workers").
 * **Not on the queue yet.** The notification outbox (own dead-letter state and loop) and provisioning
   operations (`provision.Engine`) keep their loops, and the audit checkpointer its own; see Known gaps.
 

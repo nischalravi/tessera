@@ -1,0 +1,168 @@
+package worker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
+)
+
+// RunSync discovers every connector and ingests the result in tx, audits it
+// (connectors.sync) and reconciles intended with observed access (issue
+// #301). full ignores the connectors' checkpoints. It is the body of the
+// on-demand POST /api/connectors/sync, whose request holds tx throughout; the
+// connector_sync job uses syncTenant, which holds no transaction while it
+// waits on the sources.
+func RunSync(ctx context.Context, tx *store.TenantTx, now time.Time, conns []connectors.Connector, full bool, actor string) (ojson.Object, error) {
+	results, err := discoverAll(ingest.WithCheckpoints(ctx, tx), conns, full)
+	if err != nil {
+		return nil, err
+	}
+	return ingestResults(tx, now, results, actor)
+}
+
+func discoverAll(ctx context.Context, conns []connectors.Connector, full bool) ([]*connectors.DiscoveryResult, error) {
+	if full {
+		ctx = connsync.WithMode(ctx, connsync.Full)
+	}
+	var results []*connectors.DiscoveryResult
+	for _, cn := range conns {
+		res, err := cn.Discover(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%s: discover: %w", cn.System(), err)
+		}
+		results = append(results, res)
+	}
+	return results, nil
+}
+
+func ingestResults(tx *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult, actor string) (ojson.Object, error) {
+	stats, err := ingest.Discovery(tx, now, results, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Audit(now, actor, "connectors.sync", stats.Object()); err != nil {
+		return nil, err
+	}
+	if _, err := reconcile.RunDrift(tx, now, actor); err != nil {
+		return nil, err
+	}
+	return stats.Object(), nil
+}
+
+// syncTenant is RunSync for a worker. The sources are read with no transaction
+// open: a slow source must not hold the database's write lock (on SQLite that
+// stops every other writer, the worker's own lease heartbeat included) or sit
+// in an open Postgres transaction. Then the results, the checkpoints the
+// connectors moved and the sync jobs of the agent-bound connections are written
+// in one transaction, so a failed ingest still rolls the checkpoints back with
+// the records. window keys the agent jobs (the queue job's id).
+func (d *Deps) syncTenant(ctx context.Context, t tenancy.ID, now time.Time, conns []connectors.Connector, full bool, actor, window string) (ojson.Object, error) {
+	cps := &bufferedCheckpoints{db: d.DB, tenant: t, pending: map[[2]string]*pendingCheckpoint{}}
+	results, err := discoverAll(connsync.WithStore(ctx, cps), conns, full)
+	if err != nil {
+		return nil, err
+	}
+	var out ojson.Object
+	err = d.DB.InTenant(ctx, t, func(tx *store.TenantTx) error {
+		if err := cps.apply(tx); err != nil {
+			return err
+		}
+		var err error
+		if out, err = ingestResults(tx, now, results, actor); err != nil {
+			return err
+		}
+		n, err := QueueAgentSyncs(tx, now, window)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			out = append(out, ojson.KV{Key: "agent_jobs_queued", Value: n})
+		}
+		return nil
+	})
+	return out, err
+}
+
+type pendingCheckpoint struct {
+	cp      *connsync.Checkpoint
+	deleted bool
+}
+
+// bufferedCheckpoints is the connsync.Store of a worker's sync: it reads the
+// stored checkpoints in short read transactions, keeps what the connectors
+// save or delete in memory (and serves it back to them), and apply writes it
+// in the ingest transaction.
+type bufferedCheckpoints struct {
+	db     *store.DB
+	tenant tenancy.ID
+
+	mu      sync.Mutex
+	pending map[[2]string]*pendingCheckpoint
+}
+
+func (b *bufferedCheckpoints) Load(ctx context.Context, system, name string) (*connsync.Checkpoint, error) {
+	b.mu.Lock()
+	p, ok := b.pending[[2]string{system, name}]
+	b.mu.Unlock()
+	if ok {
+		if p.deleted {
+			return nil, nil
+		}
+		return p.cp, nil
+	}
+	var cp *connsync.Checkpoint
+	err := b.db.ReadTenant(ctx, b.tenant, func(tx *store.TenantTx) error {
+		k, err := tx.ConnectorCheckpoint(system, name)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		cp = &connsync.Checkpoint{Cursor: k.Cursor, State: k.State, FullSyncAt: k.FullSyncAt, UpdatedAt: k.UpdatedAt}
+		return nil
+	})
+	return cp, err
+}
+
+func (b *bufferedCheckpoints) Save(_ context.Context, system, name string, cp *connsync.Checkpoint) error {
+	b.mu.Lock()
+	b.pending[[2]string{system, name}] = &pendingCheckpoint{cp: cp}
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *bufferedCheckpoints) Delete(_ context.Context, system, name string) error {
+	b.mu.Lock()
+	b.pending[[2]string{system, name}] = &pendingCheckpoint{deleted: true}
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *bufferedCheckpoints) apply(tx *store.TenantTx) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for k, p := range b.pending {
+		if p.deleted {
+			if err := tx.DeleteConnectorCheckpoint(k[0], k[1]); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := tx.PutConnectorCheckpoint(&store.ConnectorCheckpoint{System: k[0], Name: k[1], Cursor: p.cp.Cursor,
+			State: p.cp.State, FullSyncAt: p.cp.FullSyncAt, UpdatedAt: p.cp.UpdatedAt}); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -201,7 +201,7 @@ var tables = []string{
 	// request access drafts (schema/0312_request_drafts.sql)
 	"request_drafts",
 	// durable job queue (schema/0320_queue.sql)
-	"queue_jobs", "queue_schedules",
+	"queue_jobs", "queue_schedules", "queue_workers", "agent_jobs",
 	// role mining (schema/0420_role_mining.sql)
 	"role_mining_runs", "role_mining_candidates",
 	// log retention settings and archive segments (schema/0400, 0401; issue #298)

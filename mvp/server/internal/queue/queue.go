@@ -196,6 +196,18 @@ func (q *Queue) Schedule(name, kind, spec string, maxAttempts int) {
 	q.schedules = append(q.schedules, scheduleDef{name: name, kind: kind, spec: sp, maxAttempts: maxAttempts})
 }
 
+// WorkerID is the name this worker holds leases under (Owner, defaulted).
+func (q *Queue) WorkerID() string {
+	q.init()
+	return q.Owner
+}
+
+// Running is how many jobs this worker is running now.
+func (q *Queue) Running() int {
+	q.init()
+	return len(q.sem)
+}
+
 // Kinds lists the registered kinds, sorted.
 func (q *Queue) Kinds() []string {
 	q.mu.Lock()

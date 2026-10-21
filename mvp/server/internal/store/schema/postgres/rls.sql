@@ -1969,3 +1969,17 @@ DROP POLICY IF EXISTS tenant_isolation ON questionnaire_answers;
 CREATE POLICY tenant_isolation ON questionnaire_answers
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE queue_workers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE queue_workers FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON queue_workers;
+CREATE POLICY tenant_isolation ON queue_workers
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE agent_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_jobs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON agent_jobs;
+CREATE POLICY tenant_isolation ON agent_jobs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

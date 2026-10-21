@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,11 +13,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
-	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
-	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
-	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/jml"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
@@ -27,13 +25,13 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/questionnaires"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
-	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/internal/usage"
+	"github.com/nischalravi/tessera/mvp/server/internal/worker"
 )
 
 // registerRoutes declares every route and how it reaches tenant data:
@@ -347,39 +345,38 @@ func (s *Server) listConnectors(_ http.ResponseWriter, r *http.Request, _ *param
 func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	// ?mode=full ignores connector checkpoints and re-reads every source.
 	mode := p.queryOptLiteral("mode", []string{"incremental", "full"})
+	// ?async=true queues the sync for a worker (issue #302) instead of
+	// running it in this request.
+	async := p.queryOptLiteral("async", []string{"true", "false"})
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
 	now := s.clock()
+	c := store.TxFrom(r.Context())
+	if async != nil && *async == "true" {
+		payload := worker.SyncPayload{}
+		if mode != nil {
+			payload.Mode = *mode
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		id := store.NewID()
+		if _, err := s.queue.EnqueueTx(c, jobs.ConnectorSync, string(raw), id, now, maxSweepAttempts); err != nil {
+			return nil, err
+		}
+		if err := c.Audit(now, actor(r), "connectors.sync_queued", ojson.Object{{Key: "key", Value: id},
+			{Key: "mode", Value: payload.Mode}}); err != nil {
+			return nil, err
+		}
+		return ojson.Object{{Key: "queued", Value: true}, {Key: "key", Value: id}}, nil
+	}
 	conns, err := s.cfg.Connectors(now)
 	if err != nil {
 		return nil, err
 	}
-	c := store.TxFrom(r.Context())
-	ctx := ingest.WithCheckpoints(r.Context(), c)
-	if mode != nil && *mode == "full" {
-		ctx = connsync.WithMode(ctx, connsync.Full)
-	}
-	var results []*connectors.DiscoveryResult
-	for _, cn := range conns {
-		res, err := cn.Discover(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("%s: discover: %w", cn.System(), err)
-		}
-		results = append(results, res)
-	}
-	stats, err := ingest.Discovery(c, now, results, false)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.Audit(now, "system", "connectors.sync", stats.Object()); err != nil {
-		return nil, err
-	}
-	// reconcile intended with the access the sync just observed (issue #301)
-	if _, err := reconcile.RunDrift(c, now, "system"); err != nil {
-		return nil, err
-	}
-	return stats.Object(), nil
+	return worker.RunSync(r.Context(), c, now, conns, mode != nil && *mode == "full", "system")
 }
 
 // ---------------------------------------------------------------- summary
