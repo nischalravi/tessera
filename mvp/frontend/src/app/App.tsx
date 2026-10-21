@@ -7,6 +7,7 @@ import { SessionProvider, useSession } from "./auth";
 import { PaletteProvider } from "./CommandPalette";
 import { PersonaProvider } from "./persona";
 import { Shell } from "./Shell";
+import { PrefsGate } from "./PrefsGate";
 import { ThemeProvider } from "./theme";
 
 /**
@@ -28,6 +29,7 @@ const Home = named(() => import("../features/home/Home"), "Home");
 const Inbox = named(() => import("../features/inbox/Inbox"), "Inbox");
 const Notifications = named(() => import("../features/notifications/Notifications"), "Notifications");
 const RequestAccess = named(access, "RequestAccess");
+const ServiceAccountForm = named(access, "ServiceAccountForm");
 const MyAccess = named(access, "MyAccess");
 const Requests = named(access, "Requests");
 const JIT = named(access, "JIT");
@@ -63,6 +65,7 @@ const AgentAuthorization = named(() => import("../features/agents/AgentAuthoriza
 const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege"), "LeastPrivilege");
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
+const OAuthApps = named(() => import("../features/security/OAuthApps"), "OAuthApps");
 const Alerts = named(() => import("../features/alerts/Alerts"), "Alerts");
 const MfaPosture = named(() => import("../features/insights/MfaPosture"), "MfaPosture");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
@@ -93,6 +96,10 @@ const VendorCompromised = named(rotationPages, "VendorCompromised");
 const SharedSignals = named(() => import("../features/admin/SharedSignals"), "SharedSignals");
 const EventSinks = named(() => import("../features/admin/EventSinks"), "EventSinks");
 const RequestSettings = named(() => import("../features/admin/RequestSettings"), "RequestSettings");
+const StepUpPolicy = named(() => import("../features/admin/StepUpPolicy"), "StepUpPolicy");
+const SodViewSettings = named(() => import("../features/admin/SodViewSettings"), "SodViewSettings");
+const ReviewTypes = named(() => import("../features/governance/ReviewTypes"), "ReviewTypes");
+const Preferences = named(() => import("../features/account/Preferences"), "Preferences");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
 const AdminUsers = named(() => import("../features/admin/Users"), "Users");
@@ -168,6 +175,7 @@ export default function App() {
       <ToastProvider>
         <ConfirmProvider>
           <SessionProvider>
+          <PrefsGate>
           <PersonaProvider>
             <PaletteProvider>
               <Shell>
@@ -185,6 +193,7 @@ export default function App() {
 
                     <Route path="/access" element={<Navigate to="/access/request" replace />} />
                     <Route path="/access/request" element={<RequestAccess />} />
+                    <Route path="/access/request/service-account" element={<ServiceAccountForm />} />
                     <Route path="/access/mine" element={<MyAccess />} />
                     <Route path="/access/requests" element={<Requests />} />
                     <Route path="/access/jit" element={<JIT />} />
@@ -235,6 +244,7 @@ export default function App() {
 
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
                     <Route path="/alerts" element={<Alerts />} />
+                    <Route path="/security/oauth-apps" element={<OAuthApps />} />
                     <Route path="/governance/policies" element={<Policies />} />
                     <Route path="/governance/mitigations" element={<Mitigations />} />
                     <Route path="/governance/attributes" element={<AttributePolicies />} />
@@ -265,6 +275,10 @@ export default function App() {
                     <Route path="/admin/platform-health" element={<PlatformHealth />} />
                     <Route path="/admin/event-sinks" element={<EventSinks />} />
                     <Route path="/admin/request-settings" element={<RequestSettings />} />
+                    <Route path="/admin/step-up" element={<StepUpPolicy />} />
+                    <Route path="/admin/sod-page" element={<SodViewSettings />} />
+                    <Route path="/governance/review-types" element={<ReviewTypes />} />
+                    <Route path="/account/preferences" element={<Preferences />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}
@@ -285,6 +299,7 @@ export default function App() {
               </Shell>
             </PaletteProvider>
           </PersonaProvider>
+          </PrefsGate>
           </SessionProvider>
         </ConfirmProvider>
       </ToastProvider>

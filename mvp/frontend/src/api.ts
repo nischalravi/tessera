@@ -6,6 +6,8 @@
  * every mounted `useApi` refetches, so counts (Inbox badge, KPIs) stay consistent.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatDateTime, formatDay, preferencesPath } from "./prefs.ts";
+import type { Preferences, PreferencesView } from "./prefs.ts";
 
 const cache = new Map<string, unknown>();
 export const CHANGED = "tessera:api-changed";
@@ -962,6 +964,8 @@ export interface ReviewSchedule {
   launches: ReviewLaunch[];
   /** Business roles whose memberships it reviews (none: grants). */
   role_ids: string[];
+  /** The review type it runs as (reviewers and close-out follow the type's settings); null: the original schedule. */
+  review_type: string | null;
 }
 export interface ReviewScheduleInput {
   name: string; system: string | null; privileged_only: boolean; unused_days: number; duration_days: number; reminder_days: number;
@@ -969,6 +973,8 @@ export interface ReviewScheduleInput {
   first_run_at?: string; enabled: boolean;
   /** Omitted: kept on update. */
   role_ids?: string[];
+  /** Omitted: kept on update; "" clears it. */
+  review_type?: string;
 }
 export const createReviewSchedule = (b: ReviewScheduleInput) => api<ReviewSchedule>("/reviews/schedules", b);
 export const updateReviewSchedule = (id: string, b: ReviewScheduleInput) => api<ReviewSchedule>(`/reviews/schedules/${encodeURIComponent(id)}`, b, "PUT");
@@ -1011,12 +1017,28 @@ export interface IdentityMerge {
 export interface CreatedAfter { table: string; id: string; at: string }
 export interface UnmergeResult { merge: IdentityMerge; restored: MergeMove[]; kept: MergeMove[]; created_after?: CreatedAfter[] }
 
+/**
+ * Pinning or releasing an account needs two admins (#376): the first call answers 202 with
+ * status "pending_second_admin" and changes nothing; a different admin's identical call applies it.
+ */
+export interface PendingAccountLink { status: "pending_second_admin"; request: AccountLinkRequest }
+export type AccountLinkResult = { account: CorrAccount; decision: LinkDecision } | PendingAccountLink;
+export const isPendingAccountLink = (r: unknown): r is PendingAccountLink => (r as PendingAccountLink | null)?.status === "pending_second_admin";
+/** A pin or release waiting for a second admin. identity_id is null for a release. */
+export interface AccountLinkRequest {
+  account_id: number; account?: string; action: "link" | "release"; identity_id: number | null;
+  identity_name?: string; previous_identity_id: number | null; previous_identity_name?: string; reason: string;
+  requested_by: string; requested_by_user_id: string; requested_at: string; expires_at: string;
+}
 export const linkAccount = (accountId: number, identityId: number, reason: string) =>
-  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, { identity_id: identityId, reason });
+  api<AccountLinkResult>(`/accounts/${accountId}/link`, { identity_id: identityId, reason });
 export const markNotPerson = (accountId: number, reason: string) =>
   api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/not-person`, { reason });
 export const releaseAccount = (accountId: number) =>
-  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, undefined, "DELETE");
+  api<AccountLinkResult>(`/accounts/${accountId}/link`, undefined, "DELETE");
+/** The requester withdraws a pending pin or release. */
+export const cancelAccountLinkRequest = (accountId: number) =>
+  api<{ cancelled: boolean }>(`/correlation/link-requests/${accountId}`, undefined, "DELETE");
 /**
  * Ask for a merge. Where either person holds privileged access, has IAL 2 or more or is an
  * employee, the API answers 202 with a request that a second reviewer approves; the merge has not happened.
@@ -1264,6 +1286,10 @@ export type StageKind = "manager" | "owner" | "decider" | "sponsor";
 export interface RequestStage {
   index: number;
   kind: StageKind;
+  /** The step of the workflow that made the stage (issue #298); absent for a stage of the item's approval policy. */
+  label?: string;
+  /** A workflow wait can hold a stage: it opens at this time. */
+  started_at?: string | null;
   status: "queued" | "waiting" | "approved" | "denied" | "closed";
   assignee: PersonRef | null;
   due_at: string | null;
@@ -1329,6 +1355,88 @@ export const requestSettingsPath = "/request-settings";
 export const requestSettings = {
   save: (version: number, s: RequestSettings) => api<RequestSettingsView>(requestSettingsPath, { version, ...s }, "PUT"),
 };
+
+/** SoD page configuration (Admin → SoD page): which optional columns and filters SoD reviewers see on the conflicts page. */
+export type SodViewKey = "risk" | "function" | "entitlement" | "ruleset" | "mitigating_control" | "business_process";
+export interface SodViewSettings {
+  columns: SodViewKey[];
+  filters: SodViewKey[];
+}
+export interface SodViewView extends SodViewSettings {
+  /** 0 until the tenant saves it for the first time (everything shown). */
+  version: number;
+  available: SodViewKey[];
+  can_manage: boolean;
+}
+export const sodViewPath = "/sod/view-settings";
+export const sodView = {
+  save: (version: number, s: SodViewSettings) => api<SodViewView>(sodViewPath, { version, ...s }, "PUT"),
+};
+
+/** Step-up per action (Admin → Step-up): what the code requires of each sensitive action, and what the tenant adds. */
+export interface StepUpRequirement { acr: string; max_age_s: number }
+export interface StepUpAction {
+  /** The permission whose state-changing routes the entry covers. */
+  action: string;
+  /** What the code requires (the weakest of the action's routes with a step-up); null: nothing. */
+  floor: StepUpRequirement | null;
+  /** Some route of the action has no step-up in code, so an entry adds one there. */
+  unguarded: boolean;
+  routes: number;
+  policy: StepUpRequirement | null;
+  effective: StepUpRequirement | null;
+}
+export interface StepUpPolicyView {
+  version: number;
+  actions: StepUpAction[];
+  acrs: string[];
+  min_max_age_s: number;
+  max_max_age_s: number;
+  allow_weaker: boolean;
+  can_manage: boolean;
+}
+export const stepUpPolicyPath = "/stepup-policy";
+export const stepUpPolicy = {
+  save: (version: number, entries: Record<string, StepUpRequirement>) =>
+    api<StepUpPolicyView>(stepUpPolicyPath, { version, entries }, "PUT"),
+};
+
+/** Campaign configuration per review type (Governance → Review types, issue #298). */
+export type ReviewerSource = "owner" | "owner_or_backup" | "fixed";
+export type OnIncomplete = "revoke" | "escalate" | "keep";
+export interface ReviewTypeSettings {
+  enabled: boolean;
+  reviewer_source: ReviewerSource;
+  reviewer_id: number | null;
+  fallback_reviewer_id: number | null;
+  on_incomplete: OnIncomplete;
+  escalation_days: number;
+}
+export interface ReviewTypeRow extends ReviewTypeSettings {
+  type: string;
+  label: string;
+  reviewer: string;
+  scope: string;
+  version: number;
+  reviewer_person: { id: number; name: string } | null;
+  fallback_reviewer_person: { id: number; name: string } | null;
+  /** schedules that run as this type */
+  schedules: number;
+}
+export interface ReviewTypeList { types: ReviewTypeRow[]; can_manage: boolean }
+export const reviewTypesPath = "/review-types";
+export const reviewTypes = {
+  save: (type: string, version: number, s: ReviewTypeSettings) =>
+    api<ReviewTypeRow>(`${reviewTypesPath}/${encodeURIComponent(type)}`, { version, ...s }, "PUT"),
+};
+
+/** User preferences, under My account (issue #298): see prefs.ts for what they do. */
+export const preferences = {
+  save: (p: Preferences) => api<PreferencesView>(preferencesPath, p, "PUT"),
+};
+export { preferencesPath };
+export type { Preferences, PreferencesView };
+
 /** Questionnaires (Governance → Questionnaires, issue #298): forms asked at request time and in review decisions. */
 export type QuestionType = "short_text" | "long_text" | "single_choice" | "multi_choice" | "yes_no" | "date";
 export interface Question {
@@ -1377,8 +1485,15 @@ export interface AnsweredQuestionnaire {
 export const questionnairesPath = "/questionnaires";
 const questionnairePath = (id: string, rest = "") => questionnairesPath + "/" + encodeURIComponent(id) + rest;
 /** The query for what a form must ask: catalog items, a role, a review campaign or a review item. */
-export const neededPath = (q: { catalogItemIds?: string[]; roleId?: string; reviewCampaignId?: number; reviewItemId?: number }) => {
+export const neededPath = (q: { catalogItemIds?: string[]; roleId?: string; reviewCampaignId?: number; reviewItemId?: number;
+  serviceAccount?: { kind: string; primaryOwnerId: number; system?: string; identityId?: number } }) => {
   const p = new URLSearchParams();
+  if (q.serviceAccount) {
+    p.set("service_account_kind", q.serviceAccount.kind);
+    p.set("primary_owner_id", String(q.serviceAccount.primaryOwnerId));
+    if (q.serviceAccount.system) p.set("system", q.serviceAccount.system);
+    if (q.serviceAccount.identityId) p.set("identity_id", String(q.serviceAccount.identityId));
+  }
   if (q.catalogItemIds?.length) p.set("catalog_item_ids", q.catalogItemIds.join(","));
   if (q.roleId) p.set("role_id", q.roleId);
   if (q.reviewCampaignId) p.set("review_campaign_id", String(q.reviewCampaignId));
@@ -1390,6 +1505,135 @@ export const questionnaires = {
   edit: (id: string, version: number, spec: QuestionnaireSpec) => api<QuestionnaireDetail>(questionnairePath(id), { version, ...spec }, "PUT"),
   retire: (id: string) => api<Questionnaire>(questionnairePath(id, "/retire"), {}),
   attach: (id: string, targets: QuestionnaireTarget[]) => api<Questionnaire>(questionnairePath(id, "/attachments"), { targets }, "PUT"),
+};
+
+/** Workflow designer (Governance → Workflows, issue #298): versioned definitions that route approvals. */
+export type WorkflowScope = "access" | "service_account";
+export type WorkflowStepType = "approval" | "questionnaire" | "notify" | "wait" | "condition" | "provisioning";
+export type WorkflowOp = "eq" | "ne" | "in" | "not_in";
+export interface WorkflowCondition { attribute: string; op: WorkflowOp; values: string[] }
+/** One step. Fields that do not belong to the step's type stay absent; "next" and a condition's "then" and "else" name a step id or "end". */
+export interface WorkflowStep {
+  id: string;
+  type: WorkflowStepType;
+  name?: string;
+  next?: string;
+  approver?: string;
+  group_id?: string;
+  escalate_after_hours?: number;
+  questionnaire_id?: string;
+  notify?: string;
+  message?: string;
+  hours?: number;
+  when?: WorkflowCondition;
+  then?: string;
+  else?: string;
+}
+export interface WorkflowTarget { kind: "catalog_item" | "request_type"; target_id: string }
+export interface WorkflowSpec { name: string; description: string; steps: WorkflowStep[] }
+export interface Workflow extends WorkflowSpec {
+  id: string;
+  scope: WorkflowScope;
+  status: "active" | "retired";
+  version: number;
+  targets: WorkflowTarget[];
+  runs: number;
+  created_at: string;
+  updated_by: string;
+  updated_at: string;
+}
+export interface WorkflowDetail extends Workflow { versions: (WorkflowSpec & { version: number })[] }
+export interface WorkflowIssue { step?: string; code: string; message: string }
+/** What the editor offers, by scope. */
+export interface WorkflowVocabulary {
+  step_types: WorkflowStepType[];
+  approvers: Record<WorkflowScope, string[]>;
+  notify: string[];
+  attributes: Record<WorkflowScope, string[]>;
+  ops: WorkflowOp[];
+  request_types: Record<WorkflowScope, string[]>;
+  limits: Record<string, number>;
+}
+export interface WorkflowList extends WorkflowVocabulary { workflows: Workflow[]; can_manage: boolean }
+export interface WorkflowRef { id: string; name: string; version: number }
+export const workflowsPath = "/workflows";
+const workflowPath = (id: string, rest = "") => workflowsPath + "/" + encodeURIComponent(id) + rest;
+export const workflows = {
+  create: (scope: WorkflowScope, spec: WorkflowSpec) => api<Workflow>(workflowsPath, { scope, ...spec }),
+  /** Checks a draft against the server's rules; saves nothing. */
+  validate: (scope: WorkflowScope, steps: WorkflowStep[]) => api<{ valid: boolean; issues: WorkflowIssue[] }>(workflowsPath + "/validate", { scope, steps }),
+  edit: (id: string, version: number, spec: WorkflowSpec) => api<WorkflowDetail>(workflowPath(id), { version, ...spec }, "PUT"),
+  retire: (id: string) => api<Workflow>(workflowPath(id, "/retire"), {}),
+  assign: (id: string, targets: WorkflowTarget[]) => api<Workflow>(workflowPath(id, "/assignments"), { targets }, "PUT"),
+};
+
+/** Service-account requests (Access → Request access, issue #298): create, change or transfer a service account, with mandatory owners. */
+export type ServiceAccountRequestKind = "create" | "change" | "transfer";
+export type ServiceAccountRequestStatus = "pending" | "approved" | "fulfilled" | "denied" | "cancelled";
+export interface ServiceAccountRequest {
+  id: string;
+  kind: ServiceAccountRequestKind;
+  status: ServiceAccountRequestStatus;
+  account: PersonRef | null;
+  name: string;
+  system: string;
+  username: string;
+  purpose: string;
+  description: string;
+  primary_owner: PersonRef;
+  backup_owner: PersonRef | null;
+  previous_primary_owner: PersonRef | null;
+  previous_backup_owner: PersonRef | null;
+  justification: string;
+  requested_by: { id: string; display_name: string };
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  closed_at: string | null;
+  fulfilled_at: string | null;
+  op_id: string | null;
+  workflow: WorkflowRef | null;
+  /** The requester's answers to the questionnaires its workflow asks, in the detail view only. */
+  questionnaires?: AnsweredQuestionnaire[];
+  stages: RequestStage[];
+  can_approve: boolean;
+  can_cancel: boolean;
+}
+/** A service account with its owners, for the change and transfer forms. */
+export interface ServiceAccountRow {
+  id: number;
+  name: string;
+  status: string;
+  purpose: string;
+  primary_owner: PersonRef | null;
+  backup_owner: PersonRef | null;
+  systems: string[];
+  /** the id of the request that is open about it (only one at a time) */
+  open_request: string | null;
+}
+export interface ServiceAccountList { accounts: ServiceAccountRow[]; systems: string[] }
+export interface ServiceAccountInput {
+  kind: ServiceAccountRequestKind;
+  identity_id?: number;
+  name?: string;
+  system?: string;
+  username?: string;
+  purpose?: string;
+  description?: string;
+  primary_owner_id?: number;
+  backup_owner_id?: number;
+  justification: string;
+  answers?: AnswersByQuestionnaire;
+}
+export const serviceAccountsPath = "/service-accounts";
+export const serviceAccountRequestsPath = "/service-account-requests";
+const saRequest = (id: string, action: string, body: object = {}) => api<ServiceAccountRequest>(`${serviceAccountRequestsPath}/${encodeURIComponent(id)}/${action}`, body);
+export const serviceAccountRequests = {
+  file: (b: ServiceAccountInput) => api<ServiceAccountRequest>(serviceAccountRequestsPath, b),
+  approve: (id: string, reason?: string) => saRequest(id, "approve", reason ? { reason } : {}),
+  deny: (id: string, reason: string) => saRequest(id, "deny", { reason }),
+  cancel: (id: string) => saRequest(id, "cancel"),
 };
 
 export type RequestStatus = "pending" | "approved" | "denied" | "cancelled" | "expired" | "removed";
@@ -1414,6 +1658,8 @@ export interface RequestLine {
   /** The requester's answers, in the detail view only. */
   questionnaires?: AnsweredQuestionnaire[];
   stages: RequestStage[];
+  /** The workflow that routed the line (issue #298); absent: the item's approval policy did. */
+  workflow?: WorkflowRef;
   can_approve: boolean;
   can_cancel: boolean;
   can_remove: boolean;
@@ -1454,9 +1700,48 @@ export interface OrgRow {
 export interface OrgDetail extends OrgRow {
   parent: OrgRow | null;
   owners: OrgPerson[];
+  /** assigned: administrators named the owners (Organization settings); derived: the top of the reporting lines */
+  owners_source: "assigned" | "derived";
   child_orgs: OrgRow[];
   people: (OrgPerson & { manager: OrgPerson | null; email: string | null })[];
 }
+/** Organization settings (issue #298): assigned owners, policies that apply to the organization's people, and the hierarchy source. */
+export interface OrgPolicies {
+  /** Approval stages for a request whose item has no approval policy of its own; null: none. */
+  default_stages: ("manager" | "owner" | "decider")[] | null;
+  default_escalate_hours: number | null;
+  /** Request settings overrides; they only tighten the tenant's. */
+  justification_required: true | null;
+  justification_min_length: number | null;
+  default_hours: number | null;
+  max_hours: number | null;
+}
+export interface OrgSettingsView {
+  org_id: string;
+  owner_ids: number[];
+  owners: OrgPerson[];
+  policies: OrgPolicies;
+  version: number;
+  can_manage: boolean;
+}
+export interface OrgHierarchySourceView {
+  source: "hr_department";
+  /** Only people ingested from this source form the hierarchy; null: everyone. */
+  system: string | null;
+  version: number;
+  /** the sources people were ingested from */
+  sources: string[];
+  available: string[];
+  can_manage: boolean;
+}
+export const orgSettingsPath = (id: string) => `/orgs/${encodeURIComponent(id)}/settings`;
+export const orgHierarchySourcePath = "/org-hierarchy-source";
+export const orgSettings = {
+  save: (id: string, version: number, owner_ids: number[], policies: OrgPolicies) =>
+    api<OrgSettingsView>(orgSettingsPath(id), { version, owner_ids, policies }, "PUT"),
+  saveSource: (version: number, system: string | null) =>
+    api<OrgHierarchySourceView>(orgHierarchySourcePath, { version, source: "hr_department", system }, "PUT"),
+};
 export const orgsPath = "/orgs";
 export const orgPath = (id: string) => `${orgsPath}/${encodeURIComponent(id)}`;
 
@@ -2924,8 +3209,9 @@ export const asOfPath = (resourceId: number | string, date: string) =>
 
 // ------------------------------------------------------------ formatting
 const asUtc =(s: string) => new Date(s + (s.endsWith("Z") ? "" : "Z"));
-export const fmtDate = (s?: string | null) => (s ? asUtc(s).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "Never");
-export const fmtDay = (s?: string | null) => (s ? asUtc(s).toLocaleDateString(undefined, { dateStyle: "medium" }) : "Never");
+/** Dates and times in the signed-in user's time zone and format (My account > Preferences, see prefs.ts). */
+export const fmtDate = (s?: string | null) => (s ? formatDateTime(asUtc(s)) : "Never");
+export const fmtDay = (s?: string | null) => (s ? formatDay(asUtc(s)) : "Never");
 export const ago = (days?: number | null) =>
   days === null || days === undefined ? "never" : days === 0 ? "today" : days === 1 ? "1 day ago" : `${days} days ago`;
 export function relTime(s?: string | null) {
@@ -3715,9 +4001,10 @@ export interface QueueSchedule {
   name: string; kind: string; spec: string; enabled: boolean; max_attempts: number; next_run_at: string; last_enqueued_at: string | null;
 }
 
-/** A queue worker as one tenant sees it (issue #302): a `tessera worker` or an API process running queue kinds. */
+/** A queue worker as one tenant sees it (issue #302): a `tessera worker` or an API process running queue kinds.
+ * `worker_id` is an opaque label; workers are shared, so there is no host name, PID or build (issue #403). */
 export interface QueueWorker {
-  worker_id: string; mode: "worker" | "api"; status: "healthy" | "stale"; hostname: string; pid: number; version: string;
+  worker_id: string; mode: "worker" | "api"; status: "healthy" | "stale";
   kinds: string[]; concurrency: number; running: number; started_at: string; last_heartbeat_at: string; lag_seconds: number;
 }
 
@@ -4299,4 +4586,56 @@ export const groupSinks = {
   deadLettersPath: (id: string) => `${SINKS_PATH}/${id}/dead-letters?status=all&limit=100`,
   redeliver: (id: string, seq: number) => api(`${SINKS_PATH}/${id}/dead-letters/${seq}/redeliver`, {}),
   discard: (id: string, seq: number) => api(`${SINKS_PATH}/${id}/dead-letters/${seq}/discard`, {}),
+};
+
+// ---- Third-party OAuth apps and grants (issue #107)
+
+export type OAuthSeverity = "critical" | "high" | "medium" | "low" | "none";
+export type OAuthFlag = "high_risk_non_admin" | "unused" | "unverified";
+
+export interface OAuthApp {
+  id: string; provider: "google" | "entra" | "salesforce" | "github"; client_id: string; name: string; publisher: string;
+  verified: boolean; status: "active" | "revoked" | "removed"; risk_score: number; severity: OAuthSeverity; risk_reasons: string[];
+  flags: OAuthFlag[]; grants: number; users: number; owner: { id: number; name: string } | null;
+  first_seen: string; last_seen: string; last_used: string | null; revoked_at: string | null; revoked_by: string | null;
+}
+
+export interface OAuthSyncState { provider: string; status: "ok" | "failed"; attempted_at: string; succeeded_at: string | null; apps: number; grants: number; error: string }
+
+export interface OAuthPendingRevoke { id: string; scope: "app" | "vendor"; target: string; apps: number; grants: number; reason: string; requested_by: string; expires_at: string }
+
+export interface OAuthAppList {
+  apps: OAuthApp[]; summary: { apps: number; grants: number; high_risk: number; high_risk_non_admin: number; unused: number };
+  sync: OAuthSyncState[]; pending_requests: OAuthPendingRevoke[]; unused_days: number; catalog_version: string;
+}
+
+export interface OAuthScope { scope: string; severity: Exclude<OAuthSeverity, "none">; reason: string }
+
+export interface OAuthGrant {
+  id: string; kind: string; user: string; identity: { id: number; name: string } | null; granter_admin: boolean; consent_type: "user" | "admin";
+  scopes: OAuthScope[]; granted_at: string | null; last_used: string | null; status: "active" | "removed" | "revoked" | "revoke_failed";
+  revoked_at: string | null; revoked_by: string | null; revoke_error?: string;
+}
+
+export interface OAuthRevokeReport {
+  scope: string; target: string; total: number; revoked: number; failed: number; manual: number; skipped: number; ok: boolean;
+  items: { app_id: string; app: string; grant_id: string; user: string; outcome: "revoked" | "failed" | "manual" | "skipped"; detail?: string }[];
+}
+
+export interface OAuthRevokePending { status: "pending_second_admin"; request_id: string; apps: number; grants: number; expires_at: string }
+
+/** A revoke answers a report, or a pending request when a second admin must make the same request. */
+export type OAuthRevokeResult = OAuthRevokeReport | OAuthRevokePending;
+
+export const isPendingRevoke = (r: OAuthRevokeResult): r is OAuthRevokePending => "status" in r;
+
+export const oauthApps = {
+  listPath: "/oauth-apps",
+  detailPath: (id: string) => `/oauth-apps/${encodeURIComponent(id)}`,
+  sync: (provider?: string) => api<{ providers: { provider: string; status: string; error?: string; apps: number; grants: number }[] }>("/oauth-apps/sync", provider ? { provider } : {}),
+  setOwner: (id: string, identityId: number | null) => api(`/oauth-apps/${encodeURIComponent(id)}/owner`, { identity_id: identityId }, "PUT"),
+  revokeApp: (id: string, reason: string) => api<OAuthRevokeResult>(`/oauth-apps/${encodeURIComponent(id)}/revoke`, { reason }),
+  revokeGrant: (id: string, grantId: string, reason: string) =>
+    api<OAuthRevokeResult>(`/oauth-apps/${encodeURIComponent(id)}/grants/${encodeURIComponent(grantId)}/revoke`, { reason }),
+  revokeVendor: (vendor: string, reason: string) => api<OAuthRevokeResult>("/oauth-apps/revoke-vendor", { vendor, reason }),
 };

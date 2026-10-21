@@ -96,6 +96,7 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"outbound loopback", []string{"TESSERA_OUTBOUND_ALLOW_LOOPBACK", "true"}, "TESSERA_OUTBOUND_ALLOW_LOOPBACK must be false"},
 		{"safedial allowlist", []string{"TESSERA_SAFEDIAL_ALLOW", "192.168.1.10:636"}, "TESSERA_SAFEDIAL_ALLOW must not be set"},
 		{"simulated rotation adapter", []string{"TESSERA_ROTATION_FAKE_ADAPTERS", "true"}, "TESSERA_ROTATION_FAKE_ADAPTERS must be false"},
+		{"weaker step-up policy", []string{"TESSERA_STEPUP_ALLOW_WEAKER", "true"}, "TESSERA_STEPUP_ALLOW_WEAKER must be false"},
 		{"dev IdP URL set", []string{"TESSERA_DEV_IDP_URL", "http://127.0.0.1:8001"}, "TESSERA_DEV_IDP_URL must not be set"},
 		{"dev fake provisioning target", []string{"TESSERA_DEV_FAKE_TARGET", "1"}, "TESSERA_DEV_FAKE_TARGET must not be set"},
 		{"file audit anchor", []string{"TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl"}, "must not be file://"},
@@ -339,8 +340,19 @@ func TestArchiveSettings(t *testing.T) {
 		t.Error("an http archive URL is accepted in prod")
 	}
 	prod["TESSERA_ARCHIVE_URL"] = "https://objects.example.com/archive"
+	if _, err := config.Load(env(prod)); err == nil || !strings.Contains(err.Error(), "TESSERA_ARCHIVE_TOKEN_SEALED") {
+		t.Errorf("an archive URL without credentials is accepted in prod: %v", err)
+	}
+	prod["TESSERA_ARCHIVE_TOKEN_SEALED"] = "%%%"
+	if _, err := config.Load(env(prod)); err == nil {
+		t.Error("a non-base64 sealed token is accepted")
+	}
+	prod["TESSERA_ARCHIVE_TOKEN_SEALED"] = "c2VhbGVk"
 	if p, err := config.Load(env(prod)); err != nil || p.ArchiveURL != "https://objects.example.com/archive" {
-		t.Errorf("an https archive URL in prod: %v", err)
+		t.Errorf("an https archive URL with a token in prod: %v", err)
+	}
+	if _, err := config.Load(env(map[string]string{"TESSERA_ARCHIVE_TOKEN_SEALED": "c2VhbGVk"})); err == nil {
+		t.Error("a token without an archive URL is accepted")
 	}
 }
 

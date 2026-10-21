@@ -18,9 +18,11 @@ import (
 //
 //	GET    /api/correlation/queue                     unlinked user accounts with proposed people
 //	GET    /api/correlation/decisions                 pinned decisions
-//	POST   /api/accounts/{account_id}/link            {identity_id, reason}
+//	POST   /api/accounts/{account_id}/link            {identity_id, reason}: needs two admins (202 pending_second_admin, see accountLinkGate)
 //	POST   /api/accounts/{account_id}/not-person      {reason}
-//	DELETE /api/accounts/{account_id}/link            release the decision
+//	DELETE /api/accounts/{account_id}/link            release the decision: needs two admins too
+//	GET    /api/correlation/link-requests             pins and releases waiting for a second admin
+//	DELETE /api/correlation/link-requests/{account_id}  the requester withdraws a pending request
 //	POST   /api/identities/{identity_id}/merge        {into, reason}: merge identity_id into "into" (202 and a request when a second reviewer is needed, see matching.go)
 //	GET    /api/identity-merges                       merges, newest first
 //	POST   /api/identity-merges/{merge_id}/unmerge    {reason}: restores the moves; lists what was created since (created_after)
@@ -36,6 +38,8 @@ func (s *Server) registerCorrelationRoutes() {
 	s.handle(G, "/api/correlation/queue", read, need(auth.PermGraphRead), s.correlationQueue)
 	s.handle(G, "/api/correlation/decisions", read, need(auth.PermGraphRead), s.correlationDecisions)
 	s.handle(P, "/api/accounts/{account_id}/link", write, correlate, s.linkAccount)
+	s.handle(G, "/api/correlation/link-requests", read, correlate, s.listAccountLinkRequests)
+	s.handle(http.MethodDelete, "/api/correlation/link-requests/{account_id}", write, correlate, s.cancelAccountLinkRequest)
 	s.handle(P, "/api/accounts/{account_id}/not-person", write, correlate, s.markNotPerson)
 	s.handle(http.MethodDelete, "/api/accounts/{account_id}/link", write, correlate, s.releaseAccount)
 	s.handle(P, "/api/identities/{identity_id}/merge", write, merge, s.mergeIdentity)
@@ -203,18 +207,95 @@ type mergeBody struct {
 	Reason string `json:"reason"`
 }
 
-func (s *Server) decided(r *http.Request, action string, d *correlation.Decision) (any, error) {
+func (s *Server) decided(r *http.Request, action string, d *correlation.Decision, extra ...ojson.KV) (any, error) {
 	c, now := store.TxFrom(r.Context()), s.clock().UTC()
 	det := ojson.Object{{Key: "account_id", Value: d.Account.ID},
 		{Key: "account", Value: d.Account.System + ":" + d.Account.Username},
 		{Key: "decision", Value: d.Link.Decision}, {Key: "from_identity_id", Value: d.Previous},
 		{Key: "to_identity_id", Value: d.Account.IdentityID}, {Key: "reason", Value: d.Link.Reason}}
+	det = append(det, extra...)
 	if err := c.Audit(now, principal(r).Display, action, det); err != nil {
 		return nil, err
 	}
 	return ojson.Object{{Key: "account", Value: viewAccount(d.Account)}, {Key: "decision", Value: viewDecision(d.Link)}}, nil
 }
 
+// accountLinkWindow is how long a pin or release waits for its second admin.
+const accountLinkWindow = 72 * time.Hour
+
+// accountLinkGate is the four-eyes step of a pin or release (issue #376, the
+// pattern of #357 for platform users). The caller has already validated the
+// change. It answers one of:
+//
+//   - a pending request that matches (same action, same identity, made
+//     against the account's current identity, not expired, by another admin):
+//     the caller applies the change and must delete the request (matched);
+//   - 403 four_eyes_required: the same admin repeats their own request;
+//   - a 202 pending_second_admin body: no matching request, so this one is
+//     stored, replacing any other pending one for the account (the first
+//     admin's request is never applied by a differing second request).
+func (s *Server) accountLinkGate(r *http.Request, c *store.TenantTx, now time.Time, a *store.Account, action string,
+	identityID *int64, reason string) (matched *store.AccountLinkRequest, pending any, err error) {
+	by := principal(r).User()
+	pend, err := c.AccountLinkRequest(a.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, nil, err
+	}
+	m := pend != nil && now.Before(pend.ExpiresAt) && pend.Action == action &&
+		sameLink(pend.PreviousIdentityID, a.IdentityID) && sameLink(pend.IdentityID, identityID)
+	same := false
+	if m {
+		if same, err = sameActor(c, pend.RequestedByUserID, by.ID); err != nil {
+			return nil, nil, err
+		}
+	}
+	switch {
+	case m && same:
+		return nil, nil, &readiness.Error{Status: http.StatusForbidden, Code: "four_eyes_required",
+			Msg: "this account change needs a second admin: another admin with identities.correlate must make the same request"}
+	case m:
+		return pend, nil, nil
+	}
+	req := &store.AccountLinkRequest{AccountID: a.ID, Action: action, IdentityID: identityID, PreviousIdentityID: a.IdentityID,
+		Reason: reason, RequestedByUserID: by.ID, RequestedBy: by.Display, RequestedAt: now, ExpiresAt: now.Add(accountLinkWindow)}
+	if err := c.PutAccountLinkRequest(req); err != nil {
+		return nil, nil, err
+	}
+	det := ojson.Object{{Key: "account_id", Value: a.ID}, {Key: "account", Value: a.System + ":" + a.Username},
+		{Key: "action", Value: action}, {Key: "identity_id", Value: identityID},
+		{Key: "from_identity_id", Value: a.IdentityID}, {Key: "reason", Value: reason}, {Key: "expires_at", Value: req.ExpiresAt}}
+	if err := c.Audit(now, by.Display, "identity.account."+action+"_requested", det); err != nil {
+		return nil, nil, err
+	}
+	return nil, statusBody{http.StatusAccepted, ojson.Object{{Key: "status", Value: "pending_second_admin"},
+		{Key: "request", Value: viewAccountLinkRequest(req)}}}, nil
+}
+
+type accountLinkRequestView struct {
+	AccountID          int64     `json:"account_id"`
+	Action             string    `json:"action"`
+	IdentityID         *int64    `json:"identity_id"`
+	PreviousIdentityID *int64    `json:"previous_identity_id"`
+	Reason             string    `json:"reason"`
+	RequestedBy        string    `json:"requested_by"`
+	RequestedByUserID  string    `json:"requested_by_user_id"`
+	RequestedAt        time.Time `json:"requested_at"`
+	ExpiresAt          time.Time `json:"expires_at"`
+}
+
+func viewAccountLinkRequest(q *store.AccountLinkRequest) accountLinkRequestView {
+	return accountLinkRequestView{q.AccountID, q.Action, q.IdentityID, q.PreviousIdentityID, q.Reason, q.RequestedBy,
+		q.RequestedByUserID.String(), q.RequestedAt, q.ExpiresAt}
+}
+
+// requestedKV is the audit detail naming the first admin of an applied change.
+func requestedKV(q *store.AccountLinkRequest) []ojson.KV {
+	return []ojson.KV{{Key: "requested_by", Value: q.RequestedBy}, {Key: "requested_by_user_id", Value: q.RequestedByUserID.String()},
+		{Key: "requested_reason", Value: q.Reason}}
+}
+
+// linkAccount pins an account to an identity. It needs two admins: the first
+// request answers 202, a second admin's identical request applies it.
 func (s *Server) linkAccount(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	actor, err := decider(r)
 	if err != nil {
@@ -228,11 +309,23 @@ func (s *Server) linkAccount(_ http.ResponseWriter, r *http.Request, p *params) 
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	d, err := correlation.Link(store.TxFrom(r.Context()), id, b.IdentityID, b.Reason, actor, s.clock().UTC())
+	c, now := store.TxFrom(r.Context()), s.clock().UTC()
+	a, _, err := correlation.CheckLink(c, id, b.IdentityID, b.Reason)
 	if err != nil {
 		return nil, corrErr(err)
 	}
-	return s.decided(r, "identity.account.link", d)
+	matched, pending, err := s.accountLinkGate(r, c, now, a, store.AccountLinkActionLink, &b.IdentityID, strings.TrimSpace(b.Reason))
+	if err != nil || pending != nil {
+		return pending, err
+	}
+	if err := c.DeleteAccountLinkRequest(id); err != nil {
+		return nil, err
+	}
+	d, err := correlation.Link(c, id, b.IdentityID, b.Reason, actor, now)
+	if err != nil {
+		return nil, corrErr(err)
+	}
+	return s.decided(r, "identity.account.link", d, requestedKV(matched)...)
 }
 
 func (s *Server) markNotPerson(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -255,6 +348,7 @@ func (s *Server) markNotPerson(_ http.ResponseWriter, r *http.Request, p *params
 	return s.decided(r, "identity.account.not_person", d)
 }
 
+// releaseAccount removes an account's pin. It needs two admins, like linkAccount.
 func (s *Server) releaseAccount(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	if _, err := decider(r); err != nil {
 		return nil, err
@@ -263,11 +357,78 @@ func (s *Server) releaseAccount(_ http.ResponseWriter, r *http.Request, p *param
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	d, err := correlation.Release(store.TxFrom(r.Context()), id)
+	c, now := store.TxFrom(r.Context()), s.clock().UTC()
+	a, _, err := correlation.CheckRelease(c, id)
 	if err != nil {
 		return nil, corrErr(err)
 	}
-	return s.decided(r, "identity.account.release", d)
+	matched, pending, err := s.accountLinkGate(r, c, now, a, store.AccountLinkActionRelease, nil, "")
+	if err != nil || pending != nil {
+		return pending, err
+	}
+	if err := c.DeleteAccountLinkRequest(id); err != nil {
+		return nil, err
+	}
+	d, err := correlation.Release(c, id)
+	if err != nil {
+		return nil, corrErr(err)
+	}
+	return s.decided(r, "identity.account.release", d, requestedKV(matched)...)
+}
+
+type accountLinkRequestRowView struct {
+	accountLinkRequestView
+	Account      string `json:"account"`
+	IdentityName string `json:"identity_name"`
+	PreviousName string `json:"previous_identity_name"`
+}
+
+// listAccountLinkRequests lists the pins and releases waiting for a second
+// admin; approving is the same request the first admin made.
+func (s *Server) listAccountLinkRequests(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	rows, err := store.TxFrom(r.Context()).AccountLinkRequests(s.clock().UTC())
+	if err != nil {
+		return nil, err
+	}
+	items := make([]accountLinkRequestRowView, 0, len(rows))
+	for _, q := range rows {
+		items = append(items, accountLinkRequestRowView{viewAccountLinkRequest(&q.AccountLinkRequest), q.System + ":" + q.Username,
+			q.IdentityName, q.PreviousName})
+	}
+	return ojson.Object{{Key: "items", Value: items}, {Key: "count", Value: len(items)}}, nil
+}
+
+// cancelAccountLinkRequest withdraws a pending request; only its requester may.
+func (s *Server) cancelAccountLinkRequest(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	if _, err := decider(r); err != nil {
+		return nil, err
+	}
+	id := p.pathInt("account_id")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	by, c, now := principal(r).User(), store.TxFrom(r.Context()), s.clock().UTC()
+	q, err := c.AccountLinkRequest(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, &readiness.Error{Status: http.StatusNotFound, Code: "no_request", Msg: "the account has no pending request"}
+	} else if err != nil {
+		return nil, err
+	}
+	same, err := sameActor(c, q.RequestedByUserID, by.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !same {
+		return nil, &readiness.Error{Status: http.StatusForbidden, Code: "not_requester", Msg: "only the admin who made the request can cancel it"}
+	}
+	if err := c.DeleteAccountLinkRequest(id); err != nil {
+		return nil, err
+	}
+	det := ojson.Object{{Key: "account_id", Value: id}, {Key: "action", Value: q.Action}, {Key: "identity_id", Value: q.IdentityID}}
+	if err := c.Audit(now, by.Display, "identity.account.link_request_cancelled", det); err != nil {
+		return nil, err
+	}
+	return ojson.Object{{Key: "cancelled", Value: true}, {Key: "account_id", Value: id}}, nil
 }
 
 // mergeActor is the signed-in user who merges, approves or decides.

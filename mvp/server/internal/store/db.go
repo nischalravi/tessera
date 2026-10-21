@@ -142,6 +142,12 @@ var tables = []string{
 	"sod_ruleset_remediation",
 	// tenant request settings (schema/0380_request_settings.sql)
 	"request_settings",
+	// configurable settings (issue #298): SoD page, review types, step-up policy, user preferences, organizations
+	"sod_view_settings",                             // schema/0490_sod_view_settings.sql
+	"review_type_settings", "review_template_types", // schema/0491_review_types.sql
+	"stepup_policy",                                      // schema/0493_stepup_policy.sql
+	"user_preferences",                                   // schema/0494_user_preferences.sql
+	"org_owners", "org_settings", "org_hierarchy_source", // schema/0495_org_settings.sql
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)
@@ -224,6 +230,8 @@ var tables = []string{
 	"org_sponsors", "intake_events", "identity_conversions",
 	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
+	// pending four-eyes OAuth app revokes (schema/0470_oauth_revoke_requests.sql)
+	"oauth_revoke_requests",
 	// guest lifecycle (schema/0371_guest_lifecycle.sql)
 	"guest_lifecycle_settings", "guest_reminders", "guest_renewal_tokens", "guest_lifecycle_tasks", "sponsorship_stepups",
 	"guest_deprovisioning",
@@ -237,6 +245,8 @@ var tables = []string{
 	"agent_profiles", "mcp_findings",
 	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)
 	"identity_link_requests",
+	// pending account pins and releases, the four-eyes step (schema/0500_account_link_requests.sql)
+	"account_link_requests",
 	// groups REST API idempotency keys (schema/0376_groups_api.sql)
 	"grp_idempotency",
 	// group attribute framework (schema/0287_group_attrs.sql)
@@ -257,6 +267,9 @@ var tables = []string{
 	"grp_event_sinks", "grp_sink_dead_letters",
 	// questionnaires, their versions, attachments and answers (schema/0450_questionnaires.sql)
 	"questionnaires", "questionnaire_versions", "questionnaire_attachments", "questionnaire_answers",
+	// workflow definitions, versions, assignments, runs and service-account stages and requests
+	// (schema/0480_workflows.sql, 0481_service_account_requests.sql, 0482_workflow_runs.sql)
+	"workflows", "workflow_versions", "workflow_assignments", "workflow_runs", "workflow_stages", "service_account_requests",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

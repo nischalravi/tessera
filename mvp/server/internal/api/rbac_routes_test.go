@@ -104,6 +104,13 @@ POST   /api/audit/verify                             audit.verify    -
 GET    /api/audit/export                             audit.read      -
 GET    /api/admin/retention                          admin.read      -  # issue #298
 GET    /api/admin/archive/segments                   audit.read      -  # issue #298
+GET    /api/oauth-apps                               graph.read      -  # issue #107
+GET    /api/oauth-apps/{app_id}                      graph.read      -  # issue #107
+POST   /api/oauth-apps/sync                          oauthapps.manage -  # issue #107
+PUT    /api/oauth-apps/{app_id}/owner                oauthapps.manage -  # issue #107
+POST   /api/oauth-apps/revoke-vendor                 oauthapps.revoke STEP_UP_POLICY  # issue #107
+POST   /api/oauth-apps/{app_id}/revoke               oauthapps.revoke STEP_UP_POLICY  # issue #107
+POST   /api/oauth-apps/{app_id}/grants/{grant_id}/revoke oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/admin/archive/segments/{segment_id}/verify audit.verify  -  # issue #298
 GET    /api/admin/archive/segments/{segment_id}/export audit.read    STEP_UP_ADMIN  # issue #298
 GET    /api/readiness/templates                      connections.read   -
@@ -140,6 +147,8 @@ GET    /api/correlation/decisions                    graph.read      -  # issue 
 POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
 POST   /api/accounts/{account_id}/not-person         identities.correlate STEP_UP_POLICY  # issue #160
 DELETE /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
+GET    /api/correlation/link-requests                identities.correlate STEP_UP_POLICY  # issue #376
+DELETE /api/correlation/link-requests/{account_id}   identities.correlate STEP_UP_POLICY  # issue #376
 POST   /api/identities/{identity_id}/merge           identities.merge STEP_UP_POLICY  # issue #160
 GET    /api/identity-merges                          graph.read      -  # issue #160
 GET    /api/identities/{identity_id}/affiliations    graph.read      -  # issue #64
@@ -178,6 +187,18 @@ GET    /api/catalog                                  requests.create -  # issue 
 PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
 GET    /api/request-settings                          requests.create  -  # issue #298
 PUT    /api/request-settings                          catalog.manage  STEP_UP_POLICY  # issue #298
+GET    /api/orgs/{org_id}/settings                   graph.read      -  # issue #298
+PUT    /api/orgs/{org_id}/settings                   catalog.manage  STEP_UP_POLICY  # issue #298
+GET    /api/org-hierarchy-source                     graph.read      -  # issue #298
+PUT    /api/org-hierarchy-source                     catalog.manage  STEP_UP_POLICY  # issue #298
+GET    /api/sod/view-settings                        graph.read      -  # issue #298
+PUT    /api/sod/view-settings                        sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/review-types                             graph.read      -  # issue #298
+PUT    /api/review-types/{review_type}               reviews.manage  STEP_UP_POLICY  # issue #298
+GET    /api/stepup-policy                            admin.read      -  # issue #298
+PUT    /api/stepup-policy                            admin.change.request  STEP_UP_ADMIN  # issue #298
+GET    /api/me/preferences                           auth.self       -  # issue #298
+PUT    /api/me/preferences                           auth.self       -  # issue #298
 GET    /api/questionnaires                           catalog.manage  -  # issue #298
 POST   /api/questionnaires                           catalog.manage  -  # issue #298
 GET    /api/questionnaires/needed                    requests.create -  # issue #298
@@ -185,6 +206,20 @@ GET    /api/questionnaires/{id}                      catalog.manage  -  # issue 
 PUT    /api/questionnaires/{id}                      catalog.manage  -  # issue #298
 POST   /api/questionnaires/{id}/retire               catalog.manage  -  # issue #298
 PUT    /api/questionnaires/{id}/attachments          catalog.manage  -  # issue #298
+GET    /api/workflows                                graph.read      -  # issue #298
+POST   /api/workflows                                workflows.manage STEP_UP_POLICY  # issue #298
+POST   /api/workflows/validate                       workflows.manage -  # issue #298
+GET    /api/workflows/{id}                           graph.read      -  # issue #298
+PUT    /api/workflows/{id}                           workflows.manage STEP_UP_POLICY  # issue #298
+POST   /api/workflows/{id}/retire                    workflows.manage STEP_UP_POLICY  # issue #298
+PUT    /api/workflows/{id}/assignments               workflows.manage STEP_UP_POLICY  # issue #298
+GET    /api/service-accounts                         requests.create -  # issue #298
+POST   /api/service-account-requests                 requests.create -  # issue #298
+GET    /api/service-account-requests                 requests.create -  # issue #298 (scope=all: requests.decide or graph.read)
+GET    /api/service-account-requests/{id}            requests.create -  # issue #298
+POST   /api/service-account-requests/{id}/approve    requests.create STEP_UP_POLICY  # issue #298 (the stage's approvers: checked in the handler)
+POST   /api/service-account-requests/{id}/deny       requests.create -  # issue #298
+POST   /api/service-account-requests/{id}/cancel     requests.create -  # issue #298
 POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
 GET    /api/requests                                 requests.create -  # issue #164 (scope=pending|all: requests.decide or graph.read)
 GET    /api/requests/{request_id}                    requests.create -  # issue #164

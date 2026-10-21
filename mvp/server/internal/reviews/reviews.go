@@ -70,6 +70,9 @@ type Scope struct {
 	// SkipEmpty creates no campaign when no grant is in scope (the campaign id is 0).
 	SkipEmpty bool
 	RoleIDs   []string
+	// Resolver (issue #298) picks reviewers under a review type and limits the
+	// campaign to the identities the type covers. Nil: the original reviewers.
+	Resolver *Resolver
 }
 
 // GenerateCampaign creates a campaign with an item for every risky grant.
@@ -141,6 +144,9 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 	}
 	for _, iid := range g.Identities(true) {
 		ident := people[iid]
+		if scope.Resolver != nil && !scope.Resolver.Includes(ident) {
+			continue
+		}
 		eff := g.EffectivePermissions(iid)
 		var owner *store.Identity
 		if ident.OwnerID != nil {
@@ -223,6 +229,11 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 				}
 			} else if owner != nil && owner.Status == "active" {
 				reviewer = owner
+			}
+			if scope.Resolver != nil {
+				if rr := scope.Resolver.ForGrant(ident, g.Node(ag.Dst)); rr != nil {
+					reviewer = rr
+				}
 			}
 			if reviewer == nil {
 				reviewer = securityLead

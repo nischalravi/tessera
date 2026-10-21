@@ -43,6 +43,34 @@ func TestRequesterCannotApproveOwnRequest(t *testing.T) {
 	wantErr(t, err, http.StatusForbidden, "self_rejection_refused")
 }
 
+// TestSecondUserOfTheSamePersonCannotApprove (issue #402): two platform users linked to
+// one identity are one admin, so neither approves nor rejects the other's request.
+func TestSecondUserOfTheSamePersonCannotApprove(t *testing.T) {
+	h := newHarness(t)
+	a := h.admins("alice", "alice2", "bob")
+	target := h.user("carol", store.RoleViewer)
+	h.tx(func(tx *store.TenantTx) error {
+		id, err := tx.InsertIdentity(&store.Identity{TenantID: tenantID, ExternalID: "alice", Name: "Alice", Type: "human", Status: "active", CreatedAt: h.clk.now()})
+		if err != nil {
+			return err
+		}
+		for _, u := range a[:2] {
+			if err := tx.SetPlatformUserIdentity(u.ID, &id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	ch := mustSubmit(t, h, h.as(a[0]), admin.TypeRoleGrant, grant(target, store.RolePolicyAdmin))
+	_, err := h.svc.Approve(h.ctx, h.as(a[1]), ch.ID, ch.PayloadHash)
+	wantErr(t, err, http.StatusForbidden, "self_approval_refused")
+	_, err = h.svc.Reject(h.ctx, h.as(a[1]), ch.ID)
+	wantErr(t, err, http.StatusForbidden, "self_rejection_refused")
+	if _, err := h.svc.Approve(h.ctx, h.as(a[2]), ch.ID, ch.PayloadHash); err != nil {
+		t.Fatalf("a different person's approval: %v", err)
+	}
+}
+
 // TestApprovalNeedsFreshAdminStepUp: approval (and submission) needs the
 // 5-minute STEP_UP_ADMIN, with the requirement in the denial.
 func TestApprovalNeedsFreshAdminStepUp(t *testing.T) {

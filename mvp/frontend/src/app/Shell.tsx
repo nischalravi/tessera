@@ -301,6 +301,7 @@ function UserMenu() {
           onSelect: () => { reauthenticate(); },
         })),
         ...(session.inactive_roles.length ? [{ label: "Re-authenticate", onSelect: () => { reauthenticate(); } }] : []),
+        { label: "My preferences", onSelect: () => navigate("/account/preferences") },
         { label: "My sessions", onSelect: () => navigate("/sessions") },
         "divider",
         { heading: "View as (demo)" },

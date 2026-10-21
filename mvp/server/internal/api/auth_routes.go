@@ -11,6 +11,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/stepup"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -94,13 +95,28 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 			}
 		}
 	}
-	d := auth.Check(p, rt.spec.Perm, rt.spec.Authn, now)
-	if rt.spec.Authn != nil && !rt.spec.NoConditionalAccess && p.Kind == auth.KindUser &&
+	authn := rt.spec.Authn
+	d := auth.Check(p, rt.spec.Perm, authn, now)
+	if (d == nil || d.Error == "step_up_required") && stepup.Applies(r.Method, rt.spec.Perm, rt.spec.NoTenantStepUp || rt.answersRead) &&
+		rt.tenant != noTenant {
+		// the tenant's step-up policy can add to the route's own requirement
+		eff, err := s.tenantStepUp(r.Context(), p, rt.spec.Perm, authn)
+		if err != nil {
+			s.log.Error("step-up policy lookup failed", "method", r.Method, "path", r.URL.Path, "err", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return r, false
+		}
+		if eff != authn {
+			authn = eff
+			d = auth.Check(p, rt.spec.Perm, authn, now)
+		}
+	}
+	if authn != nil && !rt.spec.NoConditionalAccess && p.Kind == auth.KindUser &&
 		(d == nil || d.Error == "step_up_required") {
 		// a privileged action: the tenant's conditional access policies may
 		// deny it or add a step-up of their own (access.go)
 		var err error
-		if d, err = s.accessCheck(r.Context(), r, nil, p, rt.spec.Perm, rt.spec.Authn, rt.method+" "+rt.pattern); err != nil {
+		if d, err = s.accessCheck(r.Context(), r, nil, p, rt.spec.Perm, authn, rt.method+" "+rt.pattern); err != nil {
 			s.log.Error("conditional access failed", "method", r.Method, "path", r.URL.Path, "err", err)
 			writeAuditUnavailable(w, r)
 			return r, false

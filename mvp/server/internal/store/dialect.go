@@ -138,7 +138,7 @@ var pgOverrides = map[string]string{
 		ORDER BY q.run_at, q.id LIMIT @limit FOR UPDATE OF q SKIP LOCKED`,
 	// The application role has no DELETE on audit_events; archiving an audit range
 	// calls the SECURITY DEFINER function of schema/postgres/0402 (issue #298).
-	"audit_events.archive_purge": `SELECT tessera_archive_purge_audit(@tenant, @through)`,
+	"audit_events.archive_purge": `SELECT tessera_archive_purge_audit(@tenant, @segment)`,
 	"tenants.set_security_contacts": `
 		UPDATE tenants SET security_contacts = CAST(@contacts AS TEXT) WHERE id = @id AND slug != '_platform'
 			AND CAST(@contacts AS TEXT) IS JSON ARRAY`,

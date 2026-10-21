@@ -167,6 +167,9 @@ const (
 	// separation of duties (issue #298): functions, risks and rulesets. Reading
 	// them (and the violations) is graph.read, like the policy violations.
 	PermSoDManage Permission = "sod.manage"
+	// workflow designer (issue #298): create, edit, retire and assign workflows that route approvals.
+	// Routing changes who approves access, so it sits with policy_admin and needs a fresh step-up.
+	PermWorkflowsManage Permission = "workflows.manage"
 	// SoD mitigations (issue #298): sod.mitigate requests a mitigation or acceptance,
 	// escalates a violation; sod.approve is the second person who decides it.
 	PermSoDMitigate Permission = "sod.mitigate"
@@ -184,6 +187,12 @@ const (
 	// It is tenant_admin and policy_admin; the loader's folder privilege
 	// (stem_admin) is then asked in the handler like every group route.
 	PermGroupsLoaderAdmin Permission = "groups.loader.admin"
+	// third-party OAuth app inventory (issue #107): oauthapps.manage refreshes
+	// the inventory and sets an app's owner; oauthapps.revoke revokes grants at
+	// the providers (it cuts SaaS access, so it sits with policy_admin, like
+	// identities.contain). Reading the inventory is graph.read.
+	PermOAuthAppsManage Permission = "oauthapps.manage"
+	PermOAuthAppsRevoke Permission = "oauthapps.revoke"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -205,14 +214,14 @@ var rolePermissions = map[Role][]Permission{
 		PermIdentityMatchesReview, PermMatchingConfigure, PermGuestLifecycleConfigure,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
 		PermGuestsSponsor, PermGuestsRead, PermGuestsRecover, PermSponsorshipsApprove, PermTermsManage, PermIdentitiesContain,
-		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove,
+		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermWorkflowsManage,
 		PermFlatfileUpload, PermFlatfileCloseTasks,
-		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove, PermSSFConfigure, PermAgentsManage, PermGroupsLoaderAdmin},
+		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove, PermSSFConfigure, PermAgentsManage, PermGroupsLoaderAdmin, PermOAuthAppsManage, PermOAuthAppsRevoke},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin,
 		PermJobsRead, PermJobsManage, PermProvisioningRead, PermProvisioningManage, PermConfigTransport,
-		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermFlatfileManage, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermConditionalAccessRead, PermConditionalAccessManage, PermGroupsLoaderAdmin},
+		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermFlatfileManage, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermConditionalAccessRead, PermConditionalAccessManage, PermGroupsLoaderAdmin, PermOAuthAppsManage},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -296,7 +305,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermSecretsRotate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermJobsManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermFlatfileManage, PermFlatfileUpload, PermFlatfileCloseTasks, PermDriftRemediate, PermDriftPolicy, PermGroupsWrite, PermAgentsManage, PermGroupsLoaderAdmin},
+		PermConnectionsManage, PermConnectionsActivate, PermSecretsRotate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermJobsManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermWorkflowsManage, PermFlatfileManage, PermFlatfileUpload, PermFlatfileCloseTasks, PermDriftRemediate, PermDriftPolicy, PermGroupsWrite, PermAgentsManage, PermGroupsLoaderAdmin, PermOAuthAppsManage, PermOAuthAppsRevoke},
 	ScopeAudit: {PermAuditRead, PermAuditVerify, PermAlertsRead, PermSiemRead, PermReviewsExport},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover, PermConfigTransport, PermAlertsConfigure, PermSiemConfigure, PermConditionalAccessManage},

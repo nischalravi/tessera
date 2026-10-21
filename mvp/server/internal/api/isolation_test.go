@@ -162,7 +162,8 @@ var crossTenantCases = map[string]crossTenantCase{
 		body: func(id int64) string { return fmt.Sprintf(`{"identity_id":%d,"reason":"x"}`, id) }},
 	"POST account not person": {method: "POST", path: pathf("/api/accounts/%d/not-person"), key: "acct:okta:alice",
 		body: func(int64) string { return `{"reason":"x"}` }},
-	"DELETE account link": {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
+	"DELETE account link":         {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
+	"DELETE account link request": {method: "DELETE", path: pathf("/api/correlation/link-requests/%d"), key: "acct:okta:alice"},
 	"POST merge identity": {method: "POST", path: pathf("/api/identities/%d/merge"), key: "alice",
 		body: func(id int64) string { return fmt.Sprintf(`{"into":%d,"reason":"x"}`, id) }},
 	"GET identity affiliations":  {method: "GET", path: pathf("/api/identities/%d/affiliations"), key: "alice"},
@@ -219,6 +220,7 @@ var routeParamCases = map[string][]string{
 	"POST /api/accounts/{account_id}/link":                {"POST link account"},
 	"POST /api/accounts/{account_id}/not-person":          {"POST account not person"},
 	"DELETE /api/accounts/{account_id}/link":              {"DELETE account link"},
+	"DELETE /api/correlation/link-requests/{account_id}":  {"DELETE account link request"},
 	"POST /api/identities/{identity_id}/merge":            {"POST merge identity"},
 	"GET /api/identities/{identity_id}/affiliations":      {"GET identity affiliations"},
 	"GET /api/identities/{identity_id}/identifiers":       {"GET identity identifiers"},
@@ -295,6 +297,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/questionnaires/{id}") {
 			continue // TestQuestionnairesAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/workflows/{id}") || strings.HasPrefix(rt.Pattern, "/api/service-account-requests/{id}") {
+			continue // TestWorkflowsAPI_CrossTenant, TestServiceAccountsAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
 			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
@@ -412,6 +417,12 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/admin/") {
 			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/orgs/{org_id}/") || rt.Pattern == "/api/review-types/{review_type}" {
+			continue // TestSettingsAPI_CrossTenant (derived ids and type names, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/oauth-apps/") {
+			continue // TestOAuthAppsAPI (UUIDs, not fixture ids: tenant B gets 404 on A's app and grants)
 		}
 		if _, ok := routeParamCases[rt.Method+" "+rt.Pattern]; !ok {
 			t.Errorf("route %s %s has path parameters but no cross-tenant case", rt.Method, rt.Pattern)
@@ -557,6 +568,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if (strings.HasPrefix(path, "/api/groups/") || path == "/scim/v2/Groups/{id}") && strings.Contains(path, "{") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
 		}
+		if path == "/api/orgs/{org_id}/settings" {
+			continue // TestSettingsAPI_CrossTenant (derived ids, not fixture ids)
+		}
 		if strings.HasPrefix(path, "/api/sod/") && strings.Contains(path, "{") {
 			continue // TestSodAPI_CrossTenant (UUIDs, not fixture ids)
 		}
@@ -566,8 +580,14 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if path == "/api/request-drafts/{draft_id}" {
 			continue // TestRequestDraftsAPI (a UUID, private to its user)
 		}
+		if path == "/api/oauth-apps/{app_id}" {
+			continue // TestOAuthAppsAPI (a UUID, not a fixture id)
+		}
 		if path == "/api/questionnaires/{id}" {
 			continue // TestQuestionnairesAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if path == "/api/workflows/{id}" || path == "/api/service-account-requests/{id}" {
+			continue // TestWorkflowsAPI_CrossTenant, TestServiceAccountsAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		if rp, ok := rotationGetPaths(f.B.Refs)[path]; ok {
 			path = rp // tenant B's own rotation ids

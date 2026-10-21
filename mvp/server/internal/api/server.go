@@ -16,6 +16,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
@@ -48,6 +49,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/mcpauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
+	"github.com/nischalravi/tessera/mvp/server/internal/oauthapps"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -62,6 +64,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/ssf"
+	"github.com/nischalravi/tessera/mvp/server/internal/stepup"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -206,6 +209,9 @@ type Config struct {
 	// RotationFake admits the simulated rotation adapter
 	// (TESSERA_ROTATION_FAKE_ADAPTERS; config refuses it in prod).
 	RotationFake bool
+	// StepUpAllowWeaker lets a tenant step-up policy weaken the code's own
+	// requirements (config.StepUpAllowWeaker; never in prod).
+	StepUpAllowWeaker bool
 	// RotationNotifier tells secret owners about rotations; nil: the audit-event notifier.
 	RotationNotifier rotation.Notifier
 	// Containment runs the kill switch's provider calls (revoke sessions and
@@ -263,9 +269,13 @@ type Server struct {
 	clock  timeutil.Clock
 	log    *slog.Logger
 	routes []*route
-	authn  *auth.Authenticator
-	limits *limiters
-	guests *sponsorship.Service
+	// stepUps is the catalog of actions the tenant step-up policy may name,
+	// built from the routes on first use (stepup_policy.go).
+	stepUps     stepup.Catalog
+	stepUpsOnce sync.Once
+	authn       *auth.Authenticator
+	limits      *limiters
+	guests      *sponsorship.Service
 	// guestLife runs the guest lifecycle: reminders, transfer tasks, conversion, deprovisioning (issue #74)
 	guestLife *guestlife.Service
 
@@ -292,6 +302,8 @@ type Server struct {
 	rotation  *rotation.Service
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
+	// oauthapps is the third-party OAuth app inventory (issue #107); never nil.
+	oauthapps *oauthapps.Service
 	// mcp is the MCP authorization server (issue #115); never nil.
 	mcp *mcpauth.Service
 	// ssf is the Shared Signals receiver (issue #114); never nil.
@@ -395,6 +407,7 @@ func New(cfg Config) *Server {
 	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal, archive: cfg.Archive,
 		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
+	s.oauthapps = &oauthapps.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
 	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
 		PolicyVersion: s.policyVersion}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
@@ -466,6 +479,7 @@ func New(cfg Config) *Server {
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerArchiveRoutes()
+	s.registerOAuthAppsRoutes()
 	s.registerSiemRoutes()
 	s.registerCertificateRoutes()
 	s.registerBrandingRoutes()
@@ -481,7 +495,14 @@ func New(cfg Config) *Server {
 	s.registerRemovalRoutes()
 	s.registerRequestDraftRoutes()
 	s.registerQuestionnaireRoutes()
+	s.registerWorkflowRoutes()
+	s.registerServiceAccountRoutes()
 	s.registerOrgRoutes()
+	s.registerOrgSettingsRoutes()
+	s.registerSodViewRoutes()
+	s.registerReviewTypeRoutes()
+	s.registerStepUpPolicyRoutes()
+	s.registerPreferenceRoutes()
 	s.registerActivityRoutes()
 	s.registerRoleRoutes()
 	s.registerRoleMiningRoutes()

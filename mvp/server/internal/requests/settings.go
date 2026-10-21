@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/orgs"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -187,4 +188,40 @@ func (s Settings) checkForOthers(ben *store.Identity, by Actor, hasPerm bool) er
 		return refuse(403, "for_others_not_allowed", "you can request access only for yourself")
 	}
 	return nil
+}
+
+// WithOrg applies an organization's request settings overrides (issue #298).
+// They only tighten: a justification that is required, a longer minimum, a
+// shorter default and maximum duration. A looser value changes nothing.
+func (s Settings) WithOrg(p orgs.Policies) Settings {
+	if p.JustificationRequired != nil && *p.JustificationRequired {
+		s.JustificationRequired = true
+	}
+	if p.JustificationMinLength != nil && *p.JustificationMinLength > s.JustificationMin {
+		s.JustificationMin = *p.JustificationMinLength
+	}
+	shorter := func(cur, org *float64) *float64 {
+		if org != nil && (cur == nil || *org < *cur) {
+			v := *org
+			return &v
+		}
+		return cur
+	}
+	s.MaxHours = shorter(s.MaxHours, p.MaxHours)
+	s.DefaultHours = shorter(s.DefaultHours, p.DefaultHours)
+	if s.DefaultHours != nil && s.MaxHours != nil && *s.DefaultHours > *s.MaxHours {
+		v := *s.MaxHours
+		s.DefaultHours = &v
+	}
+	return s
+}
+
+// forBeneficiary is the settings a request for ben is held to: the tenant's,
+// tightened by ben's organization.
+func (s Settings) forBeneficiary(tx *store.TenantTx, ben *store.Identity) (Settings, error) {
+	p, err := orgs.PoliciesFor(tx, ben)
+	if err != nil {
+		return s, err
+	}
+	return s.WithOrg(p), nil
 }

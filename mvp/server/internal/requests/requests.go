@@ -36,6 +36,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/questionnaires"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/internal/workflow"
 )
 
 // Limits.
@@ -258,6 +259,14 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 		if err := set.checkForOthers(ben, by, forOthers); err != nil {
 			return "", nil, err
 		}
+		// the beneficiary's organization can tighten the tenant's settings (issue #298)
+		bset, err := set.forBeneficiary(tx, ben)
+		if err != nil {
+			return "", nil, err
+		}
+		if err := bset.checkJustification(just); err != nil {
+			return "", nil, err
+		}
 		if ben.Status != "active" {
 			return "", nil, refuse(409, "beneficiary_not_active", "%s is not active", ben.Name)
 		}
@@ -267,14 +276,24 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 				continue
 			}
 			seen[k] = true
-			l, err := line(tx, batch, ben, iid, s.DurationHours, just, by, set, now)
+			l, err := line(tx, batch, ben, iid, s.DurationHours, just, by, bset, now)
 			if err != nil {
 				return "", nil, err
 			}
 			lines = append(lines, l)
 		}
 	}
-	checked, perItem, err := checkAnswers(tx, lines, s.Answers)
+	plans := map[string]*workflow.Plan{} // by line: the path a workflow selects (issue #298); none: the item's policy
+	for _, l := range lines {
+		ben, err := tx.Identity(l.BeneficiaryID)
+		if err != nil {
+			return "", nil, err
+		}
+		if plans[l.ID], err = planLine(tx, l, ben); err != nil {
+			return "", nil, err
+		}
+	}
+	checked, perLine, err := checkAnswers(tx, lines, plans, s.Answers)
 	if err != nil {
 		return "", nil, err
 	}
@@ -282,14 +301,14 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 		if err := tx.InsertRequestLine(l); err != nil {
 			return "", nil, err
 		}
-		if err := questionnaires.Record(tx, store.QSubjectRequestLine, l.ID, forItem(checked, perItem[l.CatalogItemID]), by.Display, now); err != nil {
+		if err := questionnaires.Record(tx, store.QSubjectRequestLine, l.ID, forItem(checked, perLine[l.ID]), by.Display, now); err != nil {
 			return "", nil, err
 		}
 		ben, err := tx.Identity(l.BeneficiaryID)
 		if err != nil {
 			return "", nil, err
 		}
-		if err := startStages(tx, l, ben, now); err != nil {
+		if err := startStages(tx, l, ben, plans[l.ID], now); err != nil {
 			return "", nil, err
 		}
 		if err := event(tx, l.ID, "submitted", by, nil, now); err != nil {
@@ -498,6 +517,9 @@ func Approve(tx *store.TenantTx, id string, by Actor, reason string, now time.Ti
 			if err := event(tx, l.ID, "approved", by, note, now); err != nil {
 				return nil, err
 			}
+			if err := afterStage(tx, l, auth.Stage.Idx, false, by, now); err != nil {
+				return nil, err
+			}
 			if err := notifyWaiting(tx, l, now); err != nil { // the next stage's approvers
 				return nil, err
 			}
@@ -530,6 +552,11 @@ func Approve(tx *store.TenantTx, id string, by Actor, reason string, now time.Ti
 	}
 	if err := event(tx, l.ID, "approved", by, r, now); err != nil {
 		return nil, err
+	}
+	if auth.Stage != nil {
+		if err := afterStage(tx, l, auth.Stage.Idx, true, by, now); err != nil {
+			return nil, err
+		}
 	}
 	if err := notify.RequestDecided(tx, now, l, true, uid, said); err != nil {
 		return nil, err
@@ -575,6 +602,9 @@ func Deny(tx *store.TenantTx, id string, by Actor, reason string, now time.Time)
 	if err := event(tx, l.ID, "denied", by, r, now); err != nil {
 		return nil, err
 	}
+	if err := finishRun(tx, l, store.WFRunDenied, now); err != nil {
+		return nil, err
+	}
 	if err := notify.RequestDecided(tx, now, l, false, uid, said); err != nil {
 		return nil, err
 	}
@@ -601,6 +631,9 @@ func Cancel(tx *store.TenantTx, id string, by Actor, now time.Time) (*store.Requ
 		return nil, err
 	}
 	if err := event(tx, l.ID, "cancelled", by, nil, now); err != nil {
+		return nil, err
+	}
+	if err := finishRun(tx, l, store.WFRunCancelled, now); err != nil {
 		return nil, err
 	}
 	return l, tx.Audit(now, by.Display, "request.cancel", lineDetail(l, nil))

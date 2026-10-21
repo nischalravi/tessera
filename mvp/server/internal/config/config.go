@@ -96,7 +96,12 @@ type Config struct {
 	ConnectorSyncSchedule string
 	// RotationFakeAdapters admits the simulated secret-rotation adapter
 	// (TESSERA_ROTATION_FAKE_ADAPTERS; dev and test only).
-	RotationFakeAdapters   bool
+	RotationFakeAdapters bool
+	// StepUpAllowWeaker lets a tenant's step-up policy replace the code's own
+	// step-up requirements with weaker ones (TESSERA_STEPUP_ALLOW_WEAKER; off by
+	// default, a dev convenience for an IdP that cannot do the stronger methods).
+	// Without it a policy can only add or strengthen step-up. Refused in prod.
+	StepUpAllowWeaker      bool
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
@@ -120,8 +125,12 @@ type Config struct {
 	// through internal/safehttp. With neither, ArchiveDirFor falls back to
 	// BackupDir/archive, then, outside prod, to var/archive next to the
 	// database; in prod an unset archive means nothing is archived or deleted.
-	ArchiveDir            string
-	ArchiveURL            string
+	ArchiveDir string
+	ArchiveURL string
+	// ArchiveTokenSealed (TESSERA_ARCHIVE_TOKEN_SEALED) is the base64 of the
+	// object store's bearer token sealed under the KEK (`tessera archive
+	// seal-token`). Prod refuses ArchiveURL without it.
+	ArchiveTokenSealed    string
 	BackupEveryMinutes    int
 	BackupKeep            int
 	AccessTokenTTLSeconds int
@@ -303,6 +312,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.CORSOrigins = corsOrigins(getenv("TESSERA_CORS_ORIGINS"), getenv("UI_PORT"), prod)
 	c.OutboundAllowLoopback = boolean("TESSERA_OUTBOUND_ALLOW_LOOPBACK", true, false)
 	c.RotationFakeAdapters = boolean("TESSERA_ROTATION_FAKE_ADAPTERS", true, false)
+	c.StepUpAllowWeaker = boolean("TESSERA_STEPUP_ALLOW_WEAKER", false, false)
 	// dev default: var/audit-anchors.jsonl next to the database (AnchorURL)
 	c.SafedialAllow = strings.TrimSpace(getenv("TESSERA_SAFEDIAL_ALLOW"))
 	c.AgentAddr = strings.TrimSpace(getenv("TESSERA_AGENT_ADDR"))
@@ -345,6 +355,18 @@ func Load(getenv func(string) string) (*Config, error) {
 		case pu.Scheme != "https" && prod:
 			bad("TESSERA_ARCHIVE_URL must be https with TESSERA_ENV=prod")
 		}
+	}
+	c.ArchiveTokenSealed = str("TESSERA_ARCHIVE_TOKEN_SEALED", "", "")
+	if c.ArchiveTokenSealed != "" {
+		if _, err := base64.StdEncoding.DecodeString(c.ArchiveTokenSealed); err != nil {
+			bad("TESSERA_ARCHIVE_TOKEN_SEALED: not valid base64 (seal the token with `tessera archive seal-token`)")
+		}
+		if c.ArchiveURL == "" {
+			bad("TESSERA_ARCHIVE_TOKEN_SEALED needs TESSERA_ARCHIVE_URL")
+		}
+	}
+	if prod && c.ArchiveURL != "" && c.ArchiveTokenSealed == "" {
+		bad("TESSERA_ARCHIVE_URL needs TESSERA_ARCHIVE_TOKEN_SEALED with TESSERA_ENV=prod (an archive store that accepts unauthenticated writes is refused)")
 	}
 	c.BackupEveryMinutes = integer("TESSERA_BACKUP_EVERY_MINUTES", 360, 5, 7*24*60)
 	c.BackupKeep = integer("TESSERA_BACKUP_KEEP", 28, 1, 10_000)
@@ -470,6 +492,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.RotationFakeAdapters {
 			bad("TESSERA_ROTATION_FAKE_ADAPTERS must be false with TESSERA_ENV=prod: the simulated rotation adapter would report success without touching any credential")
+		}
+		if c.StepUpAllowWeaker {
+			bad("TESSERA_STEPUP_ALLOW_WEAKER must be false with TESSERA_ENV=prod: a tenant policy could then weaken the step-up the code requires")
 		}
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")

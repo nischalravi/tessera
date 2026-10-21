@@ -138,9 +138,8 @@ function WorkersTable() {
           { id: "beat", header: "Last heartbeat", sort: (r) => r.last_heartbeat_at, cell: (r) => <span className="small nowrap" title={fmtDate(r.last_heartbeat_at)}>{r.lag_seconds < 90 ? `${r.lag_seconds} s ago` : relTime(r.last_heartbeat_at.replace("Z", ""))}</span> },
           { id: "kinds", header: "Runs", csv: (r) => r.kinds.join(" "), cell: (r) => <span className="xs">{r.kinds.map((k) => KIND[k] ?? k).join(", ") || "—"}</span>, hideNarrow: true },
           { id: "load", header: "Running", num: true, sort: (r) => r.running, cell: (r) => <span className="small tnum">{r.running} / {r.concurrency}</span>, hideNarrow: true },
-          { id: "host", header: "Host", csv: (r) => `${r.hostname} ${r.pid}`, cell: (r) => <span className="xs">{r.hostname}{r.version && <span className="faint"> · {r.version}</span>}</span>, hideNarrow: true },
         ]}
-        searchText={(r) => `${r.worker_id} ${r.hostname} ${r.kinds.join(" ")} ${r.status}`}
+        searchText={(r) => `${r.worker_id} ${r.kinds.join(" ")} ${r.status}`}
         searchPlaceholder="Search workers…"
         empty="No worker has reported yet. Start the API, or run tessera worker, to see it here."
       />

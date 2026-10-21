@@ -57,9 +57,12 @@ func (b *Beater) Beat(ctx context.Context) error {
 	id := b.Queue.WorkerID()
 	if b.started.IsZero() {
 		b.started = b.now()
+		// the platform operator's view of this process is its log: tenants share the worker and
+		// must not learn its host or PID (issue #403), so neither is written to a tenant table
+		host, _ := os.Hostname()
+		b.log().Info("worker started", "worker_id", id, "mode", b.Mode, "host", host, "pid", os.Getpid(), "version", b.Version)
 	}
-	host, _ := os.Hostname()
-	w := &store.QueueWorker{WorkerID: id, Mode: b.Mode, Hostname: host, PID: os.Getpid(), Version: b.Version,
+	w := &store.QueueWorker{WorkerID: id, Mode: b.Mode, Version: b.Version,
 		Kinds: strings.Join(b.Queue.Kinds(), ","), Concurrency: b.Queue.Concurrency, Running: b.Queue.Running(),
 		StartedAt: b.started}
 	tenants, err := b.DB.ActiveTenants(ctx)

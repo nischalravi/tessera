@@ -491,8 +491,12 @@ worker you did not intend, though a duplicate is harmless: claims and operation 
   provisioning operation is claimed by an optimistic state change.
 - **Health.** Each worker, and an API process running queue kinds, beats every 10 s into `queue_workers`
   (schema 0460; one row per tenant it serves, removed on a clean stop, forgotten a day after a crash).
-  `GET /api/queue/workers` (`jobs.read`) and the Workers table of Admin → Jobs show host, version, kinds,
-  running / concurrency and the last heartbeat; a worker silent for 30 s is `stale`.
+  `GET /api/queue/workers` (`jobs.read`) and the Workers table of Admin → Jobs show kinds, running / concurrency
+  and the last heartbeat; a worker silent for 30 s is `stale`. Workers are shared infrastructure, so a tenant sees
+  only the workers that serve a kind it has jobs or schedules of, only those kinds, and an opaque stable label
+  (`worker-<10 hex>`, also the `lease_owner` of its jobs). Host name, PID and build are not in the API (there is
+  no platform-level operator role to show them to) and are not stored per tenant: each process logs them once
+  at start (`worker started`) for the platform operator (#403).
 - **High availability.** Run N workers (2 or more, on different hosts) against **Postgres**: a job is leased by
   `FOR UPDATE SKIP LOCKED`, so each runs on one worker at a time, a worker that disappears costs one lease
   period of delay, and schedules fire once per window however many workers poll. Size `-lease` above the
@@ -581,7 +585,10 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/provisioning/findings[?status=open|resolved]` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
-`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`GET|PUT /api/sod/view-settings` (SoD page columns and filters; PUT: sod.manage + step-up) · `GET /api/review-types` · `PUT /api/review-types/{type}` (campaign configuration per review type; PUT: reviews.manage + step-up) · `GET|PUT /api/stepup-policy` (step-up per action; GET: admin.read, PUT: admin.change.request + STEP_UP_ADMIN) · `GET|PUT /api/me/preferences` (the caller's own time zone, date format, locale, landing page; auth.self) · `GET|PUT /api/orgs/{org_id}/settings` · `GET|PUT /api/org-hierarchy-source` (organization owners, policies and hierarchy source; PUT: catalog.manage + step-up) ·
+`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=|service_account_kind=&primary_owner_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`GET|POST /api/workflows` · `POST /api/workflows/validate` · `GET|PUT /api/workflows/{id}` · `POST /api/workflows/{id}/retire` · `PUT /api/workflows/{id}/assignments` (workflow designer; reads `graph.read`, writes `workflows.manage` + step-up, `validate` saves nothing) ·
+`GET /api/service-accounts` · `GET|POST /api/service-account-requests[?scope=mine|pending|all&status=]` · `GET /api/service-account-requests/{id}` · `POST /api/service-account-requests/{id}/approve|deny|cancel` (service-account requests: `requests.create`, approvers per stage as for access requests; approve needs step-up) ·
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?, answers?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
@@ -603,7 +610,14 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/rotation/bulk` · `GET /api/rotation/bulk/{id}` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
-`DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` (202 and a request
+`DELETE /api/accounts/{id}/link` (pin and release need two admins with `identities.correlate`, #376: the first
+request answers 202 `pending_second_admin` and stores a request for 72 hours; the same admin again, from any
+session or any sign-in user linked to the same identity, is 403 `four_eyes_required`; a different admin's identical
+request applies it, audited in the same transaction; a differing request replaces the pending one and applies
+nothing; not-person stays single-admin) ·
+`GET /api/correlation/link-requests` (pending pins and releases, `identities.correlate`) ·
+`DELETE /api/correlation/link-requests/{account_id}` (the requester withdraws; others 403 `not_requester`; the UI
+shows both on Directory > Account matches as "Pending second admin" with Approve and Cancel) · `POST /api/identities/{id}/merge {into, reason}` (202 and a request
 when a second reviewer is needed) ·
 `GET /api/identity-matches[?status=review|reverification|decided|all&limit=]` ·
 `POST /api/identity-matches/{match_id}/decide {decision: link|new_person|reject, reason}` ·
@@ -625,7 +639,10 @@ when a second reviewer is needed) ·
 `POST /api/affiliations/{id}/end {reason}` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
-`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`GET|PUT /api/sod/view-settings` (SoD page columns and filters; PUT: sod.manage + step-up) · `GET /api/review-types` · `PUT /api/review-types/{type}` (campaign configuration per review type; PUT: reviews.manage + step-up) · `GET|PUT /api/stepup-policy` (step-up per action; GET: admin.read, PUT: admin.change.request + STEP_UP_ADMIN) · `GET|PUT /api/me/preferences` (the caller's own time zone, date format, locale, landing page; auth.self) · `GET|PUT /api/orgs/{org_id}/settings` · `GET|PUT /api/org-hierarchy-source` (organization owners, policies and hierarchy source; PUT: catalog.manage + step-up) ·
+`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=|service_account_kind=&primary_owner_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`GET|POST /api/workflows` · `POST /api/workflows/validate` · `GET|PUT /api/workflows/{id}` · `POST /api/workflows/{id}/retire` · `PUT /api/workflows/{id}/assignments` (workflow designer; reads `graph.read`, writes `workflows.manage` + step-up, `validate` saves nothing) ·
+`GET /api/service-accounts` · `GET|POST /api/service-account-requests[?scope=mine|pending|all&status=]` · `GET /api/service-account-requests/{id}` · `POST /api/service-account-requests/{id}/approve|deny|cancel` (service-account requests: `requests.create`, approvers per stage as for access requests; approve needs step-up) ·
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?, answers?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
@@ -1024,7 +1041,7 @@ the way the old sweepers did (active tenant list), then works each one in its ow
   (queued again, attempt given back). `tessera serve` runs it as `Server.RunQueue`.
 * **On the queue now.** The sweepers that `RunSweeper` ran, as per-tenant schedules every 30 s:
   `jit_sweep`, `sweep_requests`, `sweep_lifecycle` (sponsorships, then lifecycle: one job so the order
-  holds), `sweep_admin_changes`, and `containment_retries`, plus `job_maintenance` every 10 min (stale
+  holds), `sweep_admin_changes`, and `containment_retries`, plus `oauth_sync` hourly and `job_maintenance` every 10 min (stale
   `job_runs`, retention, pruning succeeded queue jobs after 7 days). The containment retry sweep runs
   `RunRetries` under a lease; each `containment_retries` row keeps its own backoff (1m, 5m, 15m, 1h) and
   24 h give-up, which are tested domain rules, so the queue adds exclusion, not a second backoff.
@@ -1110,6 +1127,13 @@ and Run now.
 Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
 `internal/admin`, routes in `internal/api/admin_routes.go`, UI under Settings → Admin: Users,
 Authentication, Change requests, API clients, and a banner on every page while a change is pending).
+
+**Four-eyes compares people, not user ids** (#402). One person can hold several platform users (sign-in makes one
+per IdP connection and subject), so two users are the same actor when their ids match or both are linked to the
+same `identity_id` (`store.TenantTx.SameActor`; `sameActor` in `internal/api/fourEyes.go`). Used by change-request
+approve and reject, identity link and unlink confirmation, identity merge, SoD mitigations, JIT, helpdesk second
+approval and call-back, role requests and access-request approvals. Two users with no identity link cannot be
+matched; link them (Admin → Groups → users) to close that gap.
 
 | `type` | Who approves | Waits | Applies |
 |---|---|---|---|
@@ -1560,6 +1584,64 @@ cannot bypass them:
 | `history_visibility` | `readers` | `involved`: graph readers no longer see other people's requests (the people on a request, its approvers and deciders still do) |
 | `for_others` | `permission` | `nobody`, `managers` (the beneficiary's manager only) or `permission` (`requests.create_for_others`): `403 for_others_not_allowed`. Business-role requests (`/api/role-requests`) are not covered |
 
+### Configurable settings (issue #298)
+
+Five more tenant settings that were fixed in code, each in its own table (schema `0490` to `0495`), each
+versioned (`409 version_conflict` on a stale version), validated at the API boundary, scoped to the tenant,
+and audited in the same transaction with the values they replaced.
+
+**SoD page** (Admin → SoD page, `sod_view_settings`). Which of risk, function, entitlement, ruleset, mitigating
+control and business process the SoD conflicts page shows as columns and as filters. No row means all of them.
+The conflicts page reads `GET /api/sod/view-settings` and shows exactly those next to the always-shown person,
+priority, system and status. It is a display choice, not an access control: `GET /api/sod/violations` is
+unchanged. Audit action `sod.view.update`.
+
+**Review types** (Governance → Review types, `review_type_settings`, `review_template_types`). Types:
+`user_manager`, `application_owner`, `entitlement_owner`, `role_owner`, `organization_owner`,
+`service_account`. Each has `reviewer_source` (`owner`, `owner_or_backup`, `fixed` + `reviewer_id`), a
+`fallback_reviewer_id` for grants whose owner cannot be reached (no owner on record, or not active), and
+`on_incomplete` for items undecided at the due date: `revoke` (what every review did before), `escalate` (to the
+fallback for `escalation_days`, then revoke) or `keep` (leave the access, close the review incomplete; the
+`review.close` event records `kept`). Owners come from the ownership model (#167): the application's owner by
+the grant's system, the entitlement's by group or resource id, the machine identity's owner, the role's owner
+for memberships (a `role_owner` schedule with no roles picked reviews every active role), an organization's
+owners (assigned, else derived). A review schedule runs as a type through `review_type` on
+`/api/reviews/schedules`: `reviews.GenerateScopedCampaign` then picks reviewers with the type's resolver
+(falling back to the original reviewer when nobody is reachable), `user_manager` covers people and
+`service_account` covers machine identities only, and the type's `on_incomplete` replaces the schedule's own
+close-out. A turned-off type cannot be chosen and a schedule already on it is skipped (`review.schedule.skipped`).
+Audit action `review.type.update`.
+
+**Step-up per action** (Admin → Step-up per action, `stepup_policy`). The code's `needStepUp` declarations are
+the floor. `GET /api/stepup-policy` lists the actions (a permission with a state-changing route), the floor the
+code requires, the tenant's entry and the effective result. `PUT` takes `{version, entries: {permission: {acr,
+max_age_s}}}` with `acr` one of the multi-factor, phishing-resistant or device-bound ACRs and `max_age_s` 60 to
+3600. The requirement a route is held to is the stricter of its own and the entry (`AuthnRequirement.Merge`), so
+an admin can add step-up to an action that has none or tighten one and never remove or weaken it:
+an entry below the floor is `422 weaker_than_required`, and the lookup keeps the floor even if one got stored. Only
+state-changing calls are covered (never reads, never `auth.self`, never the computed-answer POSTs), and a machine
+client cannot step up, so an action with an entry refuses it (`interactive_authentication_required`). The
+policy's own routes are exempt, so it cannot lock its admins out. Changing it needs `admin.change.request` and a
+fresh phishing-resistant sign-in within five minutes. `TESSERA_STEPUP_ALLOW_WEAKER=true` (dev and test only,
+default false) lets an entry replace the floor; **production refuses to start with it set**. Admin routes in
+`internal/admin` and the device-approval route check their (already strictest) requirement directly and are not
+covered by the tenant policy. Audit action `stepup.policy.update`.
+
+**User preferences** (My account → Preferences, `user_preferences`). `GET|PUT /api/me/preferences` act on the
+caller's own row only: `time_zone` (an IANA name), `date_format` (`iso`, `dmy`, `mdy`, `long`), `locale` (a fixed
+list) and `landing_page` (a path from the server's list, so it cannot be an open redirect). Empty is the default.
+The UI loads them before it renders (`PrefsGate`): `fmtDate` and `fmtDay` show every date in the user's zone and
+format, and opening the app at the root redirects once to the landing page. Audit action `user.preferences.update`.
+
+**Organization settings** (Directory → Organizations, `org_owners`, `org_settings`, `org_hierarchy_source`). The
+tree stays derived from the HR data. On an organization's page: assigned owners (up to 5 active people; they
+replace the derived owners while one is active, and `organization_owner` reviews go to them), a default approval
+workflow (stages and escalation, used for a request line whose catalog item has no approval policy of its own,
+for beneficiaries in the organization; a workflow from the designer, when one applies, routes first and this default is only the fallback) and request settings overrides that only tighten the tenant's
+(always require a justification, a longer minimum, a shorter default or maximum duration). On the list: the
+hierarchy source, which limits the tree to people ingested from one source (`system`). Only `hr_department` is
+available as the source kind. Audit actions `org.settings.update`, `org.hierarchy_source.update`. Needs `catalog.manage`.
+
 ### Questionnaires
 
 **Governance → Questionnaires** (`/governance/questionnaires`, issue #298) holds forms asked of requesters and reviewers
@@ -1599,6 +1681,68 @@ cannot bypass them:
   answers JSON, listed under SOC 2 CC6.2, SOX ITGC-Provisioning and ISO A.5.18.
 - Not covered: onboarding (joiner) has no hook for a form (HRIS-driven, no person to answer); answers are not saved
   in request drafts; removal requests, JIT and SoD mitigation requests ask nothing.
+
+### Workflow designer and service-account requests
+
+**Governance → Workflows** (`/governance/workflows`, issue #298) holds configurable, versioned workflow definitions that
+route approvals; **Access → Request access → Service account** (`/access/request/service-account`) files requests to
+create, change or transfer a service account, approved through those workflows. Tables `workflows`, `workflow_versions`
+(append-only), `workflow_assignments` (schema `0480`), `service_account_requests` (`0481`), `workflow_runs` and
+`workflow_stages` (`0482`).
+
+- **Definition.** An ordered list of at most 20 steps, edited as a list (no canvas). Step types: `approval` (approver
+  `manager`, `owner`, `group` (a native group), `decider`, and for service accounts `old_owner` and `new_owner`; optional
+  `escalate_after_hours`, default 48), `questionnaire` (#397: the requester answers it when filing), `notify`
+  (requester, beneficiary, owner or a group), `wait` (holds the next approval that many hours), `condition` (attribute,
+  `eq|ne|in|not_in`, values, `then` and `else` step ids) and `provisioning`. A step runs the following step unless
+  `next` (or a condition's branch) names another step id or `end`. Condition attributes: access `risk`, `item`,
+  `privileged`, `system`, `requester_org`, `beneficiary_org`; service accounts `kind`, `system`, `requester_org`,
+  `owner_org`. A request without the attribute does not match.
+- **Validation** (`POST /api/workflows/validate` shows every issue; create and edit refuse with `422 invalid_workflow`
+  and `issues`): unique ids, every reference resolves, no cycle, every step reachable from the first, every path reaches
+  the end, at most 8 approvals on a path, and **four eyes kept**: every path has an approval, provisioning comes after an
+  approval on every path and only notices follow it, a questionnaire comes before the first approval, a wait is followed
+  by an approval. Who may decide a stage, and that nobody decides a request they made or two stages of one request, is
+  the existing approval routing's rule (#165), not the definition's. Questionnaires and groups it names must exist.
+- **Versions and assignment.** `PUT /api/workflows/{id} {version, name, description, steps}` appends the next version
+  (`409 version_conflict` if the caller read an older one); a request keeps the version it started with. A workflow is
+  assigned (`PUT .../assignments {targets:[{kind,target_id}]}`) to catalog items (`catalog_item`) and request types
+  (`request_type`: `access`, `service_account_create`, `service_account_change`, `service_account_transfer`), one
+  workflow per target (`409 target_taken`); an item's own workflow wins over the `access` one. A transfer workflow must ask
+  `old_owner` and `new_owner` on every path (`422 transfer_needs_both_owners`). Retiring removes the assignments.
+  Create, edit, retire and assign need `workflows.manage` (policy admin) and a fresh phishing-resistant sign-in and are
+  audited (`workflow.create|update|retire|assign`, with the definition's SHA-256).
+- **Engine, access requests.** An item with no workflow is routed by its approval policy exactly as before. With one,
+  `Submit` resolves the path the conditions select for the line's attributes, copies it into the same
+  `access_request_stages` (an owner stage with an assignee, or a group, is the approver; a wait opens the stage later),
+  and keeps the plan in `workflow_runs`. Delegation, escalation to deciders, four eyes, notifications and the audit trail
+  are the existing ones. A group stage is decided by an effective member of the native group; deciders after
+  escalation; delegations do not apply to group stages. `notify` steps fire when the request is filed or after the stage
+  they follow is approved (kind *Workflow notices*); `provisioning` asks the provisioning engine for an
+  `add_entitlement` after the last approval when the target has write-back on (otherwise the grant lives in Tessera, as
+  before). A held stage is not announced when it opens (there is no scheduler for it); it shows in the inbox.
+- **Service-account requests.** `POST /api/service-account-requests {kind, identity_id?, name?, system?, username?,
+  purpose?, description?, primary_owner_id?, backup_owner_id?, justification, answers?}`. Owners are mandatory (#179,
+  #167): a primary and a backup, both active people, different people (`422 primary_owner_required`,
+  `backup_owner_required`, `same_owner`, `409 *_owner_not_active`). A create names both and the application and account
+  name; a change keeps the primary owner and changes the purpose or the backup; a transfer names the new primary
+  (the backup stays unless given). One open request per account (`409 request_open`). Default routing (no workflow
+  assigned): create asks the new owner then a decider; change the current owner then a decider; transfer the **old owner,
+  the new owner, then a decider**. A stage whose owner is the requester is approved by the request itself, and the
+  request is refused (`409 needs_another_approver`) if no other approval would remain. The last approval makes the
+  change: a create makes the `service` identity, its ownership (`ownership.set` is audited) and its account; a change or
+  transfer writes the ownership and the identity's owner. Provisioning goes through the existing engine: a create queues
+  `create_account` and the request stays *approved* until the target confirms it (a completion makes the account row
+  and marks it fulfilled); a change or transfer queues `update_account` (`description` or `owner` attribute) per active
+  account. With no write-back the change is made in Tessera at once. Audit: `service_account.request.submit|stage.approve|
+  approve|deny|cancel|fulfill`. Visible to the requester, the owners named, deciders, graph readers (as the tenant's
+  history setting allows) and the stage's approvers. UI: the request form (with the questions its workflow asks), a
+  *Service-account requests* section on Access → My requests (mine, waiting for me, all) and a detail panel with the owners,
+  the stages, the answers and approve, deny and cancel.
+- Not covered: workflows for review campaigns, joiner/mover/leaver, JIT, removal and role requests (only access lines and
+  service-account requests); a wait does not email the approvers when it ends; no parallel approvals or loops (the
+  path is chosen once, when the request is filed); a service-account request keeps no draft; the conditions test
+  request attributes only (not the beneficiary's other access).
 
 ### Contractors, guests and end dates
 
@@ -2094,6 +2238,52 @@ the run failed. Provider calls go through `internal/safehttp`.
 - **Still manual or not covered.** Okta has no API that lists IdP sessions and Google none for
   sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
   still only stamps a timestamp.
+
+### Third-party OAuth apps and grants (issue #107)
+
+Security's SaaS-to-SaaS token theft (Salesloft Drift, Gainsight, Klue) is access through an app's
+grant, not a password. Protection → **OAuth apps** lists every third-party app and grant at Google
+Workspace, Microsoft Entra ID, Salesforce and GitHub, scores each app by the scopes it holds, and
+revokes a grant, an app, or every app of a breached vendor (package `server/internal/oauthapps`,
+schema 0361 for apps, grants and sync state and 0470 for pending four-eyes revokes).
+
+- **Readers.** One per provider, read-only, through `internal/safehttp` with the **containment
+  credential** of the provider's live connection (set it with `PUT /api/connections/{id}/containment-credential`;
+  Salesforce takes `base_url` = the instance URL and an API-enabled bearer token, GitHub `org`). Google lists
+  each user's tokens; Entra lists service principals, `oauth2PermissionGrants` (per user and tenant-wide) and
+  `appRoleAssignments` (role ids resolved to values); Salesforce lists `OauthToken` rows; GitHub lists the
+  organization's installed apps and SAML SSO credential authorizations. A read that fails part-way stores
+  nothing (the failure is in the provider's sync state and the audit log); a grant a complete read no longer
+  lists is marked `removed`, never deleted. A provider names no last use or grant date where it has none:
+  the sync report's notes say what each one does not offer. Okta is not covered (its grants are per-user
+  consents, already revoked by the kill switch).
+- **Risk.** A versioned scope catalog (`risk.go`, `CatalogVersion`) rates each scope critical, high, medium or
+  low; an app scores 0-100 from its worst scope plus unverified publisher, tenant-wide admin consent, unused
+  90+ days and number of users. Each app has an owner (default: the identity that granted first, set with
+  `PUT /api/oauth-apps/{id}/owner`). Flags: `high_risk_non_admin` (a high or critical scope on a non-admin's own
+  consent), `unused` (N days, `unused_days`, default 90; an unknown last use is never "unused") and `unverified`.
+- **Sync.** Queue job `oauth_sync` (hourly per tenant; a tenant with no credentials leaves no run), or
+  `POST /api/oauth-apps/sync {provider?}` (`oauthapps.manage`).
+- **Revoke.** `POST /api/oauth-apps/{id}/revoke`, `.../grants/{grant_id}/revoke` and
+  `POST /api/oauth-apps/revoke-vendor {vendor, reason, dry_run?}` (`oauthapps.revoke`, policy admin, step-up,
+  reason of 10 to 500 characters). A vendor matches an app's publisher or name. Each grant is revoked at the
+  provider, then **re-read**: it counts as revoked only when the provider no longer shows it. What no API can
+  do (a GitHub App installation: an organization owner cannot uninstall it by API) or a provider with no
+  credential is a **manual** outcome, never a success. The answer is `200` with the report, or `502
+  oauth_revoke_incomplete` with the same report. A revoke covering more than one grant of an app with a high
+  or critical scope needs **two admins**: the first request answers `202 pending_second_admin`, the same
+  admin repeating it gets `403 four_eyes_required`, and a second admin's identical request (within 24 hours)
+  runs it. Audit events: `oauthapps.synced|sync_failed|owner_set|revoke_requested|revoke_approved|revoke_started|revoked`
+  (`revoke_started` is written before the first provider call, the outcome event in the transaction that sets
+  the grant and app statuses).
+- **Read API.** `GET /api/oauth-apps?provider=&severity=&status=&flag=&vendor=&q=&unused_days=` and
+  `GET /api/oauth-apps/{id}` (graph.read).
+- **Tests and fakes.** `internal/oauthapps/oauthfake` holds stateful fakes of the four provider APIs (paging, a
+  delete that really deletes, and switches for refusing, ignoring a delete and failing reads); the reader,
+  sync, revoke and four-eyes tests run them through a real safehttp client. The Salesforce `OauthToken`
+  query is checked against the fake only, not a live org.
+- **Not built yet.** The apps are not yet rows of the Machine identities inventory (`/api/nhi`); a policy
+  type for the flags (alerts and review campaigns) is not wired.
 
 ### MCP authorization server (agent authorization)
 
@@ -3395,9 +3585,18 @@ and is audited with `admin.change.*` and `retention.updated` in the transaction 
 
 **Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL` (an http(s) object
 store, PUT and GET of `<base>/<tenant>/<class>/<segment>.seg`, always through `internal/safehttp`; https in prod),
+authenticated with a bearer token (`TESSERA_ARCHIVE_TOKEN_SEALED`: the base64 of the token sealed under the KEK;
+make it with `printf '%s\n' "$TOKEN" | tessera archive seal-token`; prod refuses an archive URL without it),
 else the directory `TESSERA_ARCHIVE_DIR`, else `TESSERA_BACKUP_DIR/archive`, else, outside prod, `var/archive` next
 to the database. In prod with none of them nothing is archived or deleted, and Admin → Retention says so. While archiving is on
 the 30-day clean-up of finished job runs is left to the archive; with it off that clean-up is unchanged.
+**Write-once storage.** A purged segment's archived copy is the only copy of that range, so the store should refuse
+overwrites and deletes: use object lock / WORM (S3 Object Lock in compliance mode, or a bucket policy that denies
+`DeleteObject` and overwrites), and give the token create and read rights only. Tessera writes create-only
+(`PUT` with `If-None-Match: *`; a key that exists fails with `archive: object already exists`, unless it already
+holds the very same bytes, which is a retry), then reads the object back and compares its sha256 before it
+catalogues the segment. Segment keys are fresh UUIDs, so an overwrite is never a legitimate retry. The local
+directory store links files into place and never replaces one.
 Back the archive store up with the database: a restore verifies the audit chain without opening it and warns
 (`archive_unchecked`); `tessera audit verify` opens it when it runs with the server's environment.
 
@@ -3411,8 +3610,21 @@ transaction, so a crash at any point loses nothing and the next run resumes:
 3. **purged**: it is checked once more, then in one transaction the online records are deleted, the anchor event is
    appended and the segment is marked purged. The schema refuses the delete unless the segment is `verified`
    (`schema/0402_archive_guards.sql`; on Postgres the application role has no DELETE on `audit_events`, and
-   `tessera_archive_purge_audit` does it for the transaction's tenant). A record that changed since it was archived is
+   `tessera_archive_purge_audit(tenant, segment)` deletes only that verified segment's seq range for the
+   transaction's tenant). A record that changed since it was archived is
    not deleted with the stale copy; it is archived again later.
+
+**What the database boundary is, and is not (`schema/0510_archive_segment_guards.sql`, #401).** The application role
+writes `archive_segments`, so the delete guards cannot treat `status = 'verified'` as proof by itself. The schema
+closes the shortcuts: a segment can only be inserted `written` (never verified or purged), items are added to a
+segment only while it is `written` (so a verified segment never gains records), a segment of a per-record class
+cannot become verified with no items, and an audit segment cannot become verified unless the audit events at both
+ends of its range exist with its `first_hash` and `last_hash`. The audit chain, which the role cannot rewrite, is
+the independent record. A forged segment therefore unlocks no delete. What no trigger can do is prove the blob
+exists in the archive store: a caller with SQL as the application role can still catalogue a real range, verify it
+and delete it without ever storing a blob. That needs SQL access as `tessera_app` (an injection bug, not an API
+session); `audit verify` reports the lost range, and the write-once store above is what keeps honest copies safe.
+On Postgres, run the migration owner and the application as different roles (the default setup).
 
 **The audit chain stays verifiable.** An audit segment records its seq range, the `prev_hash` before it and its first
 and last hash. The purge appends an `audit.archived` event to the chain naming the segment, range and hashes ("archived
@@ -3669,9 +3881,9 @@ the right. Arrow keys move between items.
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles (with a *Mining* tab), Organizations (live, read-only, derived from departments) |
-| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
+| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle*, *Questionnaires* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities* and *Request settings*) |
+| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*, *Request settings*, *Step-up per action* and *SoD page*) |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
@@ -3760,10 +3972,10 @@ back a step and `Esc` to close. `/` focuses the top-bar search.
 | Identity Disable / Enable (identity page, panel, bulk, palette) | `POST /api/identities/{id}/disable`, `.../enable`, `GET .../disables` | `identities.contain` and a fresh phishing-resistant sign-in. Disable runs the kill switch's containment (revoke sessions, tokens, OAuth grants at connected providers), then sets the active accounts and the identity to disabled in one audited transaction (`identity.disable`). A failed provider step is retried and reported. Tessera does not suspend the account inside the provider. Any Tessera user linked to the identity is signed out in the same transaction (sessions revoked with reason `identity_disabled`, counted in the event) and refused at sign-in, step-up and on every request while the identity is not active (disabled, terminated or merged: the check allows only `active`, #331). A leaver (any path that terminates the identity) revokes the linked users' sessions in the same transaction (reason `identity_terminated`); Enable cannot bring back a terminated identity, and its open disable record stays open. Disable is refused (403 `self_disable_not_allowed`, `identity.disable.refused`) for the identity linked to the caller's own user (#335). Enable (`identity.enable`) sets back only the accounts Disable disabled and that are still disabled. Enable is refused (403, `identity.enable.refused`) for a user linked to the identity (`self_enable_not_allowed`) and, when the identity is linked to a Tessera user, for the admin who disabled it (`four_eyes_required`: a second admin enables it). It cannot restore revoked sessions and grants, and says so. No Undo. |
 | My access > Request removal | `POST /api/removal-requests`, `GET ?scope=mine\|approvals\|pending\|all`, `.../{id}/approve\|deny\|cancel` | Shows in My requests and the approver's Inbox (the person's manager, a delegate, or `requests.decide`). Approval needs step-up and removes the grant (through `requests.Remove` when an approved request granted it, else a revoked grant with a tombstone). Just-in-time and role-held grants are refused. |
 | Request access drafts | `GET/POST /api/request-drafts`, `GET/PUT/DELETE .../{id}` | Private to the user, at most 50, checked for existence but never against policy. A draft never submits itself. |
-| Directory > Organizations | `GET /api/orgs`, `GET /api/orgs/{org_id}` | Read-only and derived: a root and one organization per department. Owners are the active people at the top of a department's reporting lines who lead others in it. No cost centers (the HR data has none). |
+| Directory > Organizations | `GET /api/orgs`, `GET /api/orgs/{org_id}`, `GET|PUT /api/orgs/{org_id}/settings`, `GET|PUT /api/org-hierarchy-source` | The tree is derived: a root and one organization per department. Owners are assigned on the organization, else the active people at the top of a department's reporting lines who lead others in it. Policies and the hierarchy source are set on the page (see *Configurable settings*). No cost centers (the HR data has none). |
 | Home recent activity | `GET /api/activity` | The signed-in user's own audit events (action, target, outcome, time; no detail). "Your recent requests" reads real request lines. |
 
-**Preview features.** Some screens have no backend endpoint yet: workflows, reset password, generic
+**Preview features.** Some screens have no backend endpoint yet: reset password, generic
 object create / edit / import (accounts, machine identities, rotate secret) and most admin settings
 (Export / import configuration; Identity rules, Branding & labels and Certificates are live, see "Certificates, branding and identity rules"). They run on typed mock data in `src/mocks/`, keep their state in the
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to

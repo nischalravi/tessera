@@ -435,7 +435,7 @@ func (s *Service) purge(ctx context.Context, t tenancy.ID, g *store.ArchiveSegme
 				audit.Target(audit.TargetArchiveSegment, g.ID)); err != nil {
 				return err
 			}
-			if err := tx.PurgeArchivedAudit(g.SeqTo); err != nil {
+			if err := tx.PurgeArchivedAudit(g.ID); err != nil {
 				return err
 			}
 			if n, _, _, err := tx.AuditEventStats(1, g.SeqTo); err != nil {

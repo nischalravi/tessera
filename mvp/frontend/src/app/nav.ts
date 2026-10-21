@@ -71,7 +71,8 @@ export const RAIL: RailGroup[] = [
   {
     label: "Access",
     items: [
-      { id: "request", label: "Request access", icon: Plus, path: "/access/request", keywords: "catalog cart ask new access role entitlement" },
+      { id: "request", label: "Request access", icon: Plus, path: "/access/request", also: ["/access/request/service-account"], keywords: "catalog cart ask new access role entitlement service account create change transfer owner",
+        pages: [{ path: "/access/request/service-account", label: "Service account request", keywords: "create change transfer service account machine identity owner backup owner" }] },
       {
         id: "mine", label: "My access", icon: BadgeCheck, path: "/access/mine", also: ["/access/requests"], keywords: "what i have entitlements remove",
         pages: [{ path: "/access/requests", label: "My requests", keywords: "history drafts status submitted" }],
@@ -87,6 +88,7 @@ export const RAIL: RailGroup[] = [
           { path: "/governance/questionnaires", label: "Questionnaires", keywords: "forms questions why do you need this justification risk privileged request review decision answers approvers version" },
           { path: "/governance/drift", label: "Drift", keywords: "intended observed rogue orphan stale missing reconciliation remediation" },
           { path: "/governance/workflows", label: "Workflows", keywords: "approval routing escalation" },
+          { path: "/governance/review-types", label: "Review types", keywords: "campaign configuration application owner entitlement owner role owner organization owner service account user manager reviewer fallback incomplete escalate revoke keep" },
         ],
       },
     ],
@@ -95,6 +97,7 @@ export const RAIL: RailGroup[] = [
     label: "Protection",
     items: [
       { id: "alerts", label: "Alerts", icon: BellRing, path: "/alerts", keywords: "alerting notifications incidents detections break glass sign-in failures webhook slack teams email" },
+      { id: "oauthapps", label: "OAuth apps", icon: AppWindow, path: "/security/oauth-apps", keywords: "third-party oauth apps grants scopes consent connected apps vendor breach revoke salesloft drift gainsight token theft saas risk" },
       { id: "policies", label: "Policies & SoD", icon: ShieldCheck, path: "/governance/policies", keywords: "policy as code yaml simulation what-if violations" },
       { id: "agentauth", label: "Agent authorization", icon: LockKeyhole, path: "/agents/authorization", also: ["/agent-authorization"], keywords: "mcp oauth tokens agents delegation act token exchange consent clients resource servers decisions kill switch" },
       { id: "mitigations", label: "Mitigating controls", icon: ShieldHalf, path: "/governance/mitigations", keywords: "sod mitigation control accept risk expiring approve evidence separation of duties" },
@@ -126,6 +129,9 @@ export const RAIL: RailGroup[] = [
           { path: "/admin/retention", label: "Retention", keywords: "log retention audit events campaigns requests job runs outbox keep online days minimum floor archive two admins" },
           { path: "/admin/archive", label: "Archive", keywords: "archive segments sealed verify export restore read-only retention audit hash chain" },
           { path: "/admin/event-sinks", label: "Group event sinks", keywords: "streaming sqs sns rabbitmq kafka cloudevents queue topic dead letter outbox" },
+          { path: "/admin/step-up", label: "Step-up per action", keywords: "step-up assurance phishing-resistant fresh sign-in sensitive actions floor max age acr multi-factor" },
+          { path: "/admin/sod-page", label: "SoD page", keywords: "sod conflicts columns filters risk function entitlement ruleset mitigating control business process reviewers" },
+          { path: "/account/preferences", label: "My preferences", keywords: "time zone date format locale landing page language my account" },
           { path: "/admin/request-settings", label: "Request settings", keywords: "access request justification duration maximum default attachments history visibility request for others manager" }],
       },
     ],
