@@ -185,7 +185,7 @@ func (s *Server) listOAuthApps(_ http.ResponseWriter, r *http.Request, p *params
 	enum := func(name string, allowed []string) string {
 		v, _ := p.query(name)
 		if v != "" && !slices.Contains(allowed, v) {
-			p.errs = append(p.errs, verr{Type: "enum", Loc: []any{"query", name}, Msg: "must be one of " + strings.Join(allowed, ", "), Input: v})
+			p.errs = append(p.errs, verr{Type: "enum", Loc: []any{"query", name}, Msg: "must be one of " + strings.Join(allowed, ", ")})
 		}
 		return v
 	}
@@ -198,7 +198,11 @@ func (s *Server) listOAuthApps(_ http.ResponseWriter, r *http.Request, p *params
 	if len(vendor) > 200 || len(q) > 200 {
 		p.errs = append(p.errs, verr{Type: "string_too_long", Loc: []any{"query", "q"}, Msg: "must be at most 200 characters"})
 	}
-	unused := int(p.queryInt("unused_days", oauthapps.DefaultUnusedDays, ptr(int64(1)), ptr(int64(3650))))
+	unusedDays := p.queryInt("unused_days", oauthapps.DefaultUnusedDays, ptr(int64(1)), ptr(int64(3650)))
+	unused := oauthapps.DefaultUnusedDays
+	if unusedDays >= 1 && unusedDays <= 3650 {
+		unused = int(unusedDays)
+	}
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
