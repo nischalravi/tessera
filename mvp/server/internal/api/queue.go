@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -31,6 +33,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/roles/mining"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/worker"
 )
 
@@ -343,9 +346,14 @@ func isoPtr(t *time.Time) *string {
 	return &v
 }
 
-func viewQueueJob(j *store.QueueJob) queueJobView {
+func viewQueueJob(c *store.TenantTx, j *store.QueueJob) queueJobView {
+	var owner *string
+	if j.LeaseOwner != nil { // the lease owner is host-pid-random: show the worker's label instead
+		l := workerLabel(c.Tenant(), *j.LeaseOwner)
+		owner = &l
+	}
 	return queueJobView{ID: j.ID, Kind: j.Kind, Status: j.Status, RunAt: j.RunAt.UTC().Format(time.RFC3339),
-		Attempts: j.Attempts, MaxAttempts: j.MaxAttempts, LastError: j.LastError, LeaseOwner: j.LeaseOwner,
+		Attempts: j.Attempts, MaxAttempts: j.MaxAttempts, LastError: j.LastError, LeaseOwner: owner,
 		LeaseExpiresAt: isoPtr(j.LeaseExpiresAt), ScheduleID: j.ScheduleID, CreatedAt: j.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt: j.UpdatedAt.UTC().Format(time.RFC3339), FinishedAt: isoPtr(j.FinishedAt)}
 }
@@ -390,7 +398,7 @@ func (s *Server) listQueueJobs(_ http.ResponseWriter, r *http.Request, _ *params
 	}
 	out := make([]queueJobView, 0, len(js))
 	for _, j := range js {
-		out = append(out, viewQueueJob(j))
+		out = append(out, viewQueueJob(store.TxFrom(r.Context()), j))
 	}
 	return out, nil
 }
@@ -409,12 +417,9 @@ func (s *Server) listQueueSchedules(_ http.ResponseWriter, r *http.Request, _ *p
 }
 
 type queueWorkerView struct {
-	WorkerID        string   `json:"worker_id"`
+	WorkerID        string   `json:"worker_id"` // an opaque label, stable for the tenant; never a host or PID
 	Mode            string   `json:"mode"`
 	Status          string   `json:"status"` // healthy | stale
-	Hostname        string   `json:"hostname"`
-	PID             int      `json:"pid"`
-	Version         string   `json:"version"`
 	Kinds           []string `json:"kinds"`
 	Concurrency     int      `json:"concurrency"`
 	Running         int      `json:"running"`
@@ -423,11 +428,29 @@ type queueWorkerView struct {
 	LagSeconds      int      `json:"lag_seconds"` // since the last heartbeat
 }
 
-// listQueueWorkers shows the workers that serve the queue and when each last
-// beat: a worker whose last beat is older than worker.StaleAfter is stale
-// (crashed or cut off; its jobs return when their leases expire).
+// workerLabel is the tenant-visible name of a worker: a stable opaque id for
+// this tenant, derived from the worker's lease owner (host-pid-random), which
+// never leaves the server (issue #403). The same label stands for the worker
+// in a job's lease_owner.
+func workerLabel(tenant tenancy.ID, workerID string) string {
+	sum := sha256.Sum256([]byte(tenant.String() + "\x00" + workerID))
+	return "worker-" + hex.EncodeToString(sum[:])[:10]
+}
+
+// listQueueWorkers shows the workers that serve the queue's kinds in use by
+// the tenant and when each last beat: a worker whose last beat is older than
+// worker.StaleAfter is stale (crashed or cut off; its jobs return when their
+// leases expire). Workers are shared infrastructure, so a tenant sees only the
+// workers that serve kinds it uses, only those kinds, and no host name, PID or
+// build (there is no platform-level operator role to show them to; they are in
+// the worker's own log).
 func (s *Server) listQueueWorkers(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	ws, err := store.TxFrom(r.Context()).QueueWorkers()
+	c := store.TxFrom(r.Context())
+	ws, err := c.QueueWorkers()
+	if err != nil {
+		return nil, err
+	}
+	used, err := c.QueueKindsInUse()
 	if err != nil {
 		return nil, err
 	}
@@ -440,11 +463,16 @@ func (s *Server) listQueueWorkers(_ http.ResponseWriter, r *http.Request, _ *par
 			st = "stale"
 		}
 		kinds := []string{}
-		if w.Kinds != "" {
-			kinds = strings.Split(w.Kinds, ",")
+		for _, k := range strings.Split(w.Kinds, ",") {
+			if slices.Contains(used, k) {
+				kinds = append(kinds, k)
+			}
 		}
-		out = append(out, queueWorkerView{WorkerID: w.WorkerID, Mode: w.Mode, Status: st, Hostname: w.Hostname, PID: w.PID,
-			Version: w.Version, Kinds: kinds, Concurrency: w.Concurrency, Running: w.Running,
+		if len(kinds) == 0 {
+			continue // it serves none of this tenant's kinds
+		}
+		out = append(out, queueWorkerView{WorkerID: workerLabel(c.Tenant(), w.WorkerID), Mode: w.Mode, Status: st,
+			Kinds: kinds, Concurrency: w.Concurrency, Running: w.Running,
 			StartedAt: w.StartedAt.UTC().Format(time.RFC3339), LastHeartbeatAt: w.LastHeartbeatAt.UTC().Format(time.RFC3339),
 			LagSeconds: lag})
 	}
@@ -475,5 +503,5 @@ func (s *Server) retryQueueJob(_ http.ResponseWriter, r *http.Request, p *params
 	if err != nil {
 		return nil, err
 	}
-	return viewQueueJob(j), nil
+	return viewQueueJob(c, j), nil
 }

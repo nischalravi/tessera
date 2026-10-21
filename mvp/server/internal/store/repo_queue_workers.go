@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"slices"
 	"time"
 )
 
@@ -43,6 +44,10 @@ var (
 	queueWorkerList = tq("queue_workers.list", `
 		SELECT `+queueWorkerCols+` FROM queue_workers w WHERE w.tenant_id = @tenant
 		ORDER BY w.last_heartbeat_at DESC, w.worker_id`)
+	queueJobKinds = tq("queue_jobs.kinds_in_use", `
+		SELECT DISTINCT q.kind FROM queue_jobs q WHERE q.tenant_id = @tenant`)
+	queueScheduleKinds = tq("queue_schedules.kinds_in_use", `
+		SELECT DISTINCT s.kind FROM queue_schedules s WHERE s.tenant_id = @tenant`)
 	queueWorkerDelete = tq("queue_workers.delete", `
 		DELETE FROM queue_workers WHERE tenant_id = @tenant AND worker_id = @worker_id`)
 	queueWorkerPrune = tq("queue_workers.prune", `
@@ -77,6 +82,30 @@ func (tx *TenantTx) BeatQueueWorker(w *QueueWorker, now time.Time) error {
 // QueueWorkers lists the tenant's workers, most recently seen first.
 func (tx *TenantTx) QueueWorkers() ([]*QueueWorker, error) {
 	return collect(tx, scanQueueWorker, queueWorkerList)
+}
+
+// QueueKindsInUse lists the job kinds the tenant has jobs or schedules of: the
+// kinds whose workers its operators may see (issue #403).
+func (tx *TenantTx) QueueKindsInUse() ([]string, error) {
+	scan := func(s scanner) (*string, error) {
+		var k string
+		err := s.Scan(&k)
+		return &k, err
+	}
+	out := []string{}
+	for _, q := range []tstmt{queueJobKinds, queueScheduleKinds} {
+		ks, err := collect(tx, scan, q)
+		if err != nil {
+			return nil, err
+		}
+		for _, k := range ks {
+			if !slices.Contains(out, *k) {
+				out = append(out, *k)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // DeleteQueueWorker removes a worker that stopped cleanly (a crashed one stays,

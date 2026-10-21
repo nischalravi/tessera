@@ -156,8 +156,12 @@ func pendingRemoval(tx *store.TenantTx, id string) (*store.RemovalRequest, error
 }
 
 func authorizeRemoval(tx *store.TenantTx, q *store.RemovalRequest, by Actor, now time.Time) error {
+	own, err := tx.SameActor(q.RequestedBy, by.id())
+	if err != nil {
+		return err
+	}
 	switch {
-	case q.RequestedBy == by.id():
+	case own:
 		return refuse(403, "self_approval", "you cannot decide a request you made")
 	case by.IdentityID != nil && *by.IdentityID == q.BeneficiaryID:
 		return refuse(403, "self_approval", "you cannot decide access for yourself")

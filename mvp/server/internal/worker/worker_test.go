@@ -390,7 +390,8 @@ func TestBeaterRecordsWorkerHealth(t *testing.T) {
 	for _, tn := range []tenancy.ID{tenantA, tenantB} {
 		ws := list(tn)
 		if len(ws) != 1 || ws[0].WorkerID != "worker-1" || ws[0].Mode != store.WorkerModeWorker || ws[0].Kinds != jobs.ConnectorSync ||
-			ws[0].Concurrency != 6 || ws[0].Version != "0.1.0" || !ws[0].LastHeartbeatAt.Equal(testkit.Now) {
+			ws[0].Concurrency != 6 || ws[0].Version != "0.1.0" || !ws[0].LastHeartbeatAt.Equal(testkit.Now) ||
+			ws[0].Hostname != "" || ws[0].PID != 0 { // shared infrastructure: host and PID are not stored per tenant (#403)
 			t.Fatalf("tenant %s: %+v", tn, ws)
 		}
 	}

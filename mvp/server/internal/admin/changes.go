@@ -405,12 +405,16 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, id uuid.UUID, 
 		if ch, err = tx.AdminChange(id); err != nil {
 			return err
 		}
+		own, err := tx.SameActor(ch.RequestedBy.String(), p.UserID.String())
+		if err != nil {
+			return err
+		}
 		switch {
 		case ch.Status != store.ChangePendingApproval:
 			return conflict("invalid_state", "the request is %s, not pending approval", ch.Status)
 		case !ch.TwoPerson:
 			return conflict("invalid_state", "this change needs no approval")
-		case ch.RequestedBy == *p.UserID:
+		case own:
 			return newErr(http.StatusForbidden, "self_approval_refused", "a request cannot be approved by the person who made it")
 		case !now.Before(ch.ExpiresAt):
 			return conflict("expired", "the request was not approved within %s and has expired", ApprovalWindow)
@@ -465,7 +469,12 @@ func (s *Service) decide(ctx context.Context, p *auth.Principal, id uuid.UUID, p
 			return err
 		}
 		if trans == TransRejected {
-			if ch.RequestedBy == *p.UserID {
+			var own bool
+			own, err = tx.SameActor(ch.RequestedBy.String(), p.UserID.String())
+			if err != nil {
+				return err
+			}
+			if own {
 				return newErr(http.StatusForbidden, "self_rejection_refused", "cancel your own request instead of rejecting it")
 			}
 			err = tx.RejectAdminChange(id, *p.UserID, now)

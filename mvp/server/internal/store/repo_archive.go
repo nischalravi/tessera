@@ -94,7 +94,9 @@ var (
 	// Postgres has no DELETE grant on audit_events: its override calls the
 	// SECURITY DEFINER function of 0402, which checks the tenant itself.
 	auditArchivePurge = tq("audit_events.archive_purge", `
-		DELETE FROM audit_events WHERE tenant_id = @tenant AND seq <= @through`)
+		DELETE FROM audit_events WHERE audit_events.tenant_id = @tenant
+			AND seq >= (SELECT g.seq_from FROM archive_segments g WHERE g.tenant_id = @tenant AND g.id = @segment AND g.class = 'audit' AND g.status = 'verified')
+			AND seq <= (SELECT g.seq_to FROM archive_segments g WHERE g.tenant_id = @tenant AND g.id = @segment AND g.class = 'audit' AND g.status = 'verified')`)
 )
 
 func scanArchiveSegment(s scanner) (*ArchiveSegment, error) {
@@ -198,11 +200,18 @@ func (tx *TenantTx) MarkArchivePurged(id string, now time.Time) error {
 	return tx.execOne(archiveSegmentPurged, sql.Named("id", id), sql.Named("now", RT(now)))
 }
 
-// PurgeArchivedAudit deletes the tenant's audit events with seq <= through. The
-// schema refuses it for any event not inside a verified audit segment.
-func (tx *TenantTx) PurgeArchivedAudit(through int64) error {
-	_, err := tx.exec(auditArchivePurge, sql.Named("through", through))
-	return err
+// PurgeArchivedAudit deletes the audit events of one verified audit segment's
+// seq range (nothing for any other segment id, status or class; on Postgres it
+// is an error too). The schema refuses a delete of any event outside a verified segment.
+func (tx *TenantTx) PurgeArchivedAudit(segmentID string) error {
+	res, err := tx.exec(auditArchivePurge, sql.Named("segment", segmentID))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return errors.Join(ErrNotFound, err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------- records

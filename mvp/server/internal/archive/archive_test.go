@@ -502,7 +502,7 @@ func TestCrashSafeOrder(t *testing.T) {
 	t.Run("the schema refuses a delete before the segment is verified", func(t *testing.T) {
 		e := newEnv(t)
 		e.seed()
-		err := e.db.InTenant(context.Background(), tenantT, func(tx *store.TenantTx) error { return tx.PurgeArchivedAudit(3) })
+		err := e.db.InTenant(context.Background(), tenantT, func(tx *store.TenantTx) error { return tx.PurgeArchivedAudit("00000000-0000-4000-8000-0000000000e1") })
 		if err == nil {
 			t.Fatal("audit events were deleted with no segment")
 		}
@@ -512,7 +512,7 @@ func TestCrashSafeOrder(t *testing.T) {
 				RangeFrom: "a", RangeTo: "b", Count: 5, Location: store.LocationLocal, ObjectKey: "k", Size: 1,
 				SHA256: strings.Repeat("0", 64), CreatedAt: now})
 		})
-		err = e.db.InTenant(context.Background(), tenantT, func(tx *store.TenantTx) error { return tx.PurgeArchivedAudit(3) })
+		err = e.db.InTenant(context.Background(), tenantT, func(tx *store.TenantTx) error { return tx.PurgeArchivedAudit("00000000-0000-4000-8000-0000000000e1") })
 		if err == nil {
 			t.Fatal("audit events were deleted with a segment that is only written")
 		}
@@ -748,9 +748,23 @@ func TestForgedSegmentRowHasNoAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 	// in e, register the same range as written, verified and purged, with no events deleted and no anchor
+	// hashes the chain does not hold cannot even be marked verified (schema/0510)
+	forged := e.db.InTenant(context.Background(), tenantT, func(tx *store.TenantTx) error {
+		g := *first
+		g.ID = "00000000-0000-4000-8000-0000000000f2"
+		if err := tx.InsertArchiveSegment(&g); err != nil {
+			return err
+		}
+		return tx.MarkArchiveVerified(g.ID, now)
+	})
+	if forged == nil {
+		t.Fatal("a segment with hashes the chain does not hold was marked verified")
+	}
 	e.write(func(tx *store.TenantTx) error {
 		g := *first
 		g.ID = "00000000-0000-4000-8000-0000000000f1"
+		g.FirstHash = e.events[int(g.SeqFrom)-1].Hash
+		g.LastHash = e.events[int(g.SeqTo)-1].Hash
 		if err := tx.InsertArchiveSegment(&g); err != nil {
 			return err
 		}
@@ -760,7 +774,7 @@ func TestForgedSegmentRowHasNoAnchor(t *testing.T) {
 		return tx.MarkArchivePurged(g.ID, now)
 	})
 	rep := e.verify(fakeSource{"00000000-0000-4000-8000-0000000000f1": lines}.with(e))
-	if rep.Result != "failed" || !slices.Contains(kinds(rep), "archive_anchor_missing") {
+	if rep.Result != "failed" || !(slices.Contains(kinds(rep), "archive_anchor_missing") || slices.Contains(kinds(rep), "archive_ends")) {
 		t.Errorf("a forged segment row passed: %+v", rep)
 	}
 }

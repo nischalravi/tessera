@@ -888,6 +888,34 @@ func TestPrivs_IdentityLinkFourEyes(t *testing.T) {
 	}
 }
 
+// Two platform users linked to the same identity are one admin: the second cannot confirm
+// the first's identity link change (issue #402).
+func TestPrivs_SecondUserOfTheSamePersonIsNoSecondAdmin(t *testing.T) {
+	e := newPrivEnv(t)
+	h := e.srv.Handler()
+	login := func(name string, roles []auth.Role, identity *int64) authtest.Login {
+		return signIn(t, e.f.DB, e.f.B.ID, authtest.User{Email: name + "@b.example", Roles: roles, IdentityID: identity}, authtest.Phr, storetest.Now)
+	}
+	put := func(by, user authtest.Login, identity int64) (int, string) {
+		rec := corrDo(h, by, "PUT", "/api/groups/users/"+user.UserID.String()+"/identity", fmt.Sprintf(`{"identity_id":%d}`, identity))
+		return rec.Code, rec.Body.String()
+	}
+	admins := []auth.Role{auth.RoleTenantAdmin}
+	self, carol := e.ident("alice"), e.ident("carol")
+	a1, a1b := login("a1", admins, &self), login("a1b", admins, &self)
+	a2 := login("a2", admins, nil)
+	wil := login("wil", []auth.Role{auth.RoleOperator}, nil)
+	if code, body := put(a1, wil, carol); code != 202 {
+		t.Fatalf("first admin: %d %s", code, body)
+	}
+	if code, body := put(a1b, wil, carol); code != 403 || !strings.Contains(body, "four_eyes_required") {
+		t.Fatalf("the same person on a second user: %d %s", code, body)
+	}
+	if code, body := put(a2, wil, carol); code != 200 {
+		t.Fatalf("a different admin: %d %s", code, body)
+	}
+}
+
 // Every first link takes two admins, to a free identity as well as to one
 // another user already holds (issue #376).
 func TestPrivs_SharedIdentityLinkFourEyes(t *testing.T) {

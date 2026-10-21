@@ -176,7 +176,11 @@ func (w *Writer) DecideMitigation(id string, approve bool, note string) (*store.
 	}
 	note = clean(note)
 	subject := false
+	own := false
 	if w.By.UserID != uuid.Nil {
+		if own, err = w.Tx.SameActor(w.By.UserID.String(), m.RequestedBy); err != nil {
+			return nil, err
+		}
 		u, err := w.Tx.PlatformUser(w.By.UserID)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return nil, err
@@ -188,7 +192,7 @@ func (w *Writer) DecideMitigation(id string, approve bool, note string) (*store.
 		return nil, refuse(409, "not_pending", "the mitigation is %s, not pending", m.Status)
 	case w.By.UserID == uuid.Nil:
 		return nil, refuse(403, "user_required", "a mitigation is decided by a signed-in user")
-	case w.By.UserID.String() == m.RequestedBy:
+	case own:
 		return nil, refuse(403, "four_eyes", "another person must decide a mitigation you requested")
 	case subject:
 		return nil, refuse(403, "self_exemption_forbidden", "you cannot decide an exemption for your own violation")

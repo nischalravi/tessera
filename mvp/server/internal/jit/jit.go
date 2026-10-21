@@ -211,8 +211,12 @@ func Approve(c *store.TenantTx, requestID int64, by store.UserRef, now, createdA
 		return nil, err
 	}
 	if by.ID != uuid.Nil {
-		if req.RequestedByUserID != nil && *req.RequestedByUserID == by.ID {
-			return nil, ErrSelfApproval
+		if req.RequestedByUserID != nil {
+			if same, err := c.SameActor(req.RequestedByUserID.String(), by.ID.String()); err != nil {
+				return nil, err
+			} else if same {
+				return nil, ErrSelfApproval
+			}
 		}
 		u, err := c.PlatformUser(by.ID)
 		if err != nil {
