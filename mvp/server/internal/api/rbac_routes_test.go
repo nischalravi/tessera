@@ -492,6 +492,7 @@ POST   /api/groups/folders                           groups.write    -  # issue 
 GET    /api/groups/folders/{id}                      groups.read     -  # issue #44, #47: stem_view
 PATCH  /api/groups/folders/{id}                      groups.write    -  # issue #44, #47: stem_admin
 DELETE /api/groups/folders/{id}                      groups.write    -  # issue #44, #47: stem_admin
+GET    /api/groups/folders/{id}/delete-plan          groups.read     -  # what a recursive delete removes: stem_admin
 POST   /api/groups/folders/{id}/move                 groups.write    -  # issue #44, #47: stem_admin, create on the destination
 POST   /api/groups/folders/{id}/copy                 groups.write    -  # issue #44, #47: stem_admin, create on the destination
 GET    /api/groups/native                            groups.read     -  # issue #44, #47: the groups the caller may view
@@ -502,6 +503,7 @@ DELETE /api/groups/{id}                              groups.write    -  # issue 
 POST   /api/groups/{id}/move                         groups.write    -  # issue #44, #47: admin, create on the destination
 POST   /api/groups/{id}/copy                         groups.write    -  # issue #44, #47: read, create on the destination
 POST   /api/groups/{id}/restore                      groups.write    -  # issue #44, #47: admin
+POST   /api/groups/{id}/purge                        groups.write    -  # a deleted group, for good: admin
 GET    /api/groups/{id}/members                      groups.read     -  # issue #45, #47: read
 POST   /api/groups/{id}/members                      groups.write    -  # issue #45, #47: update, or optin for oneself
 GET    /api/groups/{id}/members/{member}             groups.read     -  # issue #45, #47: read
