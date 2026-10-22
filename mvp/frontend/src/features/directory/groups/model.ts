@@ -3,7 +3,7 @@
  * the folder tree, dates, the change preview text, the history diff, the application template.
  * Types come from `src/api.ts`; nothing here decides access (the server does, per request).
  */
-import type { GrpFolder, GrpPrivGrant, PitMember, SimChange, SimulationResult, BatchAdd } from "../../../api";
+import type { GrpFolder, GrpGroup, GrpPrivGrant, PitMember, SimChange, SimulationResult, BatchAdd } from "../../../api";
 
 // ------------------------------------------------------------ names
 
@@ -342,4 +342,54 @@ export function idempotencyKey(): string {
   const c = (globalThis as { crypto?: Crypto }).crypto;
   if (c?.randomUUID) return c.randomUUID();
   return `k${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+}
+
+// ------------------------------------------------------------ deleting from the list
+
+export interface DeletePlan {
+  /** Soft-deleted first (restorable). */
+  groups: GrpGroup[];
+  /** Deepest first, so a child goes before its parent when both are picked. */
+  folders: GrpFolder[];
+  /** Picked but not managed from the UI (or a group that is already deleted): left alone. */
+  skipped: string[];
+}
+
+/** Sort a selection into what can be deleted here and in which order. */
+export function planDelete(picked: ({ kind: "folder"; f: GrpFolder } | { kind: "group"; g: GrpGroup })[]): DeletePlan {
+  const plan: DeletePlan = { groups: [], folders: [], skipped: [] };
+  for (const r of picked) {
+    if (r.kind === "folder") {
+      if (r.f.managed_by === "ui" && r.f.name !== "") plan.folders.push(r.f);
+      else plan.skipped.push(r.f.name);
+    }
+    else if (r.g.managed_by === "ui" && r.g.status !== "deleted") plan.groups.push(r.g);
+    else plan.skipped.push(r.g.name);
+  }
+  const depth = (f: GrpFolder) => f.name.split(":").length;
+  plan.folders.sort((a, b) => depth(b) - depth(a) || a.name.localeCompare(b.name));
+  return plan;
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** "Delete 1 folder and 2 groups?" */
+export function deleteTitle(p: Pick<DeletePlan, "groups" | "folders">): string {
+  const parts = [p.folders.length && plural(p.folders.length, "folder"), p.groups.length && plural(p.groups.length, "group")].filter(Boolean);
+  return `Delete ${parts.join(" and ")}?`;
+}
+
+/** The rules shown in the confirm dialog, for what is being deleted. */
+export function deleteBody(p: Pick<DeletePlan, "groups" | "folders" | "skipped">): string {
+  const rules = [
+    p.folders.length ? "Only an empty folder can be deleted; a folder that still holds something is left in place." : "",
+    p.groups.length ? "A deleted group stops counting its members and can be restored afterwards." : "",
+    p.skipped.length ? `${plural(p.skipped.length, "item")} managed elsewhere will be skipped.` : "",
+  ];
+  return rules.filter(Boolean).join(" ");
+}
+
+/** One toast line for the failures, e.g. "TEST: folder is not empty; G: not found". */
+export function failureSummary(failed: { name: string; message: string }[]): string {
+  return failed.map((f) => `${f.name}: ${f.message}`).join("; ");
 }

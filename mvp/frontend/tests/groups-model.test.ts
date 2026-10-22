@@ -232,3 +232,17 @@ test("idempotency keys fit the server's rule and differ", () => {
   assert.notEqual(a, b);
   assert.match(a, /^[A-Za-z0-9._~:+=-]{1,255}$/);
 });
+
+test("planDelete orders groups before folders, deepest folder first, and skips what the UI does not manage", () => {
+  const f = (name: string, managed_by = "ui") => ({ kind: "folder" as const, f: { name, managed_by } as any });
+  const g = (name: string, managed_by = "ui", status = "active") => ({ kind: "group" as const, g: { name, managed_by, status } as any });
+  const p = m.planDelete([f("A"), f("A:B"), g("A:B:G"), g("A:H", "scim"), f("X", "git"), g("A:D", "ui", "deleted"), f("")]);
+  assert.deepEqual(p.folders.map((x) => x.name), ["A:B", "A"]);
+  assert.deepEqual(p.groups.map((x) => x.name), ["A:B:G"]);
+  assert.deepEqual(p.skipped, ["A:H", "X", "A:D", ""]);
+  assert.equal(m.deleteTitle({ folders: [1, 2] as any, groups: [1] as any }), "Delete 2 folders and 1 group?");
+  assert.equal(m.deleteTitle({ folders: [1] as any, groups: [1, 2] as any }), "Delete 1 folder and 2 groups?");
+  assert.equal(m.deleteTitle({ folders: [], groups: [1] as any }), "Delete 1 group?");
+  assert.match(m.deleteBody({ folders: [1] as any, groups: [1] as any, skipped: [] }), /empty folder.*restored/);
+  assert.equal(m.failureSummary([{ name: "TEST", message: "folder is not empty" }, { name: "G", message: "not found" }]), "TEST: folder is not empty; G: not found");
+});
