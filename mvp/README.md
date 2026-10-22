@@ -3972,15 +3972,46 @@ under them (an approved held loader run is an approved override and is not count
   imports, group loaders) is a *source-driven* run: when the category's mode was never set, the default for it is
   `hold_all`, so a run that passes the threshold applies **none** of its removals (additions and attribute updates still
   apply) and holds the whole set as one batch. Feed checks hold the batch whatever the thresholds say: the feed has fewer
-  records than the last good run by more than 20% (`deleteguard.DefaultFeedDropPercent`, per system for accounts; the
-  previous count is the tenant's active identities or the system's active accounts), the feed is empty, or the connector sets
+  records than the last good run by more than 20% (`deleteguard.DefaultFeedDropPercent`, changeable per source and category, see
+  *Per-source settings*; per system for accounts; the previous count of identities is the source's own last good run, of
+  accounts the system's active accounts), the feed is empty, or the connector sets
   `DiscoveryResult.Partial` (a partial or failed read). The reasons and the before/after counts are on the hold. While the
   batch is held, later runs of the same source join the open hold (a stable correlation per source and category: items
   already held are not added twice, and no second hold is opened). Release re-validates every item and needs a different
   admin and a step-up. An explicit `hold_excess` on a category is honoured for sources.
+* **Per-source settings** (schema 0690, `deletion_guard_source_policies`). A connection, a group loader or a contractor (VMS)
+  feed can carry its own threshold per category (`mode`, `max_count`, `max_percent`, `window_minutes`, in place of the
+  category's for that source's deletions; without a `mode` it inherits the category's) and its own feed checks:
+  `feed_drop_percent` (default 20; 100 never holds on the drop) and `feed_empty_check` (default on; off judges an empty
+  feed by the percent alone). A source with its own threshold is measured against what it applied itself in the window
+  (`deletion_guard_source_ledger`; the tenant ledger counts it too) and a percent is of its last good record count. A
+  hold records which source's settings were in force. They are edited where the source is: Admin → Connections → the
+  connection (below the setup steps), the group's Source tab (the loader), Admin → Contractor feeds → Edit (VMS source),
+  and listed on Admin → Deletion guard. They change through the same admin change request, `deletion_guard.update`, with
+  a `sources` payload (`{kind, source_id, category, mode, max_count, max_percent, window_minutes, feed_drop_percent,
+  feed_empty_check}` or `{..., remove: true}`); tightening takes one admin, loosening two (a weaker mode, a higher limit
+  per minute, a higher drop percent, the empty check off, or removing an override that was tighter than the category).
+  `GET /api/admin/deletion-guard/sources/{kind}/{id}` (`admin.read`) returns one source's categories with the category's
+  setting, the override, what applies, the last good count and window use; `GET /api/admin/deletion-guard` adds `sources`.
+  Flat-file imports and a result that names no connection use the tenant's settings. A VMS feed's leavers are judged under
+  that feed's settings (`deleteguard.ScopeSource`). The source's `kind` for SCIM clients (`scim_client`) is in the schema
+  but not accepted by the API: see below.
+* **Previous count per source.** The identities feed check compares a connection's record count with that connection's last
+  good run (`deletion_guard_source_state`, written when a run passes the feed checks; `DiscoveryResult.SourceID`, or the
+  connection of `DiscoveryResult.System`, names it). A source's first run has no basis and is not checked on the drop. A
+  result that names no source keeps the tenant-wide count.
+* **Inbox task per hold.** A hold opens a `deletion_held` task in the groups Inbox (`GET /api/groups/inbox/tasks?kind=deletion_held`;
+  object type `deletion_hold`, the object id is the hold id, due at the hold's expiry), visible to the tenant admin role
+  (the one that approves holds). It closes with the hold: done when it is released, dismissed when it is discarded or
+  expires, and cannot be closed by hand (409 `task_follows_hold`). Old SQLite databases are upgraded in place on open
+  (`DB.upgradeGrpInboxKinds`: one transaction, rows and indexes kept, idempotent); Postgres migration 0691 replaces the CHECKs.
+* **SCIM inbound is not hooked, because it has no write routes.** The SCIM 2.0 server (`/scim/v2`, `internal/api/scim.go`) is
+  read-only (other methods are 405) and has no SCIM client or token registry, so there is no DELETE, PATCH or PUT to guard.
+  When write routes are added they must call `deleteguard.Admit` per client (`SrcSCIM`/`scim_client`, categories `groups`,
+  `group_members`, `accounts`, `identities`) and answer a held request with an RFC 7644 error (409 with a scimType and
+  a detail naming the hold).
 * **Not guarded, on purpose.** The manual containment disable (`POST /api/identities/{id}/disable`): holding an
-  emergency containment would defeat it. Nor is there an Inbox task per hold (the groups Inbox is folder/group scoped): the
-  alert and the Held deletions list are the queue.
+  emergency containment would defeat it.
 
 ## Operational monitoring (issue #303)
 

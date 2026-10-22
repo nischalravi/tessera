@@ -27,7 +27,7 @@ func guardLeaver(c *store.TenantTx, now time.Time, ident *store.Identity) (held 
 	// the threshold the default is to hold them all. They join one open hold, so a bad feed that ends
 	// hundreds is one decision and the next run does not open another.
 	d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatIdentities, Source: deleteguard.SourceLifecycle,
-		SourceID: "leaver", Correlation: "leavers", SourceDriven: true,
+		SourceID: "leaver", Correlation: scoped("leavers", c), SourceDriven: true,
 		Items: []deleteguard.Item{{Kind: ItemLeaver, Ref: strconv.FormatInt(ident.ID, 10), Label: fmt.Sprintf("%s (%s) ends as a leaver", ident.Name, ident.ExternalID)}}})
 	if err != nil {
 		return false, err
@@ -41,7 +41,7 @@ func guardAccountDisable(c *store.TenantTx, now time.Time, accountID int64) (hel
 		return false, err
 	}
 	d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatAccounts, Source: deleteguard.SourceLifecycle,
-		SourceID: "leaver", Correlation: "leaver-accounts", SourceDriven: true,
+		SourceID: "leaver", Correlation: scoped("leaver-accounts", c), SourceDriven: true,
 		Items: []deleteguard.Item{{Kind: ItemAccountDisable, Ref: strconv.FormatInt(accountID, 10), Label: fmt.Sprintf("account %s in %s (leaver)", a.Username, a.System)}}})
 	if err != nil {
 		return false, err
@@ -92,4 +92,13 @@ func ReleaseAccountDisable(c *store.TenantTx, now time.Time, it *store.DeletionH
 		return "", "", err
 	}
 	return deleteguard.ItemReleased, "", flatfile.AccountDisabled(c, now, "system", id, "leaver")
+}
+
+// scoped makes the leavers' correlation per source when the run is scoped to one (a VMS feed): its holds
+// stay apart from other sources' and the feed's own settings apply.
+func scoped(base string, c *store.TenantTx) string {
+	if ref := deleteguard.ScopeOf(c); ref.Valid() {
+		return base + ":" + ref.Kind + ":" + ref.ID
+	}
+	return base
 }

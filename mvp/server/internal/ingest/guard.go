@@ -48,23 +48,47 @@ type held struct {
 	accounts   map[[2]string]bool
 }
 
-// vet asks the guard about every active identity and account the results turn inactive.
+// sourceKeys groups the results by the connection they were read through: the result's own SourceID, or
+// the connection of its System. A result with neither (a demo, a flat file, an agent listing of an
+// unknown system) is in the group "", judged under the tenant's settings alone.
+func sourceKeys(c *store.TenantTx, results []*connectors.DiscoveryResult) (keys []string, groups map[string][]*connectors.DiscoveryResult, err error) {
+	var byName map[string]string
+	groups = map[string][]*connectors.DiscoveryResult{}
+	for _, r := range results {
+		key := r.SourceID
+		if key == "" && r.System != "" {
+			if byName == nil {
+				byName = map[string]string{}
+				conns, err := c.Connections()
+				if err != nil {
+					return nil, nil, err
+				}
+				for _, cn := range conns {
+					if cn.RetiredAt == nil {
+						byName[cn.System] = cn.ID
+					}
+				}
+			}
+			key = byName[r.System]
+		}
+		if _, ok := groups[key]; !ok {
+			keys = append(keys, key)
+		}
+		groups[key] = append(groups[key], r)
+	}
+	sort.Strings(keys)
+	return keys, groups, nil
+}
+
+// vet asks the guard about every active identity and account the results turn inactive. Each source
+// (connection) is judged on its own: its own settings, and its record counts against its own last good run.
 func vet(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult) (held, error) {
 	h := held{identities: map[string]bool{}, accounts: map[[2]string]bool{}}
-	// the correlation is stable per source and category: while a batch is held, later runs of the same
-	// source join that hold (their items are not held twice) instead of opening another every run
-	partial := ""
-	idRecords, acRecords := 0, map[string]int{}
-	for _, r := range results {
-		if r.Partial != "" {
-			partial = r.Partial
-		}
-		idRecords += len(r.Identities)
-		for _, a := range r.Accounts {
-			acRecords[a.System]++
-		}
+	keys, groups, err := sourceKeys(c, results)
+	if err != nil {
+		return h, err
 	}
-	prevIdentities, err := c.DeletionPopulation(deleteguard.CatIdentities)
+	tenantIdentities, err := c.DeletionPopulation(deleteguard.CatIdentities)
 	if err != nil {
 		return h, err
 	}
@@ -78,9 +102,38 @@ func vet(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult
 			prevAccounts[a.System]++
 		}
 	}
+	seen, seenA := map[string]bool{}, map[[2]string]bool{}
+	for _, key := range keys {
+		ref := deleteguard.SourceRef{Kind: deleteguard.SrcConnection, ID: key}
+		if err := vetIdentities(c, now, ref, groups[key], tenantIdentities, seen, &h); err != nil {
+			return h, err
+		}
+		if err := vetAccounts(c, now, ref, groups[key], prevAccounts, seenA, &h); err != nil {
+			return h, err
+		}
+	}
+	return h, nil
+}
 
-	var idItems []deleteguard.Item
-	seen := map[string]bool{}
+// suffix makes a correlation id stable per source: later runs of the same source join its open hold
+// (their items are not held twice) instead of opening another every run.
+func suffix(base, key string) string {
+	if key == "" {
+		return base
+	}
+	return base + ":" + key
+}
+
+func vetIdentities(c *store.TenantTx, now time.Time, ref deleteguard.SourceRef, results []*connectors.DiscoveryResult,
+	tenantCount int, seen map[string]bool, h *held) error {
+	partial, records := "", 0
+	for _, r := range results {
+		if r.Partial != "" {
+			partial = r.Partial
+		}
+		records += len(r.Identities)
+	}
+	var items []deleteguard.Item
 	for _, r := range results {
 		for _, rec := range r.Identities {
 			if defaultStr(rec.Status, "active") == "active" || seen[rec.ExternalID] {
@@ -92,7 +145,7 @@ func vet(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult
 				continue // a new identity: nothing is being ended
 			}
 			if err != nil {
-				return h, err
+				return err
 			}
 			if cur.Status != "active" {
 				continue
@@ -101,35 +154,64 @@ func vet(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult
 				Department: rec.Department, Title: rec.Title, Status: rec.Status, Description: rec.Description, HiredAt: rec.HiredAt,
 				TerminatedAt: rec.TerminatedAt})
 			if err != nil {
-				return h, err
+				return err
 			}
-			idItems = append(idItems, deleteguard.Item{Kind: ItemIdentityStatus, Ref: string(snap),
+			items = append(items, deleteguard.Item{Kind: ItemIdentityStatus, Ref: string(snap),
 				Label: fmt.Sprintf("%s (%s) set to %s", rec.Name, rec.ExternalID, rec.Status)})
 		}
 	}
-	if len(idItems) > 0 {
-		var sanity []string
-		if idRecords > 0 || partial != "" {
-			sanity = deleteguard.FeedChecks(prevIdentities, idRecords, partial)
-		}
-		d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatIdentities, Items: idItems,
-			Source: deleteguard.SourceConnector, Correlation: "ingest:identities", SourceDriven: true, Sanity: sanity,
-			PrevCount: prevIdentities, NewCount: idRecords})
+	if records == 0 && partial == "" {
+		return nil // a result with no identity feed says nothing about the source's identities
+	}
+	// the source's own last good run is the basis. A source with none yet (its first run) has nothing to be
+	// measured against, and the tenant's identities are other sources' too; only a result that names no
+	// source keeps the tenant-wide count as its basis.
+	fallback := 0
+	if !ref.Valid() {
+		fallback = tenantCount
+	}
+	prev, err := deleteguard.PreviousCount(c, ref, deleteguard.CatIdentities, fallback)
+	if err != nil {
+		return err
+	}
+	sanity, err := deleteguard.CheckFeed(c, ref, deleteguard.CatIdentities, prev, records, partial)
+	if err != nil {
+		return err
+	}
+	if len(items) > 0 {
+		d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatIdentities, Items: items,
+			Source: deleteguard.SourceConnector, SourceID: ref.ID, SourceRef: ref, Correlation: suffix("ingest:identities", ref.ID),
+			SourceDriven: true, Sanity: sanity, PrevCount: prev, NewCount: records})
 		if err != nil {
-			return h, err
+			return err
 		}
 		for _, it := range d.Held {
 			var s identitySnap
 			if err := json.Unmarshal([]byte(it.Ref), &s); err != nil {
-				return h, err
+				return err
 			}
 			h.identities[s.ExternalID] = true
 		}
 	}
+	if len(sanity) == 0 {
+		return deleteguard.RecordGoodRun(c, now, ref, deleteguard.CatIdentities, records)
+	}
+	return nil
+}
 
-	var acItems []deleteguard.Item
+func vetAccounts(c *store.TenantTx, now time.Time, ref deleteguard.SourceRef, results []*connectors.DiscoveryResult,
+	prevAccounts map[string]int, seenA map[[2]string]bool, h *held) error {
+	partial, acRecords := "", map[string]int{}
+	for _, r := range results {
+		if r.Partial != "" {
+			partial = r.Partial
+		}
+		for _, a := range r.Accounts {
+			acRecords[a.System]++
+		}
+	}
+	var items []deleteguard.Item
 	systems := map[string]bool{}
-	seenA := map[[2]string]bool{}
 	for _, r := range results {
 		for _, rec := range r.Accounts {
 			k := [2]string{rec.System, rec.ExternalID}
@@ -142,47 +224,56 @@ func vet(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult
 				continue
 			}
 			if err != nil {
-				return h, err
+				return err
 			}
 			if cur.Status != "active" {
 				continue
 			}
 			systems[rec.System] = true
-			ref, err := json.Marshal([2]string{rec.System, rec.ExternalID})
+			rf, err := json.Marshal([2]string{rec.System, rec.ExternalID})
 			if err != nil {
-				return h, err
+				return err
 			}
-			acItems = append(acItems, deleteguard.Item{Kind: ItemAccountStatus, Ref: string(ref),
+			items = append(items, deleteguard.Item{Kind: ItemAccountStatus, Ref: string(rf),
 				Label: fmt.Sprintf("account %s in %s disabled", cur.Username, rec.System)})
 		}
 	}
-	if len(acItems) > 0 {
-		var names []string
-		for s := range systems {
-			names = append(names, s)
-		}
-		sort.Strings(names)
-		var sanity []string
-		prev, cur := 0, 0
-		for _, sysName := range names {
-			prev, cur = prev+prevAccounts[sysName], cur+acRecords[sysName]
-			sanity = append(sanity, deleteguard.FeedChecks(prevAccounts[sysName], acRecords[sysName], partial)...)
-		}
-		d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatAccounts, Items: acItems,
-			Source: deleteguard.SourceConnector, SourceID: strings.Join(names, ","), Correlation: "ingest:accounts:" + strings.Join(names, ","),
-			SourceDriven: true, Sanity: sanity, PrevCount: prev, NewCount: cur})
-		if err != nil {
-			return h, err
-		}
-		for _, it := range d.Held {
-			var k [2]string
-			if err := json.Unmarshal([]byte(it.Ref), &k); err != nil {
-				return h, err
-			}
-			h.accounts[k] = true
-		}
+	if len(items) == 0 {
+		return nil
 	}
-	return h, nil
+	var names []string
+	for s := range systems {
+		names = append(names, s)
+	}
+	sort.Strings(names)
+	joined := strings.Join(names, ",")
+	var sanity []string
+	prev, cur := 0, 0
+	for _, sysName := range names {
+		prev, cur = prev+prevAccounts[sysName], cur+acRecords[sysName]
+		sc, err := deleteguard.CheckFeed(c, ref, deleteguard.CatAccounts, prevAccounts[sysName], acRecords[sysName], partial)
+		if err != nil {
+			return err
+		}
+		sanity = append(sanity, sc...)
+	}
+	req := deleteguard.Request{Category: deleteguard.CatAccounts, Items: items, Source: deleteguard.SourceConnector, SourceID: joined,
+		Correlation: "ingest:accounts:" + joined, SourceDriven: true, Sanity: sanity, PrevCount: prev, NewCount: cur}
+	if ref.ID != "" {
+		req.SourceID, req.SourceRef, req.Correlation = ref.ID, ref, "ingest:accounts:"+ref.ID
+	}
+	d, err := deleteguard.AdmitWith(c, now, req)
+	if err != nil {
+		return err
+	}
+	for _, it := range d.Held {
+		var k [2]string
+		if err := json.Unmarshal([]byte(it.Ref), &k); err != nil {
+			return err
+		}
+		h.accounts[k] = true
+	}
+	return nil
 }
 
 // ReleaseIdentity applies a held identity status: the sync's record is written again if the

@@ -25,6 +25,9 @@ import (
 //	POST /api/admin/deletion-holds/{id}/approve        release the held items (body {"items":[ords]} releases only those and discards the rest); a different admin than the actor; step-up
 //	POST /api/admin/deletion-holds/{id}/discard        drop the held items (body {"note"})
 //
+//	GET  /api/admin/deletion-guard/sources/{kind}/{id}  one source's (connection, loader, vms_source) settings per category: the category's, its override, what applies, its last good record count and window use
+//
+// Per-source overrides and feed checks change through the same request type (payload "sources").
 // The thresholds change through the admin change requests (POST /api/admin/change-requests, type
 // deletion_guard.update): tightening takes one admin, loosening two.
 //
@@ -34,6 +37,7 @@ import (
 func (s *Server) registerDeletionGuardRoutes() {
 	G, P := http.MethodGet, http.MethodPost
 	s.handle(G, "/api/admin/deletion-guard", read, need(auth.PermAdminRead), s.rd(s.getDeletionGuard))
+	s.handle(G, "/api/admin/deletion-guard/sources/{kind}/{id}", read, need(auth.PermAdminRead), s.rd(s.getDeletionGuardSource))
 	s.handle(G, "/api/admin/deletion-holds", read, need(auth.PermAdminRead), s.rd(s.listDeletionHolds))
 	s.handle(G, "/api/admin/deletion-holds/{id}", read, need(auth.PermAdminRead), s.rd(s.getDeletionHold))
 	s.handle(P, "/api/admin/deletion-holds/{id}/approve", write, needStepUp(auth.PermAdminChangeAppr, auth.StepUpAdmin), s.rd(s.approveDeletionHold))
@@ -119,8 +123,83 @@ func (s *Server) getDeletionGuard(r *http.Request, _ *params) (int, any, error) 
 	if err != nil {
 		return 0, nil, err
 	}
+	srcs, err := s.sourceOverrides(tx)
+	if err != nil {
+		return 0, nil, err
+	}
 	return http.StatusOK, map[string]any{"categories": us, "hold_expiry_hours": hours, "open_holds": open,
-		"defaults": deleteguard.Defaults(), "change_type": "deletion_guard.update"}, nil
+		"defaults": deleteguard.Defaults(), "change_type": "deletion_guard.update", "sources": srcs,
+		"feed_defaults": deleteguard.DefaultFeed()}, nil
+}
+
+// sourceOverrideView is one stored override with its source's name.
+type sourceOverrideView struct {
+	deleteguard.SourcePolicy
+	Name string `json:"name"`
+	// Effective is what applies to the source for the category.
+	Effective deleteguard.Resolved `json:"effective"`
+}
+
+// sourceOverrides lists every override of the tenant, each with the name of its source.
+func (s *Server) sourceOverrides(tx *store.TenantTx) ([]sourceOverrideView, error) {
+	rows, err := tx.DeletionSourcePolicies()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]sourceOverrideView, 0, len(rows))
+	names := map[deleteguard.SourceRef]string{}
+	for _, r := range rows {
+		p := deleteguard.SourcePolicyFromRow(r)
+		ref := p.Ref()
+		name, ok := names[ref]
+		if !ok {
+			name = sourceName(tx, ref)
+			names[ref] = name
+		}
+		res, err := deleteguard.ResolveFor(tx, ref, p.Category, true)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sourceOverrideView{SourcePolicy: *p, Name: name, Effective: res})
+	}
+	return out, nil
+}
+
+// sourceName is the display name of a source ("" when it is gone).
+func sourceName(tx *store.TenantTx, ref deleteguard.SourceRef) string {
+	switch ref.Kind {
+	case deleteguard.SrcConnection:
+		if c, err := tx.Connection(ref.ID); err == nil {
+			return c.Name
+		}
+	case deleteguard.SrcLoader:
+		if l, err := tx.GrpLoader(ref.ID); err == nil {
+			return l.Name
+		}
+	case deleteguard.SrcVMS:
+		if v, err := tx.VmsSource(ref.ID); err == nil {
+			return v.Name
+		}
+	}
+	return ""
+}
+
+func (s *Server) getDeletionGuardSource(r *http.Request, p *params) (int, any, error) {
+	ref := deleteguard.SourceRef{Kind: p.path["kind"], ID: p.path["id"]}
+	if !ref.Valid() || len(ref.ID) > 128 || len(deleteguard.SourceCategories[ref.Kind]) == 0 {
+		return 0, nil, notFound("not_found", "no such source")
+	}
+	tx := store.TxFrom(r.Context())
+	name := sourceName(tx, ref)
+	if name == "" {
+		return 0, nil, notFound("not_found", "no such source")
+	}
+	cats, err := deleteguard.ViewSource(tx, ref, s.clock())
+	if err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, map[string]any{"kind": ref.Kind, "source_id": ref.ID, "name": name, "categories": cats,
+		"feed_defaults": deleteguard.DefaultFeed(), "change_type": "deletion_guard.update"}, nil
 }
 
 func (s *Server) listDeletionHolds(r *http.Request, p *params) (int, any, error) {

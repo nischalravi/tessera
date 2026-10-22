@@ -253,3 +253,155 @@ func TestDeletionGuardAPI_ReleasesSyncHolds(t *testing.T) {
 		t.Errorf("%d identities ended, want 2", ended)
 	}
 }
+
+func srcChange(src string) string {
+	return `{"type":"deletion_guard.update","payload":{"sources":[` + src + `]}}`
+}
+
+func TestDeletionGuardAPI_PerSourceSettings(t *testing.T) {
+	e := newPrivEnv(t)
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	conn := store.NewID()
+	if err := e.f.DB.InTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
+		return c.InsertConnection(&store.Connection{ID: conn, Name: "Workday prod", ConnectorType: "workday", System: "workday",
+			Role: "account_source", CreatedAt: storetest.Now, UpdatedAt: storetest.Now})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/admin/deletion-guard/sources/connection/" + conn
+	one := func(cat, rest string) string {
+		return fmt.Sprintf(`{"kind":"connection","source_id":%q,"category":%q%s}`, conn, cat, rest)
+	}
+	catOf := func(v map[string]any, cat string) map[string]any {
+		for _, c := range v["categories"].([]any) {
+			if c.(map[string]any)["category"] == cat {
+				return c.(map[string]any)
+			}
+		}
+		t.Fatalf("no category %s in %v", cat, v)
+		return nil
+	}
+
+	v := e.admin.call("GET", path, "", 200)
+	if v["name"] != "Workday prod" || len(v["categories"].([]any)) != 2 || catOf(v, "identities")["override"] != nil {
+		t.Fatalf("source view = %v", v)
+	}
+	eff := catOf(v, "identities")["effective"].(map[string]any)
+	if eff["mode"] != "hold_all" || eff["feed"].(map[string]any)["drop_percent"] != float64(20) || eff["feed"].(map[string]any)["empty_check"] != true {
+		t.Errorf("effective before any override = %v", eff)
+	}
+	e.admin.call("GET", "/api/admin/deletion-guard/sources/connection/nope", "", 404)
+	e.admin.call("GET", "/api/admin/deletion-guard/sources/tenant/x", "", 404)
+
+	// a tighter threshold takes one admin and applies at once
+	ch := e.admin.call("POST", "/api/admin/change-requests", srcChange(one("identities", `,"mode":"hold_all","max_count":3,"window_minutes":60`)), 201)
+	if ch["status"] != "applied" || ch["two_person"] != false {
+		t.Fatalf("tighten = %v", ch)
+	}
+	v = e.admin.call("GET", path, "", 200)
+	if o := catOf(v, "identities")["override"].(map[string]any); o["mode"] != "hold_all" || o["max_count"] != float64(3) || catOf(v, "identities")["limit"] != float64(3) {
+		t.Errorf("override = %v", catOf(v, "identities"))
+	}
+	// a stricter feed check is one admin; a looser one needs two
+	if ch = e.admin.call("POST", "/api/admin/change-requests", srcChange(one("identities", `,"mode":"hold_all","max_count":3,"window_minutes":60,"feed_drop_percent":10`)), 201); ch["status"] != "applied" {
+		t.Fatalf("stricter feed = %v", ch)
+	}
+	ch = e.admin.call("POST", "/api/admin/change-requests", srcChange(one("identities", `,"mode":"hold_all","max_count":3,"window_minutes":60,"feed_drop_percent":60,"feed_empty_check":false`)), 201)
+	if ch["status"] != "pending_approval" || ch["two_person"] != true {
+		t.Fatalf("looser feed = %v", ch)
+	}
+	if o := catOf(e.admin.call("GET", path, "", 200), "identities")["override"].(map[string]any); o["feed_drop_percent"] != float64(10) {
+		t.Errorf("the feed setting changed before the approval: %v", o)
+	}
+	admin2.call("POST", "/api/admin/change-requests/"+ch["id"].(string)+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, ch["payload_hash"]), 200)
+	o := catOf(e.admin.call("GET", path, "", 200), "identities")["override"].(map[string]any)
+	if o["feed_drop_percent"] != float64(60) || o["feed_empty_check"] != false {
+		t.Errorf("override after approval = %v", o)
+	}
+	// a feed-only override for another category (the mode is inherited) that loosens is two-admin too
+	if ch = e.admin.call("POST", "/api/admin/change-requests", srcChange(one("accounts", `,"feed_drop_percent":50`)), 201); ch["two_person"] != true {
+		t.Errorf("feed-only loosening = %v", ch)
+	}
+	// removing the override puts the category's settings back: here they are looser, so it takes two admins
+	rm := e.admin.call("POST", "/api/admin/change-requests", srcChange(one("identities", `,"remove":true`)), 201)
+	if rm["status"] != "pending_approval" {
+		t.Errorf("removing an override that was tighter than the category: %v", rm)
+	}
+	admin2.call("POST", "/api/admin/change-requests/"+rm["id"].(string)+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, rm["payload_hash"]), 200)
+	if catOf(e.admin.call("GET", path, "", 200), "identities")["override"] != nil {
+		t.Error("the override is still there")
+	}
+	// the list on Admin → Deletion guard names the sources
+	e.admin.call("POST", "/api/admin/change-requests", srcChange(one("identities", `,"mode":"hold_all","max_count":2,"window_minutes":60`)), 201)
+	g := e.admin.call("GET", "/api/admin/deletion-guard", "", 200)
+	srcs := g["sources"].([]any)
+	if len(srcs) != 1 || srcs[0].(map[string]any)["name"] != "Workday prod" || srcs[0].(map[string]any)["kind"] != "connection" {
+		t.Errorf("sources = %v", srcs)
+	}
+	// refused: an unknown source, a kind with no settings yet, a removal of nothing, bad numbers, a duplicate
+	e.admin.call("POST", "/api/admin/change-requests", srcChange(`{"kind":"connection","source_id":"nope","category":"accounts","mode":"hold_all","max_count":1,"window_minutes":60}`), 422)
+	e.admin.call("POST", "/api/admin/change-requests", srcChange(`{"kind":"scim_client","source_id":"x","category":"accounts","mode":"hold_all","max_count":1,"window_minutes":60}`), 422)
+	e.admin.call("POST", "/api/admin/change-requests", srcChange(one("accounts", `,"remove":true`)), 422)
+	e.admin.call("POST", "/api/admin/change-requests", srcChange(one("accounts", `,"feed_drop_percent":101`)), 422)
+	e.admin.call("POST", "/api/admin/change-requests", srcChange(one("accounts", `,"mode":"hold_all"`)), 422)
+	e.admin.call("POST", "/api/admin/change-requests", srcChange(one("accounts", `,"feed_drop_percent":5`)+","+one("accounts", `,"feed_drop_percent":6`)), 422)
+
+	// the other tenant does not see this source
+	other := newGrpOn(t, e)
+	other.call("GET", path, "", 404)
+	if s := other.call("GET", "/api/admin/deletion-guard", "", 200)["sources"].([]any); len(s) != 0 {
+		t.Errorf("another tenant lists %v", s)
+	}
+}
+
+// The Inbox shows a held deletion to the tenant admins while it waits, and the task closes with the hold.
+func TestDeletionGuardAPI_InboxTaskFollowsTheHold(t *testing.T) {
+	e := newPrivEnv(t)
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	e.admin.call("POST", "/api/admin/change-requests", guardPolicy("groups", 1, "hold_excess"), 201)
+	app := e.admin.folder("", "app")
+	var gs []string
+	for i := 0; i < 3; i++ {
+		gs = append(gs, e.admin.group(app, fmt.Sprintf("g%d", i)))
+	}
+	e.admin.call("DELETE", "/api/groups/"+gs[0], "", 200)
+	held := e.admin.call("DELETE", "/api/groups/"+gs[1], "", 202)
+	holdID := held["hold_id"].(string)
+	tasks := func(who grpClient, status string) []map[string]any {
+		var out []map[string]any
+		for _, x := range who.call("GET", "/api/groups/inbox/tasks?kind=deletion_held&status="+status, "", 200)["items"].([]any) {
+			out = append(out, x.(map[string]any))
+		}
+		return out
+	}
+	ts := tasks(e.admin, "open")
+	if len(ts) != 1 || ts[0]["object_type"] != "deletion_hold" || ts[0]["object_id"] != holdID || ts[0]["kind"] != "deletion_held" {
+		t.Fatalf("open tasks = %v", ts)
+	}
+	if got := tasks(admin2, "open"); len(got) != 1 {
+		t.Errorf("a second tenant admin sees %v", got)
+	}
+	// a person without the approver role does not
+	viewer := e.as("viewer", []auth.Role{auth.RoleViewer}, nil)
+	if got := viewer.call("GET", "/api/groups/inbox/tasks?kind=deletion_held", "", 200)["items"]; got != nil && len(got.([]any)) != 0 {
+		t.Errorf("a viewer sees %v", got)
+	}
+	// the task is not closed by hand: it follows the hold
+	e.admin.call("POST", "/api/groups/inbox/tasks/"+ts[0]["id"].(string)+"/close", `{"status":"dismissed"}`, 409)
+	admin2.call("POST", "/api/admin/deletion-holds/"+holdID+"/approve", "", 200)
+	if got := tasks(e.admin, "open"); len(got) != 0 {
+		t.Errorf("the task is still open after the release: %v", got)
+	}
+	if got := tasks(e.admin, "done"); len(got) != 1 {
+		t.Errorf("done tasks = %v", got)
+	}
+	// a discarded hold dismisses its task
+	held = e.admin.call("DELETE", "/api/groups/"+gs[2], "", 202)
+	if got := tasks(e.admin, "open"); len(got) != 1 {
+		t.Fatalf("second task = %v", got)
+	}
+	admin2.call("POST", "/api/admin/deletion-holds/"+held["hold_id"].(string)+"/discard", "", 200)
+	if got := tasks(e.admin, "dismissed"); len(got) != 1 {
+		t.Errorf("dismissed tasks = %v", got)
+	}
+}
