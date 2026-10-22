@@ -193,8 +193,10 @@ func TestBulkInvite_ParseCSV(t *testing.T) {
 func TestBulkInvite_NeedsASponsorIdentity(t *testing.T) {
 	e := newEnv(t)
 	rows, _ := sponsorship.ParseCSV(header + csvRow("a@x.example", "visitor", day(5).Format("2006-01-02")))
+	noPerson := e.admin
+	noPerson.IdentityID = nil
 	err := e.do(func(tx *store.TenantTx) error {
-		_, err := e.svc.BulkInvite(tx, e.admin, rows, true, now)
+		_, err := e.svc.BulkInvite(tx, noPerson, rows, true, now)
 		return err
 	})
 	e.wantCode(err, "sponsor_identity_required")

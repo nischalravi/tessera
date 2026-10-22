@@ -209,6 +209,25 @@ func TestRemoval_Decisions(t *testing.T) {
 		}
 	})
 
+	t.Run("an unlinked decider is refused", func(t *testing.T) {
+		w := newWorld(t)
+		_, id := w.removalOf("acct:okta:alice", "group:okta:eng")
+		q, _ := w.submitRemoval(w.alice, false, id, "x")
+		unlinked := w.pat
+		unlinked.IdentityID = nil
+		if _, err := w.decideRemoval(func(c *store.TenantTx) (*store.RemovalRequest, error) {
+			return requests.ApproveRemoval(c, q.ID, unlinked, "", w.now)
+		}); code(err) != "approver_unlinked" {
+			t.Errorf("unlinked approve = %v", err)
+		}
+		w.tx(func(c *store.TenantTx) error {
+			if ok, err := requests.CanDecideRemoval(c, q, unlinked, w.now); err != nil || ok {
+				t.Errorf("CanDecideRemoval for an unlinked decider = %v, %v", ok, err)
+			}
+			return nil
+		})
+	})
+
 	t.Run("only the requester cancels", func(t *testing.T) {
 		w := newWorld(t)
 		_, id := w.removalOf("acct:okta:alice", "group:okta:eng")

@@ -1341,14 +1341,18 @@ func (s *Server) jitDecide(action string) handlerFunc {
 		default:
 			rq, err = jit.Revoke(c, id, by, now)
 		}
-		if errors.Is(err, jit.ErrSelfApproval) {
+		if errors.Is(err, jit.ErrSelfApproval) || errors.Is(err, jit.ErrApproverUnlinked) {
+			code, msg := "self_approval", "You cannot approve your own request; another approver must decide it."
+			if errors.Is(err, jit.ErrApproverUnlinked) {
+				code, msg = "approver_unlinked", "Your account is not linked to an identity, so it cannot approve requests. Ask an administrator to link it."
+			}
 			// nothing changed; the refusal itself is evidence of the control
 			if err := c.Audit(now, by.Display, "jit.approve.refused", ojson.Object{{Key: "request_id", Value: id},
-				{Key: "reason", Value: "self_approval"}}); err != nil {
+				{Key: "reason", Value: code}}); err != nil {
 				return nil, err
 			}
-			return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: "self_approval"},
-				{Key: "detail", Value: "You cannot approve your own request; another approver must decide it."}}}, nil
+			return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: code},
+				{Key: "detail", Value: msg}}}, nil
 		}
 		if err != nil {
 			return nil, asJitError(err)

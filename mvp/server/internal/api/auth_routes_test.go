@@ -353,6 +353,21 @@ func TestJITSelfApprovalRefused(t *testing.T) {
 	if rec := serve(h, authed(priya, "POST", path, "")); rec.Code != 403 || !strings.Contains(rec.Body.String(), `"self_approval"`) {
 		t.Fatalf("approval by the beneficiary: %d %s", rec.Code, rec.Body.String())
 	}
+	// nor a platform user with no linked identity: the check cannot prove they are someone else (#443)
+	unlinked := signIn(t, srv.store, seed.LarkspurID, authtest.User{Email: "unlinked.approver@larkspur.example", Display: "Unlinked",
+		Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, FrozenNow)
+	if rec := serve(h, authed(unlinked, "POST", path, "")); rec.Code != 403 || !strings.Contains(rec.Body.String(), `"approver_unlinked"`) {
+		t.Fatalf("approval by an unlinked user: %d %s", rec.Code, rec.Body.String())
+	}
+	refusedUnlinked := false
+	for _, e := range ledger(t, srv.store, seed.LarkspurID) {
+		if e.Action == "jit.approve.refused" && strings.Contains(string(e.Detail), "approver_unlinked") {
+			refusedUnlinked = true
+		}
+	}
+	if !refusedUnlinked {
+		t.Error("no jit.approve.refused event for the unlinked approver")
+	}
 	rec = serve(h, authed(srv.login, "POST", path, ""))
 	if rec.Code != 200 || decode(t, rec)["status"] != "approved" {
 		t.Fatalf("approval by another user: %d %s", rec.Code, rec.Body.String())

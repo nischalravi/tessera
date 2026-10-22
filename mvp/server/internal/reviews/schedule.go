@@ -318,13 +318,7 @@ func progress(tx *store.TenantTx, l *store.ReviewLaunch, now time.Time, res *Tic
 			return err
 		}
 		target := people[*co.EscalateTo]
-		var lead *store.Identity
-		for _, i := range all {
-			if i.Title != nil && *i.Title == "Head of Security" {
-				lead = i
-				break
-			}
-		}
+		lead := findSecurityLead(all)
 		for _, it := range open {
 			to := *co.EscalateTo
 			if subj := people[it.IdentityID]; subj != nil && target != nil {

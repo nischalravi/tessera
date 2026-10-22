@@ -19,13 +19,18 @@ func TestJITDecisionsNotify(t *testing.T) {
 	var granted, denied *store.AccessRequest
 	testkit.Write(t, st, func(c *store.TenantTx) error {
 		requester = &store.PlatformUser{DisplayName: "Requester", CreatedAt: now}
-		approver = &store.PlatformUser{DisplayName: "Approver", CreatedAt: now}
+		// an approver with no linked identity is refused (issue #443)
+		person, err := c.InsertIdentity(&store.Identity{TenantID: c.Tenant(), ExternalID: "approver", Name: "Approver", Type: "human", Status: "active", CreatedAt: now})
+		if err != nil {
+			return err
+		}
+		approver = &store.PlatformUser{DisplayName: "Approver", IdentityID: &person, CreatedAt: now}
 		for _, u := range []*store.PlatformUser{requester, approver} {
 			if err := c.InsertPlatformUser(u); err != nil {
 				return err
 			}
 		}
-		var err error
+
 		if granted, err = jit.CreateRequest(c, now, ids["alice"], ids["group:aws:ProdAdmin"], jit.Hours{N: 2}, "incident",
 			store.UserRef{ID: requester.ID, Display: "Requester"}); err != nil {
 			return err

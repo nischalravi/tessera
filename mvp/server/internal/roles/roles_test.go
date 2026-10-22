@@ -32,11 +32,16 @@ func newWorld(t *testing.T) *world {
 	w := &world{t: t, f: f, ids: f.B.IDs, now: storetest.Now}
 	w.tx(func(c *store.TenantTx) error {
 		alice := w.ids["alice"]
+		// a decider with no linked identity is refused (approver_unlinked, issue #443)
+		patID, err := c.InsertIdentity(&store.Identity{TenantID: c.Tenant(), ExternalID: "pat", Name: "Pat", Type: "human", Status: "active", CreatedAt: w.now})
+		if err != nil {
+			return err
+		}
 		for _, u := range []struct {
 			a     *roles.Actor
 			name  string
 			ident *int64
-		}{{&w.alice, "Alice", &alice}, {&w.pat, "Pat", nil}} {
+		}{{&w.alice, "Alice", &alice}, {&w.pat, "Pat", &patID}} {
 			pu := &store.PlatformUser{DisplayName: u.name, IdentityID: u.ident, CreatedAt: w.now}
 			if err := c.InsertPlatformUser(pu); err != nil {
 				return err

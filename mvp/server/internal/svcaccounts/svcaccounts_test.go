@@ -38,11 +38,17 @@ func setup(t *testing.T) *env {
 	f := storetest.TwoTenants(t)
 	e := &env{t: t, f: f, ids: f.A.IDs, now: storetest.Now}
 	e.tx(func(c *store.TenantTx) error {
+		// a decider with no linked identity is refused (approver_unlinked, issue #443)
+		patID, err := c.InsertIdentity(&store.Identity{TenantID: c.Tenant(), ExternalID: "pat", Name: "Pat", Type: "human", Status: "active", CreatedAt: e.now})
+		if err != nil {
+			return err
+		}
+		e.ids["pat"] = patID
 		for _, u := range []struct {
 			a     *requests.Actor
 			name  string
 			ident string
-		}{{&e.alice, "Alice", "alice"}, {&e.bob, "Bob", "bob"}, {&e.carol, "Carol", "carol"}, {&e.zed, "Zed", ""}, {&e.pat, "Pat", ""}} {
+		}{{&e.alice, "Alice", "alice"}, {&e.bob, "Bob", "bob"}, {&e.carol, "Carol", "carol"}, {&e.zed, "Zed", ""}, {&e.pat, "Pat", "pat"}} {
 			pu := &store.PlatformUser{DisplayName: u.name, CreatedAt: e.now}
 			if u.ident != "" {
 				id := e.ids[u.ident]

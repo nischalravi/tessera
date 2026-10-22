@@ -37,11 +37,16 @@ func TestRequestsAndCampaignsWithDependants(t *testing.T) {
 	var campaign int64
 	in(func(c *store.TenantTx) error {
 		a := ids["alice"]
+		// a decider with no linked identity is refused (approver_unlinked, issue #443)
+		patID, err := c.InsertIdentity(&store.Identity{TenantID: c.Tenant(), ExternalID: "pat", Name: "Pat", Type: "human", Status: "active", CreatedAt: old})
+		if err != nil {
+			return err
+		}
 		for _, u := range []struct {
 			actor *requests.Actor
 			name  string
 			ident *int64
-		}{{&alice, "Alice", &a}, {&pat, "Pat", nil}} {
+		}{{&alice, "Alice", &a}, {&pat, "Pat", &patID}} {
 			pu := &store.PlatformUser{DisplayName: u.name, IdentityID: u.ident, CreatedAt: old}
 			if err := c.InsertPlatformUser(pu); err != nil {
 				return err

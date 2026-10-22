@@ -78,6 +78,20 @@ type Actor struct {
 
 func (a Actor) id() string { return a.UserID.String() }
 
+// RefuseUnlinked fails closed for an approver whose platform user has no linked
+// identity (403 approver_unlinked, issue #443): every "is the decider the
+// beneficiary?" check compares identities, so it cannot prove such a person is
+// someone else. The same rule as reviewer_unlinked (#439).
+func RefuseUnlinked(by Actor) error {
+	if by.UserID != uuid.Nil && by.IdentityID == nil {
+		return refuse(403, ErrCodeApproverUnlinked, "your account is not linked to an identity, so it cannot approve requests; ask an administrator to link it")
+	}
+	return nil
+}
+
+// ErrCodeApproverUnlinked is the code of RefuseUnlinked's refusal.
+const ErrCodeApproverUnlinked = "approver_unlinked"
+
 // ---------------------------------------------------------------- catalog
 
 // Entry is a group with its catalog item (Item nil: not in the catalog).
