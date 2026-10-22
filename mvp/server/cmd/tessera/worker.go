@@ -89,7 +89,7 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	st, err := store.Open(ctx, o.db)
+	st, err := store.OpenApp(ctx, o.db, store.AppOptions{DSN: cfg.DBApp, AllowPrivileged: cfg.DBAllowPrivilegedApp})
 	if err != nil {
 		return err
 	}

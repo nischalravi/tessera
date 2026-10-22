@@ -62,7 +62,9 @@ func mustBeTest() {
 
 // TestTarget returns a database setting for a fresh, empty database of this
 // test: a SQLite file in tb.TempDir(), or, with TESSERA_TEST_PG_URL set, a
-// new Postgres database (dropped when the test ends) reached as tessera_app.
+// new Postgres database (dropped when the test ends). That setting is the
+// owner's DSN (it migrates); Open and OpenApp pair it with the tessera_app
+// login for the request pool, as a deployment does with TESSERA_DB_APP.
 func TestTarget(tb testing.TB) string {
 	tb.Helper()
 	mustBeTest()
@@ -182,9 +184,36 @@ func randHex(n int) string {
 
 var ensureRoleOnce sync.Once
 
+// testAppPassword is the password of the tessera_app login on the test server.
+const testAppPassword = "tessera_app_test" // #nosec G101 -- throwaway test-server login
+
+var (
+	testAppMu   sync.Mutex
+	testAppDSNs = map[string]string{} // owner DSN -> tessera_app DSN of the same database
+)
+
+// testAppDSN is the application-login DSN registered for a test database's
+// owner DSN, or "" (always "" outside test binaries).
+func testAppDSN(owner string) string {
+	if !testing.Testing() {
+		return ""
+	}
+	testAppMu.Lock()
+	defer testAppMu.Unlock()
+	return testAppDSNs[owner]
+}
+
+// TestAppDSN returns the tessera_app login's DSN for a database made by
+// TestTarget or TestClone ("" for SQLite).
+func TestAppDSN(target string) string {
+	mustBeTest()
+	return testAppDSN(target)
+}
+
 // createTestDatabase creates database name (FROM template when given) on the
-// admin server, makes sure the tessera_app role exists, and returns the DSN
-// that opens it as tessera_app. name and template are generated here, never
+// admin server, makes sure the tessera_app login exists (LOGIN with a
+// password, NOSUPERUSER NOBYPASSRLS, member of nothing), and returns the
+// owner DSN of the new database, registering its tessera_app DSN. name and template are generated here, never
 // taken from input.
 func createTestDatabase(adminURL, name, template string) (string, error) {
 	db, err := sql.Open("pgx", adminURL)
@@ -195,8 +224,13 @@ func createTestDatabase(adminURL, name, template string) (string, error) {
 	var roleErr error
 	ensureRoleOnce.Do(func() {
 		// CREATE ROLE has no IF NOT EXISTS; a concurrent test binary may win the race.
-		_, err := db.Exec(`CREATE ROLE tessera_app NOLOGIN NOSUPERUSER NOBYPASSRLS`)
+		_, err := db.Exec(`CREATE ROLE tessera_app LOGIN PASSWORD '` + testAppPassword + `' NOSUPERUSER NOBYPASSRLS`) // #nosec G202 -- constant
 		if err != nil && !strings.Contains(err.Error(), "already exists") && !strings.Contains(err.Error(), "tuple concurrently updated") {
+			roleErr = err
+			return
+		}
+		// A role left NOLOGIN by an older run of the suite.
+		if _, err := db.Exec(`ALTER ROLE tessera_app LOGIN PASSWORD '` + testAppPassword + `' NOSUPERUSER NOBYPASSRLS`); err != nil { // #nosec G202 -- constant
 			roleErr = err
 		}
 	})
@@ -215,10 +249,12 @@ func createTestDatabase(adminURL, name, template string) (string, error) {
 		return "", errors.New("store: invalid TESSERA_TEST_PG_URL")
 	}
 	u.Path = "/" + name
-	qv := u.Query()
-	qv.Set("app_role", "tessera_app")
-	u.RawQuery = qv.Encode()
-	return u.String(), nil
+	owner := u.String()
+	u.User = url.UserPassword("tessera_app", testAppPassword)
+	testAppMu.Lock()
+	testAppDSNs[owner] = u.String()
+	testAppMu.Unlock()
+	return owner, nil
 }
 
 func dbNameOf(dsn string) (string, error) {

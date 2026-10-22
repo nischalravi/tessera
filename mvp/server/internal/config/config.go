@@ -65,6 +65,8 @@ type Config struct {
 	PublicURL             string // issuer base; https in prod
 	APIAudience           string // access-token aud
 	DB                    string // SQLite path (or sqlite:///path), or a postgres:// DSN (carries a password: never log it)
+	DBApp                 string // TESSERA_DB_APP: the application login's postgres:// DSN for request traffic (carries a password: never log it)
+	DBAllowPrivilegedApp  bool   // TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP: let the request pool be a privileged login (dev only)
 	KEKFile               string // TESSERA_KEK_FILE, when set
 	CookieSecure          bool
 	CORSOrigins           []string
@@ -313,6 +315,8 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.PublicURL = strings.TrimRight(str("TESSERA_PUBLIC_URL", "http://localhost:5173", ""), "/")
 	c.APIAudience = str("TESSERA_API_AUDIENCE", c.PublicURL+"/api", c.PublicURL+"/api")
 	c.DB = dbPath(getenv("TESSERA_DB"))
+	c.DBApp = strings.TrimSpace(getenv("TESSERA_DB_APP"))
+	c.DBAllowPrivilegedApp = boolean("TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP", false, false)
 	c.CookieSecure = boolean("TESSERA_COOKIE_SECURE", true, true)
 	c.CORSOrigins = corsOrigins(getenv("TESSERA_CORS_ORIGINS"), getenv("UI_PORT"), prod)
 	c.OutboundAllowLoopback = boolean("TESSERA_OUTBOUND_ALLOW_LOOPBACK", true, false)
@@ -511,10 +515,16 @@ func Load(getenv func(string) string) (*Config, error) {
 		if c.FakeTarget {
 			bad("TESSERA_DEV_FAKE_TARGET must not be set with TESSERA_ENV=prod (the fake provisioning target accepts any change)")
 		}
+		if c.DBAllowPrivilegedApp {
+			bad("TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP must not be set with TESSERA_ENV=prod (the request pool must never be a privileged database login)")
+		}
 		if IsPostgresDSN(c.DB) {
 			// Never echo the DSN: it carries the password.
 			if msg := checkProdPostgres(c.DB); msg != "" {
 				bad("TESSERA_DB: %s", msg)
+			}
+			if msg := checkProdPostgresApp(c.DB, c.DBApp); msg != "" {
+				bad("TESSERA_DB_APP: %s", msg)
 			}
 		}
 		if c.SafedialAllow != "" {
@@ -751,8 +761,8 @@ func IsPostgresDSN(s string) bool {
 }
 
 // checkProdPostgres returns what is wrong with a production Postgres DSN, or
-// "". It requires TLS to the server and an app_role: the application must run
-// as the non-owner role so row-level security binds it (design §14.3).
+// "". It requires TLS to the server and refuses the retired app_role option
+// (the application has its own login, TESSERA_DB_APP; #430).
 func checkProdPostgres(dsn string) string {
 	u, err := url.Parse(dsn)
 	if err != nil {
@@ -768,8 +778,44 @@ func checkProdPostgres(dsn string) string {
 	default:
 		problems = append(problems, "sslmode must be require, verify-ca or verify-full with TESSERA_ENV=prod")
 	}
-	if q.Get("app_role") == "" {
-		problems = append(problems, "app_role (the NOSUPERUSER, NOBYPASSRLS role, usually tessera_app) is required with TESSERA_ENV=prod so row-level security applies")
+	if q.Has("app_role") {
+		problems = append(problems, "app_role is no longer supported (SET ROLE can be reversed): give the application its own login in TESSERA_DB_APP")
+	}
+	return strings.Join(problems, "; ")
+}
+
+// checkProdPostgresApp returns what is wrong with the application login's DSN
+// next to the owner DSN, or "". Request traffic must connect as its own login
+// (never the owner, never SET ROLE) so row-level security binds it (design
+// §14.3, #430).
+func checkProdPostgresApp(ownerDSN, appDSN string) string {
+	if appDSN == "" {
+		return "is required with a postgres:// TESSERA_DB and TESSERA_ENV=prod: the application must log in as its own NOSUPERUSER NOBYPASSRLS role (usually tessera_app), not the owner"
+	}
+	if !IsPostgresDSN(appDSN) {
+		return "is not a valid postgres:// URL"
+	}
+	a, err := url.Parse(appDSN)
+	if err != nil {
+		return "is not a valid postgres:// URL"
+	}
+	q, err := url.ParseQuery(a.RawQuery)
+	if err != nil {
+		return "is not a valid postgres:// URL"
+	}
+	var problems []string
+	switch q.Get("sslmode") {
+	case "require", "verify-ca", "verify-full":
+	default:
+		problems = append(problems, "sslmode must be require, verify-ca or verify-full with TESSERA_ENV=prod")
+	}
+	if q.Has("app_role") {
+		problems = append(problems, "app_role is not supported")
+	}
+	if a.User == nil || a.User.Username() == "" {
+		problems = append(problems, "must name the application login (user) in the URL")
+	} else if o, err := url.Parse(ownerDSN); err == nil && o.User != nil && o.User.Username() == a.User.Username() {
+		problems = append(problems, "must be a different login from TESSERA_DB's")
 	}
 	return strings.Join(problems, "; ")
 }
