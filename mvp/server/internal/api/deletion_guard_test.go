@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -156,4 +157,37 @@ func TestDeletionGuardAPI_MembersAndBatch(t *testing.T) {
 		t.Fatalf("%d holds, want one per request", len(holds))
 	}
 	e.admin.call("GET", "/api/groups/"+g+"/members", "", 200)
+}
+
+func TestDeletionGuardAPI_BulkActionJoinsOneHold(t *testing.T) {
+	e := newPrivEnv(t)
+	e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	e.admin.call("POST", "/api/admin/change-requests", guardPolicy("groups", 1, "hold_excess"), 201)
+	app := e.admin.folder("", "app")
+	batch := "0b1d4f2a-5c1e-4a55-9a53-6a3f4f9d2c11"
+	var holds = map[string]bool{}
+	for i := 0; i < 4; i++ {
+		id := e.admin.group(app, fmt.Sprintf("g%d", i))
+		rec := e.admin.do("DELETE", "/api/groups/"+id, "", "X-Deletion-Batch", batch)
+		if i == 0 && rec.Code != 200 {
+			t.Fatalf("first delete = %d %s", rec.Code, rec.Body.String())
+		}
+		if i > 0 {
+			if rec.Code != 202 {
+				t.Fatalf("delete %d = %d %s", i, rec.Code, rec.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			holds[fmt.Sprint(body["hold_id"])] = true
+		}
+	}
+	if len(holds) != 1 {
+		t.Errorf("the bulk action made %d holds, want 1", len(holds))
+	}
+	l := e.admin.call("GET", "/api/admin/deletion-holds?status=held", "", 200)["holds"].([]any)
+	if len(l) != 1 || l[0].(map[string]any)["item_count"] != float64(3) {
+		t.Errorf("holds = %v", l)
+	}
 }

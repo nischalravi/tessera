@@ -11,6 +11,7 @@ import { HistoryTab } from "./HistoryTab";
 import { usePurgeGroups } from "./deletes";
 import { errText, useLoad } from "./hooks";
 import { MembersTab } from "./MembersTab";
+import { isHeld } from "../../admin/deletionGuardModel";
 import { folderLabel, folderTrail, indexFolders } from "./model";
 import { PrivilegesTab } from "./PrivilegesTab";
 
@@ -53,8 +54,9 @@ export function GroupPage() {
     const ok = await confirm({ title: `Delete ${g.name}?`, body: "The group is deleted and its members stop counting. It can be restored afterwards.", confirmLabel: "Delete", danger: true });
     if (ok === null) return;
     try {
-      await groups.deleteGroup(g.id);
-      toast("Group deleted");
+      const res = await groups.deleteGroup(g.id);
+      if (isHeld(res)) toast(`${res.message}. The group stays until a second admin releases it.`, { kind: "info", action: { label: "Open held deletion", run: () => nav(`/admin/held-deletions?selected=${encodeURIComponent(res.hold_id)}`) } });
+      else toast("Group deleted");
     } catch (e) {
       toast(errText(e), { kind: "error" });
     }

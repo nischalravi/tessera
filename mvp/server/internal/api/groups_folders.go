@@ -217,7 +217,7 @@ func (s *Server) grpEnv(r *http.Request, c *store.TenantTx, now time.Time) model
 	pr := principal(r)
 	env := model.Env{Tx: c, Now: now, Engine: s.cfg.GroupsEngine, ByIdentity: pr.IdentityID,
 		TenantAdmin: pr.ActiveRoles.Has(auth.RoleTenantAdmin), Guard: s.cfg.GroupsRules.Guard(),
-		Correlation: audit.RequestID(r.Context())}
+		Correlation: deletionCorrelation(r)}
 	if pr.UserID != nil {
 		u := pr.UserID.String()
 		env.By = &u
@@ -745,4 +745,16 @@ func (s *Server) copyGrpGroup(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusCreated, viewGroup(out), nil
+}
+
+// deletionCorrelation joins what the deletion guard holds during one request, or during a bulk
+// action of the UI that sends the same X-Deletion-Batch (a UUID) with each call, into one held
+// deletion. It is scoped to the signed-in user so another admin cannot add to this one's hold.
+func deletionCorrelation(r *http.Request) string {
+	if b := r.Header.Get("X-Deletion-Batch"); idRE.MatchString(b) {
+		if pr, ok := auth.PrincipalFrom(r.Context()); ok && pr.UserID != nil {
+			return "batch:" + pr.UserID.String() + ":" + b
+		}
+	}
+	return audit.RequestID(r.Context())
 }

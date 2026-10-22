@@ -3707,6 +3707,54 @@ after the same checks, the read-only restore; nothing is written back online). E
 
 Not archived yet: the legacy `access_requests` table, and anything else outside the five classes.
 
+## Deletion threshold guard
+
+A safety net so a mistake (a bad admin action, a bad source feed, a misconfigured connector or loader) cannot delete
+everything (`internal/deleteguard`). Every deletion path of a guarded category asks the guard first. The guard counts the
+deletions already applied in the category's sliding window (a per-tenant ledger), lets through only what fits under the
+threshold, **holds the rest**, audits and alerts, and a second admin releases or discards the held remainder.
+
+| Category | What counts | Default (on for every tenant) |
+|---|---|---|
+| `groups` | group soft delete and purge (a folder-tree delete counts each group once) | 25 per hour |
+| `folders` | folders removed (single, or the folders of a tree) | 10 per hour |
+| `group_members` | direct memberships removed by any path: the UI, bulk and batch, loaders, rules, reviews | 500 or 10% per hour |
+| `accounts` | connector-sync account removals and disables, provisioning remove/disable ops | 200 or 5% per hour |
+| `identities` | identity disable and leaver end | 50 or 2% per hour |
+
+Each policy has `max_count` and/or `max_percent` (of the tenant's size in that category, never less than 5; the lower of the
+two applies), a `window_minutes` (1 to 10080) and a `mode`: `hold_excess` (default: apply up to the threshold in a
+deterministic order, by item kind and ref, and hold the rest), `hold_all` (hold the whole batch that would pass it, like the
+loader and provisioner failsafes) or `off`. The loader and provisioner failsafes keep working as before; the guard sits
+under them (an approved held loader run is an approved override and is not counted again).
+
+* **Race safety.** The check and the ledger write run in the transaction that makes the deletions, after a write to the
+  category's counter row (`deletion_guard_counters`): a row lock on Postgres, the single writer on SQLite. Concurrent
+  requests and workers cannot together pass the threshold (`TestConcurrentRequestsCannotExceedTheThreshold`, both dialects).
+* **Held deletions** (`deletion_holds`, `deletion_hold_items`) list exactly which items were not applied, why (category,
+  window, threshold, attempted, applied, mode), who asked (user) and from where (user, loader id, rule), and a correlation
+  id: the calls of one API request, one loader run, or one bulk action of the UI (`X-Deletion-Batch`) join one hold. A hold
+  raises the `deletion_held` alert (Alerts) and `deletion_guard.held` in the audit log.
+* **Deciding.** `POST /api/admin/deletion-holds/{id}/approve` (`admin.change.approve`, step-up) must come from a different
+  admin than the one whose request was held (`SameActor`: 403 `same_actor`). With `{"items":[ords]}` only those items are
+  released and the rest discarded ("approve partially"). A release re-checks each item (it must still exist and still be
+  deletable: otherwise `gone` or `failed`), is an approved override and does not count against the window again
+  (`deletion_guard.released` with `approved_override: true`). `.../discard` keeps everything as it is. A hold nobody decides
+  on is discarded when it expires (default 7 days; swept by the admin-changes sweeper).
+* **Settings.** `GET /api/admin/deletion-guard` (thresholds, window usage, hold expiry), `GET /api/admin/deletion-holds[?status=&category=]`,
+  `GET /api/admin/deletion-holds/{id}`. Thresholds change through the admin change requests
+  (`POST /api/admin/change-requests`, type `deletion_guard.update`, audited as `deletion_guard.policy_changed`): tightening
+  applies with one admin; loosening (a weaker mode, or a higher limit per minute of window at the tenant's current size)
+  needs a second admin and a step-up, like the other safety settings.
+* **API answers.** A deleting route the guard held part of (delete or purge a group, delete a folder or a tree, remove a
+  member, a members batch) answers **202** with its usual fields plus `{applied, held, hold_id, threshold, message}`
+  ("Deleted 25 of 40: 15 held for approval (threshold 25 per hour)"). A recursive folder delete that was partly held keeps
+  the folder and its attribute definitions until the rest is released. The UI shows the message with a link to the hold.
+* **UI.** Settings → Admin → *Deletion guard* (thresholds, window use, hold expiry) and *Held deletions* (list, side panel
+  with items, approve, approve the ticked items, discard).
+* **Not done in this version.** There is no Inbox task per hold (the groups Inbox is folder/group scoped): the alert and the
+  Held deletions list are the queue. Account, provisioning and identity paths are hooked in the next change.
+
 ## Operational monitoring (issue #303)
 
 `GET /livez` and `GET /readyz` (API listener, unauthenticated, constant-shape JSON, not audited) are the orchestrator probes. `GET /metrics` (Prometheus text) is served only on the separate internal listener `TESSERA_METRICS_ADDR` (dev default `127.0.0.1:9464`, `run.sh` uses `API_PORT+1000`; off in prod unless set to a loopback or private IP; `off` disables). `GET /api/admin/platform-health` (admin.read) backs Admin -> Platform health. `TESSERA_READY_MAX_LOOP_LAG_SECONDS` (default 300) is the loop-lag threshold of `/readyz`. Metrics, SLOs and alert rules: `docs/operations/slo.md`, `deploy/prometheus/tessera-rules.yml`.
