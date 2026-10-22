@@ -65,6 +65,37 @@ type Engine struct {
 	CallTimeout time.Duration
 	// Build creates the connector of a target (tests inject fakes).
 	Build func(t *store.ProvTarget, token string) (target.Connector, error)
+	// Guard, when set, runs every call to a target under that target's
+	// limits and circuit breaker (internal/worker.Guard). A call it refuses
+	// with a Deferred error is not an attempt: the operation waits and is
+	// taken again later.
+	Guard Guarder
+}
+
+// Guarder runs fn as one call to the target of connection connID, or refuses it.
+type Guarder interface {
+	Do(ctx context.Context, t tenancy.ID, connID string, fn func(context.Context) error) error
+}
+
+// Deferred is an error from a Guarder that says "not now": the call was not
+// made, and may be tried again after DeferFor.
+type Deferred interface {
+	error
+	DeferFor() time.Duration
+}
+
+// guarded makes one call to a connection's target: under the Guard if there
+// is one, with the call timeout either way.
+func (e *Engine) guarded(ctx context.Context, t tenancy.ID, connID string, fn func(context.Context) error) error {
+	run := func(ctx context.Context) error {
+		cctx, cancel := e.call(ctx)
+		defer cancel()
+		return fn(cctx)
+	}
+	if e.Guard == nil {
+		return run(ctx)
+	}
+	return e.Guard.Do(ctx, t, connID, run)
 }
 
 // Stats counts what one pass did.
@@ -271,9 +302,11 @@ func (e *Engine) process(ctx context.Context, t tenancy.ID, op *store.ProvOp, co
 		return st, e.fail(ctx, t, op, err, &st)
 	}
 	if op.Status == Sent {
-		cctx, cancel := e.call(ctx)
-		err := conn.Apply(cctx, req)
-		cancel()
+		err := e.guarded(ctx, t, op.ConnectionID, func(cctx context.Context) error { return conn.Apply(cctx, req) })
+		var def Deferred
+		if errors.As(err, &def) {
+			return st, e.deferOp(ctx, t, op, def, &st)
+		}
 		if err != nil {
 			if target.Retryable(err) && op.Attempts < e.maxAttempts() {
 				return st, e.retryLater(ctx, t, op, err, &st)
@@ -319,6 +352,23 @@ func (e *Engine) set(ctx context.Context, t tenancy.ID, op *store.ProvOp, from s
 	})
 }
 
+// deferOp puts back an operation whose call the target's guard refused (the
+// breaker is open, or the rate limit is spent). Nothing was sent, so the
+// attempt this pass counted is given back: a target that is down for an hour
+// does not fail every operation queued for it.
+func (e *Engine) deferOp(ctx context.Context, t tenancy.ID, op *store.ProvOp, d Deferred, st *Stats) error {
+	now := e.now()
+	st.Retrying++
+	next := now.Add(max(d.DeferFor(), time.Second))
+	msg := sp("waiting: " + errText(d))
+	if op.Status == Sent {
+		return e.set(ctx, t, op, Sent, store.ProvOpState{Status: Queued, Attempts: max(0, op.Attempts-1),
+			VerifyAttempts: op.VerifyAttempts, NextAttemptAt: next, LastError: msg}, "", nil)
+	}
+	return e.set(ctx, t, op, op.Status, store.ProvOpState{Status: op.Status, Attempts: op.Attempts,
+		VerifyAttempts: max(0, op.VerifyAttempts-1), NextAttemptAt: next, LastError: msg, Observed: op.Observed}, "", nil)
+}
+
 // retryLater re-queues an operation whose send failed in a way a later
 // attempt may fix.
 func (e *Engine) retryLater(ctx context.Context, t tenancy.ID, op *store.ProvOp, cause error, st *Stats) error {
@@ -341,9 +391,15 @@ func (e *Engine) fail(ctx context.Context, t tenancy.ID, op *store.ProvOp, cause
 
 // verify re-reads the target and settles the operation.
 func (e *Engine) verify(ctx context.Context, t tenancy.ID, op *store.ProvOp, conn target.Connector, req target.Request, st *Stats) error {
-	cctx, cancel := e.call(ctx)
-	v, err := conn.Verify(cctx, req)
-	cancel()
+	var v target.Verdict
+	err := e.guarded(ctx, t, op.ConnectionID, func(cctx context.Context) (err error) {
+		v, err = conn.Verify(cctx, req)
+		return err
+	})
+	var def Deferred
+	if errors.As(err, &def) {
+		return e.deferOp(ctx, t, op, def, st)
+	}
 	now := e.now()
 	switch {
 	case err != nil:

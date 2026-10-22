@@ -4006,6 +4006,15 @@ export interface QueueSchedule {
 export interface QueueWorker {
   worker_id: string; mode: "worker" | "api"; status: "healthy" | "stale";
   kinds: string[]; concurrency: number; running: number; started_at: string; last_heartbeat_at: string; lag_seconds: number;
+  /** What this worker knows of the connections it called: the circuit breaker state and the calls in flight. */
+  targets: QueueWorkerTarget[];
+}
+
+/** One connection as one worker sees it (issue #302). An open breaker refuses calls until `open_until`, then one probe decides. */
+export interface QueueWorkerTarget {
+  connection_id: string; connection: string; breaker: "closed" | "open" | "half_open";
+  consecutive_failures: number; open_until: string | null; last_error: string;
+  in_flight: number; calls: number; failures: number; rejected: number;
 }
 
 export const queue = {
