@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
-	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
@@ -219,10 +218,6 @@ func vmsGuards(c *store.TenantTx, rec *store.IntakeEvent, f *find, srcID *string
 func endVMS(c *store.TenantTx, rec *store.IntakeEvent, f *find, system string, srcID *string, now time.Time) (*Result, error) {
 	if f.identityID == 0 {
 		return finish(c, rec, store.IntakeEventResolved, 0, srcID, OutcomeUnchanged, "", now) // nobody to end
-	}
-	if srcID != nil && *srcID != "" {
-		// the leaver is judged under this feed's own deletion guard settings
-		defer deleteguard.ScopeSource(c, deleteguard.SourceRef{Kind: deleteguard.SrcVMS, ID: *srcID})()
 	}
 	_, ended, err := lifecycle.EndNow(c, f.identityID, "assignment ended in "+system, vmsActor(system), now)
 	if err != nil {
