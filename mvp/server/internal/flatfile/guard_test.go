@@ -118,7 +118,11 @@ func TestApply_LargeTruncatedFeedIsHeldInOneBatch(t *testing.T) {
 	e.mustApplied(e.accounts(v1.String()))
 	start := time.Now()
 	e.mustApplied(e.accounts(v2.String()))
-	if d := time.Since(start); d > 10*time.Second {
+	limit := 10 * time.Second
+	if raceEnabled {
+		limit = 90 * time.Second // the quadratic version took minutes under -race
+	}
+	if d := time.Since(start); d > limit {
 		t.Errorf("holding 4999 drops took %s", d)
 	}
 	e.tx(func(c *store.TenantTx) error {
