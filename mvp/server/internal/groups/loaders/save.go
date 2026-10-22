@@ -192,6 +192,8 @@ type SaveEnv struct {
 	Now    time.Time
 	By     *string
 	Sealer *seal.Sealer
+	// Prod: a Postgres source's connection string must be sslmode=verify-full.
+	Prod bool
 }
 
 func (e SaveEnv) audit(action string, l *store.GrpLoader, extra ojson.Object) error {
@@ -204,22 +206,31 @@ func (e SaveEnv) audit(action string, l *store.GrpLoader, extra ojson.Object) er
 	return err
 }
 
-// sealSecret seals a loader's credential. Only a CSV loader with a URL has one.
+// sealSecret seals a loader's credential: a bearer token (a CSV URL, a SCIM
+// provider), a client secret, an LDAP bind password or a Postgres connection
+// string, by the type of the loader.
 func (e SaveEnv) sealSecret(l *store.GrpLoader, secret string) ([]byte, error) {
 	if secret == "" {
 		return nil, nil
 	}
-	var c CSVConfig
-	if l.Type != TypeCSV || strictDecode(json.RawMessage(l.Config), &c) != nil || c.URL == "" {
-		return nil, invalid("secret_not_used", "only a csv loader with a url takes a secret (a bearer token)")
+	if SecretPolicy(l.Type, json.RawMessage(l.Config)) == SecretNone {
+		return nil, invalid("secret_not_used", "a loader of type %s with this config takes no secret", l.Type)
 	}
-	if len(secret) > SecretMaxBytes {
-		return nil, invalid("invalid_secret", "secret is at most %d bytes", SecretMaxBytes)
+	if err := CheckSecret(l.Type, json.RawMessage(l.Config), secret, e.Prod); err != nil {
+		return nil, err
 	}
 	if e.Sealer == nil {
 		return nil, conflict("sealer_unavailable", "no key-encryption key is configured to seal the credential")
 	}
 	return e.Sealer.Seal([]byte(secret), seal.AAD(e.Tx.Tenant(), "grp_loaders", "secret_enc", l.ID))
+}
+
+// requireSecret refuses a loader that needs a credential and has none.
+func requireSecret(l *store.GrpLoader) error {
+	if SecretPolicy(l.Type, json.RawMessage(l.Config)) == SecretRequired && len(l.SecretEnc) == 0 {
+		return invalid("secret_required", "a %s loader needs its credential (secret)", l.Type)
+	}
+	return nil
 }
 
 // Create validates and stores a loader. secret is its credential ("" for none).
@@ -231,6 +242,9 @@ func Create(e SaveEnv, spec Spec, secret string) (*store.GrpLoader, error) {
 	l.ID = uuid.NewString()
 	l.CreatedBy, l.CreatedAt, l.UpdatedAt = e.By, e.Now, e.Now
 	if l.SecretEnc, err = e.sealSecret(l, secret); err != nil {
+		return nil, err
+	}
+	if err := requireSecret(l); err != nil {
 		return nil, err
 	}
 	if err := e.Tx.InsertGrpLoader(l); errors.Is(err, store.ErrDuplicate) {
@@ -261,9 +275,9 @@ func Update(e SaveEnv, id string, version *int64, spec Spec, secret *string) (*s
 	}
 	switch {
 	case secret == nil:
-		// kept (but a loader that no longer fetches a URL has no use for one)
-		var c CSVConfig
-		if len(l.SecretEnc) > 0 && (l.Type != TypeCSV || strictDecode(json.RawMessage(l.Config), &c) != nil || c.URL == "") {
+		// kept (but a loader that no longer needs a credential, such as a CSV that
+		// is a file now, has no use for one)
+		if len(l.SecretEnc) > 0 && SecretPolicy(l.Type, json.RawMessage(l.Config)) == SecretNone {
 			l.SecretEnc = nil
 		}
 	case *secret == "":
@@ -272,6 +286,9 @@ func Update(e SaveEnv, id string, version *int64, spec Spec, secret *string) (*s
 		if l.SecretEnc, err = e.sealSecret(l, *secret); err != nil {
 			return nil, err
 		}
+	}
+	if err := requireSecret(l); err != nil {
+		return nil, err
 	}
 	l.UpdatedAt = e.Now
 	switch err := e.Tx.UpdateGrpLoader(l); {

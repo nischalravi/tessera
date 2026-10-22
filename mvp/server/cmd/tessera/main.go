@@ -445,6 +445,9 @@ const (
 // LDAPS and the Active Directory global catalog (plain and TLS).
 var ldapPorts = []int{389, 636, 3268, 3269}
 
+// loaderPGPorts are the destination ports the guarded dialer allows for a loader's Postgres source.
+var loaderPGPorts = []int{5432, 5433, 6432}
+
 func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Sealer, clock timeutil.Clock,
 	loader *policy.Loader, logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -584,6 +587,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	// Postgres sources dial through the address guard (the database ports only); LDAP sources
+	// through safedial (389 and 636, dev allowlist as for the readiness checks).
+	loaderPGDial, err := safehttp.NewDialer(safehttp.Options{Env: cfg.Env, AllowLoopback: cfg.OutboundAllowLoopback && cfg.Env == config.Dev,
+		Timeout: provisioningHTTPTimeout, AllowedPorts: loaderPGPorts})
+	if err != nil {
+		return err
+	}
+	loaderDirectory := loaders.NewDirectoryOpener(cfg.Env, allow)
 	provisioningSvc := &provisioning.Service{DB: st, Sealer: sealer, Clock: clock, Log: logger,
 		Deps: provisioning.Deps{HTTP: provHTTP, Dial: provDial, AllowPlainLDAP: cfg.Env == config.Dev, SQLDir: cfg.GroupsProvSQLDir}}
 	external := cfg.ExternalWorkerKinds
@@ -606,7 +617,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}
 	srv := api.New(api.Config{ExternalKinds: external, ConnectorSyncSchedule: cfg.ConnectorSyncSchedule, Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger, Archive: archiveSvc,
 		Secrets: secrets, Credential: authority,
-		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, Provisioning: provisioningSvc, LoaderDataDir: cfg.LoaderDataDir, APIAudience: cfg.APIAudience,
+		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, Provisioning: provisioningSvc, LoaderDataDir: cfg.LoaderDataDir, LoaderHTTP: provHTTP, LoaderPGDial: loaderPGDial, LoaderDirectory: loaderDirectory, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
@@ -779,8 +790,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}()
 	// group loaders: the scheduler of full and incremental runs (Admin > Jobs)
 	loadersDone := make(chan struct{})
-	loadersRunner := &loaders.Runner{Svc: &loaders.Service{DB: st, Engine: groupsEngine, Clock: clock, Sealer: sealer, HTTP: outbound,
-		DataDir: cfg.LoaderDataDir, Log: logger}}
+	loadersRunner := &loaders.Runner{Svc: &loaders.Service{DB: st, Engine: groupsEngine, Clock: clock, Sealer: sealer, HTTP: provHTTP,
+		DataDir: cfg.LoaderDataDir, Prod: cfg.Env == config.Prod, PGDial: loaderPGDial,
+		Directory: loaderDirectory, Log: logger}}
 	go func() {
 		defer close(loadersDone)
 		loadersRunner.Loop(ctx)

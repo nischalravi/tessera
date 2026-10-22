@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -513,5 +514,116 @@ func TestLoadersAPI_SecretIsNeverReturned(t *testing.T) {
 	rec := e2.admin.do("POST", "/api/groups/loaders", strings.Replace(body, app, app2, 1))
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "sealer_unavailable") {
 		t.Errorf("a secret with no key = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestLoadersAPI_PostgresSourceCarriesItsSecretThroughApproval: a SQL loader on
+// a Postgres server needs its connection string, which travels sealed with the
+// change request (the payload the second admin reads holds none) and is stored
+// sealed on the loader once it is approved.
+func TestLoadersAPI_PostgresSourceCarriesItsSecretThroughApproval(t *testing.T) {
+	e, _ := newLoaderEnv(t)
+	app := e.admin.folder("", "app")
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	bobID := e.ident("bob")
+	pa := e.as("pa", []auth.Role{auth.RolePolicyAdmin}, &bobID)
+	e.grant("/api/groups/folders/"+app, "stem_admin", "bob", "")
+	const dsn = "postgres://reader:pg-pw-secret@db.example.com:5432/hr?sslmode=verify-full"
+	body := func(extra string) string {
+		return fmt.Sprintf(`{"name":"HR-PG","type":"sql_group_list","target_folder":%q,"config":{"engine":"postgres",
+			"query":"SELECT department AS group_name, external_id AS subject_id FROM people"}%s}`, app, extra)
+	}
+	if rec := pa.do("POST", "/api/groups/loaders", body("")); rec.Code != 422 || !strings.Contains(rec.Body.String(), "secret_required") {
+		t.Errorf("no connection string = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := pa.do("POST", "/api/groups/loaders", body(`,"secret":"host=db user=u"`)); rec.Code != 422 || strings.Contains(rec.Body.String(), "user=u") {
+		t.Errorf("a key=value string = %d %s", rec.Code, rec.Body.String())
+	}
+	// a file source takes no connection string
+	if rec := pa.do("POST", "/api/groups/loaders", strings.Replace(body(`,"secret":"x"`), `"engine":"postgres"`, `"database":"hr.db"`, 1)); rec.Code != 422 ||
+		!strings.Contains(rec.Body.String(), "secret_not_used") {
+		t.Errorf("a secret on a file source = %d %s", rec.Code, rec.Body.String())
+	}
+	acc := pa.call("POST", "/api/groups/loaders", body(`,"secret":"`+dsn+`"`), 202)
+	cid := acc["change_request_id"].(string)
+	if strings.Contains(fmt.Sprint(acc), "pg-pw-secret") {
+		t.Errorf("the answer shows the secret: %v", acc)
+	}
+	rec := e.admin.do("GET", "/api/admin/change-requests/"+cid, "")
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "pg-pw-secret") || strings.Contains(rec.Body.String(), "secret_enc") {
+		t.Fatalf("the change request shows the secret: %d %s", rec.Code, rec.Body.String())
+	}
+	var one map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &one)
+	admin2.call("POST", "/api/admin/change-requests/"+cid+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, one["payload_hash"]), 200)
+	list := lItems(e.admin.call("GET", "/api/groups/loaders", "", 200))
+	if len(list) != 1 {
+		t.Fatalf("loaders = %v", list)
+	}
+	l := list[0].(map[string]any)
+	if l["has_secret"] != true || l["requires_approval"] != true {
+		t.Errorf("loader = %v", l)
+	}
+	for _, p := range []string{"/api/groups/loaders", "/api/groups/loaders/" + l["id"].(string)} {
+		if rec := e.admin.do("GET", p, ""); strings.Contains(rec.Body.String(), "pg-pw-secret") {
+			t.Errorf("GET %s shows the secret", p)
+		}
+	}
+	// a change keeps it; replacing it goes through approval again; clearing it is refused
+	id := l["id"].(string)
+	patch := pa.call("PATCH", "/api/groups/loaders/"+id, `{"schedule":"@hourly"}`, 202)
+	ph := e.admin.call("GET", "/api/admin/change-requests/"+patch["change_request_id"].(string), "", 200)["payload_hash"]
+	admin2.call("POST", "/api/admin/change-requests/"+patch["change_request_id"].(string)+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, ph), 200)
+	if got := e.admin.call("GET", "/api/groups/loaders/"+id, "", 200); got["has_secret"] != true || got["schedule"] != "@hourly" {
+		t.Errorf("after a change = %v", got)
+	}
+	if rec := pa.do("PATCH", "/api/groups/loaders/"+id, `{"secret":""}`); rec.Code != 422 {
+		t.Errorf("clearing the connection string = %d %s", rec.Code, rec.Body.String())
+	}
+	pa.call("PATCH", "/api/groups/loaders/"+id, `{"secret":"postgres://reader:new-pw@db.example.com/hr"}`, 202)
+}
+
+// TestLoadersAPI_ScimAndLDAPSources: the SCIM and LDAP types are saved directly
+// (no query a person wrote), each with its credential sealed and never
+// returned; the types still not built are refused.
+func TestLoadersAPI_ScimAndLDAPSources(t *testing.T) {
+	e, _ := newLoaderEnv(t)
+	app := e.admin.folder("", "app")
+	scim := fmt.Sprintf(`{"name":"IdP","type":"scim","target_folder":%q,"config":{"base_url":"https://scim.example.org/scim/v2","subject_attr":"email"}%%s}`, app)
+	ldap := fmt.Sprintf(`{"name":"Dir","type":"ldap_group_list","target_folder":%q,"config":{"url":"ldaps://ldap.example.org","bind_dn":"cn=r,dc=x",
+		"base_dn":"dc=x","filter":"(objectClass=groupOfNames)","member_rdn":"uid"}%%s}`, app)
+	for _, b := range []string{scim, ldap} {
+		if rec := e.admin.do("POST", "/api/groups/loaders", fmt.Sprintf(b, "")); rec.Code != 422 || !strings.Contains(rec.Body.String(), "secret_required") {
+			t.Errorf("no credential = %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	s := e.admin.call("POST", "/api/groups/loaders", fmt.Sprintf(scim, `,"secret":"scim-bearer-secret"`), 201)
+	d := e.admin.call("POST", "/api/groups/loaders", fmt.Sprintf(ldap, `,"secret":"bind-pw-secret"`), 201)
+	for _, l := range []map[string]any{s, d} {
+		if l["has_secret"] != true || l["requires_approval"] != false {
+			t.Errorf("loader = %v", l)
+		}
+	}
+	if rec := e.admin.do("GET", "/api/groups/loaders", ""); strings.Contains(rec.Body.String(), "scim-bearer-secret") || strings.Contains(rec.Body.String(), "bind-pw-secret") {
+		t.Error("the list shows a credential")
+	}
+	// a private-address or odd-port directory is refused when it is configured
+	bad := strings.Replace(fmt.Sprintf(ldap, `,"secret":"x"`), "ldaps://ldap.example.org", "ldaps://ldap.example.org:3269", 1)
+	bad = strings.Replace(bad, `"Dir"`, `"Dir2"`, 1)
+	if rec := e.admin.do("POST", "/api/groups/loaders", bad); rec.Code != 422 || !strings.Contains(rec.Body.String(), "389") {
+		t.Errorf("port 3269 = %d %s", rec.Code, rec.Body.String())
+	}
+	for _, typ := range []string{"ldap_attribute", "sftp_csv", "hris_sis_feed"} {
+		rec := e.admin.do("POST", "/api/groups/loaders", fmt.Sprintf(`{"name":"x-%s","type":%q,"target_folder":%q,"config":{}}`, typ, typ, app))
+		if rec.Code != 422 || !strings.Contains(rec.Body.String(), "loader_type_unavailable") {
+			t.Errorf("%s = %d %s", typ, rec.Code, rec.Body.String())
+		}
+	}
+	// the secret of a SCIM loader is replaced like a CSV's
+	if got := e.admin.call("PATCH", "/api/groups/loaders/"+s["id"].(string), `{"secret":"scim-2"}`, 200); got["has_secret"] != true {
+		t.Errorf("replaced = %v", got)
+	}
+	if rec := e.admin.do("PATCH", "/api/groups/loaders/"+s["id"].(string), `{"secret":""}`); rec.Code != 422 || !strings.Contains(rec.Body.String(), "secret_required") {
+		t.Errorf("clearing a required credential = %d %s", rec.Code, rec.Body.String())
 	}
 }

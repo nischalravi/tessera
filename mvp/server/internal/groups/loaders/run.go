@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -36,7 +37,14 @@ type Service struct {
 	// DataDir is the directory SQL and CSV files must be under
 	// (TESSERA_LOADER_DATA_DIR); empty turns file sources off.
 	DataDir string
-	Log     *slog.Logger
+	// Prod refuses weaker source settings (a Postgres source that is not
+	// sslmode=verify-full). PGDial is the address-checked dialer of Postgres
+	// sources and Directory the opener of LDAP connections (NewDirectoryOpener);
+	// nil turns those sources off.
+	Prod      bool
+	PGDial    func(ctx context.Context, network, addr string) (net.Conn, error)
+	Directory DirectoryOpener
+	Log       *slog.Logger
 }
 
 func (s *Service) now() time.Time {
@@ -149,7 +157,8 @@ func (s *Service) Run(ctx context.Context, tenant tenancy.ID, loaderID, kind str
 	}
 	stats := &SourceStats{}
 	job := LoaderJob{Loader: l, Config: json.RawMessage(l.Config), Secret: secret,
-		Env: Env{DB: s.DB, Tenant: tenant, Now: started, DataDir: s.DataDir, HTTP: s.HTTP}, Stats: stats}
+		Env: Env{DB: s.DB, Tenant: tenant, Now: started, DataDir: s.DataDir, HTTP: s.HTTP, Prod: s.Prod, PGDial: s.PGDial,
+			Directory: s.Directory}, Stats: stats}
 	fctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	var loaded []LoadedGroup

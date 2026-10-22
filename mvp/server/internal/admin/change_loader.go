@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -29,13 +31,42 @@ type loaderSavePayload struct {
 }
 
 func init() {
-	changeTypes[TypeGroupLoaderSave] = typed(TypeGroupLoaderSave, nil, planLoaderSave, applyLoaderSave,
+	t := typed(TypeGroupLoaderSave, nil, planLoaderSave, applyLoaderSave,
 		func(_ *env, v *loaderSavePayload) string {
 			if v.LoaderID == "" {
 				return fmt.Sprintf("Create %s loader %q", v.Spec.Type, v.Spec.Name)
 			}
 			return fmt.Sprintf("Change %s loader %q", v.Spec.Type, v.Spec.Name)
 		})
+	// A SQL loader on a Postgres server carries its connection string (sealed, never in
+	// the payload, which the second approver reads).
+	t.submitSecret = submitLoaderSecret
+	changeTypes[TypeGroupLoaderSave] = t
+}
+
+// submitLoaderSecret seals the credential of a Postgres loader's request. A create
+// needs one; a change keeps the stored one when none comes.
+func submitLoaderSecret(e *env, v any, id uuid.UUID, secret string) ([]byte, error) {
+	p := v.(*loaderSavePayload)
+	cfg, err := loaders.ValidateConfig(p.Spec.Type, p.Spec.Config, p.Spec.ConnectionID != "")
+	if err != nil {
+		return nil, loaderErr(err)
+	}
+	use := loaders.SecretPolicy(p.Spec.Type, cfg)
+	switch {
+	case secret == "" && use == loaders.SecretRequired && p.LoaderID == "":
+		return nil, invalid("a %s loader needs its credential (client_secret)", p.Spec.Type)
+	case secret == "":
+		return nil, nil
+	case use == loaders.SecretNone:
+		return nil, invalid("a %s loader with this config takes no secret", p.Spec.Type)
+	case e.svc.Sealer == nil:
+		return nil, newErr(503, "sealer_unavailable", "no key-encryption key is configured to seal the credential")
+	}
+	if err := loaders.CheckSecret(p.Spec.Type, cfg, secret, e.svc.Prod); err != nil {
+		return nil, loaderErr(err)
+	}
+	return e.svc.Sealer.Seal([]byte(secret), secretAAD(e.tx.Tenant(), id))
 }
 
 // loaderErr turns the loaders package's refusals into the workflow's.
@@ -83,17 +114,33 @@ func planLoaderSave(e *env, v *loaderSavePayload) (plan, error) {
 	return plan{twoPerson: true, target: target}, nil
 }
 
-func applyLoaderSave(e *env, _ *store.AdminChange, v *loaderSavePayload) error {
+func applyLoaderSave(e *env, ch *store.AdminChange, v *loaderSavePayload) error {
 	if _, err := planLoaderSave(e, v); err != nil {
 		return err
 	}
 	by := e.by.String()
-	se := loaders.SaveEnv{Tx: e.tx, Now: e.now, By: &by, Sealer: e.svc.Sealer}
+	se := loaders.SaveEnv{Tx: e.tx, Now: e.now, By: &by, Sealer: e.svc.Sealer, Prod: e.svc.Prod}
+	var secret *string
+	if len(ch.SecretEnc) > 0 {
+		if e.svc.Sealer == nil {
+			return newErr(503, "sealer_unavailable", "no key-encryption key is configured to open the credential")
+		}
+		b, err := e.svc.Sealer.Open(ch.SecretEnc, secretAAD(e.tx.Tenant(), ch.ID))
+		if err != nil {
+			return fmt.Errorf("open the request's credential: %w", err)
+		}
+		s := string(b)
+		secret = &s
+	}
 	var err error
 	if v.LoaderID == "" {
-		_, err = loaders.Create(se, v.Spec, "")
+		s := ""
+		if secret != nil {
+			s = *secret
+		}
+		_, err = loaders.Create(se, v.Spec, s)
 	} else {
-		_, err = loaders.Update(se, v.LoaderID, v.Version, v.Spec, nil)
+		_, err = loaders.Update(se, v.LoaderID, v.Version, v.Spec, secret)
 	}
 	return loaderErr(err)
 }

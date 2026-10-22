@@ -76,16 +76,33 @@ func requireColumns(cols []string, names ...string) ([]int, error) {
 }
 
 func (sqlSource) query(ctx context.Context, job LoaderJob, cfg *SQLConfig, q string, args map[string]string) (*store.ExtResult, error) {
-	path, err := confine(job.Env.DataDir, job.Env.Tenant, cfg.Database)
-	if err != nil {
-		return nil, err
+	var res *store.ExtResult
+	var err error
+	if cfg.IsPostgres() {
+		if job.Env.PGDial == nil {
+			return nil, conflict("source_unavailable", "Postgres sources are not available on this server")
+		}
+		if len(job.Secret) == 0 {
+			return nil, conflict("source_auth_missing", "the loader has no connection string")
+		}
+		res, err = store.RunExtQueryPG(ctx, store.ExtPGQuery{DSN: string(job.Secret), RootCAPEM: cfg.CAPEM, RequireVerifyFull: job.Env.Prod,
+			Dial: job.Env.PGDial, SQL: q, Args: args})
+	} else {
+		var path string
+		if path, err = confine(job.Env.DataDir, job.Env.Tenant, cfg.Database); err != nil {
+			return nil, err
+		}
+		res, err = store.RunExtQuery(ctx, store.ExtQuery{Path: path, SQL: q, Args: args})
 	}
-	res, err := store.RunExtQuery(ctx, store.ExtQuery{Path: path, SQL: q, Args: args})
 	switch {
 	case errors.Is(err, store.ErrExtRowLimit):
 		return nil, conflict("source_row_limit", "the query returns more than %d rows", store.DefaultExtMaxRows)
 	case errors.Is(err, context.DeadlineExceeded):
 		return nil, conflict("source_timeout", "the query took longer than %s", store.DefaultExtTimeout)
+	case errors.Is(err, store.ErrExtTLS):
+		return nil, conflict("source_tls_required", "the connection string must use sslmode=verify-full")
+	case errors.Is(err, store.ErrExtDSN):
+		return nil, conflict("source_bad_secret", "the connection string is not usable: %v", err)
 	case err != nil:
 		return nil, conflict("source_query_failed", "the query failed: %v", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -241,6 +242,13 @@ type Config struct {
 	// file sources of group loaders, with a subdirectory <tenant id>/ per tenant
 	// (a loader reads only its own tenant's). Empty: file sources are off.
 	LoaderDataDir string
+	// LoaderHTTP is the larger-body, longer-timeout guarded client of loader sources that read an
+	// HTTP API (SCIM, a CSV URL); nil uses OutboundHTTP. LoaderPGDial is the address-checked dialer
+	// of Postgres sources and LoaderDirectory the opener of LDAP connections (loaders.NewDirectoryOpener);
+	// nil turns those sources off.
+	LoaderHTTP      *http.Client
+	LoaderPGDial    func(ctx context.Context, network, addr string) (net.Conn, error)
+	LoaderDirectory loaders.DirectoryOpener
 	// Provisioning is the group provisioning service (issue #54): the same one
 	// the background runner uses. Nil: a service with no outbound clients, which
 	// can still hold provisioners but cannot reach a target.
@@ -444,8 +452,13 @@ func New(cfg Config) *Server {
 	}
 	s.guestLife = guestlife.New(s.guests)
 	s.guestLife.Secrets, s.guestLife.BaseURL, s.guestLife.TenantName = cfg.Secrets, cfg.PublicURL, s.tenantName
+	loaderHTTP := cfg.LoaderHTTP
+	if loaderHTTP == nil {
+		loaderHTTP = cfg.OutboundHTTP
+	}
 	s.loaders = &loaders.Service{DB: cfg.Store, Engine: cfg.GroupsEngine, Clock: func() time.Time { return s.clock() },
-		Sealer: cfg.Sealer, HTTP: cfg.OutboundHTTP, DataDir: cfg.LoaderDataDir, Log: cfg.Logger}
+		Sealer: cfg.Sealer, HTTP: loaderHTTP, DataDir: cfg.LoaderDataDir, Prod: cfg.Env == config.Prod, PGDial: cfg.LoaderPGDial,
+		Directory: cfg.LoaderDirectory, Log: cfg.Logger}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
