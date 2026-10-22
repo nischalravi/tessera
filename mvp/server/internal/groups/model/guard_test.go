@@ -303,3 +303,37 @@ func TestHoldAllHoldsALoaderGroupsWholeRemoval(t *testing.T) {
 		return nil
 	})
 }
+
+// A loader is a source feed: with the default policy (nobody set a mode) a removal set that passes
+// the threshold is held whole, not applied up to it.
+func TestLoaderRemovalsDefaultToHoldAll(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	must(t, f, func(e model.Env) error {
+		app := mkFolder(t, e, "", "app")
+		e.Cause, e.CauseRef, e.Correlation = store.CauseLoader, "ldr-9", "loader:ldr-9"
+		g, err := e.CreateLoaderGroup(model.LoaderGroupInput{Folder: app.ID, Extension: "lg", LoaderID: "ldr-9"})
+		if err != nil {
+			return err
+		}
+		ids := mkIdentities(t, e, 8)
+		if _, err := e.LoaderSync(g, "ldr-9", ids, nil); err != nil {
+			return err
+		}
+		res, err := e.LoaderSync(g, "ldr-9", nil, ids)
+		if err != nil {
+			return err
+		}
+		if res.Removed != 0 || res.Held != 8 {
+			t.Errorf("removed %d held %d: a corrupted source must apply none of its removals", res.Removed, res.Held)
+		}
+		// the same run again joins the open hold: no second hold
+		if _, err := e.LoaderSync(g, "ldr-9", nil, ids); err != nil {
+			return err
+		}
+		hs, _ := e.Tx.DeletionHolds("held", deleteguard.CatMembers, 10, 0)
+		if len(hs) != 1 || hs[0].ItemCount != 8 {
+			t.Errorf("holds %+v: the same corrupted source must keep one hold of 8 items", hs)
+		}
+		return nil
+	})
+}

@@ -5,11 +5,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -207,9 +209,24 @@ func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
 	if _, err := ingest.Import(c, now, discovery(m, accounts, ents, held)); err != nil {
 		return nil, err
 	}
+	feed := feedCheck{}
+	if in.Kind == KindAccounts && len(delta.Removed) > 0 {
+		// the file is the feed: an empty or much shorter one than the last good upload is not trusted to say who is gone
+		all, err := c.Accounts()
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range all {
+			if a.System == in.System && a.Status == "active" {
+				feed.prev++
+			}
+		}
+		feed.now = len(accounts)
+		feed.sanity = deleteguard.FeedChecks(feed.prev, feed.now, "")
+	}
 	for _, r := range delta.Removed {
 		if in.Kind == KindAccounts {
-			err = dropAccount(c, now, in.System, r.Key)
+			err = dropAccount(c, now, in.System, r.Key, feed)
 		} else {
 			err = dropEntitlement(c, now, in.System, r.Key)
 		}
@@ -335,7 +352,13 @@ func discovery(m *Mapping, accounts, ents []Record, held map[string]bool) *conne
 // dropAccount handles an account the file no longer lists: it is disabled,
 // and the grants an import made for it go. It is not deleted: reviews and the
 // audit trail still refer to it.
-func dropAccount(c *store.TenantTx, now time.Time, system, xid string) error {
+// feedCheck is what Apply knows about the file as a feed: record counts and why it looks broken.
+type feedCheck struct {
+	prev, now int
+	sanity    []string
+}
+
+func dropAccount(c *store.TenantTx, now time.Time, system, xid string, feed feedCheck) error {
 	a, err := c.AccountByXID(system, xid)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
@@ -343,6 +366,53 @@ func dropAccount(c *store.TenantTx, now time.Time, system, xid string) error {
 	if err != nil {
 		return err
 	}
+	if a.Status == "active" {
+		// the deletion guard (internal/deleteguard): an import that drops more accounts than the
+		// threshold allows holds the rest; they stay as they are until a second admin releases them
+		ref, err := json.Marshal([2]string{system, xid})
+		if err != nil {
+			return err
+		}
+		d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatAccounts, Source: deleteguard.SourceConnector,
+			SourceID: system, Correlation: "flatfile:" + system, SourceDriven: true, Sanity: feed.sanity, PrevCount: feed.prev, NewCount: feed.now,
+			Items: []deleteguard.Item{{Kind: ItemDropAccount, Ref: string(ref), Label: fmt.Sprintf("account %s in %s dropped by an import", a.Username, system)}}})
+		if err != nil {
+			return err
+		}
+		if len(d.Held) > 0 {
+			return nil
+		}
+	}
+	return disableAndDropEdges(c, now, a)
+}
+
+// ItemDropAccount is the kind of a held drop of an account the file no longer lists.
+const ItemDropAccount = "account_drop"
+
+// ReleaseDrop applies a held drop: the account is disabled and its import grants go, if it is
+// still active.
+func ReleaseDrop(c *store.TenantTx, now time.Time, it *store.DeletionHoldItem) (outcome, note string, err error) {
+	var k [2]string
+	if err := json.Unmarshal([]byte(it.Ref), &k); err != nil {
+		return "", "", fmt.Errorf("flatfile: bad held drop: %w", err)
+	}
+	a, err := c.AccountByXID(k[0], k[1])
+	if errors.Is(err, store.ErrNotFound) {
+		return deleteguard.ItemGone, "the account no longer exists", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if a.Status != "active" {
+		return deleteguard.ItemGone, "the account is already " + a.Status, nil
+	}
+	if err := disableAndDropEdges(c, now, a); err != nil {
+		return "", "", err
+	}
+	return deleteguard.ItemReleased, "", nil
+}
+
+func disableAndDropEdges(c *store.TenantTx, now time.Time, a *store.Account) error {
 	if err := c.DisableAccount(a.ID); err != nil {
 		return err
 	}

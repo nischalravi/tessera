@@ -4847,7 +4847,9 @@ export interface DeletionHoldItem { ord: number; kind: string; ref: string; labe
 
 export interface DeletionHold {
   id: string; category: DeletionCategory; status: HoldStatus; mode: DeletionMode;
-  reason: { window_minutes?: number; max_count?: number | null; max_percent?: number | null; limit?: number | null; used_before?: number; attempted?: number; applied?: number; population?: number };
+  reason: { window_minutes?: number; max_count?: number | null; max_percent?: number | null; limit?: number | null; used_before?: number; attempted?: number; applied?: number; population?: number;
+    /** Why the feed itself looks broken (empty, much shorter than the last good run, a partial read). */
+    sanity?: string[]; previous_count?: number; new_count?: number; source_driven?: boolean };
   actor: string; actor_name?: string; source: string; source_id: string; correlation_id: string; item_count: number;
   created_at: string; expires_at: string; resolved_at: string | null; resolved_by: string | null; note: string | null;
   items?: DeletionHoldItem[];
