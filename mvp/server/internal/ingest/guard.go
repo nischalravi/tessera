@@ -163,8 +163,14 @@ func vetIdentities(c *store.TenantTx, now time.Time, ref deleteguard.SourceRef, 
 	if records == 0 && partial == "" {
 		return nil // a result with no identity feed says nothing about the source's identities
 	}
-	// the source's own last good run is the basis; the tenant's active identities only until it has one
-	prev, err := deleteguard.PreviousCount(c, ref, deleteguard.CatIdentities, tenantCount)
+	// the source's own last good run is the basis. A source with none yet (its first run) has nothing to be
+	// measured against, and the tenant's identities are other sources' too; only a result that names no
+	// source keeps the tenant-wide count as its basis.
+	fallback := 0
+	if !ref.Valid() {
+		fallback = tenantCount
+	}
+	prev, err := deleteguard.PreviousCount(c, ref, deleteguard.CatIdentities, fallback)
 	if err != nil {
 		return err
 	}
