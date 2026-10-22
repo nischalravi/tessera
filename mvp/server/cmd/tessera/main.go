@@ -506,7 +506,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	rsvc.Runner.Scenario = scenario
 	rsvc.Runner.Live.Sealer, rsvc.Runner.Live.Allow = sealer, allow
 	// Directory Agents (DR-11): private directories are probed through them.
-	agents := &agent.Service{DB: st, Hub: agent.NewHub(nil), Clock: clock, Recorder: worker.RecordAgentSync}
+	agents := &agent.Service{DB: st, Hub: agent.NewHub(nil), Clock: clock, Recorder: worker.RecordAgentSync,
+		Push: &worker.AgentPush{Sealer: sealer}}
 	rsvc.Runner.Live.Agents = agents
 	if err := configureReadinessSchedule(rsvc); err != nil {
 		return err
