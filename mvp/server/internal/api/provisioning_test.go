@@ -642,3 +642,68 @@ func TestTargetOrigin(t *testing.T) {
 		}
 	}
 }
+
+// A target in a private network is reached through a Directory Agent (issue
+// #302): the API takes the agent's id, checks that it is an active agent of the
+// tenant, requires https, refuses the dev fake target, shows it, and audits it.
+func TestProvisioning_TargetThroughAnAgent(t *testing.T) {
+	h := newProvHarness(t, fake.Options{})
+	h.seedTarget()
+	var active, pending, revoked string
+	testkit.Write(t, h.st, func(c *store.TenantTx) error {
+		for name, status := range map[string]*string{"active": &active, "pending": &pending, "revoked": &revoked} {
+			id := store.NewID()
+			*status = id
+			if err := c.InsertDirectoryAgent(&store.DirectoryAgent{ID: id, Name: "agent-" + name, CreatedBy: "t", CreatedAt: testkit.Now}); err != nil {
+				return err
+			}
+			if name != "pending" {
+				if err := c.ActivateDirectoryAgent(id, strings.Repeat("a", 63)+name[:1], store.AgentTelemetry{}, testkit.Now); err != nil {
+					return err
+				}
+			}
+			if name == "revoked" {
+				if err := c.RevokeDirectoryAgent(id, "t", testkit.Now); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	body := func(agentID, base string) string {
+		return fmt.Sprintf(`{"kind":"scim","base_url":%q,"write_back":true,"token":"tok","agent_id":%q}`, base, agentID)
+	}
+	const private = "https://scim.corp.example/scim/v2"
+	for name, tc := range map[string]struct{ body string }{
+		"a pending agent":  {body(pending, private)},
+		"a revoked agent":  {body(revoked, private)},
+		"an unknown agent": {body(store.NewID(), private)},
+		"a malformed id":   {body("../x", private)},
+		"plain http":       {body(active, "http://scim.corp.example/scim/v2")},
+		"the fake target":  {fmt.Sprintf(`{"kind":"fake","agent_id":%q}`, active)},
+	} {
+		if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, tc.body); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	v := h.target(body(active, private), 200)
+	if v["agent_id"] != active || v["base_url"] != private {
+		t.Fatalf("target = %v", v)
+	}
+	if got := h.c.json("GET", "/api/provisioning/targets", "", 200).([]any); len(got) != 1 || got[0].(map[string]any)["agent_id"] != active {
+		t.Errorf("targets = %v", got)
+	}
+	// the target survives an edit that does not mention the agent: it goes back to a direct target
+	v = h.target(`{"kind":"scim","base_url":"https://scim.corp.example/scim/v2","write_back":true}`, 200)
+	if _, ok := v["agent_id"]; ok {
+		t.Errorf("an edit without agent_id kept the agent: %v", v)
+	}
+	testkit.Read(t, h.st, func(c *store.TenantTx) error {
+		evs, err := c.AuditEvents(store.AuditFilter{Action: "provision.target_set"})
+		raw, _ := json.Marshal(evs)
+		if err != nil || !strings.Contains(string(raw), active) || strings.Contains(string(raw), "tok") && strings.Contains(string(raw), `"token"`) {
+			t.Errorf("audit = %s, %v", raw, err)
+		}
+		return err
+	})
+}

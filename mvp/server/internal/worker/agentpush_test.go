@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -611,5 +612,45 @@ func TestAgentPush_SealKeyRegistration(t *testing.T) {
 	s.inA(func(c *store.TenantTx) error { return s.svc.Revoke(c, a.id, "admin", s.now) })
 	if _, err := a.client.RegisterSealKey(t.Context(), pub); !agent.IsUnauthorized(err) {
 		t.Errorf("a revoked agent registered a key: %v", err)
+	}
+}
+
+// The agent's own runner does all of it unattended: registers its sealing key
+// with its heartbeat, pulls the push, executes it and reports.
+func TestAgentPush_RunnerEndToEnd(t *testing.T) {
+	s := newPushStack(t, fake.Options{})
+	a := s.enrol(s.f.A, "dc-1", false) // the runner registers the key itself
+	s.target(a.id)
+	r := &agent.Runner{Client: a.client, Exec: a.exec, SealKey: a.key, HeartbeatEvery: 20 * time.Millisecond,
+		Telemetry: agent.Telemetry{Hostname: "dc-1", OS: "linux", Version: agent.Version, AllowlistHash: strings.Repeat("a", 64)},
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil))}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	wait := func(what string, ok func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); !ok(); time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	wait("the sealing key", func() bool {
+		var k *store.AgentSealKey
+		_ = s.f.DB.ReadTenant(t.Context(), s.f.A.ID, func(c *store.TenantTx) error { k, _ = c.AgentSealKey(a.id); return nil })
+		return k != nil
+	})
+	op := s.submit(target.DisableAccount, "t:runner")
+	s.run()
+	wait("the operation to be verified", func() bool { return s.op(op.ID).Status == provision.Verified })
+	if exists, active := s.scim.Active(pushUser); !exists || active {
+		t.Errorf("the user was not disabled: exists=%v active=%v", exists, active)
+	}
+	if got := s.jobs(); len(got) != 1 || got[0].Status != store.AgentJobDone {
+		t.Errorf("jobs = %+v", got)
 	}
 }
