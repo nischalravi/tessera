@@ -35,7 +35,7 @@ func testServer(t testing.TB, st *testkit.DB, mutate ...func(*Config)) http.Hand
 	for _, m := range mutate {
 		m(&cfg)
 	}
-	return asAdmin(t, New(cfg), st.DB, st.Tenant, testkit.Now).Handler()
+	return asLinkedAdmin(t, New(cfg), st.DB, st.Tenant, testkit.Now).Handler()
 }
 
 type client struct {

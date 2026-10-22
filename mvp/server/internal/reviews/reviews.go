@@ -49,14 +49,33 @@ var ErrUnknownItem = &Error{"unknown review item"}
 // 403, code self_review): nobody certifies their own access (issue #434).
 var ErrSelfReview = &Error{"a reviewer cannot decide an item about themselves"}
 
+// ErrReviewerUnlinked refuses a decision by a platform user with no linked
+// identity (mapped to HTTP 403, code reviewer_unlinked): the self-review guard
+// cannot prove such a person is not the subject, so it fails closed (issue #439).
+var ErrReviewerUnlinked = &Error{"the reviewer's account is not linked to an identity"}
+
 // refuseSelf returns ErrSelfReview when the decider is the item's subject: a
 // platform user linked to the subject's identity, or the same person as one
-// (SameActor). A decider with no platform user (the scheduler) passes.
+// (SameActor). It returns ErrReviewerUnlinked for a platform user with no
+// linked identity. A decider with no platform user (the scheduler) passes.
 func refuseSelf(c *store.TenantTx, item *store.ReviewItem, by store.UserRef) error {
+	return refuseSubject(c, item.IdentityID, by)
+}
+
+// refuseSubject is refuseSelf for a subject identity id (a review item or a
+// sampled auto-decision).
+func refuseSubject(c *store.TenantTx, subject int64, by store.UserRef) error {
 	if by.ID == uuid.Nil {
 		return nil
 	}
-	users, err := c.PlatformUserIDsForIdentity(item.IdentityID)
+	u, err := c.PlatformUser(by.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	if u != nil && u.IdentityID == nil {
+		return ErrReviewerUnlinked
+	}
+	users, err := c.PlatformUserIDsForIdentity(subject)
 	if err != nil {
 		return err
 	}

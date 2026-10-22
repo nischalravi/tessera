@@ -107,6 +107,9 @@ func (s *Server) qaDecide(_ http.ResponseWriter, r *http.Request, p *params) (an
 		comment = &v
 	}
 	ad, err := reviews.QADecide(store.TxFrom(r.Context()), s.clock(), id, body["decision"].(string), principal(r).User(), comment)
+	if body, ok, aerr := s.refusedDecision(r, err, "qa_id", id); ok {
+		return body, aerr
+	}
 	if err != nil {
 		return nil, populationErr(err)
 	}

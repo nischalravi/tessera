@@ -134,7 +134,12 @@ func newServer(tb testing.TB, st *store.DB) paritySrv {
 		Connectors: func(time.Time) ([]connectors.Connector, error) { return connectors.Load("demo", FrozenNow) },
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)), AllowedOrigins: []string{authtest.Origin},
 	})
-	return paritySrv{testSrv{srv, authtest.LoginAs(tb, st, seed.LarkspurID, parityUser, parityCtx, FrozenNow)},
+	// the on-call decides reviews, so it is linked to a person of the demo
+	// directory (a decider with no linked identity is refused, issue #439); a
+	// Security Engineer with no review items of their own in the fixtures
+	pu := parityUser
+	pu.IdentityID = ensureIdentity(tb, st, seed.LarkspurID, "emp-1030", "emp-1030", FrozenNow)
+	return paritySrv{testSrv{srv, authtest.LoginAs(tb, st, seed.LarkspurID, pu, parityCtx, FrozenNow)},
 		authtest.LoginAs(tb, st, seed.LarkspurID, parityRequester, parityRequesterCtx, FrozenNow)}
 }
 

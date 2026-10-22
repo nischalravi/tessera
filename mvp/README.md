@@ -548,7 +548,11 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/reviews/items/{id}/decision {decision, comment?, rule_action?}` (a decision is final: repeating it is a 200 no-op, a different one is
 `409 review_item_decided` and an audited `review.decide.refused`; nobody decides an item about themselves: `403 self_review`, also from a
 second platform user linked to the same identity (`SameActor`), audited as `review.decide.refused`. A campaign never assigns an item to its
-own subject: it goes to the review type's fallback (escalation) reviewer, else the security lead, else stays unassigned) ·
+own subject: it goes to the review type's fallback (escalation) reviewer, else the security lead, else stays unassigned; close-out escalation
+follows the same rule. A platform user with no linked identity cannot decide (`403 reviewer_unlinked`, audited the same way): the guard cannot
+prove they are not the subject, so an admin links the account first (the demo's Alice and Ivan are linked in the seed). `POST
+/api/reviews/qa/{id}/decision` and group attestation decisions (`POST /api/groups/attestation/campaigns/{id}/items/{item}/decision`) apply
+both refusals too. A decider with no user at all, the scheduler, is not refused) ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·

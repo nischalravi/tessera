@@ -1568,16 +1568,8 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 	if errors.Is(err, reviews.ErrUnknownItem) {
 		return nil, errStatus(http.StatusNotFound, "unknown review item")
 	}
-	if errors.Is(err, reviews.ErrSelfReview) {
-		// nothing changed; the refusal itself is evidence of the control
-		by := principal(r).User()
-		if _, err := store.TxFrom(r.Context()).RecordAudit(store.AuditRecord{At: s.clock(), Action: "review.decide.refused",
-			LegacyActor: by.Display, Detail: ojson.Object{{Key: "item_id", Value: id}, {Key: "reason", Value: "self_review"}},
-			TargetType: reviews.TargetType, TargetID: strconv.FormatInt(id, 10)}); err != nil {
-			return nil, err
-		}
-		return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: "self_review"},
-			{Key: "detail", Value: "You cannot decide a review item about your own access; another reviewer must decide it."}}}, nil
+	if body, ok, aerr := s.refusedDecision(r, err, "item_id", id); ok {
+		return body, aerr
 	}
 	var re *reviews.Error
 	if errors.As(err, &re) {
@@ -1816,4 +1808,27 @@ func (s *Server) leaverPlan(_ http.ResponseWriter, r *http.Request, p *params) (
 		return nil, err
 	}
 	return plan, nil
+}
+
+// refusedDecision turns the guard's refusals (self_review, reviewer_unlinked)
+// into a 403 body and audits them as review.decide.refused. Nothing changed;
+// the refusal itself is evidence of the control, so it is a body, not an error
+// (the audit event commits). ok is false for any other error.
+func (s *Server) refusedDecision(r *http.Request, err error, key string, id int64) (any, bool, error) {
+	var code, msg string
+	switch {
+	case errors.Is(err, reviews.ErrSelfReview):
+		code, msg = "self_review", "You cannot decide a review item about your own access; another reviewer must decide it."
+	case errors.Is(err, reviews.ErrReviewerUnlinked):
+		code, msg = "reviewer_unlinked", "Your account is not linked to an identity, so it cannot decide reviews. Ask an administrator to link it."
+	default:
+		return nil, false, nil
+	}
+	by := principal(r).User()
+	if _, aerr := store.TxFrom(r.Context()).RecordAudit(store.AuditRecord{At: s.clock(), Action: "review.decide.refused",
+		LegacyActor: by.Display, Detail: ojson.Object{{Key: key, Value: id}, {Key: "reason", Value: code}},
+		TargetType: reviews.TargetType, TargetID: strconv.FormatInt(id, 10)}); aerr != nil {
+		return nil, true, aerr
+	}
+	return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: code}, {Key: "detail", Value: msg}}}, true, nil
 }

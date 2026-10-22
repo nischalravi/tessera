@@ -20,7 +20,8 @@ func TestReviewRolesAPI(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
-	op := signIn(t, f.DB, f.B.ID, authtest.User{Email: "op@b.example", Roles: []auth.Role{auth.RoleOperator}}, authtest.Phr, storetest.Now)
+	op := signIn(t, f.DB, f.B.ID, authtest.User{Email: "op@b.example", Roles: []auth.Role{auth.RoleOperator},
+		IdentityID: ensureIdentity(t, f.DB, f.B.ID, "op-reviewer", "op-reviewer", storetest.Now)}, authtest.Phr, storetest.Now)
 	viewer := signIn(t, f.DB, f.B.ID, authtest.User{Email: "v@b.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, storetest.Now)
 	pa := signIn(t, f.DB, f.B.ID, authtest.User{Email: "pa@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, storetest.Now)
 	opA := signIn(t, f.DB, f.A.ID, authtest.User{Email: "op@a.example", Roles: []auth.Role{auth.RoleOperator}}, authtest.Phr, storetest.Now)

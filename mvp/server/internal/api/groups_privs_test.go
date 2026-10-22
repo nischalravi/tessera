@@ -51,6 +51,15 @@ func (e *privEnv) user(name string, identity string) grpClient {
 	return e.as(name, []auth.Role{auth.RoleOperator}, &id)
 }
 
+// linkAdmin replaces the env's admin with a tenant admin linked to a
+// grant-less identity of B, for tests that decide reviews: a decider with no linked
+// identity is refused (reviewer_unlinked, issue #439).
+func (e *privEnv) linkAdmin() {
+	e.t.Helper()
+	id := ensureIdentity(e.t, e.f.DB, e.f.B.ID, "linked-admin", "linked-admin", storetest.Now)
+	e.admin = e.as("linked-admin", []auth.Role{auth.RoleTenantAdmin}, id)
+}
+
 func (e *privEnv) ident(name string) int64 { return e.f.B.IDs[name] }
 
 // grant makes the admin grant privilege to an identity on an object path
@@ -78,6 +87,7 @@ func denied(t *testing.T, c grpClient, method, path, body, privilege string) {
 // route's permission. The table must name every registered /api/groups route.
 func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 	e := newPrivEnv(t)
+	e.linkAdmin()
 	root := e.admin.folder("", "root0")
 	app := e.admin.folder(root, "app")
 	app2 := e.admin.folder(root, "app2")

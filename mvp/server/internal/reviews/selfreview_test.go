@@ -148,3 +148,82 @@ func TestGenerateReassignsSelfAssignedItems(t *testing.T) {
 		return nil
 	})
 }
+
+// unlinkedUser adds an active platform user with no linked identity (what
+// sign-in creates until an admin links it).
+func unlinkedUser(t *testing.T, db *testkit.DB) store.UserRef {
+	t.Helper()
+	u := &store.PlatformUser{DisplayName: "unlinked", CreatedAt: testkit.Now}
+	testkit.Write(t, db, func(c *store.TenantTx) error { return c.InsertPlatformUser(u) })
+	return store.UserRef{ID: u.ID, Display: "unlinked"}
+}
+
+// Issue #439: a platform user with no linked identity cannot decide: the guard
+// cannot prove they are not the subject. Nothing is recorded as decided.
+func TestDecideRefusesUnlinkedReviewer(t *testing.T) {
+	for _, via := range []string{"Decide", "DecideItem"} {
+		t.Run(via, func(t *testing.T) {
+			db := testkit.Demo(t)
+			by := unlinkedUser(t, db)
+			testkit.Write(t, db, func(c *store.TenantTx) error {
+				var err error
+				if via == "Decide" {
+					_, err = reviews.Decide(c, testkit.Now, 1, "keep", by, nil)
+				} else {
+					_, _, err = reviews.DecideItem(c, testkit.Now, 1, "keep", by, nil, "")
+				}
+				if !errors.Is(err, reviews.ErrReviewerUnlinked) {
+					t.Errorf("err = %v, want ErrReviewerUnlinked", err)
+				}
+				it, ierr := c.Item(1)
+				if ierr == nil && it.Decision != nil && *it.Decision != "" {
+					t.Errorf("item decided as %q", *it.Decision)
+				}
+				return nil
+			})
+		})
+	}
+	t.Run("no user (the scheduler) still decides", func(t *testing.T) {
+		db := testkit.Demo(t)
+		testkit.Write(t, db, func(c *store.TenantTx) error {
+			if _, err := reviews.Decide(c, testkit.Now, 1, "keep", store.UserRef{}, nil); err != nil {
+				t.Errorf("scheduler decision: %v", err)
+			}
+			return nil
+		})
+	})
+}
+
+// Issues #439 and #440: QA decisions have the same guard: the subject of the
+// auto-decision cannot QA their own grant, and an unlinked user cannot QA.
+func TestQADecideRefusesSelfAndUnlinked(t *testing.T) {
+	db := testkit.Demo(t)
+	var ad *store.AutoDecision
+	testkit.Read(t, db, func(c *store.TenantTx) error {
+		autos, err := c.AutoDecisions(seedCampaign)
+		for _, a := range autos {
+			if a.QASample && ad == nil {
+				ad = a
+			}
+		}
+		return err
+	})
+	if ad == nil {
+		t.Fatal("the demo campaign needs a QA-sampled auto-decision")
+	}
+	self := store.UserRef{ID: linkUser(t, db, ad.IdentityID), Display: "subject"}
+	unlinked := unlinkedUser(t, db)
+	testkit.Write(t, db, func(c *store.TenantTx) error {
+		if _, err := reviews.QADecide(c, testkit.Now, ad.ID, "keep", self, nil); !errors.Is(err, reviews.ErrSelfReview) {
+			t.Errorf("subject's own QA: %v, want ErrSelfReview", err)
+		}
+		if _, err := reviews.QADecide(c, testkit.Now, ad.ID, "keep", unlinked, nil); !errors.Is(err, reviews.ErrReviewerUnlinked) {
+			t.Errorf("unlinked QA: %v, want ErrReviewerUnlinked", err)
+		}
+		got, err := c.AutoDecision(ad.ID)
+		if err == nil && got.QADecision != nil {
+			t.Errorf("a refused QA decision was recorded: %v", *got.QADecision)
+		}
+		return nil
+	})
+}
