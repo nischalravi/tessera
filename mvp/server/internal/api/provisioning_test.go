@@ -24,6 +24,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/internal/worker"
 	"github.com/nischalravi/tessera/mvp/server/policies"
 )
 
@@ -83,6 +84,9 @@ func newProvHarness(t *testing.T, o fake.Options) *provHarness {
 	}
 	srv := newTestAPIServerWith(t, st, func(c *Config) { c.Outbound = hc; c.FakeTargetURL = fs.URL })
 	h.srv = srv
+	// these tests fail a target's writes on purpose, many times in a row; the circuit breaker
+	// (default: five failures in a row) is tested on its own (TestEngine_OpenBreaker..., worker tests)
+	srv.Guard().Defaults = &worker.Limits{MaxConcurrency: 4}
 	h.c = client{t, asLinkedAdmin(t, srv, st.DB, st.Tenant, testkit.Now).Handler()}
 	v := h.c.json("POST", "/api/connections", `{"name":"Okta (provisioning test)","connector_type":"demo-okta"}`, http.StatusCreated).(map[string]any)
 	h.conn = v["id"].(string)
