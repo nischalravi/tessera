@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -183,20 +184,28 @@ func (f *Fake) list(w http.ResponseWriter, r *http.Request) {
 		lo = len(sel)
 	}
 	next := ""
+	host := r.Host
+	if !hostRE.MatchString(host) {
+		host = "invalid.example" // a request header is never echoed unchecked
+	}
+	if f.faults.NextOffOrigin {
+		host = "evil.example"
+	}
+	// the link is built from the fixed path and numbers, never from request text
+	link := func(p int) string {
+		nq := url.Values{"page": {strconv.Itoa(p)}}
+		for _, k := range []string{"modified_after", "modified_since"} {
+			if t, err := time.Parse(time.RFC3339, q.Get(k)); err == nil {
+				nq.Set(k, t.UTC().Format(time.RFC3339))
+			}
+		}
+		return "https://" + host + f.listPath() + "?" + nq.Encode()
+	}
 	switch {
 	case f.faults.LoopForever:
-		next = "https://" + r.Host + r.URL.RequestURI()
+		next = link(page)
 	case hi < len(sel):
-		nq := url.Values{}
-		for k, v := range q {
-			nq[k] = v
-		}
-		nq.Set("page", strconv.Itoa(page+1))
-		host := r.Host
-		if f.faults.NextOffOrigin {
-			host = "evil.example"
-		}
-		next = "https://" + host + r.URL.Path + "?" + nq.Encode()
+		next = link(page + 1)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if f.Vendor == "beeline" {
@@ -230,3 +239,5 @@ func (f *Fake) beeline(w http.ResponseWriter, ws []Worker, next string) {
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": out, "links": map[string]string{"next": next}})
 }
+
+var hostRE = regexp.MustCompile(`^[A-Za-z0-9.:\[\]-]{1,255}$`)
