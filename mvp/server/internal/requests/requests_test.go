@@ -33,11 +33,15 @@ func newWorld(t *testing.T) *world {
 	w := &world{t: t, f: f, ids: f.B.IDs, items: map[string]string{}, now: storetest.Now}
 	w.tx(func(c *store.TenantTx) error {
 		alice := w.ids["alice"]
+		pat, err := newPerson(c, "pat", w.now)
+		if err != nil {
+			return err
+		}
 		for _, u := range []struct {
 			a     *requests.Actor
 			name  string
 			ident *int64
-		}{{&w.alice, "Alice", &alice}, {&w.pat, "Pat", nil}} {
+		}{{&w.alice, "Alice", &alice}, {&w.pat, "Pat", &pat}} {
 			pu := &store.PlatformUser{DisplayName: u.name, IdentityID: u.ident, CreatedAt: w.now}
 			if err := c.InsertPlatformUser(pu); err != nil {
 				return err
@@ -64,6 +68,12 @@ func newWorld(t *testing.T) *world {
 		return nil
 	})
 	return w
+}
+
+// newPerson adds a grant-less human identity: a decider with no linked identity
+// is refused (approver_unlinked, issue #443), so deciders are linked to one.
+func newPerson(c *store.TenantTx, ext string, now time.Time) (int64, error) {
+	return c.InsertIdentity(&store.Identity{TenantID: c.Tenant(), ExternalID: ext, Name: ext, Type: "human", Status: "active", CreatedAt: now})
 }
 
 func (w *world) tx(fn func(c *store.TenantTx) error) {
@@ -228,7 +238,8 @@ func TestRequest_DecisionRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	forAlice, forBob := lines[0], lines[1]
-	other0 := requests.Actor{UserID: uuid.New(), Display: "Someone", Decider: true}
+	carolID := w.ids["carol"]
+	other0 := requests.Actor{UserID: uuid.New(), Display: "Someone", Decider: true, IdentityID: &carolID}
 	w.tx(func(c *store.TenantTx) error {
 		if _, err := requests.Approve(c, forBob.ID, w.pat, "", w.now); code(err) != "self_approval" {
 			t.Errorf("requester approves: %v", err)
@@ -272,11 +283,15 @@ func TestRequest_DecisionRules(t *testing.T) {
 	}
 	other := requests.Actor{Display: "Olu", Decider: true}
 	w.tx(func(c *store.TenantTx) error {
-		u := &store.PlatformUser{DisplayName: "Olu", CreatedAt: w.now}
+		olu, err := newPerson(c, "olu", w.now)
+		if err != nil {
+			return err
+		}
+		u := &store.PlatformUser{DisplayName: "Olu", IdentityID: &olu, CreatedAt: w.now}
 		if err := c.InsertPlatformUser(u); err != nil {
 			return err
 		}
-		other.UserID = u.ID
+		other.UserID, other.IdentityID = u.ID, &olu
 		if _, err := requests.Approve(c, again[0].ID, other, "ok", w.now); err != nil {
 			return err
 		}
@@ -285,7 +300,7 @@ func TestRequest_DecisionRules(t *testing.T) {
 		if _, err := requests.Remove(c, again[0].ID, stranger, false, "x", w.now); code(err) != "forbidden" {
 			t.Errorf("someone else removes: %v", err)
 		}
-		_, err := requests.Remove(c, again[0].ID, w.alice, false, "", w.now)
+		_, err = requests.Remove(c, again[0].ID, w.alice, false, "", w.now)
 		return err
 	})
 	if w.edge("acct:okta:alice", "group:okta:platform") != nil {
@@ -353,5 +368,39 @@ func TestCatalog_PutItemRules(t *testing.T) {
 			}
 		}
 		return err
+	})
+}
+
+// A decider whose user has no linked identity is refused (approver_unlinked,
+// issue #443): the self-approval check cannot prove they are not the
+// beneficiary. A linked, unrelated decider still approves.
+func TestRequest_UnlinkedApproverRefused(t *testing.T) {
+	w := newWorld(t)
+	lines, err := w.submit(w.alice, false, []string{"alice"}, []string{"group:okta:platform"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlinked := requests.Actor{Display: "Unlinked", Decider: true}
+	w.tx(func(c *store.TenantTx) error {
+		u := &store.PlatformUser{DisplayName: "Unlinked", CreatedAt: w.now}
+		if err := c.InsertPlatformUser(u); err != nil {
+			return err
+		}
+		unlinked.UserID = u.ID
+		for _, tc := range []struct {
+			name string
+			fn   func() error
+		}{
+			{"approve", func() error { _, err := requests.Approve(c, lines[0].ID, unlinked, "", w.now); return err }},
+			{"deny", func() error { _, err := requests.Deny(c, lines[0].ID, unlinked, "no", w.now); return err }},
+		} {
+			if got := code(tc.fn()); got != "approver_unlinked" {
+				t.Errorf("unlinked decider %s: %q, want approver_unlinked", tc.name, got)
+			}
+		}
+		if _, err := requests.Approve(c, lines[0].ID, w.pat, "", w.now); err != nil {
+			t.Errorf("a linked, unrelated decider: %v", err)
+		}
+		return nil
 	})
 }

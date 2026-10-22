@@ -4085,6 +4085,11 @@ id, and the reason is in the audit log (`auth.login.failure`), never in the URL.
 Approvals, review decisions, HRIS execution, applying a revoke and editing a connection's config or
 credential also need a phishing-resistant sign-in in the last 15 minutes (step-up, §10.2). Nobody can
 approve a JIT request they made, or one that grants access to their own identity (403 `self_approval`).
+A platform user with no linked identity cannot approve either (403 `approver_unlinked`, issue #443; JIT refusals are audited as
+`jit.approve.refused`): the self-approval check compares identities, so it cannot prove such a user is not the beneficiary. The same
+rule covers access-request lines (any decision, including escalated and delegated stages), removal requests, business-role requests,
+service-account requests and sponsorship approvals; an admin links the account first (the demo users are linked in the seed). The
+security lead picked for reviews is the active "Head of Security" only.
 When the sign-in is too old or too weak the API answers `401 step_up_required` with the RFC 9470
 challenge (`WWW-Authenticate: Bearer error="insufficient_user_authentication", acr_values=…, max_age=…`)
 and a `step_up_url`. The UI explains why and, on **Continue**, re-authenticates at the IdP

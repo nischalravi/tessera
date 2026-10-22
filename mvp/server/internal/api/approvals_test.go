@@ -21,7 +21,9 @@ func TestApprovalsAPI_RoutedFlow(t *testing.T) {
 	admin := reqLogin(t, f, "pa@b.example", []auth.Role{auth.RolePolicyAdmin}, "")
 	alice := reqLogin(t, f, "alice@b.example", []auth.Role{auth.RoleViewer}, "alice")
 	carol := reqLogin(t, f, "carol@b.example", []auth.Role{auth.RoleViewer}, "carol")
-	zed := reqLogin(t, f, "zed@b.example", []auth.Role{auth.RoleViewer}, "")
+	// a delegate with no linked identity is refused (approver_unlinked, #443)
+	f.B.IDs["zed"] = *ensureIdentity(t, f.DB, f.B.ID, "zed", "zed", storetest.Now)
+	zed := reqLogin(t, f, "zed@b.example", []auth.Role{auth.RoleViewer}, "zed")
 
 	rec := reqDo(h, admin, "PUT", fmt.Sprintf("/api/catalog/items/%d", f.B.IDs["group:okta:platform"]),
 		`{"requestable":true,"risk":"medium","approval_stages":["manager","decider"],"escalate_after_hours":24}`)
@@ -119,5 +121,39 @@ func TestApprovalsAPI_CrossTenant(t *testing.T) {
 	}
 	if rec := reqDo(h, admin, "GET", "/api/approvals/delegates", ""); strings.Contains(rec.Body.String(), ua2.UserID.String()) {
 		t.Error("B's delegate list has A's user")
+	}
+}
+
+// A decider whose user has no linked identity is refused with 403
+// approver_unlinked (issue #443); the linked policy admin still approves.
+func TestApprovalsAPI_UnlinkedDeciderRefused(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	admin := reqLogin(t, f, "pa@b.example", []auth.Role{auth.RolePolicyAdmin}, "")
+	alice := reqLogin(t, f, "alice@b.example", []auth.Role{auth.RoleViewer}, "alice")
+	unlinked := signIn(t, f.DB, f.B.ID, authtest.User{Email: "unlinked@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, storetest.Now)
+
+	rec := reqDo(h, admin, "PUT", fmt.Sprintf("/api/catalog/items/%d", f.B.IDs["group:okta:platform"]),
+		`{"requestable":true,"risk":"medium","approval_stages":["decider"]}`)
+	if rec.Code != 200 {
+		t.Fatalf("put item: %d %s", rec.Code, rec.Body)
+	}
+	var item catalogEntry
+	_ = json.Unmarshal(rec.Body.Bytes(), &item)
+	rec = reqDo(h, alice, "POST", "/api/requests",
+		fmt.Sprintf(`{"beneficiary_ids":[%d],"catalog_item_ids":["%s"],"justification":"platform rotation"}`, f.B.IDs["alice"], *item.ID))
+	if rec.Code != 201 {
+		t.Fatalf("submit: %d %s", rec.Code, rec.Body)
+	}
+	var sub struct {
+		Lines []lineView `json:"lines"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &sub)
+	id := sub.Lines[0].ID
+	if rec := reqDo(h, unlinked, "POST", "/api/requests/"+id+"/approve", `{}`); rec.Code != 403 || !strings.Contains(rec.Body.String(), "approver_unlinked") {
+		t.Errorf("unlinked decider: %d %s", rec.Code, rec.Body)
+	}
+	if rec := reqDo(h, admin, "POST", "/api/requests/"+id+"/approve", `{}`); rec.Code != 200 {
+		t.Errorf("linked decider: %d %s", rec.Code, rec.Body)
 	}
 }

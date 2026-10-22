@@ -102,7 +102,7 @@ func removalDetail(q *store.RemovalRequest, reason, outcome *string) ojson.Objec
 // asked or the one it is for, and either the beneficiary's manager, a
 // delegate of the manager, or a holder of requests.decide.
 func CanDecideRemoval(tx *store.TenantTx, q *store.RemovalRequest, by Actor, now time.Time) (bool, error) {
-	if q.Status != store.RequestPending || (by.IdentityID != nil && *by.IdentityID == q.BeneficiaryID) {
+	if q.Status != store.RequestPending || by.IdentityID == nil || *by.IdentityID == q.BeneficiaryID {
 		return false, nil
 	}
 	if own, err := tx.SameActor(q.RequestedBy, by.id()); err != nil || own {
@@ -166,6 +166,11 @@ func authorizeRemoval(tx *store.TenantTx, q *store.RemovalRequest, by Actor, now
 	own, err := tx.SameActor(q.RequestedBy, by.id())
 	if err != nil {
 		return err
+	}
+	if !own {
+		if err := RefuseUnlinked(by); err != nil {
+			return err
+		}
 	}
 	switch {
 	case own:

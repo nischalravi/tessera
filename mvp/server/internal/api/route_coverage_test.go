@@ -185,7 +185,7 @@ func TestEveryCallAudited(t *testing.T) {
 		}
 		t.Run(rt.Method+" "+rt.Pattern, func(t *testing.T) {
 			// a fresh session per route: logout and session revocation end theirs
-			l := signIn(t, f.DB, f.B.ID, testAdmin, authtest.Phr, storetest.Now)
+			l := signIn(t, f.DB, f.B.ID, linkedAdmin(t, f.DB, f.B.ID, storetest.Now), authtest.Phr, storetest.Now)
 			wantAAL, wantACR := 2, string(auth.ACRPhr)
 			if rt.Perm == auth.PermBreakGlassRecover {
 				// only a break-glass session holds this permission

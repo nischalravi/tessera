@@ -1368,6 +1368,11 @@ func Approve(tx *store.TenantTx, id, reason string, by Actor, now time.Time) (*s
 	if err != nil {
 		return nil, nil, err
 	}
+	if !own {
+		if err := requests.RefuseUnlinked(by); err != nil {
+			return nil, nil, err
+		}
+	}
 	switch {
 	case own:
 		return nil, nil, refuse(403, "self_approval", "you cannot approve a request you made")
