@@ -166,7 +166,7 @@ func TestAuthorizationRequestRefusals(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			in := NewAuthRequest{Client: e.client, RedirectURI: testRedirect, CodeChallenge: ChallengeS256(testVerif),
+			in := NewAuthRequest{Issuer: testIssuer, Client: e.client, RedirectURI: testRedirect, CodeChallenge: ChallengeS256(testVerif),
 				Resource: e.resA.Resource, Scope: []string{e.shared}, UserIdentity: e.alice}
 			mod(&in)
 			_, _, oe, err = e.svc.BeginAuthorization(tx, g, in)
@@ -200,8 +200,11 @@ func TestAuthorizationRequestRefusals(t *testing.T) {
 			t.Errorf("%s: %+v, want %s", name, oe, c.want)
 		}
 	}
-	if n := len(e.audit("mcp.authorize.deny")); n != 6 {
-		t.Errorf("%d authorize denials audited, want 6", n)
+	if n := len(e.audit("mcp.authorize.deny")); n != 5 {
+		t.Errorf("%d authorize denials audited, want 5", n)
+	}
+	if n := len(e.audit(ActionUnregistered)); n != 1 { // the unregistered resource is a policy denial (#479)
+		t.Errorf("%d unregistered-server denials audited, want 1", n)
 	}
 	// a disabled resource is unusable
 	e.write(func(tx *store.TenantTx) error { return tx.SetMCPResourceStatus(e.resA.ID, "disabled") })

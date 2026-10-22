@@ -92,10 +92,13 @@ func Mint(tx *store.TenantTx, s *seal.Sealer, c Claims) (string, error) {
 var (
 	ErrTokenInvalid = errors.New("token is not valid")
 	ErrTokenExpired = errors.New("token has expired")
+	// ErrIssuerMismatch: the signature is ours but the issuer is not the one asked for.
+	ErrIssuerMismatch = errors.New("token issuer does not match")
 )
 
 // Verify checks a token's signature against the tenant's published access
-// keys, its type, issuer, lifetime and act depth. It does not check
+// keys, its type, issuer (ErrIssuerMismatch when it is signed by us but names
+// another issuer), lifetime and act depth. It does not check
 // revocation or audience (the caller does, against the mcp_tokens row).
 func Verify(tx *store.TenantTx, raw, issuer string, now time.Time) (*Claims, error) {
 	if raw == "" || len(raw) > MaxTokenBytes {
@@ -121,8 +124,11 @@ func Verify(tx *store.TenantTx, raw, issuer string, now time.Time) (*Claims, err
 	if err := tok.Claims(found[0].Key, &c); err != nil {
 		return nil, ErrTokenInvalid
 	}
+	if c.Issuer != issuer {
+		return nil, ErrIssuerMismatch
+	}
 	switch {
-	case c.Issuer != issuer || c.Subject == "" || c.ID == "" || len(c.Audience) != 1:
+	case c.Subject == "" || c.ID == "" || len(c.Audience) != 1:
 		return nil, ErrTokenInvalid
 	case c.Expiry == nil || c.IssuedAt == nil:
 		return nil, ErrTokenInvalid

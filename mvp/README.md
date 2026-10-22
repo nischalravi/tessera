@@ -2507,6 +2507,27 @@ signed with the tenant's `access_token` key from `internal/keys`; there are no r
   first when its one-hour cache has expired (`RefreshActorClient`; a failed refresh fails closed).
 - **Resource servers** (`/api/mcp/resources`) must be registered; a token is only issued for one.
   Registration shows a secret once; only its SHA-256 is stored.
+- **Issuer and audience binding, unregistered servers (issue #479, schema 0690).** A rogue MCP server steals an
+  agent's OAuth credentials by posing as the server the agent was set up for (the MCP Python SDK flaw of 29 Sep,
+  the OpenCode flaw of 22 Oct), so each registered resource is **bound** to the authorization server issuer it
+  expects its tokens from and the audience they carry. With no explicit binding the defaults apply: this tenant's
+  MCP issuer and the resource URI. Bind with `PUT /api/mcp/resources/{id} {issuer, audience}` (both together;
+  `agents.manage`, step-up) or at registration (`POST` with the same two optional fields). Both are absolute https
+  URIs (http for loopback), the issuer without a query, and the audience is unique per tenant (`409
+  audience_in_use`). Changing the binding revokes the resource's live tokens (`mcp.resource.bind`). The
+  list shows `issuer`, `audience` and `bound`; the RFC 9728 metadata names the bound issuer in
+  `authorization_servers`. Enforced: (1) **issuing** (authorization, code redemption and token exchange) is
+  refused with `invalid_target` unless the bound issuer is this tenant's authorization server, and the token's
+  `aud` is the bound audience (`mcp.policy.issuer_mismatch`); (2) **introspection and tool-call decisions**
+  answer inactive, with a reason in the decision log, for a token whose issuer differs from the bound one
+  ("token issuer does not match ...") or whose audience is not the bound audience or was issued for another
+  resource ("token is for another audience"). A resource bound to another authorization server therefore gets no
+  token from Tessera, and its old tokens stop working. **Policy: no unregistered MCP servers.** A token is issued
+  only for a registered, active resource; a request for any other (unknown or disabled) is refused with
+  `invalid_target` ("blocked by policy ...") and recorded as the audit event and decision
+  `mcp.policy.unregistered_server`, so an agent cannot use an unregistered MCP server through Tessera. The policy is
+  built in and cannot be switched off; it is not a policy document. Tessera cannot stop an agent connecting to a
+  server directly: the repo scan of `GET /api/ai-agents/mcp-findings` still lists what agents are configured with.
 - **Decisions**: every issue, exchange, denial, revocation and tool-call decision is a row in
   `mcp_decisions` and an audit event (`mcp.token.issue`, `mcp.token.exchange`, `mcp.token.deny`,
   `mcp.token.revoke`, `mcp.tool_call.decision`, `mcp.authorize.*`, `mcp.client.*`, `mcp.resource.*`)

@@ -329,16 +329,37 @@ function Resources({ canManage }: { canManage: boolean }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [created, setCreated] = useState<McpResource | null>(null);
+  const [issuer, setIssuer] = useState("");
+  const [audience, setAudience] = useState("");
+  const [binding, setBinding] = useState<McpResource | null>(null);
   const confirm = useConfirm();
   const toast = useToast();
   const create = async () => {
     setBusy(true);
     setErr(null);
     try {
-      setCreated(await mcpAuthz.createResource(uri.trim(), name.trim()));
+      const bind = issuer.trim() || audience.trim() ? { issuer: issuer.trim(), audience: audience.trim() } : undefined;
+      setCreated(await mcpAuthz.createResource(uri.trim(), name.trim(), bind));
       setAdding(false);
       setUri("");
       setName("");
+      setIssuer("");
+      setAudience("");
+      reload();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const bind = async () => {
+    if (!binding) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await mcpAuthz.bindResource(binding.id, issuer.trim(), audience.trim());
+      toast(`${binding.name} is bound; its earlier tokens were revoked`);
+      setBinding(null);
       reload();
     } catch (e) {
       setErr((e as Error).message);
@@ -363,9 +384,10 @@ function Resources({ canManage }: { canManage: boolean }) {
   const cols: Column<McpResource>[] = [
     { id: "name", header: "Resource server", sort: (r) => r.name, cell: (r) => <><b>{r.name}</b><div className="small muted">{r.resource}</div></> },
     { id: "status", header: "Status", sort: (r) => r.status, cell: (r) => <Badge tone={r.status === "active" ? "ok" : "neutral"}>{r.status}</Badge> },
+    { id: "bind", header: "Bound to", hideNarrow: true, sort: (r) => r.issuer, cell: (r) => <><div className="small">{r.issuer}</div><div className="small muted">aud {r.audience}{!r.bound && " (default)"}</div></> },
     { id: "meta", header: "Protected resource metadata", hideNarrow: true, cell: (r) => <Chip mono>{r.metadata_path}</Chip> },
     { id: "by", header: "Registered by", hideNarrow: true, cell: (r) => `${r.created_by}, ${fmtDate(r.created_at)}` },
-    { id: "act", header: "", cell: (r) => canManage ? <Button size="sm" icon={r.status === "active" ? <ShieldOff size={14} /> : undefined} onClick={() => toggle(r)}>{r.status === "active" ? "Disable" : "Enable"}</Button> : null },
+    { id: "act", header: "", cell: (r) => canManage ? <><Button size="sm" onClick={() => { setIssuer(r.issuer); setAudience(r.audience); setErr(null); setBinding(r); }}>Bind</Button>{" "}<Button size="sm" icon={r.status === "active" ? <ShieldOff size={14} /> : undefined} onClick={() => toggle(r)}>{r.status === "active" ? "Disable" : "Enable"}</Button></> : null },
   ];
   return (
     <>
@@ -379,7 +401,7 @@ function Resources({ canManage }: { canManage: boolean }) {
         id="mcp-resources" rows={data} error={error} rowKey={(r) => r.id} columns={cols} onRefresh={reload}
         searchText={(r) => `${r.name} ${r.resource}`} searchPlaceholder="Search resource servers" rowLabel={(r) => r.name}
         commands={[canManage && { label: "Register resource server", icon: <Plus size={14} />, onClick: () => setAdding(true) }]}
-        empty={<p className="muted">No resource servers. A token can only be issued for a registered resource server (its resource URI is the token's audience).</p>}
+        empty={<p className="muted">No resource servers. A token can only be issued for a registered resource server; an unregistered one is blocked by policy. Each is bound to the authorization server and audience its tokens must carry.</p>}
       />
       {adding && (
         <FormDialog title="Register a resource server" onClose={() => setAdding(false)} onSubmit={create} submitLabel="Register" busy={busy} error={err}>
@@ -387,6 +409,19 @@ function Resources({ canManage }: { canManage: boolean }) {
           <Field label="Resource URI" hint="The audience of its tokens (RFC 8707): an https URI without a fragment.">
             <input className="input" type="url" required value={uri} onChange={(e) => setUri(e.target.value)} placeholder="https://mcp.example.com/mcp" />
           </Field>
+          <Field label="Authorization server issuer (optional)" hint="The issuer this server expects its tokens from. Empty: this tenant's MCP authorization server. Set it together with the audience.">
+            <input className="input" type="url" value={issuer} onChange={(e) => setIssuer(e.target.value)} />
+          </Field>
+          <Field label="Token audience (optional)" hint="Empty: the resource URI.">
+            <input className="input" type="url" value={audience} onChange={(e) => setAudience(e.target.value)} />
+          </Field>
+        </FormDialog>
+      )}
+      {binding && (
+        <FormDialog title={`Bind ${binding.name}`} onClose={() => setBinding(null)} onSubmit={bind} submitLabel="Bind and revoke tokens" busy={busy} error={err}>
+          <p className="muted">Tokens are issued for this server only by the bound authorization server, carry the bound audience, and are refused anywhere else. Changing the binding revokes its live tokens. If the issuer is not this tenant's authorization server, no token can be issued for it.</p>
+          <Field label="Authorization server issuer"><input className="input" type="url" required value={issuer} onChange={(e) => setIssuer(e.target.value)} autoFocus /></Field>
+          <Field label="Token audience"><input className="input" type="url" required value={audience} onChange={(e) => setAudience(e.target.value)} /></Field>
         </FormDialog>
       )}
     </>
