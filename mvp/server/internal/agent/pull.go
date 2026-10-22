@@ -86,7 +86,8 @@ type PulledJob struct {
 	Kind         string   `json:"kind"`
 	ConnectionID string   `json:"connection_id"`
 	Attempt      int      `json:"attempt"`
-	Spec         SyncSpec `json:"spec"`
+	Spec         SyncSpec `json:"spec,omitzero"`  // a sync job
+	Push         *PushJob `json:"push,omitempty"` // a provision_push job
 	// TimeoutSecs is how long the agent may spend (relative, so a clock
 	// difference between the agent and Tessera cannot make a job late).
 	TimeoutSecs int `json:"timeout_seconds"`
@@ -126,6 +127,7 @@ type PullResult struct {
 	JobID string       `json:"job_id"`
 	Error *ResultError `json:"error,omitempty"`
 	Sync  *SyncResult  `json:"sync,omitempty"`
+	Push  *PushResult  `json:"push,omitempty"`
 }
 
 // Validate bounds and checks a result before anything is ingested.
@@ -221,18 +223,52 @@ func (s *Service) claimOne(ctx context.Context, p *Principal) (*PulledJob, error
 			if err := s.auditJob(c, now, a, "agent.job_failed", j, ojson.Object{{Key: "error", Value: j.LastError}}); err != nil {
 				return err
 			}
+			if j.Kind == KindPush && s.Push != nil {
+				if err := s.Push.Failed(c, now, a, j, j.LastError, true); err != nil {
+					return err
+				}
+			}
 		}
 		for _, j := range claimed {
-			var spec SyncSpec
-			if err := json.Unmarshal([]byte(j.Payload), &spec); err != nil || spec.Validate() != nil {
-				// a malformed row can never run: fail it rather than hand it out
-				if err := c.FailAgentJob(j, "the job payload is not valid", false, now); err != nil {
+			switch j.Kind {
+			case KindSync:
+				var spec SyncSpec
+				if err := json.Unmarshal([]byte(j.Payload), &spec); err != nil || spec.Validate() != nil {
+					// a malformed row can never run: fail it rather than hand it out
+					if err := c.FailAgentJob(j, "the job payload is not valid", false, now); err != nil {
+						return err
+					}
+					continue
+				}
+				out = &PulledJob{ID: j.ID, Kind: j.Kind, ConnectionID: j.ConnectionID, Attempt: j.Attempts, Spec: spec,
+					TimeoutSecs: int(SyncTimeout / time.Second)}
+			case KindPush:
+				pj, err := s.pushJob(c, a, j)
+				if err != nil {
+					// a push that can never run as it is (no sealing key, bad spec, a credential that
+					// cannot be opened) fails its operation now, with the reason, rather than at the lease
+					msg := err.Error()
+					if err := c.FailAgentJob(j, msg, false, now); err != nil {
+						return err
+					}
+					if s.Push != nil {
+						if err := s.Push.Failed(c, now, a, j, msg, true); err != nil {
+							return err
+						}
+					}
+					if err := s.auditJob(c, now, a, "agent.job_failed", j, ojson.Object{{Key: "error", Value: msg}}); err != nil {
+						return err
+					}
+					continue
+				}
+				out = &PulledJob{ID: j.ID, Kind: j.Kind, ConnectionID: j.ConnectionID, Attempt: j.Attempts, Push: pj,
+					TimeoutSecs: int(PushTimeout / time.Second)}
+			default:
+				if err := c.FailAgentJob(j, "unknown job kind", false, now); err != nil {
 					return err
 				}
 				continue
 			}
-			out = &PulledJob{ID: j.ID, Kind: j.Kind, ConnectionID: j.ConnectionID, Attempt: j.Attempts, Spec: spec,
-				TimeoutSecs: int(SyncTimeout / time.Second)}
 			break
 		}
 		return nil
@@ -263,11 +299,13 @@ func (s *Service) Report(ctx context.Context, p *Principal, res PullResult) erro
 		return ErrNoRecorder
 	}
 	if res.Error == nil {
-		if res.Sync == nil {
-			return fmt.Errorf("%w: a report holds an error or a result", ErrBadInput)
+		if (res.Sync == nil) == (res.Push == nil) {
+			return fmt.Errorf("%w: a report holds an error or one result", ErrBadInput)
 		}
-		if err := res.Sync.Validate(); err != nil {
-			return fmt.Errorf("%w: %s", ErrBadInput, err)
+		if res.Sync != nil {
+			if err := res.Sync.Validate(); err != nil {
+				return fmt.Errorf("%w: %s", ErrBadInput, err)
+			}
 		}
 	}
 	now := s.Clock()
@@ -295,8 +333,33 @@ func (s *Service) Report(ctx context.Context, p *Principal, res PullResult) erro
 			if err := c.FailAgentJob(j, msg, retryable(res.Error.Code), now); err != nil {
 				return err
 			}
+			if j.Kind == KindPush && s.Push != nil {
+				if err := s.Push.Failed(c, now, a, j, msg, !willRetry); err != nil {
+					return err
+				}
+			}
 			return s.auditJob(c, now, a, "agent.job_failed", j, ojson.Object{{Key: "code", Value: res.Error.Code},
 				{Key: "will_retry", Value: willRetry}})
+		}
+		if j.Kind == KindPush {
+			if res.Push == nil || s.Push == nil {
+				return ErrBadInput
+			}
+			summary, err := s.Push.Done(c, now, a, j, res.Push)
+			if err != nil {
+				return err
+			}
+			raw, err := json.Marshal(summary)
+			if err != nil {
+				return err
+			}
+			if err := c.CompleteAgentJob(j.ID, p.AgentID, string(raw), now); err != nil {
+				return err
+			}
+			return s.auditJob(c, now, a, "agent.job_done", j, summary)
+		}
+		if res.Sync == nil {
+			return ErrBadInput
 		}
 		var spec SyncSpec
 		if err := json.Unmarshal([]byte(j.Payload), &spec); err != nil {
@@ -315,6 +378,10 @@ func (s *Service) Report(ctx context.Context, p *Principal, res PullResult) erro
 		}
 		return s.auditJob(c, now, a, "agent.job_done", j, summary)
 	})
+	var pae *PushApplyError
+	if errors.As(err, &pae) {
+		return s.failPush(ctx, p, res.JobID, pae.Error())
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		return ErrUnknownJob
 	}

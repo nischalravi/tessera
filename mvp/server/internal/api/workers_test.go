@@ -182,3 +182,125 @@ func TestExternalKindsAreLeftToWorkers(t *testing.T) {
 		t.Fatalf("the worker did not run it: %+v", *js[0])
 	}
 }
+
+// TestQueueWorkersShowBreakerState (issue #302): a worker's view of the
+// connections it called (breaker state, calls in flight, the last error) is
+// listed with the worker, under the connection's name, to the tenant that owns
+// the connection only.
+func TestQueueWorkersShowBreakerState(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	admin := signIn(t, f.DB, f.A.ID, testAdmin, authtest.Phr, storetest.Now)
+	if rec := corrDo(h, admin, "POST", "/api/connectors/sync?async=true", ""); rec.Code != http.StatusOK {
+		t.Fatalf("queue a sync: %d %s", rec.Code, rec.Body)
+	}
+	beatWorker(t, f, f.A.ID, "node-1-100-aaaa", storetest.Now)
+	beatWorker(t, f, f.B.ID, "node-1-100-aaaa", storetest.Now)
+	conn := f.A.Refs["connection:ad"]
+	until := storetest.Now.Add(time.Minute)
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		return c.ReplaceWorkerTargetStates("node-1-100-aaaa", []store.WorkerTargetState{{ConnectionID: conn, State: store.BreakerOpen,
+			ConsecutiveFailures: 5, OpenUntil: &until, LastError: "503 from the target", InFlight: 1, Calls: 9, Failures: 5, Rejected: 3}},
+			storetest.Now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := corrDo(h, admin, "GET", "/api/queue/workers", "")
+	var ws []queueWorkerView
+	if err := json.Unmarshal(rec.Body.Bytes(), &ws); err != nil || rec.Code != http.StatusOK || len(ws) != 1 || len(ws[0].Targets) != 1 {
+		t.Fatalf("workers: %d %s", rec.Code, rec.Body)
+	}
+	tg := ws[0].Targets[0]
+	if tg.ConnectionID != conn || tg.Connection == "" || tg.Breaker != "open" || tg.ConsecutiveFailures != 5 ||
+		tg.OpenUntil == nil || *tg.OpenUntil != until.UTC().Format(time.RFC3339) || tg.LastError != "503 from the target" ||
+		tg.InFlight != 1 || tg.Calls != 9 || tg.Failures != 5 || tg.Rejected != 3 {
+		t.Errorf("target = %+v", tg)
+	}
+	// a worker with no targets lists an empty array, and B (same worker id) sees none of A's
+	adminB := signIn(t, f.DB, f.B.ID, authtest.User{Email: "admin@b.example", Roles: []auth.Role{auth.RoleTenantAdmin, auth.RolePolicyAdmin}}, authtest.Phr, storetest.Now)
+	if rec := corrDo(h, adminB, "POST", "/api/connectors/sync?async=true", ""); rec.Code != http.StatusOK {
+		t.Fatalf("queue B's sync: %d %s", rec.Code, rec.Body)
+	}
+	rec = corrDo(h, adminB, "GET", "/api/queue/workers", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"targets":[]`) || strings.Contains(rec.Body.String(), conn) {
+		t.Errorf("B's workers: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectionLimitsAPI (issue #302): per-connection worker limits are read
+// with connections.read, set and cleared with connections.manage and step-up,
+// validated at the boundary, scoped to the tenant's live connections, and
+// audited.
+func TestConnectionLimitsAPI(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	admin := signIn(t, f.DB, f.A.ID, testAdmin, authtest.Phr, storetest.Now)
+	viewer := signIn(t, f.DB, f.A.ID, authtest.User{Email: "v@a.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, storetest.Now)
+	conn, bConn := f.A.Refs["connection:ad"], f.B.Refs["connection:ad"]
+	path := "/api/queue/limits?connection_id=" + conn
+
+	rec := corrDo(h, admin, "GET", path, "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"set":false`) {
+		t.Fatalf("defaults: %d %s", rec.Code, rec.Body)
+	}
+	body := `{"connection_id":"` + conn + `","max_concurrency":2,"rate_per_min":120,"burst":5,"breaker_threshold":3,"breaker_cooldown_seconds":45}`
+	rec = corrDo(h, admin, "PUT", "/api/queue/limits", body)
+	var v connectionLimitsView
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil || rec.Code != http.StatusOK || !v.Set || v.MaxConcurrency != 2 ||
+		v.RatePerMin != 120 || v.Burst != 5 || v.BreakerThreshold != 3 || v.BreakerCooldownSecs != 45 || v.UpdatedBy == nil {
+		t.Fatalf("put: %d %s", rec.Code, rec.Body)
+	}
+	if rec := corrDo(h, admin, "GET", path, ""); !strings.Contains(rec.Body.String(), `"rate_per_min":120`) {
+		t.Errorf("get after put: %s", rec.Body)
+	}
+	// validation at the boundary: nothing is written
+	for name, bad := range map[string]string{
+		"concurrency": `{"max_concurrency":65}`, "negative": `{"rate_per_min":-1}`, "rate": `{"rate_per_min":60001}`,
+		"burst": `{"burst":1001}`, "threshold": `{"breaker_threshold":101}`, "cooldown too short": `{"breaker_cooldown_seconds":1}`,
+		"cooldown too long": `{"breaker_cooldown_seconds":3601}`, "unknown field": `{"max_concurrency":1,"surprise":true}`, "empty": ``,
+	} {
+		if rec := corrDo(h, admin, "PUT", "/api/queue/limits", strings.Replace(bad, "{", `{"connection_id":"`+conn+`",`, 1)); rec.Code < 400 || rec.Code >= 500 {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	if rec := corrDo(h, admin, "GET", path, ""); !strings.Contains(rec.Body.String(), `"max_concurrency":2`) {
+		t.Errorf("a refused write changed the limits: %s", rec.Body)
+	}
+	// permissions and tenancy
+	if rec := corrDo(h, viewer, "PUT", "/api/queue/limits", body); rec.Code != http.StatusForbidden {
+		t.Errorf("viewer PUT: %d", rec.Code)
+	}
+	if rec := corrDo(h, viewer, "DELETE", path, ""); rec.Code != http.StatusForbidden {
+		t.Errorf("viewer DELETE: %d", rec.Code)
+	}
+	for _, method := range []string{"GET", "DELETE"} {
+		if rec := corrDo(h, admin, method, "/api/queue/limits?connection_id="+bConn, ""); rec.Code != http.StatusNotFound {
+			t.Errorf("%s another tenant's connection: %d", method, rec.Code)
+		}
+		if rec := corrDo(h, admin, method, "/api/queue/limits?connection_id=not-an-id", ""); method == "DELETE" && rec.Code != http.StatusNotFound {
+			t.Errorf("DELETE a malformed id: %d", rec.Code)
+		}
+	}
+	if rec := corrDo(h, admin, "PUT", "/api/queue/limits", strings.Replace(body, conn, bConn, 1)); rec.Code != http.StatusNotFound {
+		t.Errorf("PUT another tenant's connection: %d", rec.Code)
+	}
+	if rec := corrDo(h, admin, "PUT", "/api/queue/limits", `{"max_concurrency":1}`); rec.Code != http.StatusNotFound {
+		t.Errorf("PUT with no connection: %d", rec.Code)
+	}
+	// the list holds only this tenant's rows
+	if rec := corrDo(h, admin, "GET", "/api/queue/limits", ""); !strings.Contains(rec.Body.String(), conn) || strings.Contains(rec.Body.String(), bConn) {
+		t.Errorf("list: %s", rec.Body)
+	}
+	// clearing returns to the defaults, and clearing twice is harmless
+	for range 2 {
+		if rec := corrDo(h, admin, "DELETE", path, ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"set":false`) {
+			t.Errorf("delete: %d %s", rec.Code, rec.Body)
+		}
+	}
+	if got := auditActions(t, f, f.A.ID); got["connection.limits_set"] != 1 || got["connection.limits_cleared"] != 1 {
+		t.Errorf("audit = %v", got)
+	}
+	if got := auditActions(t, f, f.B.ID); got["connection.limits_set"] != 0 {
+		t.Errorf("B's audit = %v", got)
+	}
+}

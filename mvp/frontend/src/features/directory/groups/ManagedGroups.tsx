@@ -77,7 +77,8 @@ export function ManagedGroups() {
       toast(`Nothing to delete here: ${plan.skipped.join(", ")} ${plan.skipped.length === 1 ? "is" : "are"} already deleted or managed elsewhere. Use Delete permanently to remove a deleted group.`, { kind: "error" });
       return;
     }
-    const ok = await confirm({ title: deleteTitle(plan), body: deleteBody(plan), confirmLabel: "Delete", danger: true });
+    const ok = await confirm({ title: deleteTitle(plan), body: deleteBody(plan), confirmLabel: "Delete", danger: true,
+      reason: plan.groups.length ? { label: "Reason (optional)", placeholder: "Why are the groups being deleted?" } : undefined });
     if (ok === null) return;
     const failed: { name: string; message: string }[] = [];
     const stuck: GrpFolder[] = [];
@@ -85,7 +86,7 @@ export function ManagedGroups() {
     const batch = newBatch(); // what the deletion guard holds from these calls is one held deletion
     let done = 0;
     for (const g of plan.groups) {
-      try { answers.push(await groups.deleteGroup(g.id, batch)); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
+      try { answers.push(await groups.deleteGroup(g.id, ok || undefined, batch)); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
     }
     for (const f of plan.folders) {
       try { answers.push(await groups.deleteFolder(f.id, batch)); done++; } catch (e) {
@@ -165,6 +166,12 @@ export function ManagedGroups() {
     },
     { id: "kind", header: "Type", sort: (r) => (r.kind === "folder" ? "0" : r.g.definition), cell: (r) => r.kind === "folder" ? <Badge tone="outline">Folder</Badge> : <span className="row tight"><GroupBadges g={r.g} /></span> },
     { id: "members", header: "Members", num: true, sort: (r) => (r.kind === "group" ? r.g.effective_count : -1), csv: (r) => (r.kind === "group" ? r.g.effective_count : ""), cell: (r) => r.kind === "group" ? r.g.effective_count.toLocaleString("en-US") : <span className="faint">{r.items} {r.items === 1 ? "folder" : "folders"}</span> },
+    ...(showDeleted ? [
+      { id: "delby", header: "Deleted by", sort: (r: Row) => (r.kind === "group" ? r.g.deleted_by ?? "" : ""), csv: (r: Row) => (r.kind === "group" ? r.g.deleted_by ?? "" : ""),
+        cell: (r: Row) => (r.kind === "group" && r.g.status === "deleted" ? <span title={r.g.deleted_reason ? `Reason: ${r.g.deleted_reason}` : undefined}>{r.g.deleted_by ?? <span className="faint">Unknown</span>}</span> : null), hideNarrow: true },
+      { id: "delat", header: "Deleted at", sort: (r: Row) => (r.kind === "group" ? r.g.deleted_at ?? "" : ""), csv: (r: Row) => (r.kind === "group" ? r.g.deleted_at ?? "" : ""),
+        cell: (r: Row) => (r.kind === "group" && r.g.deleted_at ? fmtWhen(r.g.deleted_at) : null), hideNarrow: true },
+    ] satisfies Column<Row>[] : []),
     { id: "path", header: "Full name", sort: (r) => nameOf(r), cell: (r) => <span className="sys xs truncate" style={{ maxWidth: 360 }}>{nameOf(r)}</span>, hideNarrow: true },
   ];
 
@@ -314,6 +321,10 @@ function GroupPanel({ g, onClose, ...act }: { g: GrpGroup; onClose: () => void }
             <dt>Owner</dt><dd>{g.data_owner ?? "None"}</dd>
             <dt>Requestable</dt><dd>{g.requestable ? "Yes" : "No"}</dd>
             <dt>Created</dt><dd>{fmtWhen(g.created_at)}</dd>
+            {g.status === "deleted" && <><dt>Deleted by</dt><dd>{g.deleted_by ?? "Unknown"}</dd>
+              <dt>Deleted at</dt><dd>{g.deleted_at ? fmtWhen(g.deleted_at) : "Unknown"}</dd>
+              {g.deleted_reason && <><dt>Reason</dt><dd>{g.deleted_reason}</dd></>}
+              {g.deleted_with_folder && <><dt>Deleted with</dt><dd className="sys">{g.deleted_with_folder}</dd></>}</>}
           </dl>
           <PanelActions {...act} managedBy={g.managed_by} />
         </div>

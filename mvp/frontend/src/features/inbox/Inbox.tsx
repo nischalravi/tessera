@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowRightLeft, Check, ClipboardCheck, GitMerge, Keyboard, KeyRound, ListChecks, Plug, Search, ShoppingCart, Trash2, UserCheck, UserPlus, X } from "lucide-react";
+import { ArrowRightLeft, Check, ClipboardCheck, Database, GitMerge, Keyboard, KeyRound, ListChecks, Plug, Search, ShoppingCart, Trash2, UserCheck, UserPlus, X } from "lucide-react";
 import { GuestLifecycleOverview, HrisEvent, JitRequest, SimResult, ago, approveRequest, denyRequest, fmtDate, fmtDay, guestLifecycle, guests, hrisExecute, jitDecide, registrationRequests, relTime, removals, reviewDecide, simulate, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
@@ -14,7 +14,7 @@ import { TASK_KIND_LABEL, TRIGGER_LABEL, taskActions } from "../governance/guest
 import { GuestInboxItem, guestRowActions } from "./guestItems";
 import { InboxItem, InboxKind, useInbox } from "./model";
 
-const KIND_LABEL: Record<InboxKind, string> = { approval: "Approval", review: "Review", task: "Task", connection: "Connection", guest: "Guest" };
+const KIND_LABEL: Record<InboxKind, string> = { approval: "Approval", review: "Review", task: "Task", connection: "Connection", guest: "Guest", loader: "Group loader" };
 
 /** The row for a piece of guest work: a sponsorship approval, a registration, an identity match or a lifecycle task. */
 function guestTitle(g: GuestInboxItem): ReturnType<typeof itemTitle> {
@@ -65,6 +65,11 @@ export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta
     }
     case "guest":
       return guestTitle(it.guest);
+    case "loader": {
+      const t = it.task;
+      return { icon: <Database size={15} />, title: `Group loader ${t.loader_name} is held`, tone: "warning", kindLabel: KIND_LABEL.loader,
+        meta: <>{t.adds ?? 0} to add, {t.removes ?? 0} to remove{!!t.unresolved && <>, {t.unresolved} unresolved</>} · a failsafe tripped {relTime(t.held_at)}</> };
+    }
     case "connection":
       return { icon: <Plug size={15} />, title: `${it.conn.name} is degraded`, meta: <>Readiness {it.conn.score} · {it.task?.reason ?? "write-back stopped, reads continue"}</>, tone: "warning", kindLabel: KIND_LABEL.connection };
   }
@@ -287,6 +292,14 @@ function Detail({ it }: { it: InboxItem }) {
         {it.kind === "review" && <ReviewDetail it={it} />}
         {it.kind === "task" && <TaskDetail e={it.event} />}
         {it.kind === "guest" && <GuestDetail g={it.guest} />}
+        {it.kind === "loader" && (
+          <div className="stack-sm">
+            <p className="small muted">The source returned a change that breaks a failsafe, so nothing was applied. Read the plan and the impact, then approve or reject it.</p>
+            {it.task.failsafe_tripped?.map((t, i) => <p key={i} className="small"><b>Tripped:</b> {t.detail}</p>)}
+            {it.task.impact && <p className="small">{it.task.impact.removed_identities} people would lose access and {it.task.impact.added_identities} would gain it{it.task.impact.removed_used_last_30_days > 0 && `; ${it.task.impact.removed_used_last_30_days} of those used access in the last 30 days`}.</p>}
+            <Link className="btn" to={`/directory/groups/loaders?selected=${it.task.loader_id}`}>Review the held run</Link>
+          </div>
+        )}
         {it.kind === "connection" && (
           <div className="stack-sm">
             <p className="small muted">A scheduled check failed twice, a credential is close to expiry or sync has failed. Reads continue and data is labelled as coming from a degraded connection; write-back has stopped.</p>
@@ -307,6 +320,7 @@ const VERBS: Record<InboxKind, { primary: Verb; secondary: Verb }> = {
   task: { primary: "run", secondary: "run" },
   connection: { primary: "run", secondary: "run" },
   guest: { primary: "approve", secondary: "deny" },
+  loader: { primary: "open", secondary: "open" },
 };
 const VERB_LABEL: Record<Verb, string> = { approve: "Approve", deny: "Deny", keep: "Keep", revoke: "Revoke", run: "Run plan", open: "Open" };
 
@@ -397,7 +411,7 @@ function useInboxActions() {
         toast(`Plan executed: ${itemTitle(it).title}`);
       } else if (it.kind === "guest") {
         return await actGuest(it.guest, verb, opts);
-      } else if (it.kind === "connection") {
+      } else if (it.kind === "connection" || it.kind === "loader") {
         return false; // opened from its row
       }
       return true;
@@ -422,7 +436,7 @@ function GuestRowButtons({ g, departure, busy, current, run }: { g: GuestInboxIt
 
 // ----------------------------------------------------------------- page
 const FILTERS: { id: "all" | InboxKind; label: string }[] = [
-  { id: "all", label: "All" }, { id: "approval", label: "Approvals" }, { id: "review", label: "Reviews" }, { id: "task", label: "Tasks" }, { id: "guest", label: "Guests" }, { id: "connection", label: "Connections" },
+  { id: "all", label: "All" }, { id: "approval", label: "Approvals" }, { id: "review", label: "Reviews" }, { id: "task", label: "Tasks" }, { id: "guest", label: "Guests" }, { id: "loader", label: "Loaders" }, { id: "connection", label: "Connections" },
 ];
 
 export function Inbox() {
@@ -473,7 +487,7 @@ export function Inbox() {
   };
 
   const bulk = async (primary: boolean) => {
-    const chosen = visible.filter((i) => checked.has(i.key) && i.kind !== "task" && i.kind !== "connection" && i.kind !== "guest" && !selfRequest(i));
+    const chosen = visible.filter((i) => checked.has(i.key) && i.kind !== "task" && i.kind !== "connection" && i.kind !== "loader" && i.kind !== "guest" && !selfRequest(i));
     if (!chosen.length) return;
     const destructive = !primary && chosen.some((i) => i.kind === "review");
     const ok = await confirm({
@@ -581,6 +595,8 @@ export function Inbox() {
                     <span className="q-actions" onClick={(e) => e.stopPropagation()}>
                       {it.kind === "connection" ? (
                         <Link className="btn sm" to={`/admin/connections/${it.conn.id}`}>Open</Link>
+                      ) : it.kind === "loader" ? (
+                        <Link className="btn sm" to={`/directory/groups/loaders?selected=${it.task.loader_id}`}>Review</Link>
                       ) : it.kind === "guest" ? (
                         <GuestRowButtons g={it.guest} departure={departure} busy={busy} current={it.key === current?.key} run={(v) => run(it, v)} />
                       ) : it.kind === "task" ? (

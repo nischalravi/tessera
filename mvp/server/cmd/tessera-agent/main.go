@@ -32,6 +32,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -169,8 +170,27 @@ func runAgent(cfg *agent.Config, stderr io.Writer) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	r := &agent.Runner{Client: c, Telemetry: telemetry(cfg), Log: log,
-		Exec: &agent.Executor{Allow: cfg.Allow(), Creds: creds, New: ldapProber, NewSyncer: ldapSync}}
+	// the key a server-held credential is sealed to (pushes to private HTTPS targets); it stays here
+	sealKey, err := agent.LoadOrCreateSealKey(filepath.Join(cfg.StateDir, "identity"))
+	if err != nil {
+		return err
+	}
+	var pushRoots *x509.CertPool
+	if cfg.PushCAFile != "" {
+		pem, err := os.ReadFile(cfg.PushCAFile) // #nosec G304 G703 -- the operator names their own CA file
+		if err != nil {
+			return err
+		}
+		if pushRoots, err = agent.LoadPushRoots(pem); err != nil {
+			return err
+		}
+	}
+	if len(cfg.AllowPush()) == 0 {
+		log.Info("allowed_push_targets is empty: provisioning pushes will be refused")
+	}
+	r := &agent.Runner{Client: c, Telemetry: telemetry(cfg), Log: log, SealKey: sealKey,
+		Exec: &agent.Executor{Allow: cfg.Allow(), Creds: creds, New: ldapProber, NewSyncer: ldapSync,
+			AllowPush: cfg.AllowPush(), PushRoots: pushRoots, SealKey: sealKey}}
 	log.Info("tessera-agent started", "version", agent.Version, "server", cfg.ServerURL, "allowlist_hash", cfg.AllowlistHash())
 	return r.Run(ctx)
 }

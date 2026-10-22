@@ -70,7 +70,10 @@ func referenced(g *store.NativeGroup, refs []string) *Error {
 // stay. It is refused unless the group is deleted, while another group uses it
 // as a member or composite factor (409 group_in_use, naming them) and under
 // the checks DeleteGroup makes.
-func (e Env) PurgeGroup(id store.GroupID) error {
+func (e Env) PurgeGroup(id store.GroupID) error { return e.purgeOne(id) }
+
+// purgeOne is the one purge of a group by id (the recursive delete uses purgeGroup, under the same checks).
+func (e Env) purgeOne(id store.GroupID) error {
 	g, err := e.Group(id)
 	if err != nil {
 		return err
@@ -158,8 +161,19 @@ func (e Env) purgeGroup(g *store.NativeGroup, inTree map[store.GroupID]bool) err
 	if err := e.Tx.DeleteGrpGroup(g.ID); err != nil {
 		return wrap(err)
 	}
-	return e.audit("groups.group.purged", "group", string(g.ID), ojson.Object{{Key: "group_id", Value: string(g.ID)},
-		{Key: "name", Value: g.Name}, {Key: "memberships", Value: members}, {Key: "factors", Value: factors}})
+	detail := ojson.Object{{Key: "group_id", Value: string(g.ID)}, {Key: "name", Value: g.Name},
+		{Key: "memberships", Value: members}, {Key: "factors", Value: factors}}
+	if e.Reason != "" {
+		detail = append(detail, ojson.KV{Key: "reason", Value: e.Reason})
+	}
+	if g.DeletedAt != nil { // who deleted it first, so the trail still says after the row is gone
+		detail = append(detail, ojson.KV{Key: "deleted_by", Value: g.DeletedBy}, ojson.KV{Key: "deleted_at", Value: store.RT(*g.DeletedAt)},
+			ojson.KV{Key: "deleted_reason", Value: g.DeletedReason})
+	}
+	if g.DeletedWithFolder != "" {
+		detail = append(detail, ojson.KV{Key: "with_folder", Value: g.DeletedWithFolder})
+	}
+	return e.audit("groups.group.purged", "group", string(g.ID), detail)
 }
 
 // ---------------------------------------------------------------- recursive folder delete
@@ -440,7 +454,7 @@ func (e Env) DeleteFolderRecursive(id store.FolderID) (*DeletePlan, *DeleteResul
 			continue
 		}
 		if g.Status != store.GroupDeleted {
-			if err := e.softDelete(g); err != nil {
+			if err := e.softDelete(g, p.Folder.Name); err != nil {
 				return p, nil, err
 			}
 			res.SoftDeleted++
@@ -490,6 +504,6 @@ func (e Env) DeleteFolderRecursive(id store.FolderID) (*DeletePlan, *DeleteResul
 	err = e.audit("groups.folder.deleted_recursive", "folder", string(p.Folder.ID), ojson.Object{
 		{Key: "folder_id", Value: string(p.Folder.ID)}, {Key: "name", Value: p.Folder.Name}, {Key: "folders", Value: res.Folders},
 		{Key: "groups", Value: res.Groups}, {Key: "groups_active", Value: p.ActiveGroups}, {Key: "groups_deleted", Value: p.DeletedGroups},
-		{Key: "attr_defs", Value: res.AttrDefs}, {Key: "memberships", Value: res.Memberships}})
+		{Key: "attr_defs", Value: res.AttrDefs}, {Key: "memberships", Value: res.Memberships}, {Key: "reason", Value: e.Reason}})
 	return p, res, err
 }

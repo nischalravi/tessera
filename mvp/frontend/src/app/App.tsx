@@ -49,6 +49,7 @@ const Apps = named(directory, "Apps");
 const Orgs = named(directory, "Orgs");
 const Groups = named(() => import("../features/directory/groups/GroupsRoute"), "GroupsRoute");
 const GroupPage = named(() => import("../features/directory/groups/GroupPage"), "GroupPage");
+const Loaders = named(() => import("../features/directory/groups/LoadersPage"), "LoadersPage");
 const FolderPage = named(() => import("../features/directory/groups/FolderPage"), "FolderPage");
 const Ownership = named(() => import("../features/directory/Ownership"), "Ownership");
 const IdentityPage = named(() => import("../features/directory/IdentityPage"), "IdentityPage");
@@ -221,6 +222,7 @@ export default function App() {
                     <Route path="/rotation/jobs" element={<RotationJobs />} />
                     <Route path="/rotation/policies" element={<RotationPolicies />} />
                     <Route path="/rotation/vendor" element={<VendorCompromised />} />
+                    <Route path="/directory/groups/loaders" element={<Loaders />} />
                     <Route path="/directory/groups/folders/:id" element={<FolderPage />} />
                     <Route path="/directory/groups/:id" element={<GroupPage />} />
                     <Route path="/directory/identities/:id" element={<IdentityPage />} />

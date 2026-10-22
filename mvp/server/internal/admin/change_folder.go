@@ -22,6 +22,9 @@ type folderDeletePayload struct {
 	Folders  int    `json:"folders"`
 	Groups   int    `json:"groups"`
 	Members  int    `json:"memberships"`
+	// Reason and ByDisplay are what the requester gave and who they are: the groups it deletes record them.
+	Reason    string `json:"reason"`
+	ByDisplay string `json:"by_display"`
 }
 
 func init() {
@@ -32,16 +35,19 @@ func init() {
 		})
 }
 
-func (e *env) groupsModel() model.Env {
+func (e *env) groupsModel(v *folderDeletePayload) model.Env {
 	by := e.by.String()
-	return model.Env{Tx: e.tx, Now: e.now, By: &by}
+	return model.Env{Tx: e.tx, Now: e.now, By: &by, ByDisplay: v.ByDisplay, Reason: v.Reason}
 }
 
 func planFolderDelete(e *env, v *folderDeletePayload) (plan, error) {
 	if err := grpID(v.FolderID); err != nil {
 		return plan{}, err
 	}
-	p, err := e.groupsModel().PlanFolderDelete(store.FolderID(v.FolderID))
+	if len(v.Reason) == 0 || len(v.Reason) > 500 {
+		return plan{}, invalid("reason is required (at most 500 characters)")
+	}
+	p, err := e.groupsModel(v).PlanFolderDelete(store.FolderID(v.FolderID))
 	if err != nil {
 		return plan{}, loaderErr(err)
 	}
@@ -59,7 +65,7 @@ func applyFolderDelete(e *env, _ *store.AdminChange, v *folderDeletePayload) err
 	if _, err := planFolderDelete(e, v); err != nil {
 		return err
 	}
-	_, _, err := e.groupsModel().DeleteFolderRecursive(store.FolderID(v.FolderID))
+	_, _, err := e.groupsModel(v).DeleteFolderRecursive(store.FolderID(v.FolderID))
 	return loaderErr(err)
 }
 
