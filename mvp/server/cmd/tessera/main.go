@@ -610,6 +610,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
+		RateLimits:  rateLimits(cfg),
 		Containment: containmentSvc,
 		SSF: &ssf.Service{HTTP: outbound, Sealer: sealer, Clock: clock, Containment: containmentSvc,
 			Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback},
@@ -680,7 +681,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(sweepDone)
 		// the queue and its health beat: Admin -> Jobs shows this process as a worker
 		worker.Serve(ctx, srv.Queue(), &worker.Beater{DB: st, Queue: srv.Queue(), Mode: store.WorkerModeAPI,
-			Version: agent.Version, Clock: clock, Log: logger})
+			Version: agent.Version, Clock: clock, Log: logger, Guard: srv.Guard()})
 	}()
 	reviewsDone := make(chan struct{})
 	go func() {
@@ -938,4 +939,11 @@ func newAlertService(cfg *config.Config, st *store.DB, sealer *seal.Sealer, clie
 	}
 	return &alerts.Service{DB: st, Sealer: sealer, HTTP: client, Mail: mailer, Clock: clock, Log: logger,
 		PublicURL: cfg.PublicURL}, nil
+}
+
+// rateLimits applies the per-IP burst sizes of the configuration (TESSERA_AUTH_RATE_BURST and
+// TESSERA_ANON_RATE_BURST), which were read but never reached the limiter: a sign-in-heavy run
+// (the e2e suite) ran into the default burst of 30 and was answered 429.
+func rateLimits(cfg *config.Config) api.RateLimits {
+	return api.RateLimits{Auth: api.RateLimit{Burst: cfg.AuthRateBurst}, Anonymous: api.RateLimit{Burst: cfg.AnonRateBurst}}
 }
