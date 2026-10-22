@@ -355,6 +355,15 @@ func (s *Service) record(tx *store.TenantTx, plan *Plan, rep *RevokeReport, by, 
 			}
 		}
 	}
+	closed := map[string]bool{}
+	for _, id := range order { // a permission that was flagged as added is contained once it is revoked
+		if p := touched[id].Provider; !closed[p] {
+			closed[p] = true
+			if err := resolveChanges(tx, p, now); err != nil {
+				return err
+			}
+		}
+	}
 	items := rep.Items
 	if len(items) > maxAuditedItems {
 		items = items[:maxAuditedItems]

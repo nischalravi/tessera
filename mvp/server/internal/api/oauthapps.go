@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,7 +30,18 @@ import (
 //	POST /api/oauth-apps/{app_id}/revoke            {reason}: every live grant of the app
 //	POST /api/oauth-apps/{app_id}/grants/{grant_id}/revoke   {reason}
 //	POST /api/oauth-apps/revoke-vendor              {vendor, reason, dry_run?}: every app of a breached vendor
+//	POST /api/oauth-apps/{app_id}/credentials/{credential_id}/remove   {reason}: remove a secret an attacker may have added (#474)
+//	POST /api/oauth-apps/{app_id}/changes/{change_id}/resolve          {note}: acknowledge a detected change (#474)
 //
+// A sync also detects what an app gained since the last one: a new secret or
+// certificate, a new application permission or tenant-wide consent, and an
+// owner change (#474). They are listed as "changes" (open ones in the list, all
+// of an app with its credentials in the app view), audited as
+// oauthapps.change_detected, and raised by the oauth_app_change alert rule.
+// Containment is the credential remove above or the grant revoke. A credential
+// no API can remove (an Entra certificate) answers 502 oauth_credential_manual.
+//
+
 // Revoking needs oauthapps.revoke and a fresh phishing-resistant sign-in. A
 // revoke that covers more than one grant of an app holding a high or critical
 // scope, and every vendor revoke of such apps, needs two admins: the first
@@ -59,6 +71,8 @@ func (s *Server) registerOAuthAppsRoutes() {
 	s.handle(P, "/api/oauth-apps/revoke-vendor", phased, needStepUp(auth.PermOAuthAppsRevoke, auth.StepUpPolicy), s.revokeOAuthVendor)
 	s.handle(P, "/api/oauth-apps/{app_id}/revoke", phased, needStepUp(auth.PermOAuthAppsRevoke, auth.StepUpPolicy), s.revokeOAuthApp)
 	s.handle(P, "/api/oauth-apps/{app_id}/grants/{grant_id}/revoke", phased, needStepUp(auth.PermOAuthAppsRevoke, auth.StepUpPolicy), s.revokeOAuthGrant)
+	s.handle(P, "/api/oauth-apps/{app_id}/credentials/{credential_id}/remove", phased, needStepUp(auth.PermOAuthAppsRevoke, auth.StepUpPolicy), s.removeOAuthCredential)
+	s.handle(P, "/api/oauth-apps/{app_id}/changes/{change_id}/resolve", write, need(auth.PermOAuthAppsManage), s.resolveOAuthChange)
 }
 
 // queueOAuthSync is the queue handler of the inventory refresh. A tenant with
@@ -126,6 +140,42 @@ type oauthGrantView struct {
 	RevokedAt   *string               `json:"revoked_at"`
 	RevokedBy   *string               `json:"revoked_by"`
 	RevokeError string                `json:"revoke_error,omitempty"`
+}
+
+type oauthChangeView struct {
+	ID         string  `json:"id"`
+	AppID      string  `json:"app_id"`
+	App        string  `json:"app"`
+	Kind       string  `json:"kind"`
+	Summary    string  `json:"summary"`
+	DetectedAt string  `json:"detected_at"`
+	Status     string  `json:"status"`
+	ResolvedAt *string `json:"resolved_at"`
+	Resolution string  `json:"resolution,omitempty"`
+	// CredentialID names the credential (remove it with .../credentials/{id}/remove); GrantID the permission (revoke it).
+	CredentialID string `json:"credential_id,omitempty"`
+	GrantID      string `json:"grant_id,omitempty"`
+}
+
+type oauthCredentialView struct {
+	ID      string  `json:"id"`
+	Kind    string  `json:"kind"`
+	Label   string  `json:"label"`
+	AddedAt *string `json:"added_at"`
+	Status  string  `json:"status"`
+}
+
+func viewOAuthChange(c *store.OAuthChange, appName string) oauthChangeView {
+	v := oauthChangeView{ID: c.ID, AppID: c.AppID, App: appName, Kind: c.Kind, Summary: c.Summary,
+		DetectedAt: c.DetectedAt.UTC().Format(time.RFC3339), Status: c.Status, ResolvedAt: isoPtr(c.ResolvedAt), Resolution: c.Resolution}
+	var d struct {
+		FactID  string `json:"fact_id"`
+		GrantID string `json:"grant_id"`
+	}
+	if json.Unmarshal(c.Detail, &d) == nil {
+		v.CredentialID, v.GrantID = d.FactID, d.GrantID
+	}
+	return v
 }
 
 func viewOAuthApp(tx *store.TenantTx, a *store.OAuthApp, grants []*store.OAuthGrant, now time.Time, unusedDays int, names map[int64]string) (oauthAppView, error) {
@@ -299,7 +349,20 @@ func (s *Server) listOAuthApps(_ http.ResponseWriter, r *http.Request, p *params
 	for _, x := range pending {
 		pv = append(pv, pendingView{x.ID, x.Scope, x.Target, x.Apps, x.Grants, x.Reason, x.RequestedBy, x.ExpiresAt.UTC().Format(time.RFC3339)})
 	}
-	return map[string]any{"apps": out, "summary": sum, "sync": sync, "pending_requests": pv, "unused_days": unused,
+	open, err := c.OpenOAuthChanges()
+	if err != nil {
+		return nil, err
+	}
+	appName := map[string]string{}
+	for _, a := range apps {
+		appName[a.ID] = a.Name
+	}
+	changes := make([]oauthChangeView, 0, len(open))
+	for _, ch := range open {
+		changes = append(changes, viewOAuthChange(ch, appName[ch.AppID]))
+	}
+	sum["open_changes"] = len(changes)
+	return map[string]any{"apps": out, "summary": sum, "sync": sync, "pending_requests": pv, "changes": changes, "unused_days": unused,
 		"catalog_version": oauthapps.CatalogVersion}, nil
 }
 
@@ -340,7 +403,25 @@ func (s *Server) getOAuthApp(_ http.ResponseWriter, r *http.Request, p *params) 
 		}
 		gv = append(gv, x)
 	}
-	return map[string]any{"app": v, "grants": gv}, nil
+	facts, err := c.OAuthFactsOf(id)
+	if err != nil {
+		return nil, err
+	}
+	creds := []oauthCredentialView{}
+	for _, f := range facts {
+		if f.Kind == store.OAuthFactSecret || f.Kind == store.OAuthFactCertificate {
+			creds = append(creds, oauthCredentialView{ID: f.ID, Kind: f.Kind, Label: f.Label, AddedAt: isoPtr(f.AddedAt), Status: f.Status})
+		}
+	}
+	chs, err := c.OAuthChangesOf(id)
+	if err != nil {
+		return nil, err
+	}
+	cv := make([]oauthChangeView, 0, len(chs))
+	for _, ch := range chs {
+		cv = append(cv, viewOAuthChange(ch, a.Name))
+	}
+	return map[string]any{"app": v, "grants": gv, "credentials": creds, "changes": cv}, nil
 }
 
 // ---------------------------------------------------------------- writes
@@ -396,6 +477,81 @@ func (s *Server) setOAuthAppOwner(_ http.ResponseWriter, r *http.Request, p *par
 		return nil, err
 	}
 	return map[string]any{"app_id": echoSafe(id), "identity_id": b.IdentityID}, nil
+}
+
+func (s *Server) removeOAuthCredential(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id, err := oauthAppID(p, "app_id")
+	if err != nil {
+		return nil, err
+	}
+	cid, err := oauthAppID(p, "credential_id")
+	if err != nil {
+		return nil, err
+	}
+	var b oauthRevokeBody
+	if err := decodeBody(r, &b, false); err != nil {
+		return nil, err
+	}
+	if err := checkReason(b.Reason); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), containTimeout)
+	defer cancel()
+	rep, err := s.oauthapps.RemoveCredential(ctx, s.store, principal(r).TenantID, id, cid, actor(r), strings.TrimSpace(b.Reason))
+	switch {
+	case errors.Is(err, oauthapps.ErrNotFound), errors.Is(err, oauthapps.ErrNoCredential):
+		return nil, errStatus(http.StatusNotFound, "no such app or credential")
+	case err != nil:
+		return nil, err
+	}
+	if !rep.OK {
+		code := "oauth_credential_failed"
+		if rep.Outcome == oauthapps.OutcomeManual {
+			code = "oauth_credential_manual"
+		}
+		return nil, &readiness.Error{Status: http.StatusBadGateway, Code: code, Msg: "the credential was not removed: " + rep.Detail,
+			Extra: map[string]any{"report": rep}}
+	}
+	return rep, nil
+}
+
+func (s *Server) resolveOAuthChange(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id, err := oauthAppID(p, "app_id")
+	if err != nil {
+		return nil, err
+	}
+	cid, err := oauthAppID(p, "change_id")
+	if err != nil {
+		return nil, err
+	}
+	var b struct {
+		Note string `json:"note"`
+	}
+	if err := decodeBody(r, &b, true); err != nil {
+		return nil, err
+	}
+	note := strings.TrimSpace(b.Note)
+	if len(note) > 500 {
+		return nil, badRequest("invalid_note", "note is at most 500 characters")
+	}
+	c := store.TxFrom(r.Context())
+	ch, err := c.OAuthChange(cid)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && ch.AppID != id) {
+		return nil, errStatus(http.StatusNotFound, "no such change")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := c.ResolveOAuthChangeID(cid, "acknowledged by "+actor(r)+": "+note, s.clock()); errors.Is(err, store.ErrNotFound) {
+		return nil, errStatus(http.StatusConflict, "the change is already closed")
+	} else if err != nil {
+		return nil, err
+	}
+	if err := c.Audit(s.clock(), actor(r), "oauthapps.change_resolved", ojson.Object{{Key: "change_id", Value: cid},
+		{Key: "app_id", Value: id}, {Key: "kind", Value: ch.Kind}, {Key: "note", Value: note}}); err != nil {
+		return nil, err
+	}
+	return map[string]any{"change_id": echoSafe(cid), "status": store.OAuthChangeResolved}, nil
 }
 
 type oauthRevokeBody struct {

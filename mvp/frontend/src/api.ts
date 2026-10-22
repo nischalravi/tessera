@@ -4776,10 +4776,24 @@ export interface OAuthSyncState { provider: string; status: "ok" | "failed"; att
 
 export interface OAuthPendingRevoke { id: string; scope: "app" | "vendor"; target: string; apps: number; grants: number; reason: string; requested_by: string; expires_at: string }
 
-export interface OAuthAppList {
-  apps: OAuthApp[]; summary: { apps: number; grants: number; high_risk: number; high_risk_non_admin: number; unused: number };
-  sync: OAuthSyncState[]; pending_requests: OAuthPendingRevoke[]; unused_days: number; catalog_version: string;
+/** A change a sync detected on an app (issue #474): a credential or permission added, or an owner change. */
+export interface OAuthChange {
+  id: string; app_id: string; app: string; kind: "credential_added" | "permission_granted" | "owner_changed"; summary: string;
+  detected_at: string; status: "open" | "resolved"; resolved_at: string | null; resolution?: string;
+  /** Set for a credential change: remove it with oauthApps.removeCredential. */
+  credential_id?: string;
+  /** Set for a permission change: revoke it with oauthApps.revokeGrant. */
+  grant_id?: string;
 }
+
+export interface OAuthCredential { id: string; kind: "secret" | "certificate"; label: string; added_at: string | null; status: "active" | "removed" }
+
+export interface OAuthAppList {
+  apps: OAuthApp[]; summary: { apps: number; grants: number; high_risk: number; high_risk_non_admin: number; unused: number; open_changes: number };
+  sync: OAuthSyncState[]; pending_requests: OAuthPendingRevoke[]; changes: OAuthChange[]; unused_days: number; catalog_version: string;
+}
+
+export interface OAuthCredentialReport { app_id: string; app: string; credential_id: string; label: string; kind: string; outcome: "removed" | "failed" | "manual"; detail?: string; ok: boolean }
 
 export interface OAuthScope { scope: string; severity: Exclude<OAuthSeverity, "none">; reason: string }
 
@@ -4810,6 +4824,15 @@ export const oauthApps = {
   revokeGrant: (id: string, grantId: string, reason: string) =>
     api<OAuthRevokeResult>(`/oauth-apps/${encodeURIComponent(id)}/grants/${encodeURIComponent(grantId)}/revoke`, { reason }),
   revokeVendor: (vendor: string, reason: string) => api<OAuthRevokeResult>("/oauth-apps/revoke-vendor", { vendor, reason }),
+  /** Removes a secret an attacker may have added, then re-reads the provider (issue #474). Rejects with the reason when it is not removed. */
+  removeCredential: async (id: string, credentialId: string, reason: string): Promise<OAuthRevokeReport> => {
+    const r = await api<OAuthCredentialReport>(`/oauth-apps/${encodeURIComponent(id)}/credentials/${encodeURIComponent(credentialId)}/remove`, { reason });
+    return { scope: "credential", target: r.credential_id, total: 1, revoked: 1, failed: 0, manual: 0, skipped: 0, ok: true,
+      items: [{ app_id: r.app_id, app: r.app, grant_id: r.credential_id, user: r.label, outcome: "revoked" }] };
+  },
+  /** Acknowledges a detected change (an owner change stays open until a person does). */
+  resolveChange: (id: string, changeId: string, note: string) =>
+    api(`/oauth-apps/${encodeURIComponent(id)}/changes/${encodeURIComponent(changeId)}/resolve`, { note }),
 };
 
 // ------------------------------------------------------------ deletion threshold guard (internal/deleteguard)

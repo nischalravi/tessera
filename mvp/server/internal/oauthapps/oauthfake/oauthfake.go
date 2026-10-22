@@ -209,6 +209,21 @@ type EntraSP struct {
 	ID, AppID, Name, Publisher string
 	VerifiedPublisher          string
 	Roles                      map[string]string // app role id -> value (a resource's roles)
+	Secrets, Certs             []EntraKey        // credentials of the service principal
+	Owners                     []EntraOwner
+}
+
+// EntraKey is a client secret (passwordCredential) or a certificate (keyCredential).
+type EntraKey struct{ ID, Name, Start string }
+
+// EntraOwner is an owner of an application or service principal.
+type EntraOwner struct{ ID, UPN string }
+
+// EntraApplication is an app registration.
+type EntraApplication struct {
+	ID, AppID      string
+	Secrets, Certs []EntraKey
+	Owners         []EntraOwner
 }
 
 // EntraDelegated is an oauth2PermissionGrant.
@@ -226,6 +241,7 @@ type Entra struct {
 	Fake
 	BaseURL   string // the server's URL, for @odata.nextLink
 	SPs       []*EntraSP
+	Apps      []*EntraApplication
 	Delegated []*EntraDelegated
 	Roles     []*EntraRole
 	UserNames map[string]string // user id -> user principal name
@@ -247,9 +263,52 @@ func (e *Entra) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if sp.VerifiedPublisher != "" {
 				v["verifiedPublisher"] = map[string]any{"verifiedPublisherId": sp.VerifiedPublisher}
 			}
+			secretsOf(v, sp.Secrets, sp.Certs, sp.Owners)
 			vals = append(vals, v)
 		}
 		e.page(w, "servicePrincipals", vals, next)
+	case path == "applications" && r.Method == http.MethodGet:
+		from, to, next := window(r.URL.Query().Get("skip"), len(e.Apps), e.size())
+		vals := []map[string]any{}
+		for _, a := range e.Apps[from:to] {
+			v := map[string]any{"id": a.ID, "appId": a.AppID}
+			secretsOf(v, a.Secrets, a.Certs, a.Owners)
+			vals = append(vals, v)
+		}
+		e.page(w, "applications", vals, next)
+	case len(parts) == 2 && parts[0] == "applications" && r.Method == http.MethodGet:
+		for _, a := range e.Apps {
+			if a.ID == parts[1] {
+				v := map[string]any{"id": a.ID}
+				secretsOf(v, a.Secrets, a.Certs, nil)
+				writeJSON(w, v)
+				return
+			}
+		}
+		notFound(w)
+	case len(parts) == 3 && parts[2] == "removePassword" && (parts[0] == "applications" || parts[0] == "servicePrincipals") && r.Method == http.MethodPost:
+		var body struct {
+			KeyID string `json:"keyId"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil {
+			http.Error(w, "bad body", http.StatusBadRequest)
+			return
+		}
+		secrets := e.secretsOf(parts[0], parts[1])
+		if secrets == nil {
+			notFound(w)
+			return
+		}
+		for i, k := range *secrets {
+			if k.ID == body.KeyID {
+				if e.del(w) {
+					*secrets = append((*secrets)[:i:i], (*secrets)[i+1:]...)
+					w.WriteHeader(http.StatusNoContent)
+				}
+				return
+			}
+		}
+		notFound(w)
 	case len(parts) == 2 && parts[0] == "servicePrincipals" && r.Method == http.MethodGet:
 		for _, sp := range e.SPs {
 			if sp.ID == parts[1] {
@@ -257,7 +316,9 @@ func (e *Entra) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				for id, v := range sp.Roles {
 					roles = append(roles, map[string]any{"id": id, "value": v})
 				}
-				writeJSON(w, map[string]any{"id": sp.ID, "appRoles": roles})
+				v := map[string]any{"id": sp.ID, "appRoles": roles}
+				secretsOf(v, sp.Secrets, sp.Certs, nil)
+				writeJSON(w, v)
 				return
 			}
 		}
@@ -321,6 +382,43 @@ func (e *Entra) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		notFound(w)
 	}
+}
+
+// secretsOf adds the credentials and owners of an object to its JSON form.
+func secretsOf(v map[string]any, secrets, certs []EntraKey, owners []EntraOwner) {
+	conv := func(keys []EntraKey) []map[string]any {
+		out := []map[string]any{}
+		for _, k := range keys {
+			out = append(out, map[string]any{"keyId": k.ID, "displayName": k.Name, "startDateTime": k.Start})
+		}
+		return out
+	}
+	v["passwordCredentials"], v["keyCredentials"] = conv(secrets), conv(certs)
+	if owners != nil {
+		os := []map[string]any{}
+		for _, o := range owners {
+			os = append(os, map[string]any{"id": o.ID, "userPrincipalName": o.UPN})
+		}
+		v["owners"] = os
+	}
+}
+
+// secretsOf returns the secret list of an application or service principal, or nil.
+func (e *Entra) secretsOf(collection, id string) *[]EntraKey {
+	if collection == "applications" {
+		for _, a := range e.Apps {
+			if a.ID == id {
+				return &a.Secrets
+			}
+		}
+		return nil
+	}
+	for _, sp := range e.SPs {
+		if sp.ID == id {
+			return &sp.Secrets
+		}
+	}
+	return nil
 }
 
 func (e *Entra) page(w http.ResponseWriter, path string, vals []map[string]any, next string) {

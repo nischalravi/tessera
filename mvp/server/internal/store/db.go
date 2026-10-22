@@ -241,6 +241,8 @@ var tables = []string{
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
 	// pending four-eyes OAuth app revokes (schema/0470_oauth_revoke_requests.sql)
 	"oauth_revoke_requests",
+	// credential, permission and owner changes of OAuth apps (schema/0680_oauth_app_changes.sql)
+	"oauth_app_facts", "oauth_app_changes",
 	// guest lifecycle (schema/0371_guest_lifecycle.sql)
 	"guest_lifecycle_settings", "guest_reminders", "guest_renewal_tokens", "guest_lifecycle_tasks", "sponsorship_stepups",
 	"guest_deprovisioning",

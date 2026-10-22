@@ -2414,7 +2414,8 @@ Security's SaaS-to-SaaS token theft (Salesloft Drift, Gainsight, Klue) is access
 grant, not a password. Protection → **OAuth apps** lists every third-party app and grant at Google
 Workspace, Microsoft Entra ID, Salesforce and GitHub, scores each app by the scopes it holds, and
 revokes a grant, an app, or every app of a breached vendor (package `server/internal/oauthapps`,
-schema 0361 for apps, grants and sync state and 0470 for pending four-eyes revokes).
+schema 0361 for apps, grants and sync state, 0470 for pending four-eyes revokes and 0680 for credential and
+owner changes).
 
 - **Readers.** One per provider, read-only, through `internal/safehttp` with the **containment
   credential** of the provider's live connection (set it with `PUT /api/connections/{id}/containment-credential`;
@@ -2447,6 +2448,27 @@ schema 0361 for apps, grants and sync state and 0470 for pending four-eyes revok
   the grant and app statuses).
 - **Read API.** `GET /api/oauth-apps?provider=&severity=&status=&flag=&vendor=&q=&unused_days=` and
   `GET /api/oauth-apps/{id}` (graph.read).
+- **Credential, permission and owner changes (issue #474, schema 0680).** Storm-0940 used compromised vendor
+  cloud-app identities to add credentials to customers' OAuth apps, so each sync also compares what an app
+  holds with the last sync. Entra reports the client secrets and certificates of the app registration and of
+  its service principal (id, name and start date only; a secret value is never read) and their owners
+  (`$expand=owners`); the other providers report no credentials. Three changes are recorded as open rows of
+  `oauth_app_changes` and audited as `oauthapps.change_detected`: **credential added** (a new secret or
+  certificate), **permission granted** (a new application permission, or a new tenant-wide admin consent;
+  one user's consent is not reported) and **owner changed** (added or removed). The first sync that sees an
+  app only records a baseline (`oauth_app_facts`), so a tenant's first sync raises nothing. The built-in
+  alert rule `oauth_app_change` (high; `internal/alerts`) raises on each event. The OAuth apps page lists
+  the open changes and the app panel shows them with the app's credentials. **Containment:**
+  `POST /api/oauth-apps/{id}/credentials/{credential_id}/remove {reason}` (`oauthapps.revoke`, step-up) removes a
+  secret at the provider (`removePassword`), re-reads it and answers `200`, or `502 oauth_credential_failed`;
+  an Entra certificate cannot be removed by API (Graph needs a proof-of-possession token), so it answers `502
+  oauth_credential_manual`, never a success. A permission is revoked with the grant revoke above.
+  `POST /api/oauth-apps/{id}/changes/{change_id}/resolve {note?}` (`oauthapps.manage`) acknowledges a change
+  (an owner change stays open until a person does). A credential change closes itself when the credential
+  is gone at the provider, a permission change when the grant is no longer live. Audit events:
+  `oauthapps.change_detected|change_resolved|credential_remove_started|credential_removed`. Only apps the
+  inventory already holds (apps with at least one grant) get credentials and owners read. `GET /api/oauth-apps`
+  also answers `changes` (the open ones) and `GET /api/oauth-apps/{id}` the app's `credentials` and `changes`.
 - **Tests and fakes.** `internal/oauthapps/oauthfake` holds stateful fakes of the four provider APIs (paging, a
   delete that really deletes, and switches for refusing, ignoring a delete and failing reads); the reader,
   sync, revoke and four-eyes tests run them through a real safehttp client. The Salesforce `OauthToken`

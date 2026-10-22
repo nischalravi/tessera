@@ -6,8 +6,8 @@
  * the permission and a fresh phishing-resistant sign-in.
  */
 import { FormEvent, useId, useRef, useState } from "react";
-import { Ban, RefreshCw, ShieldAlert } from "lucide-react";
-import { ApiError, OAuthApp, OAuthAppList, OAuthGrant, OAuthRevokeReport, OAuthRevokeResult, OAuthSeverity, fmtDate, isPendingRevoke, oauthApps, useApi } from "../../api";
+import { Ban, KeyRound, RefreshCw, ShieldAlert } from "lucide-react";
+import { ApiError, OAuthApp, OAuthAppList, OAuthChange, OAuthCredential, OAuthGrant, OAuthRevokeReport, OAuthRevokeResult, OAuthSeverity, fmtDate, isPendingRevoke, oauthApps, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { Badge, Button, Callout, Column, DataTable, EmptyState, Page, SidePanel, Tone, useSelected, useToast } from "../../components";
 import { useModal } from "../../components/overlay";
@@ -72,7 +72,7 @@ function RevokeDialog({ target, onClose, onDone }: { target: RevokeTarget; onClo
       setResult(await target.run(reason.trim()));
     } catch (err: any) {
       setError(String(err.message ?? err));
-      if (err instanceof ApiError && err.body?.report) setResult(err.body.report);
+      if (err instanceof ApiError && err.body?.report?.items) setResult(err.body.report);
     } finally {
       setBusy(false);
       onDone();
@@ -128,13 +128,54 @@ function GrantRow({ g, canRevoke, onRevoke }: { g: OAuthGrant; canRevoke: boolea
   );
 }
 
+const CHANGE: Record<OAuthChange["kind"], string> = { credential_added: "Credential added", permission_granted: "Permission granted", owner_changed: "Owner changed" };
+
+/** What a sync found added to the app since the last one, with the containment for each (issue #474). */
+function ChangeRow({ c, canRevoke, canManage, onRemove, onRevoke, onAck }: {
+  c: OAuthChange; canRevoke: boolean; canManage: boolean; onRemove: () => void; onRevoke: () => void; onAck: () => void;
+}) {
+  return (
+    <li className="step">
+      <span className="act"><Badge tone={c.status === "open" ? "critical" : "neutral"}>{CHANGE[c.kind]}</Badge></span>
+      <span className="small grow">
+        {c.summary}
+        <br /><span className="muted">Detected {fmtDate(c.detected_at)}{c.status === "resolved" && c.resolution ? `, closed: ${c.resolution}` : ""}</span>
+      </span>
+      {c.status === "open" && c.credential_id && canRevoke && <Button size="sm" variant="danger" onClick={onRemove} aria-label={`Remove the credential: ${c.summary}`}>Remove credential</Button>}
+      {c.status === "open" && c.grant_id && canRevoke && <Button size="sm" variant="danger" onClick={onRevoke} aria-label={`Revoke the permission: ${c.summary}`}>Revoke grant</Button>}
+      {c.status === "open" && c.kind === "owner_changed" && canManage && <Button size="sm" onClick={onAck} aria-label={`Acknowledge: ${c.summary}`}>Acknowledge</Button>}
+    </li>
+  );
+}
+
 function AppPanel({ id, onClose, reload }: { id: string; onClose: () => void; reload: () => void }) {
-  const { data, reload: reloadOne } = useApi<{ app: OAuthApp; grants: OAuthGrant[] }>(oauthApps.detailPath(id));
+  const { data, reload: reloadOne } = useApi<{ app: OAuthApp; grants: OAuthGrant[]; credentials: OAuthCredential[]; changes: OAuthChange[] }>(oauthApps.detailPath(id));
   const { can } = useSession();
+  const toast = useToast();
   const canRevoke = can("oauthapps.revoke");
+  const canManage = can("oauthapps.manage");
   const [dlg, setDlg] = useState<RevokeTarget | null>(null);
   const app = data?.app;
   const done = () => { reload(); reloadOne(); };
+  const ack = async (c: OAuthChange) => {
+    try {
+      await oauthApps.resolveChange(id, c.id, "");
+      toast("Change acknowledged", { kind: "ok" });
+      done();
+    } catch (e: any) {
+      toast(String(e.message ?? e), { kind: "error" });
+    }
+  };
+  const removeCredential = (credentialId: string, label: string) => setDlg({
+    title: "Remove credential",
+    blurb: `Removes the credential "${label}" from ${app?.name} at ${app ? PROVIDER[app.provider] : "the provider"}, then re-reads the provider to check. A certificate cannot be removed through the API and is a manual task.`,
+    run: (reason) => oauthApps.removeCredential(id, credentialId, reason),
+  });
+  const revokeGrant = (grantId: string) => setDlg({
+    title: "Revoke grant",
+    blurb: `Revokes this grant of ${app?.name} at ${app ? PROVIDER[app.provider] : "the provider"}, then re-reads the provider to check.`,
+    run: (reason) => oauthApps.revokeGrant(id, grantId, reason),
+  });
   return (
     <SidePanel title={app?.name ?? "OAuth app"} onClose={onClose}
       sub={app && <><SevBadge s={app.severity} /><span className="small muted">{PROVIDER[app.provider]}</span></>}>
@@ -165,14 +206,36 @@ function AppPanel({ id, onClose, reload }: { id: string; onClose: () => void; re
               })}>Vendor breached</Button>
             </p>
           )}
+          {data.changes.length > 0 && (
+            <>
+              <h3 className="mt">Detected changes ({data.changes.filter((c) => c.status === "open").length} open)</h3>
+              <ul className="steps" aria-label="Detected changes">
+                {data.changes.map((c) => (
+                  <ChangeRow key={c.id} c={c} canRevoke={canRevoke} canManage={canManage} onAck={() => ack(c)}
+                    onRemove={() => c.credential_id && removeCredential(c.credential_id, c.summary)}
+                    onRevoke={() => c.grant_id && revokeGrant(c.grant_id)} />
+                ))}
+              </ul>
+            </>
+          )}
+          {data.credentials.some((c) => c.status === "active") && (
+            <>
+              <h3 className="mt">Credentials ({data.credentials.filter((c) => c.status === "active").length})</h3>
+              <ul className="steps" aria-label="Credentials">
+                {data.credentials.filter((c) => c.status === "active").map((c) => (
+                  <li key={c.id} className="step">
+                    <span className="act"><Badge tone="neutral">{c.kind}</Badge></span>
+                    <span className="small grow">{c.label}{c.added_at && <span className="muted"> · added {fmtDate(c.added_at)}</span>}</span>
+                    {canRevoke && <Button size="sm" variant="danger" onClick={() => removeCredential(c.id, c.label)} aria-label={`Remove credential ${c.label}`}>Remove</Button>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           <h3 className="mt">Grants ({data.grants.length})</h3>
           <ul className="steps" aria-label="Grants">
             {data.grants.map((g) => (
-              <GrantRow key={g.id} g={g} canRevoke={canRevoke} onRevoke={() => setDlg({
-                title: "Revoke grant",
-                blurb: `Revokes this grant of ${app.name} at ${PROVIDER[app.provider]}, then re-reads the provider to check.`,
-                run: (reason) => oauthApps.revokeGrant(app.id, g.id, reason),
-              })} />
+              <GrantRow key={g.id} g={g} canRevoke={canRevoke} onRevoke={() => revokeGrant(g.id)} />
             ))}
           </ul>
         </>
@@ -207,6 +270,14 @@ export function OAuthApps() {
       sub="Third-party apps and the grants they hold in Google Workspace, Microsoft Entra ID, Salesforce and GitHub, scored by the scopes they were given.">
       {s && <p className="small muted">{s.apps} apps, {s.grants} live grants, {s.high_risk} high risk, {s.high_risk_non_admin} with a high-risk scope granted by a non-admin, {s.unused} unused for {data?.unused_days} days or more.</p>}
       {data?.sync.filter((x) => x.status === "failed").map((x) => <Callout key={x.provider} tone="bad">Last sync of {PROVIDER[x.provider]} failed: {x.error}. The inventory shown is from the last good sync.</Callout>)}
+      {(data?.changes.length ?? 0) > 0 && (
+        <Callout tone="bad">
+          <KeyRound size={14} aria-hidden /> {data?.changes.length} change(s) detected since the last sync: select the app to see them and contain them.
+          <ul className="small">
+            {data?.changes.slice(0, 5).map((c) => <li key={c.id}><button type="button" className="linklike" onClick={() => setSelected(c.app_id)}>{c.summary}</button></li>)}
+          </ul>
+        </Callout>
+      )}
       {(data?.pending_requests.length ?? 0) > 0 && <Callout tone="warn">{data?.pending_requests.length} revoke request(s) wait for a second admin: repeat the same revoke to approve.</Callout>}
       <DataTable
         id="oauth-apps"

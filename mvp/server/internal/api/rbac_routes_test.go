@@ -116,6 +116,8 @@ PUT    /api/oauth-apps/{app_id}/owner                oauthapps.manage -  # issue
 POST   /api/oauth-apps/revoke-vendor                 oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/oauth-apps/{app_id}/revoke               oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/oauth-apps/{app_id}/grants/{grant_id}/revoke oauthapps.revoke STEP_UP_POLICY  # issue #107
+POST   /api/oauth-apps/{app_id}/credentials/{credential_id}/remove oauthapps.revoke STEP_UP_POLICY  # issue #474
+POST   /api/oauth-apps/{app_id}/changes/{change_id}/resolve oauthapps.manage -  # issue #474
 GET    /api/vms/sources                              connections.read -  # issue #304
 POST   /api/vms/sources                              connections.manage -  # issue #304
 PUT    /api/vms/sources/{source_id}                  connections.manage -  # issue #304

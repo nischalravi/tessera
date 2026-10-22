@@ -2165,3 +2165,17 @@ DROP POLICY IF EXISTS tenant_isolation ON deletion_hold_items;
 CREATE POLICY tenant_isolation ON deletion_hold_items
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE oauth_app_facts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE oauth_app_facts FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON oauth_app_facts;
+CREATE POLICY tenant_isolation ON oauth_app_facts
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE oauth_app_changes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE oauth_app_changes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON oauth_app_changes;
+CREATE POLICY tenant_isolation ON oauth_app_changes
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
