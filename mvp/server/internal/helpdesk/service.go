@@ -35,6 +35,9 @@ const (
 	ReasonOperatorRequired = "operator_required"
 	// ReasonSelfReset: the caller is linked to the identity being reset.
 	ReasonSelfReset = "self_reset_not_allowed"
+	// ReasonActorUnlinked: the caller is a platform user with no linked
+	// identity, so "not the subject" cannot be shown (fail closed, #446).
+	ReasonActorUnlinked = "actor_unlinked"
 	// ReasonRequesterVerify: the requester recorded an attested verification
 	// (a call-back) on their own case; a second operator must.
 	ReasonRequesterVerify = "requester_cannot_verify"
@@ -149,6 +152,23 @@ func userPtr(by store.UserRef) *uuid.UUID {
 	return &id
 }
 
+// refuseUnlinked fails closed for a platform user with no linked identity: the
+// self-reset checks compare linked users, which cannot place such a person
+// (#446). A caller with no platform user (a service) passes.
+func refuseUnlinked(c *store.TenantTx, by store.UserRef) error {
+	if by.ID == uuid.Nil {
+		return nil
+	}
+	u, err := c.PlatformUser(by.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	if err != nil || u.IdentityID == nil {
+		return forbid(ReasonActorUnlinked, "your account is not linked to an identity, so it cannot handle reset cases; ask an administrator to link it")
+	}
+	return nil
+}
+
 // subjectUsers lists the platform users linked to the identity being reset.
 func subjectUsers(c *store.TenantTx, identityID int64) ([]uuid.UUID, error) {
 	return c.PlatformUserIDsForIdentity(identityID)
@@ -202,6 +222,9 @@ func (s *Service) Start(c *store.TenantTx, in StartInput, by store.UserRef, now 
 	}
 	subj, err := subjectUsers(c, ident.ID)
 	if err != nil {
+		return nil, err
+	}
+	if err := refuseUnlinked(c, by); err != nil {
 		return nil, err
 	}
 	if isOneOf(userPtr(by), subj...) {
@@ -412,6 +435,9 @@ func (s *Service) PrepareVerify(c *store.TenantTx, caseID string, in VerifyInput
 		return nil, fail(CodeInvalid, "method must be one of push, callback, manager_approval, idv")
 	}
 	// nobody verifies their own reset, whatever the method (#358)
+	if err := refuseUnlinked(c, by); err != nil {
+		return nil, err
+	}
 	if isOneOf(userPtr(by), pin.SubjectUsers...) {
 		return nil, forbid(ReasonSelfReset, "you cannot verify a reset of your own identity")
 	}

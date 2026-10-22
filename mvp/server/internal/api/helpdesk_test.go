@@ -61,8 +61,10 @@ func newHelpdeskEnv(t *testing.T, svc func(*helpdesk.Service)) *helpdeskEnv {
 		return signIn(t, f.DB, f.A.ID, authtest.User{Email: email, Roles: []auth.Role{auth.RoleOperator}, IdentityID: id},
 			authtest.Phr, *e.now)
 	}
-	e.agent = e.signin("agent@a.example", nil)
-	e.other = e.signin("other@a.example", nil)
+	// operators are linked to (grant-less) people: an unlinked one is refused (#446)
+	link := func(xid string) *int64 { return ensureIdentity(t, f.DB, f.A.ID, "none", xid, *e.now) }
+	e.agent = e.signin("agent@a.example", link("op-agent"))
+	e.other = e.signin("other@a.example", link("op-other"))
 	e.mgr = e.signin("carol@a.example", &e.carol)
 	return e
 }
@@ -609,5 +611,28 @@ func TestHelpdeskRequesterLinkedUserIsNotIndependent(t *testing.T) {
 	}
 	if !e.view(v.ID).Policy.Satisfied {
 		t.Fatal("an unrelated operator's call-back does not satisfy the policy")
+	}
+}
+
+// An operator whose platform user has no linked identity cannot open or verify
+// a reset case: the self-reset check cannot place them (#446).
+func TestHelpdeskUnlinkedOperatorIsRefused(t *testing.T) {
+	e := newHelpdeskEnv(t, nil)
+	unlinked := e.signin("unlinked@a.example", nil)
+	code, body := e.do(unlinked, "POST", "/api/helpdesk/cases",
+		fmt.Sprintf(`{"identity_id":%d,"kind":"mfa","system":"okta","reason":"locked out after phone loss"}`, e.alice))
+	if code != http.StatusForbidden || !strings.Contains(body, `"`+helpdesk.ReasonActorUnlinked+`"`) {
+		t.Errorf("open: %d %s, want 403 actor_unlinked", code, body)
+	}
+	v := e.start(e.agent, e.alice, "mfa")
+	code, body = e.verify(unlinked, v.ID, callbackBody)
+	if code != http.StatusForbidden || !strings.Contains(body, `"`+helpdesk.ReasonActorUnlinked+`"`) {
+		t.Errorf("verify: %d %s, want 403 actor_unlinked", code, body)
+	}
+	if got := e.view(v.ID); len(got.Verifications) != 0 {
+		t.Fatalf("a refused verification was recorded: %+v", got)
+	}
+	if code, body = e.verify(e.other, v.ID, callbackBody); code != 200 {
+		t.Fatalf("linked unrelated operator: %d %s", code, body)
 	}
 }

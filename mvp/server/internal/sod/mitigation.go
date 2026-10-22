@@ -176,7 +176,7 @@ func (w *Writer) DecideMitigation(id string, approve bool, note string) (*store.
 	}
 	note = clean(note)
 	subject := false
-	own := false
+	own, unlinked := false, false
 	if w.By.UserID != uuid.Nil {
 		if own, err = w.Tx.SameActor(w.By.UserID.String(), m.RequestedBy); err != nil {
 			return nil, err
@@ -186,6 +186,8 @@ func (w *Writer) DecideMitigation(id string, approve bool, note string) (*store.
 			return nil, err
 		}
 		subject = err == nil && u.IdentityID != nil && *u.IdentityID == m.IdentityID
+		// an unlinked decider cannot be shown not to be the violation's person: fail closed (#446)
+		unlinked = err != nil || u.IdentityID == nil
 	}
 	switch {
 	case m.Status != store.MitigationPending:
@@ -196,6 +198,8 @@ func (w *Writer) DecideMitigation(id string, approve bool, note string) (*store.
 		return nil, refuse(403, "four_eyes", "another person must decide a mitigation you requested")
 	case subject:
 		return nil, refuse(403, "self_exemption_forbidden", "you cannot decide an exemption for your own violation")
+	case unlinked:
+		return nil, refuse(403, "decider_unlinked", "your account is not linked to an identity, so it cannot decide an exemption; ask an administrator to link it")
 	case len(note) > MaxNote || (!approve && note == ""):
 		return nil, refuse(422, "invalid_note", "a note of 1 to %d characters is required to reject", MaxNote)
 	case approve && !m.EndsAt.After(w.Now):

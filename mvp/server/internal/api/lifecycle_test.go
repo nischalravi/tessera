@@ -43,6 +43,11 @@ func TestLifecycleAPI_Flow(t *testing.T) {
 	if rec := reqDo(h, alice, "POST", path+"/extend", ext); rec.Code != 403 || !strings.Contains(rec.Body.String(), "not_sponsor") {
 		t.Errorf("alice extends: %d %s", rec.Code, rec.Body)
 	}
+	// a manager with no linked identity cannot extend a term (#446)
+	unlinked := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ul@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, storetest.Now)
+	if rec := reqDo(h, unlinked, "POST", path+"/extend", ext); rec.Code != 403 || !strings.Contains(rec.Body.String(), "actor_unlinked") {
+		t.Errorf("unlinked manager extends: %d %s", rec.Code, rec.Body)
+	}
 	if rec := reqDo(h, carol, "POST", path+"/extend", ext); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"event":"extended"`) {
 		t.Fatalf("carol extends: %d %s", rec.Code, rec.Body)
 	}
