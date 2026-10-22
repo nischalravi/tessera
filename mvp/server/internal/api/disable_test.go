@@ -53,7 +53,8 @@ func TestDisableEnableAPI(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	h := containServer(t, f).Handler()
 	okta := newFakeOkta(t)
-	l := policyAdmin(t, f, f.A.ID, "pa@a.example")
+	l := linkedPolicyAdmin(t, f, f.A.ID, "pa@a.example")
+	l2 := linkedPolicyAdmin(t, f, f.A.ID, "pa2@a.example") // enables: the disabler cannot (four eyes)
 	admin := signIn(t, f.DB, f.A.ID, authtest.User{Email: "ta@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
 	setCredential(t, h, admin, f.A.Refs["connection"], okta.srv.URL)
 	alice := f.A.IDs["alice"]
@@ -94,7 +95,7 @@ func TestDisableEnableAPI(t *testing.T) {
 	}
 
 	// Enable restores the accounts Disable disabled and says what it cannot restore
-	rec = corrDo(h, l, "POST", enable, body)
+	rec = corrDo(h, l2, "POST", enable, body)
 	var en disableOut
 	if err := json.Unmarshal(rec.Body.Bytes(), &en); err != nil || rec.Code != 200 || en.Status != "active" ||
 		len(en.Restored) != len(out.Disable.Accounts) || len(en.Skipped) != 0 || en.Disable.EnabledAt == nil ||
@@ -121,7 +122,7 @@ func TestDisableAPI_FailedProviderStepStillDisables(t *testing.T) {
 	h := containServer(t, f).Handler()
 	okta := newFakeOkta(t)
 	okta.keepToken = true
-	l := policyAdmin(t, f, f.A.ID, "pa@a.example")
+	l := linkedPolicyAdmin(t, f, f.A.ID, "pa@a.example")
 	admin := signIn(t, f.DB, f.A.ID, authtest.User{Email: "ta@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
 	setCredential(t, h, admin, f.A.Refs["connection"], okta.srv.URL)
 	rec := corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/disable", f.A.IDs["alice"]), `{"reason":"suspected account takeover"}`)
@@ -138,8 +139,8 @@ func TestDisableAPI_FailedProviderStepStillDisables(t *testing.T) {
 func TestDisableEnableAPI_Access(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	h := containServer(t, f).Handler()
-	l := policyAdmin(t, f, f.A.ID, "pa@a.example")
-	lb := policyAdmin(t, f, f.B.ID, "pa@b.example")
+	l := linkedPolicyAdmin(t, f, f.A.ID, "pa@a.example")
+	lb := linkedPolicyAdmin(t, f, f.B.ID, "pa@b.example")
 	admin := signIn(t, f.DB, f.A.ID, authtest.User{Email: "ta@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
 	viewer := signIn(t, f.DB, f.A.ID, authtest.User{Email: "v@a.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, storetest.Now)
 	stale := signIn(t, f.DB, f.A.ID, authtest.User{Email: "stale@a.example", Roles: []auth.Role{auth.RolePolicyAdmin}},
@@ -195,8 +196,8 @@ func TestDisableAPI_SignsOutTheLinkedUser(t *testing.T) {
 	alice := f.A.IDs["alice"]
 	linked := signIn(t, f.DB, f.A.ID, authtest.User{Email: "alice@a.example", Roles: []auth.Role{auth.RolePolicyAdmin},
 		IdentityID: &alice}, authtest.Phr, storetest.Now)
-	l := policyAdmin(t, f, f.A.ID, "pa@a.example")
-	l2 := policyAdmin(t, f, f.A.ID, "pa2@a.example")
+	l := linkedPolicyAdmin(t, f, f.A.ID, "pa@a.example")
+	l2 := linkedPolicyAdmin(t, f, f.A.ID, "pa2@a.example")
 	disable := fmt.Sprintf("/api/identities/%d/disable", alice)
 	enable := fmt.Sprintf("/api/identities/%d/enable", alice)
 	const body = `{"reason":"suspected insider activity"}`
@@ -284,4 +285,53 @@ func auditDetail(t *testing.T, f *storetest.Fixture, tenant tenancy.ID, action s
 		t.Fatal(err)
 	}
 	return b.String()
+}
+
+// linkedPolicyAdmin is policyAdmin linked to a grant-less identity: an admin with no linked
+// identity is refused on disable and enable (actor_unlinked, #449).
+func linkedPolicyAdmin(t *testing.T, f *storetest.Fixture, tenant tenancy.ID, email string) authtest.Login {
+	t.Helper()
+	return signIn(t, f.DB, tenant, authtest.User{Email: email, Roles: []auth.Role{auth.RolePolicyAdmin},
+		IdentityID: ensureIdentity(t, f.DB, tenant, "none", "pa-"+email, storetest.Now)}, authtest.Phr, storetest.Now)
+}
+
+// An admin whose platform user has no linked identity can neither disable nor enable (#449), the
+// refusal is audited, and a linked unrelated admin still can. The four-eyes rule on enable holds
+// for an identity with no linked user: the admin who disabled it cannot enable it.
+func TestDisableEnableAPI_UnlinkedAdminRefused(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := containServer(t, f).Handler()
+	unlinked := policyAdmin(t, f, f.A.ID, "unlinked@a.example")
+	l := linkedPolicyAdmin(t, f, f.A.ID, "pa@a.example")
+	l2 := linkedPolicyAdmin(t, f, f.A.ID, "pa2@a.example")
+	alice := f.A.IDs["alice"]
+	disable := fmt.Sprintf("/api/identities/%d/disable", alice)
+	enable := fmt.Sprintf("/api/identities/%d/enable", alice)
+	const body = `{"reason":"suspected insider activity"}`
+
+	if rec := corrDo(h, unlinked, "POST", disable, body); rec.Code != 403 || !strings.Contains(rec.Body.String(), `"actor_unlinked"`) {
+		t.Errorf("unlinked disable: %d %s", rec.Code, rec.Body)
+	}
+	if st := identityStatus(t, h, l, alice); st != "active" {
+		t.Fatalf("status after refused disable = %s", st)
+	}
+	if rec := corrDo(h, l, "POST", disable, body); rec.Code != 200 {
+		t.Fatalf("linked disable: %d %s", rec.Code, rec.Body)
+	}
+	if rec := corrDo(h, unlinked, "POST", enable, body); rec.Code != 403 || !strings.Contains(rec.Body.String(), `"actor_unlinked"`) {
+		t.Errorf("unlinked enable: %d %s", rec.Code, rec.Body)
+	}
+	// no user is linked to alice here, yet the disabler still cannot enable (four eyes)
+	if rec := corrDo(h, l, "POST", enable, body); rec.Code != 403 || !strings.Contains(rec.Body.String(), "four_eyes_required") {
+		t.Errorf("disabler enable of an unlinked identity: %d %s", rec.Code, rec.Body)
+	}
+	if st := identityStatus(t, h, l, alice); st != "disabled" {
+		t.Errorf("status after refused enables = %s", st)
+	}
+	if got := auditActions(t, f, f.A.ID); got["identity.disable.refused"] != 1 || got["identity.enable.refused"] != 2 || got["identity.enable"] != 0 {
+		t.Errorf("audit actions %v", got)
+	}
+	if rec := corrDo(h, l2, "POST", enable, body); rec.Code != 200 {
+		t.Errorf("linked unrelated admin enable: %d %s", rec.Code, rec.Body)
+	}
 }

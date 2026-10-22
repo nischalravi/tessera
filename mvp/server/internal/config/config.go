@@ -182,6 +182,13 @@ type Config struct {
 	// MetricsAddrDefault is true when MetricsAddr is the dev default rather
 	// than an operator's choice: a busy port is then a warning, not fatal.
 	MetricsAddrDefault bool
+	// WorkerMetricsAddr is TESSERA_WORKER_METRICS_ADDR: where `tessera worker`
+	// serves /metrics (host:port; empty = no listener, the default). It must be
+	// a loopback, private or link-local IP literal unless
+	// WorkerMetricsAllowPublic (TESSERA_WORKER_METRICS_ALLOW_PUBLIC) is set; see
+	// CheckWorkerMetricsAddr. The API's own /metrics is MetricsAddr.
+	WorkerMetricsAddr        string
+	WorkerMetricsAllowPublic bool
 	// ReadyMaxLoopLagSeconds is how long a background loop may go without a
 	// success before /readyz fails (TESSERA_READY_MAX_LOOP_LAG_SECONDS).
 	ReadyMaxLoopLagSeconds int
@@ -403,6 +410,15 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.Mail = loadMail(getenv, prod, integer, bad)
 	c.ReadyMaxLoopLagSeconds = integer("TESSERA_READY_MAX_LOOP_LAG_SECONDS", 300, 30, 86400)
 	c.MetricsAddr, c.MetricsAddrDefault = loadMetricsAddr(getenv, prod, boolean("TESSERA_METRICS_ALLOW_WILDCARD", false, false), bad)
+	c.WorkerMetricsAllowPublic = boolean("TESSERA_WORKER_METRICS_ALLOW_PUBLIC", false, false)
+	if a, err := CheckWorkerMetricsAddr(getenv("TESSERA_WORKER_METRICS_ADDR"), c.WorkerMetricsAllowPublic); err != nil {
+		bad("TESSERA_WORKER_METRICS_ADDR: %v", err)
+	} else {
+		c.WorkerMetricsAddr = a
+	}
+	if c.WorkerMetricsAllowPublic && prod && strings.TrimSpace(getenv("TESSERA_WORKER_METRICS_ADDR")) == "" {
+		bad("TESSERA_WORKER_METRICS_ALLOW_PUBLIC=true with no TESSERA_WORKER_METRICS_ADDR: remove it, or name the address")
+	}
 	if v := strings.TrimSpace(getenv("TESSERA_NOW")); v != "" {
 		t, err := timeutil.ParseISO(v)
 		switch {

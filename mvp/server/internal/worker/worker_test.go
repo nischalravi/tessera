@@ -461,3 +461,45 @@ func TestServeBeatsWhileRunningAndWithdrawsAtTheEnd(t *testing.T) {
 		return nil
 	})
 }
+
+// TestBeaterPublishesTargetStates: the guard's view of each target the worker
+// called goes out with the heartbeat, to the tenant that owns the connection
+// only, replaces itself on every beat, and is withdrawn when the worker stops.
+func TestBeaterPublishesTargetStates(t *testing.T) {
+	e := newEnv(t, tenantA, tenantB)
+	conn := e.connection(t, "a", "ad-corp")
+	g := e.guard(worker.Limits{BreakerThreshold: 1, BreakerCooldown: time.Minute})
+	q := e.queue(t, "worker-1", time.Minute, &worker.Deps{Connectors: noConnectors}, jobs.ConnectorSync)
+	b := &worker.Beater{DB: e.db, Queue: q, Mode: store.WorkerModeWorker, Clock: e.clk.Now, Guard: g}
+	_ = g.Do(t.Context(), tenantA, conn, func(context.Context) error { return errors.New("503 from the directory") })
+	if err := b.Beat(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	states := func(tn tenancy.ID) (ts []*store.WorkerTargetState) {
+		_ = e.db.ReadTenant(t.Context(), tn, func(tx *store.TenantTx) (err error) { ts, err = tx.WorkerTargetStates(); return err })
+		return ts
+	}
+	ts := states(tenantA)
+	if len(ts) != 1 || ts[0].WorkerID != "worker-1" || ts[0].ConnectionID != conn || ts[0].State != store.BreakerOpen ||
+		ts[0].OpenUntil == nil || ts[0].LastError != "503 from the directory" || ts[0].Failures != 1 {
+		t.Fatalf("tenant A: %+v", ts)
+	}
+	if got := states(tenantB); len(got) != 0 {
+		t.Errorf("tenant B sees A's targets: %+v", got)
+	}
+	// the breaker closes (cooldown over, a good probe): the next beat replaces the row
+	e.clk.Add(2 * time.Minute)
+	if err := g.Do(t.Context(), tenantA, conn, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Beat(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if ts := states(tenantA); len(ts) != 1 || ts[0].State != store.BreakerClosed || ts[0].ConsecutiveFailures != 0 || ts[0].LastError != "" {
+		t.Fatalf("after recovery: %+v", ts)
+	}
+	b.Forget()
+	if ts := states(tenantA); len(ts) != 0 {
+		t.Errorf("a worker that stopped cleanly left target rows: %+v", ts)
+	}
+}

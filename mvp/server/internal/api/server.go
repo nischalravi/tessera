@@ -71,6 +71,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/internal/transport"
 	"github.com/nischalravi/tessera/mvp/server/internal/vms"
+	"github.com/nischalravi/tessera/mvp/server/internal/worker"
 )
 
 // DefaultMaxBodyBytes caps request bodies (every request body is a small JSON object).
@@ -299,6 +300,7 @@ type Server struct {
 	readiness *readiness.Service
 	agents    *agent.Service
 	prov      *provision.Engine
+	guard     *worker.Guard
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
 	archive   *archive.Service
 	rotation  *rotation.Service
@@ -415,8 +417,10 @@ func New(cfg Config) *Server {
 		RT: connsync.Runtime{Env: cfg.Env, AllowLoopback: cfg.Env == config.Dev}, Clock: func() time.Time { return s.clock() }}
 	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
 		PolicyVersion: s.policyVersion}
+	// every in-process call to a customer's system runs under the per-connection limits and breaker
+	s.guard = &worker.Guard{DB: cfg.Store, Clock: func() time.Time { return s.clock() }}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
-		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
+		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning"), Guard: s.guard}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
 	if cfg.RPID != "" && cfg.PublicOrigin != "" {

@@ -230,8 +230,11 @@ func (s *Server) disableIdentity(_ http.ResponseWriter, r *http.Request, p *para
 		}); err != nil {
 			return nil, err
 		}
-		return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: refusal},
-			{Key: "detail", Value: "You cannot disable the identity linked to your own Tessera user; another admin must do it."}}}, nil
+		msg := "You cannot disable the identity linked to your own Tessera user; another admin must do it."
+		if refusal == containment.RefuseUnlinked {
+			msg = unlinkedMsg
+		}
+		return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: refusal}, {Key: "detail", Value: msg}}}, nil
 	}
 	rep := s.runContainment(ctx, job)
 	// The run is recorded first, in its own transaction, so a provider call that
@@ -313,8 +316,11 @@ func (s *Server) enableIdentity(_ http.ResponseWriter, r *http.Request, p *param
 			return nil, err
 		}
 		msg := "You cannot enable an identity linked to your own Tessera user; another admin must do it."
-		if refusal == containment.RefuseFourEyes {
-			msg = "This identity is linked to a Tessera user, so a second admin, not the one who disabled it, must enable it."
+		switch refusal {
+		case containment.RefuseFourEyes:
+			msg = "A second admin, not the one who disabled this identity, must enable it."
+		case containment.RefuseUnlinked:
+			msg = unlinkedMsg
 		}
 		return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: refusal}, {Key: "detail", Value: msg}}}, nil
 	}
@@ -560,3 +566,6 @@ func (s *Server) retryNow(_ http.ResponseWriter, r *http.Request, p *params) (an
 	}
 	return ojson.Object{{Key: "retry", Value: containment.ViewRetry(rows[0])}}, nil
 }
+
+// unlinkedMsg explains actor_unlinked on the disable and enable routes (#449).
+const unlinkedMsg = "Your Tessera user is not linked to an identity, so it cannot disable or enable identities; ask an administrator to link it."

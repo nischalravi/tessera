@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { AppWindow, Folder, FolderPlus, Plus, Users } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { AppWindow, Folder, FolderPlus, Plus, RotateCcw, Trash2, Users } from "lucide-react";
 import { GrpFolder, GrpGroup, groups } from "../../../api";
 import { useSession } from "../../../app/auth";
-import { Badge, Callout, Column, Crumb, DataTable, Loading, Page, SidePanel, Tabs, useSelected } from "../../../components";
+import { Badge, Button, Callout, Column, Crumb, DataTable, Loading, Page, SidePanel, Tabs, useConfirm, useSelected, useToast } from "../../../components";
 import { GroupBadges, RecomputeBanner, fmtWhen } from "./common";
 import { NewApplicationDrawer, NewFolderDrawer, NewGroupDrawer } from "./forms";
-import { useLoad } from "./hooks";
-import { childFolders, folderLabel, folderTrail, indexFolders } from "./model";
+import { errText, useLoad } from "./hooks";
+import { childFolders, deleteBody, deleteTitle, failureSummary, folderLabel, folderTrail, indexFolders, planDelete } from "./model";
 import { ViewToggle } from "./ViewToggle";
 
 type Row = { key: string; kind: "folder"; f: GrpFolder; items: number } | { key: string; kind: "group"; g: GrpGroup };
@@ -22,6 +22,9 @@ const labelOf = (r: Row) => (r.kind === "folder" ? folderLabel(r.f) : r.g.displa
  */
 export function ManagedGroups() {
   const { can } = useSession();
+  const toast = useToast();
+  const confirm = useConfirm();
+  const nav = useNavigate();
   const [params, setParams] = useSearchParams();
   const folderId = params.get("folder");
   const everywhere = params.get("all") === "1";
@@ -60,6 +63,48 @@ export function ManagedGroups() {
   const writable = can("groups.write");
   const setParam = (k: string, v: string | null) => setParams((p) => { const n = new URLSearchParams(p); if (v === null) n.delete(k); else n.set(k, v); n.delete("selected"); return n; }, { replace: true });
 
+  /** Delete what was picked: groups first (soft delete), then folders deepest first; one toast for the failures. */
+  const deleteRows = async (picked: Row[]) => {
+    const plan = planDelete(picked);
+    if (plan.groups.length + plan.folders.length === 0) {
+      toast(`Nothing to delete here: ${plan.skipped.join(", ")} ${plan.skipped.length === 1 ? "is" : "are"} managed elsewhere.`, { kind: "error" });
+      return;
+    }
+    const ok = await confirm({ title: deleteTitle(plan), body: deleteBody(plan), confirmLabel: "Delete", danger: true });
+    if (ok === null) return;
+    const failed: { name: string; message: string }[] = [];
+    let done = 0;
+    for (const g of plan.groups) {
+      try { await groups.deleteGroup(g.id); done++; } catch (e) { failed.push({ name: g.name, message: errText(e) }); }
+    }
+    for (const f of plan.folders) {
+      try { await groups.deleteFolder(f.id); done++; } catch (e) { failed.push({ name: f.name, message: errText(e) }); }
+    }
+    if (failed.length) toast(`${done ? `Deleted ${done}. ` : ""}Could not delete ${failed.length}: ${failureSummary(failed)}`, { kind: "error" });
+    else toast(done === 1 ? "Deleted" : `Deleted ${done} items`);
+    setSelected(null);
+    folders.reload();
+    fetchGroups.reload();
+  };
+  const restoreGroup = async (g: GrpGroup) => {
+    try {
+      await groups.restoreGroup(g.id);
+      toast("Group restored");
+      setSelected(null);
+      fetchGroups.reload();
+    } catch (e) {
+      toast(errText(e), { kind: "error" });
+    }
+  };
+  const deleteCurrent = async () => {
+    if (!current) return;
+    const parent = current.parent_id ? ix.byId.get(current.parent_id) : null;
+    await deleteRows([{ key: `f:${current.id}`, kind: "folder", f: current, items: 0 }]);
+    const left = await groups.listFolders({ limit: LIMIT }).catch(() => null);
+    if (left && !left.items.some((f) => f.id === current.id)) nav(parent && parent.name !== "" ? `/directory/groups?folder=${parent.id}` : "/directory/groups");
+  };
+  const managedByUi = (r: Row) => (r.kind === "folder" ? r.f.managed_by : r.g.managed_by) === "ui";
+
   const cols: Column<Row>[] = [
     {
       id: "name", header: "Name", sort: (r) => nameOf(r).toLowerCase(), csv: (r) => nameOf(r),
@@ -97,7 +142,9 @@ export function ManagedGroups() {
           writable && { label: "New group", icon: <Plus size={16} />, onClick: () => setCreating("group"), disabled: !current, title: current ? undefined : "Open a folder first" },
           writable && { label: "New folder", icon: <FolderPlus size={16} />, onClick: () => setCreating("folder") },
           writable && { label: "New application", icon: <AppWindow size={16} />, onClick: () => setCreating("app"), title: "Create the standard folders and groups of an application" },
+          writable && current && { label: "Delete this folder", icon: <Trash2 size={16} />, danger: true, onClick: deleteCurrent, disabled: current.managed_by !== "ui", title: current.managed_by !== "ui" ? `Managed by ${current.managed_by.replace(/_/g, " ")}, so changed there` : "Only an empty folder can be deleted" },
         ]}
+        bulkActions={writable ? [{ label: "Delete", icon: <Trash2 size={16} />, danger: true, run: deleteRows }] : undefined}
         onRefresh={() => { folders.reload(); fetchGroups.reload(); }}
         rowLabel={nameOf}
         onRowClick={(r) => setSelected(r.key)}
@@ -114,7 +161,7 @@ export function ManagedGroups() {
         empty={<EmptyFolder writable={writable} inFolder={!!current} />}
       />
       {fetchGroups.data && fetchGroups.data.items.length >= LIMIT && <Callout tone="warn">Only the first {LIMIT} groups are listed. Open a folder to narrow the list.</Callout>}
-      {open && <Panel row={open} onClose={() => setSelected(null)} />}
+      {open && <Panel row={open} onClose={() => setSelected(null)} canDelete={writable && managedByUi(open)} onDelete={() => deleteRows([open])} onRestore={writable && open.kind === "group" && open.g.status === "deleted" ? () => restoreGroup(open.g) : undefined} />}
       {creating === "folder" && <NewFolderDrawer parent={current} onClose={() => setCreating(null)} />}
       {creating === "group" && current && <NewGroupDrawer folder={current} onClose={() => setCreating(null)} />}
       {creating === "app" && <NewApplicationDrawer parent={current} onClose={() => setCreating(null)} />}
@@ -132,7 +179,15 @@ function EmptyFolder({ writable, inFolder }: { writable: boolean; inFolder: bool
 }
 
 /** The side panel of a row: a short summary; the full page has every tab. */
-function Panel({ row, onClose }: { row: Row; onClose: () => void }) {
+interface PanelActions { canDelete: boolean; onDelete: () => void; onRestore?: () => void }
+
+function PanelActions({ canDelete, onDelete, onRestore, managedBy }: PanelActions & { managedBy: string }) {
+  if (onRestore) return <div><Button icon={<RotateCcw size={16} />} onClick={onRestore}>Restore</Button></div>;
+  if (!canDelete) return managedBy !== "ui" ? <p className="small muted">Managed by {managedBy.replace(/_/g, " ")}, so it is changed there, not here.</p> : null;
+  return <div><Button variant="danger" icon={<Trash2 size={16} />} onClick={onDelete}>Delete</Button></div>;
+}
+
+function Panel({ row, onClose, ...act }: { row: Row; onClose: () => void } & PanelActions) {
   if (row.kind === "folder") {
     const f = row.f;
     return (
@@ -146,13 +201,14 @@ function Panel({ row, onClose }: { row: Row; onClose: () => void }) {
           <dt>Created</dt><dd>{fmtWhen(f.created_at)}</dd>
         </dl>
         <p><Link to={`/directory/groups?folder=${f.id}`}>Browse this folder</Link></p>
+        <PanelActions {...act} managedBy={f.managed_by} />
       </SidePanel>
     );
   }
-  return <GroupPanel g={row.g} onClose={onClose} />;
+  return <GroupPanel g={row.g} onClose={onClose} {...act} />;
 }
 
-function GroupPanel({ g, onClose }: { g: GrpGroup; onClose: () => void }) {
+function GroupPanel({ g, onClose, ...act }: { g: GrpGroup; onClose: () => void } & PanelActions) {
   const [tab, setTab] = useState<"overview" | "members">("overview");
   const members = useLoad(tab === "members" ? () => groups.members(g.id, { filter: "effective", limit: 10, sort: "name" }) : null, `panelmembers:${g.id}`);
   return (
@@ -175,6 +231,7 @@ function GroupPanel({ g, onClose }: { g: GrpGroup; onClose: () => void }) {
             <dt>Requestable</dt><dd>{g.requestable ? "Yes" : "No"}</dd>
             <dt>Created</dt><dd>{fmtWhen(g.created_at)}</dd>
           </dl>
+          <PanelActions {...act} managedBy={g.managed_by} />
         </div>
       ) : !members.data ? <Loading error={members.error} kind="block" /> : (
         <div className="stack-sm">

@@ -75,6 +75,9 @@ type Deps struct {
 	Connectors func(now time.Time) ([]connectors.Connector, error)
 	// Provision sends a tenant's due provisioning operations.
 	Provision *provision.Engine
+	// Guard enforces per-target limits and circuit breakers on every call to a
+	// customer's system (nil: no limits). Set the same Guard on Provision.
+	Guard *Guard
 	// SyncSchedule, when set, is a queue spec ("@every 15m" or cron) that
 	// schedules connector_sync for every tenant. Empty: syncs run on demand.
 	SyncSchedule string
