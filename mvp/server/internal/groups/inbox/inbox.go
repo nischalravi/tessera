@@ -22,6 +22,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
+// ObjectDeletionHold is the object type of a deletion_held task: the object id is the hold's id. It is not a
+// groups object, so no groups privilege covers it: the approvers of held deletions (the tenant admin role,
+// which holds admin.change.approve) see it.
+const ObjectDeletionHold = "deletion_hold"
+
 // Limits on a task's text.
 const (
 	MaxTitle  = 300
@@ -45,12 +50,15 @@ type Input struct {
 
 func (in *Input) check() error {
 	switch in.Kind {
-	case store.TaskDeprovisioning, store.TaskRule, store.TaskMicroCertification, store.TaskAttestation, store.TaskAttestationOverdue:
+	case store.TaskDeprovisioning, store.TaskRule, store.TaskMicroCertification, store.TaskAttestation, store.TaskAttestationOverdue, store.TaskDeletionHeld:
 	default:
 		return gov.Invalid("invalid_kind", "%q is not a task kind", in.Kind)
 	}
-	if in.ObjectType != string(privs.Folder) && in.ObjectType != string(privs.Group) {
-		return gov.Invalid("invalid_object", "a task is about a folder or a group")
+	if in.ObjectType != string(privs.Folder) && in.ObjectType != string(privs.Group) && in.ObjectType != ObjectDeletionHold {
+		return gov.Invalid("invalid_object", "a task is about a folder, a group or a held deletion")
+	}
+	if (in.Kind == store.TaskDeletionHeld) != (in.ObjectType == ObjectDeletionHold) {
+		return gov.Invalid("invalid_object", "a deletion_held task is about a held deletion, and only it")
 	}
 	if in.Title == "" || len(in.Title) > MaxTitle {
 		return gov.Invalid("invalid_title", "title is 1 to %d characters", MaxTitle)
@@ -116,6 +124,9 @@ func Sees(ck *privs.Checker, t *store.GrpTask) (bool, error) {
 	if t.Assignee != nil && ck.Subject().Identity != nil && *t.Assignee == *ck.Subject().Identity {
 		return true, nil
 	}
+	if t.ObjectType == ObjectDeletionHold {
+		return ck.Subject().TenantAdmin, nil
+	}
 	return ck.Has(privs.Object{Type: privs.ObjectType(t.ObjectType), ID: t.ObjectID}, adminOf(t.ObjectType))
 }
 
@@ -172,6 +183,9 @@ func Close(tx *store.TenantTx, ck *privs.Checker, now time.Time, id, status, by 
 		return nil, err
 	} else if !ok {
 		return nil, &privs.DeniedError{Object: privs.Object{Type: privs.ObjectType(t.ObjectType), ID: t.ObjectID}, Privilege: adminOf(t.ObjectType)}
+	}
+	if t.Kind == store.TaskDeletionHeld && t.Status == store.TaskOpen {
+		return nil, gov.Conflict("task_follows_hold", "this task closes when the held deletion is approved, discarded or expires: decide it on Held deletions")
 	}
 	if t.Status != store.TaskOpen {
 		return nil, gov.Conflict("task_closed", "the task is already %s", t.Status)
