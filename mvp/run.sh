@@ -24,6 +24,12 @@ FRONTEND="$ROOT/frontend"
 BIN="$SERVER/bin/tessera"
 DEVIDP_BIN="$SERVER/bin/tessera-devidp"
 DB="${TESSERA_DB:-$SERVER/tessera.db}"
+# A Postgres TESSERA_DB is the owner login (migrations); requests log in as TESSERA_DB_APP (tessera_app,
+# README "Postgres"). The server refuses to serve as the owner unless TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP=true.
+if [[ "$DB" == postgres://* || "$DB" == postgresql://* ]] && [ -z "${TESSERA_DB_APP:-}" ] \
+  && [ "${TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP:-}" != "true" ]; then
+  echo "==> note: TESSERA_DB is Postgres and TESSERA_DB_APP is unset; serve will refuse to start (see README, Postgres)" >&2
+fi
 API_PORT="${API_PORT:-8000}"
 UI_PORT="${UI_PORT:-5173}"
 export UI_PORT

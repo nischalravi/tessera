@@ -284,29 +284,21 @@ func TestTranslatePG(t *testing.T) {
 }
 
 func TestParsePGDSN(t *testing.T) {
-	cfg, role, err := parsePGDSN("postgres://owner:pw@db.example.com:6543/tessera?sslmode=require&app_role=tessera_app&application_name=t")
+	cfg, err := parsePGDSN("postgres://owner:pw@db.example.com:6543/tessera?sslmode=require&application_name=t")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if role != "tessera_app" || cfg.Host != "db.example.com" || cfg.Port != 6543 || cfg.Database != "tessera" || cfg.User != "owner" {
-		t.Errorf("parsed %q %+v", role, cfg)
-	}
-	if _, ok := cfg.RuntimeParams["app_role"]; ok {
-		t.Error("app_role would be sent to the server as a setting")
+	if cfg.Host != "db.example.com" || cfg.Port != 6543 || cfg.Database != "tessera" || cfg.User != "owner" {
+		t.Errorf("parsed %+v", cfg)
 	}
 	if cfg.RuntimeParams["application_name"] != "t" {
 		t.Errorf("other options lost: %v", cfg.RuntimeParams)
 	}
-	if _, role, err := parsePGDSN("postgres://owner@localhost/db"); err != nil || role != "" {
-		t.Errorf("no app_role: %q %v", role, err)
+	// app_role (SET ROLE on an owner login) is retired: refused, never ignored (#430)
+	if _, err := parsePGDSN("postgres://owner@h/db?app_role=tessera_app"); err == nil || !strings.Contains(err.Error(), "TESSERA_DB_APP") {
+		t.Errorf("app_role accepted: %v", err)
 	}
-	for _, bad := range []string{"postgres://o@h/db?app_role=Tessera%20App", "postgres://o@h/db?app_role=a;drop", "postgres://o@h/db?app_role=" + strings.Repeat("a", 64)} {
-		// refused, never silently run without the role
-		if _, _, err := parsePGDSN(bad); err == nil || !strings.Contains(err.Error(), "invalid") {
-			t.Errorf("%q: %v", bad, err)
-		}
-	}
-	_, _, err = parsePGDSN("postgres://owner:hunter2@h:notaport/db")
+	_, err = parsePGDSN("postgres://owner:hunter2@h:notaport/db")
 	if err == nil || strings.Contains(err.Error(), "hunter2") {
 		t.Errorf("a bad DSN must be refused without echoing the password: %v", err)
 	}

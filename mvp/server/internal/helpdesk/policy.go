@@ -71,6 +71,10 @@ type Input struct {
 	Verifications []Verification
 	// RequestedBy is the platform user who started the case.
 	RequestedBy *uuid.UUID
+	// RequesterUsers are the platform users linked to the same identity as the
+	// requester: one person can hold several sign-in users, so the requester's
+	// second user is the requester too (#431, as store.TenantTx.SameActor).
+	RequesterUsers []uuid.UUID
 	// SecondApprover is the platform user who gave the second approval.
 	SecondApprover *uuid.UUID
 	// SubjectUsers are the platform users linked to the identity being reset.
@@ -106,6 +110,13 @@ func isOneOf(u *uuid.UUID, ids ...uuid.UUID) bool {
 	return u != nil && *u != uuid.Nil && slices.Contains(ids, *u)
 }
 
+// isRequester reports whether u is the requester or another user of the same
+// person.
+func (in Input) isRequester(u *uuid.UUID) bool {
+	return in.RequestedBy != nil && u != nil &&
+		(*u == *in.RequestedBy || isOneOf(u, in.RequesterUsers...))
+}
+
 // Counts reports whether v counts toward the policy.
 func (in Input) counts(v Verification) bool {
 	if v.Outcome != Passed || !Allowed(v.Method, in.Privileged) {
@@ -121,7 +132,7 @@ func (in Input) counts(v Verification) bool {
 		if v.By == nil || *v.By == uuid.Nil || isOneOf(v.By, in.SubjectUsers...) {
 			return false
 		}
-		return in.RequestedBy == nil || *v.By != *in.RequestedBy
+		return !in.isRequester(v.By)
 	}
 	return true
 }
@@ -148,7 +159,7 @@ func Evaluate(in Input) Decision {
 	if in.Privileged {
 		d.SecondApproved = in.SecondApprover != nil && *in.SecondApprover != uuid.Nil &&
 			!isOneOf(in.SecondApprover, in.SubjectUsers...) &&
-			(in.RequestedBy == nil || *in.SecondApprover != *in.RequestedBy)
+			!in.isRequester(in.SecondApprover)
 		if !d.SecondApproved {
 			d.Missing = append(d.Missing, "a second approver who is not the requester")
 		}

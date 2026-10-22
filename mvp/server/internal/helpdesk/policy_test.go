@@ -15,6 +15,7 @@ func pass(method string, by *uuid.UUID) Verification {
 
 func TestEvaluate(t *testing.T) {
 	requester, other, subject, third := u(), u(), u(), u()
+	requester2 := u() // another sign-in user of the requester's person
 	tests := []struct {
 		name string
 		in   Input
@@ -31,6 +32,16 @@ func TestEvaluate(t *testing.T) {
 			Verifications: []Verification{{Method: MethodPush, Outcome: Failed, PhishingResistant: true}}}, false, nil},
 		{"call-back to the HR number by a second operator", Input{RequestedBy: requester,
 			Verifications: []Verification{pass(MethodCallback, other)}}, true, []string{MethodCallback}},
+		{"call-back by the requester's linked user does not count", Input{RequestedBy: requester, RequesterUsers: []uuid.UUID{*requester, *requester2},
+			Verifications: []Verification{pass(MethodCallback, requester2)}}, false, nil},
+		{"manager approval by the requester's linked user does not count", Input{RequestedBy: requester, RequesterUsers: []uuid.UUID{*requester2},
+			Verifications: []Verification{pass(MethodManagerApproval, requester2)}}, false, nil},
+		{"call-back by an unlinked user counts", Input{RequestedBy: requester, RequesterUsers: []uuid.UUID{*requester2},
+			Verifications: []Verification{pass(MethodCallback, other)}}, true, []string{MethodCallback}},
+		{"privileged: second approver is the requester's linked user", Input{Privileged: true, RequestedBy: requester,
+			RequesterUsers: []uuid.UUID{*requester2}, SecondApprover: requester2,
+			Verifications: []Verification{pass(MethodIDV, requester), pass(MethodCallback, other)}}, false,
+			[]string{MethodCallback, MethodIDV}},
 		{"call-back by the requester does not count", Input{RequestedBy: requester,
 			Verifications: []Verification{pass(MethodCallback, requester)}}, false, nil},
 		{"call-back by the subject does not count", Input{RequestedBy: requester, SubjectUsers: []uuid.UUID{*subject},
