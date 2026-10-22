@@ -376,7 +376,11 @@ func (s *Server) attestItem(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return s.checklistAfter(r, p, func(c *store.TenantTx, id, item string, now time.Time) (*readiness.Bundle, error) {
-		return s.readiness.Attest(c, id, item, in.Note, actor(r), now)
+		byUser := ""
+		if pr := principal(r); pr != nil && pr.UserID != nil {
+			byUser = pr.UserID.String()
+		}
+		return s.readiness.AttestAs(c, id, item, in.Note, actor(r), byUser, now)
 	})
 }
 

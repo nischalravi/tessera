@@ -580,6 +580,39 @@ func TestSponsorship_TwoSponsorshipsActiveUntilTheLastEnds(t *testing.T) {
 	}), "not_active")
 }
 
+// The creator's other sign-in user (linked to the same identity) is the creator for the four-eyes
+// rule (issue #425), also once the sponsorship is no longer the creator's own (a sponsor transfer
+// left the creator as created_by only).
+func TestSponsorship_LinkedUserOfTheCreatorCannotApprove(t *testing.T) {
+	e := newEnv(t)
+	prod := e.catalog("group:aws:ProdAdmin", "medium")
+	in := invite("con@x.example", "contractor", day(90))
+	in.Bundle = []int64{prod}
+	res := e.invited(e.carol, in)
+	id := res.Sponsorship.ID
+	other := *e.carol.IdentityID
+	second := actor("Carol (second)", nil, true) // the identity link is only in the database
+	if err := e.do(func(tx *store.TenantTx) error {
+		for _, u := range []sponsorship.Actor{e.carol, second} {
+			if err := tx.InsertPlatformUser(&store.PlatformUser{ID: u.UserID, DisplayName: u.Display, Status: "active", IdentityID: &other, CreatedAt: now}); err != nil {
+				return err
+			}
+		}
+		ss, err := sponsorship.Load(tx, id)
+		if err != nil {
+			return err
+		}
+		ss.SponsorIdentityID = *e.bob.IdentityID // the sponsor moved to Bob; Carol's user stays the creator
+		return tx.SaveSponsorship(ss, ss.Status)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.wantCode(e.do(func(tx *store.TenantTx) error { _, err := e.svc.Approve(tx, second, id, now); return err }), "self_approval")
+	if err := e.do(func(tx *store.TenantTx) error { _, err := e.svc.Approve(tx, e.admin, id, now); return err }); err != nil {
+		t.Errorf("a different person approves: %v", err)
+	}
+}
+
 func TestSponsorship_ApprovalFlow(t *testing.T) {
 	e := newEnv(t)
 	prod := e.catalog("group:aws:ProdAdmin", "medium")

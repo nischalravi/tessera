@@ -55,6 +55,12 @@ type DisableResult struct {
 // status is the roll-up of the containment run that went with it ("none" when
 // there was nothing to run). ErrNotActive when the identity is not active.
 func Disable(c *store.TenantTx, identityID int64, by, reason, status string, now time.Time) (*DisableResult, error) {
+	return DisableAs(c, identityID, by, "", reason, status, now)
+}
+
+// DisableAs is Disable that also records the disabler's platform user id (empty for a principal
+// that is not a user), which EnableRefusal compares with SameActor (#425).
+func DisableAs(c *store.TenantTx, identityID int64, by, byUserID, reason, status string, now time.Time) (*DisableResult, error) {
 	ident, err := c.Identity(identityID)
 	if err != nil {
 		return nil, err
@@ -67,6 +73,9 @@ func Disable(c *store.TenantTx, identityID int64, by, reason, status string, now
 		return nil, err
 	}
 	d := &store.IdentityDisable{IdentityID: identityID, Reason: reason, DisabledBy: by, DisabledAt: now, ContainmentStatus: status}
+	if byUserID != "" {
+		d.DisabledByUser = &byUserID
+	}
 	res := &DisableResult{Disable: d, Accounts: []AccountRef{}}
 	for _, a := range accts {
 		if a.Status != "active" {
@@ -168,7 +177,19 @@ func EnableRefusal(c *store.TenantTx, identityID int64, byUser *store.PlatformUs
 	if err != nil {
 		return "", err
 	}
-	if len(linked) > 0 && d.DisabledBy == by {
+	if len(linked) == 0 {
+		return "", nil
+	}
+	// Compare users, not display names: a second user linked to the disabler's identity is the
+	// same person (#425). A row without a recorded user id (older, or disabled by a non-user
+	// principal) falls back to the actor name.
+	same := d.DisabledByUser == nil && d.DisabledBy == by
+	if d.DisabledByUser != nil && byUser != nil {
+		if same, err = c.SameActor(*d.DisabledByUser, byUser.ID.String()); err != nil {
+			return "", err
+		}
+	}
+	if same {
 		return RefuseFourEyes, nil
 	}
 	return "", nil
