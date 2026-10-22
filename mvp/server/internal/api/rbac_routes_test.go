@@ -104,6 +104,11 @@ POST   /api/audit/verify                             audit.verify    -
 GET    /api/audit/export                             audit.read      -
 GET    /api/admin/retention                          admin.read      -  # issue #298
 GET    /api/admin/archive/segments                   audit.read      -  # issue #298
+GET    /api/admin/deletion-guard                     admin.read      -  # deletion threshold guard
+GET    /api/admin/deletion-holds                     admin.read      -  # deletion threshold guard
+GET    /api/admin/deletion-holds/{id}                admin.read      -  # deletion threshold guard
+POST   /api/admin/deletion-holds/{id}/approve        admin.change.approve STEP_UP_ADMIN  # deletion threshold guard
+POST   /api/admin/deletion-holds/{id}/discard        admin.change.approve STEP_UP_ADMIN  # deletion threshold guard
 GET    /api/oauth-apps                               graph.read      -  # issue #107
 GET    /api/oauth-apps/{app_id}                      graph.read      -  # issue #107
 POST   /api/oauth-apps/sync                          oauthapps.manage -  # issue #107

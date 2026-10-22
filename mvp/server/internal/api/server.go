@@ -479,6 +479,7 @@ func New(cfg Config) *Server {
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerArchiveRoutes()
+	s.registerDeletionGuardRoutes()
 	s.registerOAuthAppsRoutes()
 	s.registerSiemRoutes()
 	s.registerCertificateRoutes()

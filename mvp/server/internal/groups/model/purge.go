@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/attrs"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -85,6 +86,9 @@ func (e Env) PurgeGroup(id store.GroupID) error {
 		return err
 	}
 	if err := writable(f); err != nil {
+		return err
+	}
+	if held, err := e.guard(deleteguard.CatGroups, groupItem(ItemGroupPurge, g)); held || err != nil {
 		return err
 	}
 	return e.purgeGroup(g, nil)
@@ -383,7 +387,12 @@ type DeleteResult struct {
 	AttrDefs    int `json:"attr_defs"`
 	Memberships int `json:"memberships"`
 	SoftDeleted int `json:"soft_deleted"`
+	// Held counts the groups and folders the deletion guard held (internal/deleteguard).
+	Held int `json:"held"`
 }
+
+// treeRef is the item ref of the i-th group of a recursive delete: it sorts in plan order.
+func treeRef(i int, id store.GroupID) string { return fmt.Sprintf("%06d|%s", i, id) }
 
 // DeleteFolderRecursive deletes a folder and its whole tree in the caller's
 // transaction: groups are soft-deleted then purged (a group before the groups it
@@ -411,9 +420,27 @@ func (e Env) DeleteFolderRecursive(id store.FolderID) (*DeletePlan, *DeleteResul
 		tree[g.ID] = true
 	}
 	res := &DeleteResult{Memberships: p.Memberships}
-	for _, g := range p.Groups {
+	// the groups go through the deletion guard as one batch; the ref keeps the plan's order (a
+	// group before the groups it nests), so what is let through is a prefix of it
+	items := make([]deleteguard.Item, len(p.Groups))
+	for i, g := range p.Groups {
+		items[i] = deleteguard.Item{Kind: ItemGroupTree, Ref: treeRef(i, g.ID), Label: g.Name}
+	}
+	d, err := e.admit(deleteguard.CatGroups, items...)
+	if err != nil {
+		return p, nil, err
+	}
+	allowed := make(map[string]bool, len(d.Applied))
+	for _, it := range d.Applied {
+		allowed[it.Ref] = true
+	}
+	res.Held = len(d.Held)
+	for i, g := range p.Groups {
+		if !allowed[treeRef(i, g.ID)] {
+			continue
+		}
 		if g.Status != store.GroupDeleted {
-			if err := e.DeleteGroup(g.ID); err != nil {
+			if err := e.softDelete(g); err != nil {
 				return p, nil, err
 			}
 			res.SoftDeleted++
@@ -426,6 +453,13 @@ func (e Env) DeleteFolderRecursive(id store.FolderID) (*DeletePlan, *DeleteResul
 		}
 		res.Groups++
 	}
+	if res.Held > 0 {
+		// the tree stays (its folders and attribute definitions hold what was not deleted)
+		return p, res, e.audit("groups.folder.deleted_recursive", "folder", string(p.Folder.ID), ojson.Object{
+			{Key: "folder_id", Value: string(p.Folder.ID)}, {Key: "name", Value: p.Folder.Name}, {Key: "folders", Value: 0},
+			{Key: "groups", Value: res.Groups}, {Key: "groups_held", Value: res.Held}, {Key: "hold_id", Value: d.HoldID},
+			{Key: "memberships", Value: p.Memberships}})
+	}
 	defs, err := e.Tx.GrpAttrDefs(store.GrpAttrDefFilter{Prefix: p.Folder.Name, Limit: 5000})
 	if err != nil {
 		return p, nil, err
@@ -436,12 +470,23 @@ func (e Env) DeleteFolderRecursive(id store.FolderID) (*DeletePlan, *DeleteResul
 		}
 		res.AttrDefs++
 	}
-	for _, sf := range p.Subtree {
-		if err := e.removeFolder(sf); err != nil {
+	fitems := make([]deleteguard.Item, len(p.Subtree))
+	byRef := make(map[string]*store.Folder, len(p.Subtree))
+	for i, sf := range p.Subtree {
+		fitems[i] = folderItem(sf)
+		byRef[fitems[i].Ref] = sf
+	}
+	fd, err := e.admit(deleteguard.CatFolders, fitems...)
+	if err != nil {
+		return p, nil, err
+	}
+	for _, it := range fd.Applied { // deepest first: the item ref sorts that way
+		if err := e.removeFolder(byRef[it.Ref]); err != nil {
 			return p, nil, err
 		}
 		res.Folders++
 	}
+	res.Held += len(fd.Held)
 	err = e.audit("groups.folder.deleted_recursive", "folder", string(p.Folder.ID), ojson.Object{
 		{Key: "folder_id", Value: string(p.Folder.ID)}, {Key: "name", Value: p.Folder.Name}, {Key: "folders", Value: res.Folders},
 		{Key: "groups", Value: res.Groups}, {Key: "groups_active", Value: p.ActiveGroups}, {Key: "groups_deleted", Value: p.DeletedGroups},

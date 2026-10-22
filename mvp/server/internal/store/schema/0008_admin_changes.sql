@@ -54,7 +54,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     -- issue #298: per-tenant log retention settings (internal/admin/change_retention.go)
     'retention.update',
     -- deleting a folder with everything in it needs a second admin when it is large or populated (internal/admin/change_folder.go)
-    'groups.folder.delete_recursive')),
+    'groups.folder.delete_recursive',
+    -- deletion threshold guard settings: loosening takes two admins (internal/admin/change_deleteguard.go)
+    'deletion_guard.update')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

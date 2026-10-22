@@ -148,6 +148,9 @@ var tables = []string{
 	"stepup_policy",                                      // schema/0493_stepup_policy.sql
 	"user_preferences",                                   // schema/0494_user_preferences.sql
 	"org_owners", "org_settings", "org_hierarchy_source", // schema/0495_org_settings.sql
+	// deletion threshold guard (schema/0670_deletion_guard.sql)
+	"deletion_guard_policies", "deletion_guard_settings", "deletion_guard_counters", "deletion_guard_ledger",
+	"deletion_holds", "deletion_hold_items",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)

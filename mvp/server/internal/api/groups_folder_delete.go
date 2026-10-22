@@ -7,6 +7,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -113,6 +114,7 @@ func (s *Server) deleteGrpFolder(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, badRequest("invalid_recursive", "recursive is true or false")
 	}
 	ctx := r.Context()
+	col := &deleteguard.Collector{}
 	if !recursive {
 		err := p.scope.Write(ctx, func(c *store.TenantTx) error {
 			ck := privs.NewChecker(c, s.clock(), s.cfg.GroupsEngine, s.grpSubject(r))
@@ -123,10 +125,15 @@ func (s *Server) deleteGrpFolder(r *http.Request, p *params) (int, any, error) {
 			if err := grpErr(ck.Require(privs.FolderObject(f.ID), privs.StemAdmin)); err != nil {
 				return err
 			}
-			return grpErr(s.grpEnv(r, c, s.clock()).DeleteFolder(f.ID))
+			e := s.grpEnv(r, c, s.clock())
+			e.Held = col
+			return grpErr(e.DeleteFolder(f.ID))
 		})
 		if err != nil {
 			return 0, nil, err
+		}
+		if res := col.Result(); res != nil {
+			return http.StatusAccepted, heldBody(res, map[string]any{"id": id, "deleted": false}), nil
 		}
 		return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
 	}
@@ -168,11 +175,17 @@ func (s *Server) deleteGrpFolder(r *http.Request, p *params) (int, any, error) {
 		if again.NeedsApproval {
 			return grpErr(&model.Error{Kind: model.Conflict, Code: "folder_changed", Msg: "the folder changed while it was being deleted; try again"})
 		}
-		_, res, err = s.grpEnv(r, c, s.clock()).DeleteFolderRecursive(store.FolderID(id))
+		e := s.grpEnv(r, c, s.clock())
+		e.Held = col
+		_, res, err = e.DeleteFolderRecursive(store.FolderID(id))
 		return grpErr(err)
 	})
 	if err != nil {
 		return 0, nil, err
+	}
+	if held := col.Result(); held != nil {
+		return http.StatusAccepted, heldBody(held, map[string]any{"id": id, "deleted": false, "recursive": true, "folders": res.Folders,
+			"groups": res.Groups, "attr_defs": res.AttrDefs, "memberships": res.Memberships}), nil
 	}
 	return http.StatusOK, map[string]any{"id": id, "deleted": true, "recursive": true, "folders": res.Folders, "groups": res.Groups,
 		"attr_defs": res.AttrDefs, "memberships": res.Memberships}, nil

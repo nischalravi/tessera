@@ -2095,3 +2095,45 @@ DROP POLICY IF EXISTS tenant_isolation ON account_link_requests;
 CREATE POLICY tenant_isolation ON account_link_requests
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE deletion_guard_policies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deletion_guard_policies FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON deletion_guard_policies;
+CREATE POLICY tenant_isolation ON deletion_guard_policies
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE deletion_guard_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deletion_guard_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON deletion_guard_settings;
+CREATE POLICY tenant_isolation ON deletion_guard_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE deletion_guard_counters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deletion_guard_counters FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON deletion_guard_counters;
+CREATE POLICY tenant_isolation ON deletion_guard_counters
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE deletion_guard_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deletion_guard_ledger FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON deletion_guard_ledger;
+CREATE POLICY tenant_isolation ON deletion_guard_ledger
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE deletion_holds ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deletion_holds FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON deletion_holds;
+CREATE POLICY tenant_isolation ON deletion_holds
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE deletion_hold_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deletion_hold_items FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON deletion_hold_items;
+CREATE POLICY tenant_isolation ON deletion_hold_items
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

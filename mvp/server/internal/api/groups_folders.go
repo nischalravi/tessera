@@ -6,7 +6,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
@@ -214,7 +216,8 @@ func grpBodyID(field, v string) error {
 func (s *Server) grpEnv(r *http.Request, c *store.TenantTx, now time.Time) model.Env {
 	pr := principal(r)
 	env := model.Env{Tx: c, Now: now, Engine: s.cfg.GroupsEngine, ByIdentity: pr.IdentityID,
-		TenantAdmin: pr.ActiveRoles.Has(auth.RoleTenantAdmin), Guard: s.cfg.GroupsRules.Guard()}
+		TenantAdmin: pr.ActiveRoles.Has(auth.RoleTenantAdmin), Guard: s.cfg.GroupsRules.Guard(),
+		Correlation: audit.RequestID(r.Context())}
 	if pr.UserID != nil {
 		u := pr.UserID.String()
 		env.By = &u
@@ -623,8 +626,12 @@ func (s *Server) deleteGrpGroup(r *http.Request, p *params) (int, any, error) {
 	if _, err := s.grpGroupFor(r, s.grpChecker(r), id, privs.Admin); err != nil {
 		return 0, nil, err
 	}
-	if err := s.grpWrite(r, func(e model.Env) error { return e.DeleteGroup(store.GroupID(id)) }); err != nil {
+	col := &deleteguard.Collector{}
+	if err := s.grpWrite(r, func(e model.Env) error { e.Held = col; return e.DeleteGroup(store.GroupID(id)) }); err != nil {
 		return 0, nil, err
+	}
+	if res := col.Result(); res != nil {
+		return http.StatusAccepted, heldBody(res, map[string]any{"id": id, "deleted": false}), nil
 	}
 	return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
 }
@@ -637,8 +644,12 @@ func (s *Server) purgeGrpGroup(r *http.Request, p *params) (int, any, error) {
 	if _, err := s.grpGroupFor(r, s.grpChecker(r), id, privs.Admin); err != nil {
 		return 0, nil, err
 	}
-	if err := s.grpWrite(r, func(e model.Env) error { return e.PurgeGroup(store.GroupID(id)) }); err != nil {
+	col := &deleteguard.Collector{}
+	if err := s.grpWrite(r, func(e model.Env) error { e.Held = col; return e.PurgeGroup(store.GroupID(id)) }); err != nil {
 		return 0, nil, err
+	}
+	if res := col.Result(); res != nil {
+		return http.StatusAccepted, heldBody(res, map[string]any{"id": id, "purged": false}), nil
 	}
 	return http.StatusOK, map[string]any{"id": id, "purged": true}, nil
 }
