@@ -283,13 +283,13 @@ func (f *Fake) caMembers(w http.ResponseWriter, r *http.Request, s *Safe, rest [
 					return
 				}
 				s.Members[i] = m
-				writeJSON(w, map[string]string{"memberName": b.Name})
+				writeJSON(w, map[string]bool{"ok": true}) // fixed, never request input
 				return
 			}
 		}
 		s.Members = append(s.Members, m)
 		w.WriteHeader(http.StatusCreated)
-		writeJSON(w, map[string]string{"memberName": b.Name})
+		writeJSON(w, map[string]bool{"ok": true}) // fixed, never request input
 	case r.Method == http.MethodDelete && len(rest) == 1:
 		for i := range s.Members {
 			if s.Members[i].Name == rest[0] {
