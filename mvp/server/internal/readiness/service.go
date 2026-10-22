@@ -597,6 +597,12 @@ func (s *Service) itemFor(b *Bundle, itemID string) (*ItemEval, error) {
 
 // Attest records an attestation for an item of the in-progress revision.
 func (s *Service) Attest(c *store.TenantTx, connID, itemID, note, actor string, now time.Time) (*Bundle, error) {
+	return s.AttestAs(c, connID, itemID, note, actor, "", now)
+}
+
+// AttestAs is Attest that also records the attester's platform user id (empty for a principal that
+// is not a user), which ApproveActivation compares with SameActor (#425).
+func (s *Service) AttestAs(c *store.TenantTx, connID, itemID, note, actor, actorUserID string, now time.Time) (*Bundle, error) {
 	b, _, err := s.pendingBundle(c, connID, actor, now)
 	if err != nil {
 		return nil, err
@@ -622,7 +628,11 @@ func (s *Service) Attest(c *store.TenantTx, connID, itemID, note, actor string, 
 		}
 		return nil, blocked("dependencies_not_passing", g)
 	}
-	if err := c.UpsertAttestation(&store.Attestation{RevisionID: b.Rev.ID, ItemID: itemID, ActorID: actor, Note: note,
+	var byUser *string
+	if actorUserID != "" {
+		byUser = &actorUserID
+	}
+	if err := c.UpsertAttestation(&store.Attestation{RevisionID: b.Rev.ID, ItemID: itemID, ActorID: actor, ActorUserID: byUser, Note: note,
 		ItemHash: it.ItemHash, ConfigHash: b.ConfigHash, AttestedAt: now}); err != nil {
 		return nil, err
 	}

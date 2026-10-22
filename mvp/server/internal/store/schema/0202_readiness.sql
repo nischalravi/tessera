@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS readiness_attestations (
   revision_id TEXT NOT NULL REFERENCES connection_revisions (id),
   item_id TEXT NOT NULL,
   actor_id TEXT NOT NULL,
+  actor_user_id TEXT,
   note TEXT NOT NULL CHECK (length(note) >= 10),
   item_hash TEXT NOT NULL,
   config_hash TEXT NOT NULL,

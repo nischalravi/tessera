@@ -3644,6 +3644,18 @@ without ever storing a blob. That needs SQL access as `tessera_app` (an injectio
 role's SQL cannot reach (a MAC under a key kept outside the database) is the remaining step. On Postgres, run the
 migration owner and the application as different roles (the default setup).
 
+**Limit of "verified" (#424).** A `verified` segment proves the database rows are consistent (the range, the
+hashes, the items). It does not prove the archive object exists or matches `sha256`; nothing checks the blob before
+`tessera_archive_purge_audit` runs. Having the archive store sign an attestation of the stored object's SHA-256, checked
+before the purge, is open design work.
+
+**Postgres search_path (`schema/postgres/0530_definer_search_path.sql`, #424).** Every `SECURITY DEFINER` function and
+the archive guards pin `search_path = pg_catalog, public, pg_temp` (pg_temp last) and name their tables as
+`public.<table>`, so a session-local table cannot stand in for a real one; the verify guard finds the table owner
+through `pg_class.relowner` of the trigger's table. The migration also revokes `TEMPORARY` on the database from PUBLIC
+and `tessera_app` (the application creates no temporary tables). That revoke needs the database owner; if the
+migration role is not the owner, run `REVOKE TEMPORARY ON DATABASE tessera FROM PUBLIC, tessera_app;` once as the DBA.
+
 **The audit chain stays verifiable.** An audit segment records its seq range, the `prev_hash` before it and its first
 and last hash. The purge appends an `audit.archived` event to the chain naming the segment, range and hashes ("archived
 up to N"). `audit.Verify` (`POST /api/audit/verify`, `tessera audit verify`) checks the purged segments join up from
@@ -3690,6 +3702,7 @@ CREATE ROLE tessera_owner LOGIN PASSWORD '…' BYPASSRLS;   -- (or SUPERUSER) it
 CREATE ROLE tessera_app NOLOGIN NOSUPERUSER NOBYPASSRLS;   -- never owns a table, never bypasses row-level security
 GRANT tessera_app TO tessera_owner;                        -- lets the owner's connections SET ROLE tessera_app
 CREATE DATABASE tessera OWNER tessera_owner;
+REVOKE TEMPORARY ON DATABASE tessera FROM PUBLIC, tessera_app;   -- no session-local tables (#424)
 ```
 
 * The DSN's role runs the goose migrations (`internal/store/schema/postgres/*.sql`, embedded, applied
