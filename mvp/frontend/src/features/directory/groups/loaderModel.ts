@@ -163,12 +163,14 @@ const columnRE = /^[A-Za-z0-9_ .-]{1,64}$/;
 const fileRE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(\/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$/;
 const sourceRE = /^[A-Za-z0-9_.:-]{1,64}$/;
 
-/** The first keyword of a SQL statement must be SELECT or WITH: the first line of defence (the server also runs it read-only). */
+/** The first keyword must be SELECT or WITH, with one statement and no comments (the server's first line of defence; it also runs the query read-only). */
 export function sqlProblem(q: string): string | null {
-  const t = q.trim().replace(/^(--[^\n]*\n|\/\*[\s\S]*?\*\/|\s)+/, "");
+  const t = q.trim();
   if (!t) return "Enter a query.";
-  if (!/^(select|with)\b/i.test(t)) return "A query must be a single SELECT or WITH statement.";
-  if (/;\s*\S/.test(t)) return "Only one statement is allowed.";
+  if (t.includes("--") || t.includes("/*")) return "A query must not contain comments.";
+  const body = t.replace(/[;\s]+$/, "");
+  if (body.includes(";")) return "Only one statement is allowed.";
+  if (!/^(select|with)\b/i.test(body)) return "A query must be a single SELECT or WITH statement.";
   return null;
 }
 

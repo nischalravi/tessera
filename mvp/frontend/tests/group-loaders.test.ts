@@ -104,7 +104,8 @@ test("the step checks mirror the server's", () => {
   assert.deepEqual(m.stepProblems("source", sql), []);
   assert.match(m.stepProblems("source", { ...sql, query: "DELETE FROM t" }).join(), /SELECT or WITH/);
   assert.match(m.stepProblems("source", { ...sql, query: "SELECT 1; DROP TABLE t" }).join(), /one statement/);
-  assert.deepEqual(m.stepProblems("source", { ...sql, query: "-- c\nWITH x AS (SELECT 1) SELECT * FROM x;" }), []);
+  assert.deepEqual(m.stepProblems("source", { ...sql, query: "WITH x AS (SELECT 1) SELECT * FROM x;" }), []);
+  assert.match(m.stepProblems("source", { ...sql, query: "-- c\nSELECT 1" }).join(), /comments/);
   assert.match(m.stepProblems("source", { ...sql, incrementalQuery: "SELECT 1", incrementalSecs: "60" }).join(), /@cursor/);
   assert.match(m.stepProblems("source", { ...sql, incrementalQuery: "SELECT @cursor", incrementalSecs: "5" }).join(), /30 to 86400/);
   assert.match(m.stepProblems("people", { ...csv(), nameTemplate: "x" }).join(), /one/);
