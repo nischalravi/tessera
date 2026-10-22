@@ -34,8 +34,8 @@ type Beater struct {
 	// Guard, when set, has its per-target breaker state published with each
 	// beat, so it is visible in GET /api/queue/workers.
 	Guard *Guard
-	Clock   func() time.Time
-	Log     *slog.Logger
+	Clock func() time.Time
+	Log   *slog.Logger
 
 	started time.Time
 }

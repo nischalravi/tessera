@@ -132,7 +132,11 @@ func (d *Deps) syncTenant(ctx context.Context, t tenancy.ID, now time.Time, conn
 			out = append(out, ojson.KV{Key: "agent_jobs_queued", Value: n})
 		}
 		if len(skipped) > 0 {
-			out = append(out, ojson.KV{Key: "skipped_breaker_open", Value: skipped})
+			out = append(out, ojson.KV{Key: "skipped_by_limits", Value: skipped})
+			if err := tx.Audit(now, actor, "connectors.sync_skipped", ojson.Object{{Key: "systems", Value: skipped},
+				{Key: "reason", Value: "circuit breaker open or rate limit spent"}, {Key: "job_id", Value: window}}); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

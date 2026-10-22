@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,13 +23,21 @@ func TestWorkerCmdRefusesBadSettings(t *testing.T) {
 	t.Setenv("TESSERA_ENV", "dev")
 	db := filepath.Join(t.TempDir(), "w.db")
 	for name, args := range map[string][]string{
-		"an unknown kind":      {"-kinds", "connector_sync,sweep_requests"},
-		"no kind":              {"-kinds", ","},
-		"no concurrency":       {"-concurrency", "0"},
-		"too much concurrency": {"-concurrency", "65"},
-		"a lease too short":    {"-lease", "1s"},
-		"an unknown flag":      {"-listen", ":8000"}, // a worker has no API
-		"a stray argument":     {"connector_sync"},
+		"an unknown kind":                {"-kinds", "connector_sync,sweep_requests"},
+		"no kind":                        {"-kinds", ","},
+		"no concurrency":                 {"-concurrency", "0"},
+		"too much concurrency":           {"-concurrency", "65"},
+		"a lease too short":              {"-lease", "1s"},
+		"an unknown flag":                {"-listen", ":8000"}, // a worker has no API
+		"a stray argument":               {"connector_sync"},
+		"a public metrics address":       {"-metrics-addr", "203.0.113.9:9465"},
+		"a wildcard metrics address":     {"-metrics-addr", ":9465"},
+		"a metrics host name":            {"-metrics-addr", "metrics.example.com:9465"},
+		"a metrics address with no port": {"-metrics-addr", "127.0.0.1"},
+		"too much target concurrency":    {"-target-concurrency", "65"},
+		"a negative target rate":         {"-target-rate", "-1"},
+		"too many breaker failures":      {"-target-breaker-failures", "101"},
+		"a breaker cooldown too short":   {"-target-breaker-cooldown", "10ms"},
 	} {
 		var logs bytes.Buffer
 		if err := run(context.Background(), append([]string{"worker", "-db", db}, args...), io.Discard, &logs); err == nil {
@@ -125,5 +135,67 @@ func TestWorkerCmdRunsQueuedSyncsAndStopsCleanly(t *testing.T) {
 	})
 	if !strings.Contains(logs.String(), "tessera worker started") || !strings.Contains(logs.String(), "tessera worker stopped") {
 		t.Errorf("logs: %s", logs.String())
+	}
+}
+
+// TestWorkerCmdServesMetrics: -metrics-addr serves Prometheus text with the
+// worker's own metrics on /metrics and nothing else, and stops with the worker.
+func TestWorkerCmdServesMetrics(t *testing.T) {
+	t.Setenv("TESSERA_ENV", "dev")
+	t.Setenv("TESSERA_CONNECTORS", "demo-workday")
+	db := filepath.Join(t.TempDir(), "w.db")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var logs bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, []string{"worker", "-db", db, "-kinds", "connector_sync", "-poll", "100ms", "-concurrency", "3",
+			"-metrics-addr", addr}, io.Discard, &logs)
+	}()
+	get := func(path string) (int, string) {
+		resp, err := http.Get("http://" + addr + path) // #nosec G107 -- a test against its own loopback listener
+		if err != nil {
+			return 0, err.Error()
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	var code int
+	var body string
+	for deadline := time.Now().Add(2 * time.Minute); code != http.StatusOK; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no metrics at %s: %d %s\n%s", addr, code, body, logs.String())
+		}
+		code, body = get("/metrics")
+	}
+	for _, want := range []string{"tessera_worker_concurrency 3", "tessera_worker_jobs_running", "tessera_process_start_time_seconds"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("no %q in:\n%s", want, body)
+		}
+	}
+	if c, _ := get("/"); c != http.StatusNotFound {
+		t.Errorf("GET /: %d, want 404 (only /metrics is served)", c)
+	}
+	if c, _ := get("/api/queue/workers"); c != http.StatusNotFound {
+		t.Errorf("GET /api/queue/workers: %d", c)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("the worker's exit: %v", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("the worker did not stop")
+	}
+	if _, err := http.Get("http://" + addr + "/metrics"); err == nil { // #nosec G107 -- loopback test listener
+		t.Error("the metrics listener outlived the worker")
 	}
 }

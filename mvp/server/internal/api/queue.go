@@ -113,7 +113,7 @@ func (s *Server) newQueue() *queue.Queue {
 // parts (so an on-demand sync and a queued one run the same code).
 func (s *Server) workerDeps() *worker.Deps {
 	return &worker.Deps{DB: s.store, Clock: func() time.Time { return s.clock() }, Log: s.log.With("component", "worker"),
-		Connectors: s.cfg.Connectors, Provision: s.prov, SyncSchedule: s.cfg.ConnectorSyncSchedule}
+		Connectors: s.cfg.Connectors, Provision: s.prov, Guard: s.guard, SyncSchedule: s.cfg.ConnectorSyncSchedule}
 }
 
 // inProcessKinds are the queue kinds of the worker pool that this process
@@ -128,6 +128,10 @@ func (s *Server) inProcessKinds() []string {
 
 // ExternalKind reports whether kind is run by workers rather than this process.
 func (s *Server) ExternalKind(kind string) bool { return slices.Contains(s.cfg.ExternalKinds, kind) }
+
+// Guard is the per-target limits and circuit breakers of this process's calls
+// to customers' systems (its state goes out with the worker heartbeat).
+func (s *Server) Guard() *worker.Guard { return s.guard }
 
 // Queue is the job queue (tests drive it with Tick and Wait).
 func (s *Server) Queue() *queue.Queue { return s.queue }

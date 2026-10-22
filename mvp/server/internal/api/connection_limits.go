@@ -17,10 +17,12 @@ import (
 // 30 seconds, so a change takes effect without a restart.
 
 func (s *Server) registerConnectionLimitRoutes() {
-	s.handle(http.MethodGet, "/api/connections/{id}/limits", read, need(auth.PermConnectionsRead), s.rd(s.getConnectionLimits))
+	// The connection is named in the query (GET, DELETE) or the body (PUT), not the path: these routes
+	// belong to the worker pool's queue API, not to a connection's readiness lifecycle.
+	s.handle(http.MethodGet, "/api/queue/limits", read, need(auth.PermConnectionsRead), s.rd(s.getConnectionLimits))
 	// Step-up like the credential: raising a limit changes the load put on a customer's system.
-	s.handle(http.MethodPut, "/api/connections/{id}/limits", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.putConnectionLimits))
-	s.handle(http.MethodDelete, "/api/connections/{id}/limits", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.deleteConnectionLimits))
+	s.handle(http.MethodPut, "/api/queue/limits", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.putConnectionLimits))
+	s.handle(http.MethodDelete, "/api/queue/limits", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.deleteConnectionLimits))
 }
 
 type connectionLimitsView struct {
@@ -48,11 +50,12 @@ func viewLimits(id string, l *store.ConnectionLimits) connectionLimitsView {
 }
 
 type connectionLimitsInput struct {
-	MaxConcurrency      int `json:"max_concurrency"`
-	RatePerMin          int `json:"rate_per_min"`
-	Burst               int `json:"burst"`
-	BreakerThreshold    int `json:"breaker_threshold"`
-	BreakerCooldownSecs int `json:"breaker_cooldown_seconds"`
+	ConnectionID        string `json:"connection_id"`
+	MaxConcurrency      int    `json:"max_concurrency"`
+	RatePerMin          int    `json:"rate_per_min"`
+	Burst               int    `json:"burst"`
+	BreakerThreshold    int    `json:"breaker_threshold"`
+	BreakerCooldownSecs int    `json:"breaker_cooldown_seconds"`
 }
 
 func (in *connectionLimitsInput) validate() error {
@@ -71,10 +74,11 @@ func (in *connectionLimitsInput) validate() error {
 	return nil
 }
 
-func (s *Server) liveConnection(r *http.Request, p *params) (string, error) {
-	id, err := connID(p)
-	if err != nil {
-		return "", err
+// liveConnection checks that id names a live (not retired) connection of the
+// request's tenant.
+func (s *Server) liveConnection(r *http.Request, id string) (string, error) {
+	if !idRE.MatchString(id) {
+		return "", notFoundErr("connection")
 	}
 	conn, err := store.TxFrom(r.Context()).Connection(id)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && conn.RetiredAt != nil) {
@@ -83,12 +87,24 @@ func (s *Server) liveConnection(r *http.Request, p *params) (string, error) {
 	return id, err
 }
 
-func (s *Server) getConnectionLimits(r *http.Request, p *params) (int, any, error) {
-	id, err := s.liveConnection(r, p)
+func (s *Server) getConnectionLimits(r *http.Request, _ *params) (int, any, error) {
+	c := store.TxFrom(r.Context())
+	if r.URL.Query().Get("connection_id") == "" { // every connection that has limits set
+		ls, err := c.AllConnectionLimits()
+		if err != nil {
+			return 0, nil, err
+		}
+		out := make([]connectionLimitsView, 0, len(ls))
+		for _, l := range ls {
+			out = append(out, viewLimits(l.ConnectionID, l))
+		}
+		return http.StatusOK, out, nil
+	}
+	id, err := s.liveConnection(r, r.URL.Query().Get("connection_id"))
 	if err != nil {
 		return 0, nil, err
 	}
-	l, err := store.TxFrom(r.Context()).ConnectionLimits(id)
+	l, err := c.ConnectionLimits(id)
 	if errors.Is(err, store.ErrNotFound) {
 		l, err = nil, nil
 	}
@@ -98,13 +114,13 @@ func (s *Server) getConnectionLimits(r *http.Request, p *params) (int, any, erro
 	return http.StatusOK, viewLimits(id, l), nil
 }
 
-func (s *Server) putConnectionLimits(r *http.Request, p *params) (int, any, error) {
-	id, err := s.liveConnection(r, p)
-	if err != nil {
-		return 0, nil, err
-	}
+func (s *Server) putConnectionLimits(r *http.Request, _ *params) (int, any, error) {
 	var in connectionLimitsInput
 	if err := decodeBody(r, &in, false); err != nil {
+		return 0, nil, err
+	}
+	id, err := s.liveConnection(r, in.ConnectionID)
+	if err != nil {
 		return 0, nil, err
 	}
 	if err := in.validate(); err != nil {
@@ -129,8 +145,8 @@ func (s *Server) putConnectionLimits(r *http.Request, p *params) (int, any, erro
 	return http.StatusOK, viewLimits(id, saved), nil
 }
 
-func (s *Server) deleteConnectionLimits(r *http.Request, p *params) (int, any, error) {
-	id, err := s.liveConnection(r, p)
+func (s *Server) deleteConnectionLimits(r *http.Request, _ *params) (int, any, error) {
+	id, err := s.liveConnection(r, r.URL.Query().Get("connection_id"))
 	if err != nil {
 		return 0, nil, err
 	}
