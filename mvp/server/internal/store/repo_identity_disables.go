@@ -14,6 +14,7 @@ type IdentityDisable struct {
 	IdentityID        int64
 	Reason            string
 	DisabledBy        string
+	DisabledByUser    *string // platform user id of the disabler (nil: not a user, or recorded before #425)
 	DisabledAt        time.Time
 	ContainmentStatus string
 	EnabledBy         *string
@@ -23,12 +24,12 @@ type IdentityDisable struct {
 }
 
 const disableCols = `d.id, d.identity_id, d.reason, d.disabled_by, d.disabled_at, d.containment_status,
-	d.enabled_by, d.enabled_at, d.enable_reason`
+	d.enabled_by, d.enabled_at, d.enable_reason, d.disabled_by_user_id`
 
 var (
 	disablesInsert = tq("identity_disables.insert", `
-		INSERT INTO identity_disables (id, tenant_id, identity_id, reason, disabled_by, disabled_at, containment_status)
-		VALUES (@id, @tenant, @identity_id, @reason, @disabled_by, @disabled_at, @containment_status)`)
+		INSERT INTO identity_disables (id, tenant_id, identity_id, reason, disabled_by, disabled_at, containment_status, disabled_by_user_id)
+		VALUES (@id, @tenant, @identity_id, @reason, @disabled_by, @disabled_at, @containment_status, @disabled_by_user_id)`)
 	disablesAccountInsert = tq("identity_disable_accounts.insert", `
 		INSERT INTO identity_disable_accounts (tenant_id, disable_id, account_id)
 		VALUES (@tenant, @disable_id, @account_id)`)
@@ -51,16 +52,16 @@ var (
 func scanDisable(s scanner) (*IdentityDisable, error) {
 	var d IdentityDisable
 	var at string
-	var by, reason sql.NullString
+	var by, reason, byUser sql.NullString
 	var en nullTime
-	if err := s.Scan(&d.ID, &d.IdentityID, &d.Reason, &d.DisabledBy, &at, &d.ContainmentStatus, &by, &en, &reason); err != nil {
+	if err := s.Scan(&d.ID, &d.IdentityID, &d.Reason, &d.DisabledBy, &at, &d.ContainmentStatus, &by, &en, &reason, &byUser); err != nil {
 		return nil, err
 	}
 	var err error
 	if d.DisabledAt, err = ParseRT(at); err != nil {
 		return nil, err
 	}
-	d.EnabledBy, d.EnableReason = strp(by), strp(reason)
+	d.EnabledBy, d.EnableReason, d.DisabledByUser = strp(by), strp(reason), strp(byUser)
 	if en.Valid {
 		t, err := ParseRT(en.String)
 		if err != nil {
@@ -83,7 +84,7 @@ func (tx *TenantTx) InsertIdentityDisable(d *IdentityDisable) error {
 	}
 	_, err := tx.exec(disablesInsert, sql.Named("id", d.ID), sql.Named("identity_id", d.IdentityID),
 		sql.Named("reason", d.Reason), sql.Named("disabled_by", d.DisabledBy), sql.Named("disabled_at", RT(d.DisabledAt)),
-		sql.Named("containment_status", d.ContainmentStatus))
+		sql.Named("containment_status", d.ContainmentStatus), sql.Named("disabled_by_user_id", d.DisabledByUser))
 	if isUnique(err) {
 		return ErrDuplicate
 	}

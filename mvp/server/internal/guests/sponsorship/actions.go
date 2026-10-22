@@ -72,9 +72,18 @@ func (s *Service) save(tx *store.TenantTx, ss *store.Sponsorship, from string, n
 }
 
 // fourEyes refuses a decision by someone the sponsorship is about or whose
-// request it is.
-func fourEyes(ss *store.Sponsorship, by Actor) error {
-	if by.Is(ss.SponsorIdentityID) || by.Is(ss.GuestIdentityID) || (ss.CreatedBy != nil && by.uid() != nil && *ss.CreatedBy == *by.uid()) {
+// request it is. The creator is compared with SameActor, so a second user linked to the creator's
+// identity is the creator too (#425).
+func fourEyes(tx *store.TenantTx, ss *store.Sponsorship, by Actor) error {
+	self := by.Is(ss.SponsorIdentityID) || by.Is(ss.GuestIdentityID)
+	if !self && ss.CreatedBy != nil && by.uid() != nil {
+		same, err := tx.SameActor(*ss.CreatedBy, *by.uid())
+		if err != nil {
+			return err
+		}
+		self = same
+	}
+	if self {
 		return refuse(403, "self_approval", "a second person approves: not the sponsor, the guest or whoever made the request")
 	}
 	return nil
@@ -94,7 +103,7 @@ func (s *Service) Approve(tx *store.TenantTx, by Actor, id string, now time.Time
 	case ss.Status != store.SponsorPendingApproval:
 		return nil, refuse(409, "not_pending", "this sponsorship is not waiting for approval")
 	}
-	if err := fourEyes(ss, by); err != nil {
+	if err := fourEyes(tx, ss, by); err != nil {
 		return nil, err
 	}
 	sponsor, err := tx.Identity(ss.SponsorIdentityID)
@@ -148,7 +157,7 @@ func (s *Service) Reject(tx *store.TenantTx, by Actor, id, reason string, now ti
 	case ss.Status != store.SponsorPendingApproval:
 		return nil, refuse(409, "not_pending", "this sponsorship is not waiting for approval")
 	}
-	if err := fourEyes(ss, by); err != nil {
+	if err := fourEyes(tx, ss, by); err != nil {
 		return nil, err
 	}
 	ss.PolicyVersion = s.Policy.Version

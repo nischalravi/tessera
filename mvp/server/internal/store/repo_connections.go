@@ -264,13 +264,13 @@ func (tx *TenantTx) SetRevisionState(ch StateChange) error {
 
 var (
 	attestationsUpsert = tq("readiness_attestations.upsert", `
-		INSERT INTO readiness_attestations (tenant_id, revision_id, item_id, actor_id, note, item_hash, config_hash,
+		INSERT INTO readiness_attestations (tenant_id, revision_id, item_id, actor_id, actor_user_id, note, item_hash, config_hash,
 			attested_at)
-		VALUES (@tenant, @revision_id, @item_id, @actor_id, @note, @item_hash, @config_hash, @attested_at)
-		ON CONFLICT (tenant_id, revision_id, item_id) DO UPDATE SET actor_id = excluded.actor_id, note = excluded.note,
+		VALUES (@tenant, @revision_id, @item_id, @actor_id, @actor_user_id, @note, @item_hash, @config_hash, @attested_at)
+		ON CONFLICT (tenant_id, revision_id, item_id) DO UPDATE SET actor_id = excluded.actor_id, actor_user_id = excluded.actor_user_id, note = excluded.note,
 			item_hash = excluded.item_hash, config_hash = excluded.config_hash, attested_at = excluded.attested_at`)
 	attestationsOfRevision = tq("readiness_attestations.of_revision", `
-		SELECT a.revision_id, a.item_id, a.actor_id, a.note, a.item_hash, a.config_hash, a.attested_at
+		SELECT a.revision_id, a.item_id, a.actor_id, a.note, a.item_hash, a.config_hash, a.attested_at, a.actor_user_id
 		FROM readiness_attestations a WHERE a.tenant_id = @tenant AND a.revision_id = @revision_id`)
 	liveAttestationsUpsert = tq("readiness_live_attestations.upsert", `
 		INSERT INTO readiness_live_attestations (tenant_id, revision_id, item_id, actor_id, attester, reason, evidence,
@@ -313,7 +313,7 @@ var (
 // UpsertAttestation records (or replaces) an attestation.
 func (tx *TenantTx) UpsertAttestation(a *Attestation) error {
 	_, err := tx.exec(attestationsUpsert, sql.Named("revision_id", a.RevisionID), sql.Named("item_id", a.ItemID),
-		sql.Named("actor_id", a.ActorID), sql.Named("note", a.Note), sql.Named("item_hash", a.ItemHash),
+		sql.Named("actor_id", a.ActorID), sql.Named("actor_user_id", a.ActorUserID), sql.Named("note", a.Note), sql.Named("item_hash", a.ItemHash),
 		sql.Named("config_hash", a.ConfigHash), sql.Named("attested_at", RT(a.AttestedAt)))
 	return err
 }
@@ -323,9 +323,11 @@ func (tx *TenantTx) Attestations(revisionID string) (map[string]*Attestation, er
 	list, err := collect(tx, func(s scanner) (*Attestation, error) {
 		var a Attestation
 		var at string
-		if err := s.Scan(&a.RevisionID, &a.ItemID, &a.ActorID, &a.Note, &a.ItemHash, &a.ConfigHash, &at); err != nil {
+		var uid sql.NullString
+		if err := s.Scan(&a.RevisionID, &a.ItemID, &a.ActorID, &a.Note, &a.ItemHash, &a.ConfigHash, &at, &uid); err != nil {
 			return nil, err
 		}
+		a.ActorUserID = strp(uid)
 		var err error
 		a.AttestedAt, err = ParseRT(at)
 		return &a, err

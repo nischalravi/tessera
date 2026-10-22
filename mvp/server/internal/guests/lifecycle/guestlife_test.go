@@ -42,8 +42,19 @@ func newEnv(t *testing.T) *env {
 	sp := sponsorship.New(storetest.IdentityKeyer(t))
 	gl := guestlife.New(sp)
 	gl.Secrets, gl.BaseURL = notify.NewSecrets(), "https://tessera.example"
-	return &env{t: t, f: f, sp: sp, gl: gl, carol: actor("Carol", &carol, false), bob: actor("Bob", &bob, false),
+	e := &env{t: t, f: f, sp: sp, gl: gl, carol: actor("Carol", &carol, false), bob: actor("Bob", &bob, false),
 		admin: actor("Pat", nil, true), alice: actor("Alice", &alice, false)}
+	// resolved_by and updated_by reference platform_users; Postgres enforces
+	// it, so each actor is a real user of the tenant.
+	e.must(func(tx *store.TenantTx) error {
+		for _, a := range []sponsorship.Actor{e.carol, e.bob, e.admin, e.alice} {
+			if err := tx.InsertPlatformUser(&store.PlatformUser{ID: a.UserID, TenantID: f.B.ID, DisplayName: a.Display, CreatedAt: now}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return e
 }
 
 func (e *env) do(fn func(tx *store.TenantTx) error) error {

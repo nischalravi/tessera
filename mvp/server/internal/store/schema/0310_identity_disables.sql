@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS identity_disables (
   identity_id INTEGER NOT NULL REFERENCES identities (id),
   reason TEXT NOT NULL,
   disabled_by TEXT NOT NULL,
+  disabled_by_user_id TEXT,
   disabled_at TEXT NOT NULL,
   containment_status TEXT NOT NULL DEFAULT 'none',
   enabled_by TEXT,
