@@ -78,7 +78,7 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 		return errors.New("set TESSERA_ENV=dev (run.sh does), TESSERA_ENV=test or TESSERA_ENV=prod")
 	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	cfg, err := config.Load(os.Getenv)
+	cfg, err := config.Load(envWithDB(o.db))
 	if err != nil {
 		return err
 	}

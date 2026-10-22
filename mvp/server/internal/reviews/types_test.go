@@ -292,6 +292,12 @@ func TestSchedule_ReviewTypeSettingsDriveCloseOut(t *testing.T) {
 				t.Fatal("no items")
 			}
 			for _, it := range items {
+				if it.IdentityID == bob { // never his own reviewer (#434); this type has no fallback
+					if it.ReviewerID != nil && *it.ReviewerID == bob {
+						t.Errorf("item %d about bob is assigned to bob", it.ID)
+					}
+					continue
+				}
 				if it.ReviewerID == nil || *it.ReviewerID != bob {
 					t.Errorf("item %d reviewer %v, want bob (the application owner)", it.ID, it.ReviewerID)
 				}

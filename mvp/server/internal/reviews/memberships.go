@@ -275,6 +275,7 @@ func (v *roleView) build(now time.Time, people map[int64]*store.Identity,
 				reviewer = rr
 			}
 		}
+		reviewer = avoidSelf(v.resolver, ident, reviewer, securityLead)
 		var reviewerID *int64
 		if reviewer != nil {
 			reviewerID = &reviewer.ID
@@ -340,6 +341,9 @@ func DecideItem(c *store.TenantTx, now time.Time, itemID int64, decision string,
 		return nil, "", ErrUnknownItem
 	}
 	if err != nil {
+		return nil, "", err
+	}
+	if err := refuseSelf(c, item, by); err != nil {
 		return nil, "", err
 	}
 	// A decided item is final, as in Decide: the same decision again is a

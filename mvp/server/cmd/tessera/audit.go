@@ -181,7 +181,7 @@ func auditVerify(ctx context.Context, st *store.DB, tenants []store.Tenant, from
 }
 
 func auditCheckpoint(ctx context.Context, st *store.DB, dbFile string, tenants []store.Tenant, stdout io.Writer) error {
-	cfg, err := config.Load(os.Getenv)
+	cfg, err := config.Load(envWithDB(dbFile))
 	if err != nil {
 		return err
 	}
@@ -230,7 +230,7 @@ func archiveSourceFor(dbFile string, st *store.DB) audit.ArchiveSource {
 	if os.Getenv("TESSERA_ENV") == "" {
 		return nil
 	}
-	cfg, err := config.Load(os.Getenv)
+	cfg, err := config.Load(envWithDB(dbFile))
 	if err != nil {
 		return nil
 	}

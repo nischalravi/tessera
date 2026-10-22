@@ -1568,6 +1568,17 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 	if errors.Is(err, reviews.ErrUnknownItem) {
 		return nil, errStatus(http.StatusNotFound, "unknown review item")
 	}
+	if errors.Is(err, reviews.ErrSelfReview) {
+		// nothing changed; the refusal itself is evidence of the control
+		by := principal(r).User()
+		if _, err := store.TxFrom(r.Context()).RecordAudit(store.AuditRecord{At: s.clock(), Action: "review.decide.refused",
+			LegacyActor: by.Display, Detail: ojson.Object{{Key: "item_id", Value: id}, {Key: "reason", Value: "self_review"}},
+			TargetType: reviews.TargetType, TargetID: strconv.FormatInt(id, 10)}); err != nil {
+			return nil, err
+		}
+		return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: "self_review"},
+			{Key: "detail", Value: "You cannot decide a review item about your own access; another reviewer must decide it."}}}, nil
+	}
 	var re *reviews.Error
 	if errors.As(err, &re) {
 		return nil, errStatus(http.StatusBadRequest, re.Msg)

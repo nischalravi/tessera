@@ -215,6 +215,29 @@ func TestProdGuardRailsRefuseBeforeAnythingRuns(t *testing.T) {
 	}
 }
 
+// TestProdDSNChecksFollowDBFlag: the prod Postgres checks (TLS, a separate
+// TESSERA_DB_APP login) run on the DSN that --db names, not only on the
+// TESSERA_DB variable (#435).
+func TestProdDSNChecksFollowDBFlag(t *testing.T) {
+	t.Setenv("TESSERA_ENV", "prod")
+	t.Setenv("TESSERA_DB", "")
+	t.Setenv("TESSERA_DB_APP", "")
+	const dsn = "postgres://owner:pw@127.0.0.1:1/tessera?sslmode=disable"
+	for _, cmd := range []string{"serve", "worker"} {
+		t.Run(cmd, func(t *testing.T) {
+			var out, logs bytes.Buffer
+			err := run(context.Background(), []string{cmd, "-db", dsn}, &out, &logs)
+			if err == nil || !strings.Contains(err.Error(), "refusing to start with TESSERA_ENV=prod") ||
+				!strings.Contains(err.Error(), "TESSERA_DB: ") || !strings.Contains(err.Error(), "TESSERA_DB_APP: ") {
+				t.Errorf("%s: %v", cmd, err)
+			}
+			if err != nil && strings.Contains(err.Error(), "pw@") {
+				t.Errorf("%s: the refusal echoes the DSN password", cmd)
+			}
+		})
+	}
+}
+
 func TestRunRejectsUnknownCommand(t *testing.T) {
 	var out, errb bytes.Buffer
 	if err := run(context.Background(), []string{"frobnicate"}, &out, &errb); err == nil {
