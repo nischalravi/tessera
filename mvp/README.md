@@ -4078,10 +4078,24 @@ server decides access on each request (the UI only hides what cannot work).
 | Screen | Route | What it has |
 |---|---|---|
 | Folder browser | `/directory/groups[?folder=<id>]` | breadcrumb, folders then groups with type badges and member counts, only what the caller may view; filter chips (type, definition, group or role, status), search, *Include subfolders*, CSV export; a row opens the side panel (overview, first members) with *Open group page* / *Open folder page*; commands *New group*, *New folder*, *New application* |
-| Group page | `/directory/groups/<id>[?tab=]` | header (path, type badges, owner, status, a *Recalculating…* banner while `recompute_state` is pending); tabs **Members** (direct / indirect / effective / composite, search, enabled filter, paging, add and remove, CSV import and export, a *Trace* drawer with every path), **Definition** (composite operator and factors as a set expression; edit or convert), **Privileges** (direct rows, grant, revoke, and the explanation of every path), **Usage** (what a composite is built from), **History** (members on a date, compare two dates, anyone in a period), **Attributes** (object types with lint findings, attribute assignments) |
+| Group page | `/directory/groups/<id>[?tab=]` | header (path, type badges, owner, status, a *Recalculating…* banner while `recompute_state` is pending); tabs **Members** (direct / indirect / effective / composite, search, enabled filter, paging, add and remove, CSV import and export, a *Trace* drawer with every path), **Definition** (composite operator and factors as a set expression; edit or convert), **Privileges** (direct rows, grant, revoke, and the explanation of every path), **Usage** (what a composite is built from), **History** (members on a date, compare two dates, anyone in a period), **Attributes** (object types with lint findings, attribute assignments), and **Source** (the membership source that fills the group: see below) |
+| Loaders | `/directory/groups/loaders[?selected=<id>]` | every membership source the caller may view with its state (On, Off, Held, Last run failed), kind, folder, last run, how long ago it loaded and its schedule; filter chips, search, CSV export; a row opens the loader in the side panel; *Add a source* opens the wizard; a banner counts held runs |
 | Folder page | `/directory/groups/folders/<id>[?tab=]` | contents, privileges with inheritance scope (`groups`, `folders`, `attr_defs`; one level or all), object types and attributes, details |
 | Change preview | a drawer | every member add or remove, CSV import and composite save calls `POST /api/groups:simulate` first and shows "+1,204 / −13 identities in 4 groups" with the groups changed; nothing is written until *Apply*. Batches carry an `Idempotency-Key` |
 | New application | a drawer | the Deployment Guide layout in one step (app, security and service folders; admin, reference, allow, allow-manual, deny groups; policy group `allow − deny`) as separate changes, safe to run again |
+
+**Membership sources (group loaders, GR-10).** Screens: `LoaderTab.tsx` (the group page's **Source** tab),
+`LoaderPanel.tsx` (state, schedule, *Run now*, *Preview*, *Turn on/off*, held runs to approve or reject with their
+failsafe trips, impact and plan, unresolved people, run history), `LoaderWizard.tsx` (*Add a source*: kind,
+source fields per type, how people are matched, name template and what to do when the source stops returning a
+group, schedule and failsafe limits, review), `LoadersPage.tsx` and `LoaderRuns.tsx`. The client is `groupLoaders`
+in `src/api.ts` (one typed function per route of `/api/groups/loaders` and `/api/groups/loader-tasks`); the pure
+logic (form to `LoaderSpec`, the checks that mirror the server's, words for runs) is `loaderModel.ts`, tested by
+`tests/group-loaders.test.ts`. A loader makes and owns its own groups, so a group edited by hand has no source and
+the tab offers *Add a source* in its folder. A group a loader fills carries `loader_id` in its API answer. A source
+that is not a SQL query is saved turned off and previewed at once, so the plan is seen before anything changes;
+a SQL source answers `202` and waits for a second administrator (*Admin, Change requests*), so it can be previewed
+once approved. Held runs also appear in the Inbox (filter chip *Loaders*) and link to the loader.
 
 **Inbox.** One queue for JIT and catalog approvals, access-review items, joiner/mover/leaver
 tasks and delegations, with keys: `j`/`k` move, `a` approve or keep, `d` deny, `r` revoke,
