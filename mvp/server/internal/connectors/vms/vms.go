@@ -72,7 +72,7 @@ func (s *Settings) Validate(vendor string) error {
 	if len(s.Mapping) > 0 {
 		for k, v := range s.Mapping {
 			if !canonical[k] {
-				return fmt.Errorf("mapping: %q is not a field", k)
+				return errors.New("mapping: a key is not one of the fields")
 			}
 			if strings.TrimSpace(v) == "" || len(v) > 100 {
 				return fmt.Errorf("mapping: the column of %q is empty or too long", k)
