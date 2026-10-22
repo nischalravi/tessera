@@ -26,6 +26,9 @@ const ActivationTTL = 72 * time.Hour
 // trail and attestations record.
 type Person struct{ Key, Display string }
 
+// userOfKey is the platform user id inside a Person key ("user:<uuid>"), for SameActor.
+func userOfKey(key string) string { return strings.TrimPrefix(key, "user:") }
+
 // RequiresSecondPerson reports whether activating the connection's
 // in-progress revision needs a second approver.
 func (s *Service) RequiresSecondPerson(c *store.TenantTx, connID string) (bool, error) {
@@ -106,7 +109,13 @@ func (s *Service) ApproveActivation(c *store.TenantTx, connID string, by Person,
 	if err != nil {
 		return nil, ActiveConnection{}, err
 	}
-	if by.Key == "" || by.Key == req.RequestedByKey {
+	if by.Key == "" {
+		return nil, ActiveConnection{}, newErr(403, "two_person_rule", "the person who requested the activation cannot approve it")
+	}
+	// Same user, or a user linked to the same identity: one person with two sign-ins is one person (#425).
+	if same, err := c.SameActor(userOfKey(by.Key), userOfKey(req.RequestedByKey)); err != nil {
+		return nil, ActiveConnection{}, err
+	} else if same {
 		return nil, ActiveConnection{}, newErr(403, "two_person_rule", "the person who requested the activation cannot approve it")
 	}
 	if !now.Before(req.ExpiresAt) {
@@ -126,7 +135,15 @@ func (s *Service) ApproveActivation(c *store.TenantTx, connID string, by Person,
 		return nil, ActiveConnection{}, err
 	}
 	for item, a := range atts {
-		if strings.EqualFold(a.ActorID, by.Display) {
+		// By user id (SameActor) when the attestation recorded one; the display name only for rows
+		// from before #425.
+		same := a.ActorUserID == nil && strings.EqualFold(a.ActorID, by.Display)
+		if a.ActorUserID != nil {
+			if same, err = c.SameActor(*a.ActorUserID, userOfKey(by.Key)); err != nil {
+				return nil, ActiveConnection{}, err
+			}
+		}
+		if same {
 			return nil, ActiveConnection{}, newErr(403, "two_person_rule",
 				"%s attested %s on this revision and cannot also approve its activation", by.Display, item)
 		}

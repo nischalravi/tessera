@@ -409,6 +409,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	if err := d.upgradeLoginTxnPurpose(ctx); err != nil {
 		return err
 	}
+	if err := d.upgradeUserIDColumns(ctx); err != nil {
+		return err
+	}
 	files, err := fs.Glob(schemaFS, "schema/*.sql")
 	if err != nil {
 		return err
@@ -447,6 +450,31 @@ func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
 	}
 	if _, err := d.sql.ExecContext(ctx, "DROP TABLE login_transactions"); err != nil {
 		return fmt.Errorf("store: upgrade login_transactions: %w", err)
+	}
+	return nil
+}
+
+// upgradeUserIDColumns adds the platform-user-id columns of issue #425 to a SQLite database created
+// before them (CREATE TABLE IF NOT EXISTS cannot). Postgres does this in migrations 0531 and 0532.
+func (d *DB) upgradeUserIDColumns(ctx context.Context) error {
+	for _, c := range []struct{ table, column string }{
+		{"identity_disables", "disabled_by_user_id"}, {"readiness_attestations", "actor_user_id"},
+	} {
+		var exists, n int
+		if err := d.sql.QueryRowContext(ctx,
+			`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, c.table).Scan(&exists); err != nil {
+			return err
+		}
+		if err := d.sql.QueryRowContext(ctx,
+			`SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, c.table, c.column).Scan(&n); err != nil {
+			return err
+		}
+		if exists == 1 && n == 0 {
+			// c comes from the fixed list above, never from input.
+			if _, err := d.sql.ExecContext(ctx, "ALTER TABLE "+c.table+" ADD COLUMN "+c.column+" TEXT"); err != nil { // #nosec G202 -- fixed names
+				return fmt.Errorf("store: upgrade %s: %w", c.table, err)
+			}
+		}
 	}
 	return nil
 }

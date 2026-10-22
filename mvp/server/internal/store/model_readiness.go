@@ -119,6 +119,7 @@ type ConnectionRevision struct {
 type Attestation struct {
 	RevisionID, ItemID string
 	ActorID, Note      string
+	ActorUserID        *string // platform user id of the attester (nil: recorded before #425)
 	ItemHash           string
 	ConfigHash         string
 	AttestedAt         time.Time

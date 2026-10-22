@@ -243,7 +243,11 @@ func (s *Server) disableIdentity(_ http.ResponseWriter, r *http.Request, p *para
 	var res *containment.DisableResult
 	err = p.scope.Write(ctx, func(c *store.TenantTx) error {
 		var err error
-		res, err = containment.Disable(c, id, actor(r), reason, containment.Summarize(rep, retries).Status, s.clock())
+		byUser := ""
+		if pr := principal(r); pr != nil && pr.UserID != nil {
+			byUser = pr.UserID.String()
+		}
+		res, err = containment.DisableAs(c, id, actor(r), byUser, reason, containment.Summarize(rep, retries).Status, s.clock())
 		return err
 	})
 	switch {

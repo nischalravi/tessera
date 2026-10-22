@@ -542,6 +542,9 @@ func (s *Server) roleRequestView(r *http.Request, v *viewer, q *store.RoleReques
 		out.DecidedBy = &d
 	}
 	mine := me.IdentityID != nil && *me.IdentityID == q.BeneficiaryID
+	// CanApprove is a UI hint and compares raw ids on purpose; the server enforces the rule with
+	// SameActor when the decision is made (roles/roles.go), so a linked second user sees the button
+	// and is refused there.
 	out.CanApprove = s.can(r, auth.PermRequestsDecide) && q.Status == store.RequestPending && q.RequestedBy != me.UserID.String() && !mine
 	out.CanCancel = q.Status == store.RequestPending && q.RequestedBy == me.UserID.String()
 	var qerr error
