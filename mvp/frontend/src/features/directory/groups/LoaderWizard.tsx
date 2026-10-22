@@ -168,7 +168,18 @@ export function LoaderWizard({ folder, onClose, onSaved }: { folder?: string; on
             {(f.type === "sql_simple" || f.type === "sql_group_list") && (
               <>
                 <Callout tone="warn">This runs a query you write on a database file. It must be one SELECT or WITH statement, and it runs in a read-only transaction. Creating or changing it needs a second administrator's approval.</Callout>
-                <Field label="Database file" hint="A file name under the loader data directory."><input className="input" value={f.database} onChange={(e) => set({ database: e.target.value })} placeholder="hr.db" /></Field>
+                <div className="row" role="radiogroup" aria-label="Where the database is">
+                  <label className="row tight"><input type="radio" name="sqlengine" checked={f.sqlEngine === "file"} onChange={() => set({ sqlEngine: "file" })} /><span>A database file</span></label>
+                  <label className="row tight"><input type="radio" name="sqlengine" checked={f.sqlEngine === "postgres"} onChange={() => set({ sqlEngine: "postgres" })} /><span>A Postgres server</span></label>
+                </div>
+                {f.sqlEngine === "file"
+                  ? <Field label="Database file" hint="A file name under the loader data directory."><input className="input" value={f.database} onChange={(e) => set({ database: e.target.value })} placeholder="hr.db" /></Field>
+                  : (
+                    <>
+                      <Field label="Connection string" hint="postgres://user:password@host/database. Sealed, never shown again. Production needs sslmode=verify-full (the default). Use a read-only login."><input className="input" type="password" autoComplete="off" value={f.dsn} onChange={(e) => set({ dsn: e.target.value })} /></Field>
+                      <Field label="CA certificate (optional)" hint="PEM, if the server's certificate is from a private CA."><textarea className="input mono" rows={3} value={f.caPem} onChange={(e) => set({ caPem: e.target.value })} /></Field>
+                    </>
+                  )}
                 {f.type === "sql_simple" && <Field label="Group" hint="Every row's person becomes a member of this group."><input className="input" value={f.group} onChange={(e) => set({ group: e.target.value })} placeholder="staff" /></Field>}
                 <Field label="Query" hint={f.type === "sql_simple" ? "Returns a subject_id column, and optionally subject_source." : "Returns group_name and subject_id, and optionally subject_source."}>
                   <textarea className="input mono" rows={5} value={f.query} onChange={(e) => set({ query: e.target.value })} placeholder="SELECT employee_id AS subject_id FROM staff WHERE active = 1" />
@@ -208,6 +219,52 @@ export function LoaderWizard({ folder, onClose, onSaved }: { folder?: string; on
                   )}
                 <Field label="People column" hint="The header of the column that names the person."><input className="input" value={f.subjectColumn} onChange={(e) => set({ subjectColumn: e.target.value })} /></Field>
                 <Field label="Delimiter (optional)" hint="One character; a comma if empty."><input className="input" maxLength={1} value={f.delimiter} onChange={(e) => set({ delimiter: e.target.value })} style={{ width: 80 }} /></Field>
+              </>
+            )}
+            {f.type === "scim" && (
+              <>
+                <Field label="Service URL" hint="The SCIM 2.0 root, such as https://example.com/scim/v2."><input className="input" type="url" value={f.scimUrl} onChange={(e) => set({ scimUrl: e.target.value })} /></Field>
+                <div className="row" role="radiogroup" aria-label="How to sign in to the provider">
+                  <label className="row tight"><input type="radio" name="scimauth" checked={f.scimAuth === "bearer"} onChange={() => set({ scimAuth: "bearer" })} /><span>Bearer token</span></label>
+                  <label className="row tight"><input type="radio" name="scimauth" checked={f.scimAuth === "client_credentials"} onChange={() => set({ scimAuth: "client_credentials" })} /><span>OAuth client credentials</span></label>
+                </div>
+                {f.scimAuth === "client_credentials" && (
+                  <>
+                    <Field label="Token URL"><input className="input" type="url" value={f.scimTokenUrl} onChange={(e) => set({ scimTokenUrl: e.target.value })} /></Field>
+                    <Field label="Client id"><input className="input" value={f.scimClientId} onChange={(e) => set({ scimClientId: e.target.value })} autoComplete="off" /></Field>
+                    <Field label="Scope (optional)"><input className="input" value={f.scimScope} onChange={(e) => set({ scimScope: e.target.value })} /></Field>
+                  </>
+                )}
+                <Field label={f.scimAuth === "bearer" ? "Bearer token" : "Client secret"} hint="Sealed, never shown again."><input className="input" type="password" autoComplete="off" value={f.scimSecret} onChange={(e) => set({ scimSecret: e.target.value })} /></Field>
+                <Field label="Group filter (optional)" hint={<>A SCIM filter the provider applies, such as <span className="sys">displayName sw "eng"</span>.</>}><input className="input mono" value={f.scimGroupFilter} onChange={(e) => set({ scimGroupFilter: e.target.value })} /></Field>
+                <Field label="User filter (optional)" hint="Limits who can be a member."><input className="input mono" value={f.scimUserFilter} onChange={(e) => set({ scimUserFilter: e.target.value })} /></Field>
+                <Field label="Name prefix (optional)"><input className="input" value={f.namePrefix} onChange={(e) => set({ namePrefix: e.target.value })} /></Field>
+                <label className="row tight"><input type="checkbox" checked={f.scimOnlyActive} onChange={(e) => set({ scimOnlyActive: e.target.checked })} /><span>Leave out users the provider marks inactive</span></label>
+              </>
+            )}
+            {(f.type === "ldap_simple" || f.type === "ldap_group_list") && (
+              <>
+                <Callout tone="info">The connection always uses TLS (LDAPS on 636, or StartTLS on 389). From a hosted server a directory on a private address is not reachable.</Callout>
+                <Field label="Directory URL" hint="ldaps://host, or ldap://host for StartTLS."><input className="input" value={f.ldapUrl} onChange={(e) => set({ ldapUrl: e.target.value })} placeholder="ldaps://ldap.example.com" /></Field>
+                <Field label="Bind DN" hint="A read-only account."><input className="input" value={f.ldapBindDn} onChange={(e) => set({ ldapBindDn: e.target.value })} autoComplete="off" /></Field>
+                <Field label="Bind password" hint="Sealed, never shown again."><input className="input" type="password" autoComplete="off" value={f.ldapSecret} onChange={(e) => set({ ldapSecret: e.target.value })} /></Field>
+                <Field label="CA certificate (optional)" hint="PEM, for a private CA."><textarea className="input mono" rows={3} value={f.caPem} onChange={(e) => set({ caPem: e.target.value })} /></Field>
+                <Field label="Base DN"><input className="input" value={f.ldapBaseDn} onChange={(e) => set({ ldapBaseDn: e.target.value })} placeholder="ou=people,dc=example,dc=com" /></Field>
+                <Field label="Filter" hint={f.type === "ldap_simple" ? "Selects the people." : "Selects the group entries."}><input className="input mono" value={f.ldapFilter} onChange={(e) => set({ ldapFilter: e.target.value })} /></Field>
+                <Field label="Search"><select className="input" value={f.ldapScope} onChange={(e) => set({ ldapScope: e.target.value as "sub" | "one" })}><option value="sub">The whole subtree</option><option value="one">One level</option></select></Field>
+                {f.type === "ldap_simple" ? (
+                  <>
+                    <Field label="Attribute that names the person" hint="uid, mail, employeeNumber…"><input className="input" value={f.ldapSubjectAttr} onChange={(e) => set({ ldapSubjectAttr: e.target.value })} /></Field>
+                    <Field label="Group"><input className="input" value={f.group} onChange={(e) => set({ group: e.target.value })} /></Field>
+                  </>
+                ) : (
+                  <>
+                    <Field label="Group name attribute (optional)" hint="cn if empty."><input className="input" value={f.ldapGroupNameAttr} onChange={(e) => set({ ldapGroupNameAttr: e.target.value })} /></Field>
+                    <Field label="Member attribute (optional)" hint="member if empty; memberUid for POSIX groups."><input className="input" value={f.ldapMemberAttr} onChange={(e) => set({ ldapMemberAttr: e.target.value })} /></Field>
+                    <Field label="RDN that names the person (optional)" hint="When members are DNs: uid takes uid=alice,… as alice. Leave empty when the value is the id itself."><input className="input" value={f.ldapMemberRdn} onChange={(e) => set({ ldapMemberRdn: e.target.value })} /></Field>
+                  </>
+                )}
+                <Field label="Name prefix (optional)"><input className="input" value={f.namePrefix} onChange={(e) => set({ namePrefix: e.target.value })} /></Field>
               </>
             )}
             {f.type === "connector_groups" && (
@@ -261,8 +318,25 @@ export function LoaderWizard({ folder, onClose, onSaved }: { folder?: string; on
                 <Field label="Or a column that says it, row by row (optional)" hint="Overrides the choice above."><input className="input" value={f.sourceColumn} onChange={(e) => set({ sourceColumn: e.target.value })} /></Field>
               </>
             )}
+            {f.type === "scim" && (
+              <>
+                <Field label="Identify each member by" hint="Members come with the provider's own ids, so the users are read to find this.">
+                  <select className="input" value={f.scimSubject} onChange={(e) => set({ scimSubject: e.target.value as LoaderForm["scimSubject"] })}>
+                    <option value="userName">User name</option><option value="email">Email address</option><option value="externalId">External id</option><option value="id">The provider's own id (a connected account)</option>
+                  </select>
+                </Field>
+                <Field label="Match that against" hint="Blank: email addresses for email, identity external ids otherwise. Type a system's name to match its accounts.">
+                  <input className="input" value={f.scimSubjectSource} onChange={(e) => set({ scimSubjectSource: e.target.value })} placeholder={f.scimSubject === "email" ? "email" : "identity"} />
+                </Field>
+              </>
+            )}
+            {(f.type === "ldap_simple" || f.type === "ldap_group_list") && (
+              <Field label="Match the values against" hint="Blank: email for mail, identity external ids otherwise. Or email, tessera_id, or a system's name for its accounts.">
+                <input className="input" value={f.scimSubjectSource} onChange={(e) => set({ scimSubjectSource: e.target.value })} />
+              </Field>
+            )}
             {sql && <Callout tone="neutral">Matching is by the <span className="sys">subject_source</span> column of the query: <span className="sys">identity</span> (external id, also the default), <span className="sys">email</span>, <span className="sys">tessera_id</span>, or the name of a connected system for its account ids.</Callout>}
-            {!sql && f.type !== "csv" && <Callout tone="neutral">This source names people by their Tessera identity, so no matching is needed.</Callout>}
+            {!sql && !["csv", "scim", "ldap_simple", "ldap_group_list"].includes(f.type ?? "") && <Callout tone="neutral">This source names people by their Tessera identity, so no matching is needed.</Callout>}
             <p className="small muted">Matching is exact. A person who matches nobody is never dropped silently: they are listed as unresolved and tried again on every run.</p>
             <Field label="Group name template" hint={<>Turns the source's group name into the group's name. Exactly one <span className="sys">{"{{.Name}}"}</span>.</>}>
               <input className="input mono" value={f.nameTemplate} onChange={(e) => set({ nameTemplate: e.target.value })} />

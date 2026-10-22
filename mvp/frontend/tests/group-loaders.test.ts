@@ -138,3 +138,40 @@ test("words for runs, trips, schedules and state", () => {
   assert.equal(m.loaderOfGroup([{ id: "a" }, { id: "b" }], { loader_id: "b" })?.id, "b");
   assert.equal(m.loaderOfGroup([{ id: "a" }], {}), null);
 });
+
+test("SCIM, LDAP and Postgres sources build their config and carry their credential as the secret", () => {
+  const base = m.emptyForm("f");
+  const scim = m.buildSpec({ ...base, type: "scim", name: "idp", scimUrl: "https://scim.example.com/scim/v2", scimSecret: "tok", scimSubject: "email", scimGroupFilter: 'displayName sw "e"', scimOnlyActive: false });
+  assert.deepEqual(scim.config, { base_url: "https://scim.example.com/scim/v2", subject_attr: "email", group_filter: 'displayName sw "e"', only_active: false });
+  assert.equal(scim.secret, "tok");
+  const cc = m.buildConfig({ ...base, type: "scim", scimUrl: "https://s.example", scimAuth: "client_credentials", scimTokenUrl: "https://s.example/t", scimClientId: "c", scimScope: "scim" });
+  assert.equal(cc.auth, "client_credentials");
+  assert.equal(cc.client_id, "c");
+  const ldap = m.buildSpec({ ...base, type: "ldap_group_list", name: "d", ldapUrl: "ldaps://ldap.example.com", ldapBindDn: "cn=r,dc=x", ldapSecret: "pw", ldapBaseDn: "dc=x", ldapFilter: "(objectClass=groupOfNames)", ldapMemberRdn: "uid" });
+  assert.deepEqual(ldap.config, { url: "ldaps://ldap.example.com", bind_dn: "cn=r,dc=x", base_dn: "dc=x", filter: "(objectClass=groupOfNames)", member_rdn: "uid" });
+  assert.equal(ldap.secret, "pw");
+  const one = m.buildConfig({ ...base, type: "ldap_simple", ldapUrl: "ldap://h", ldapBindDn: "cn=r", ldapBaseDn: "dc=x", ldapSubjectAttr: "mail", group: "staff", ldapScope: "one" });
+  assert.equal(one.scope, "one");
+  assert.equal(one.group, "staff");
+  const pg = m.buildSpec({ ...base, type: "sql_group_list", name: "p", sqlEngine: "postgres", dsn: "postgres://u:p@h/db", query: "SELECT 1", startEnabled: true });
+  assert.deepEqual(pg.config, { engine: "postgres", query: "SELECT 1" });
+  assert.equal(pg.secret, "postgres://u:p@h/db");
+  assert.equal(m.needsSecret({ type: "sql_simple", sqlEngine: "file" }), false);
+  assert.equal(m.needsSecret({ type: "scim", sqlEngine: "file" }), true);
+});
+
+test("the checks of the new sources", () => {
+  const base = m.emptyForm("f");
+  const scim = { ...base, type: "scim" as const, name: "n" };
+  assert.match(m.stepProblems("source", scim).join(), /URL/);
+  assert.match(m.stepProblems("source", { ...scim, scimUrl: "https://x.example/scim" }).join(), /token or client secret/);
+  assert.deepEqual(m.stepProblems("source", { ...scim, scimUrl: "https://x.example/scim", scimSecret: "t" }), []);
+  assert.match(m.stepProblems("source", { ...scim, scimUrl: "https://x.example", scimSecret: "t", scimAuth: "client_credentials" }).join(), /token URL/);
+  const ldap = { ...base, type: "ldap_simple" as const, name: "n", ldapUrl: "ldaps://h.example", ldapBindDn: "cn=r,dc=x", ldapSecret: "p", ldapBaseDn: "dc=x", group: "g" };
+  assert.deepEqual(m.stepProblems("source", ldap), []);
+  assert.match(m.stepProblems("source", { ...ldap, ldapUrl: "ldap://h.example:3268" }).join(), /URL/);
+  assert.match(m.stepProblems("source", { ...ldap, ldapFilter: "objectClass=person" }).join(), /parentheses/);
+  const sql = { ...base, type: "sql_simple" as const, name: "n", group: "g", query: "SELECT 1", sqlEngine: "postgres" as const };
+  assert.match(m.stepProblems("source", sql).join(), /connection string/);
+  assert.deepEqual(m.stepProblems("source", { ...sql, dsn: "postgres://u:p@db.example.com/hr" }), []);
+});

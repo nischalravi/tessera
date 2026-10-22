@@ -4548,7 +4548,7 @@ export const groups = {
 // Membership sources: a loader reads a source on a schedule and keeps the members of the groups it owns in sync.
 // Design docs/design/groups-grouper-parity.md §9.1. Routes: /api/groups/loaders, /api/groups/loader-tasks.
 
-export type LoaderType = "sql_simple" | "sql_group_list" | "csv" | "connector_groups" | "attribute" | "recent_memberships";
+export type LoaderType = "sql_simple" | "sql_group_list" | "csv" | "connector_groups" | "attribute" | "recent_memberships" | "scim" | "ldap_simple" | "ldap_group_list";
 export type LoaderStatus = "enabled" | "disabled" | "held";
 export type OnMissingGroup = "empty" | "disable" | "delete" | "keep";
 export type LoaderRunKind = "full" | "incremental" | "preview";
@@ -4562,7 +4562,7 @@ export interface LoaderFailsafe {
 export interface LoaderSpec {
   name: string; type: LoaderType; connection_id?: string; config: Record<string, unknown>; target_folder: string; name_template?: string;
   on_missing_group?: OnMissingGroup; and_group?: string; schedule?: string; incremental_secs?: number; failsafe?: LoaderFailsafe; status?: "enabled" | "disabled";
-  /** Bearer token of a csv loader's url: sealed by the server, never returned. */
+  /** The credential: a csv url's or SCIM provider's bearer token, a client secret, an LDAP bind password, or a Postgres connection string. Sealed by the server, never returned. */
   secret?: string;
 }
 export interface LoaderTrip { rule: string; group?: string; value: number; limit: number; detail: string }

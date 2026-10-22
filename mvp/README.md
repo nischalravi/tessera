@@ -3303,8 +3303,55 @@ taken is a failed run (`loader_name_taken`).
 | `attribute` | one group per value of an identity attribute (`department`, `title`, `type`, `status`, `source`) |
 | `recent_memberships` | people who were effective members of a group in the last N days and are not now (`include_current` adds the current ones), read from the point-in-time history |
 
-`ldap_*`, `sftp_csv` and `hris_sis_feed` are designed but not built: they need an LDAP and an SSH
-library, which GR-10 did not add (`422 loader_type_unavailable`).
+| `scim` | the groups of an external SCIM 2.0 provider, with their members (see "Setting up a source" below) |
+| `ldap_simple` | the entries an LDAP or AD search returns, all members of one group |
+| `ldap_group_list` | group entries of an LDAP or AD directory, with their members |
+
+`sql_simple` and `sql_group_list` also run on a **Postgres server** (`"engine":"postgres"`). `ldap_attribute`,
+`sftp_csv` and `hris_sis_feed` are designed but not built (`422 loader_type_unavailable`). MySQL and SQL Server
+are not supported: they need drivers this work did not add (follow-up).
+
+**Credential.** A loader's `secret` (write-only, sealed with `internal/seal` bound to the tenant and the loader,
+never returned, in no audit event, run or error) is: a CSV URL's bearer token (optional), a SCIM bearer token
+or client secret, an LDAP bind password, or a Postgres connection string. Those last three are required. For a
+SQL loader the secret travels sealed with the `groups.loader.save` change request (never in its payload, which the
+second approver reads) and is stored on the loader when it is approved; a change that sends no secret keeps it.
+
+**Setting up a source** (Directory, Groups, a group's *Source* tab, or *Add a source*; or the API):
+
+- *SCIM.* `config`: `base_url` (the `.../scim/v2` root, https), `subject_attr` (`userName`, `email`, `externalId` or
+  `id`: how a member is named; the Users are read to turn a member's SCIM id into it), optional `subject_source`
+  (default `email` for email, `identity` otherwise; a system name matches its accounts), `group_filter` and
+  `user_filter` (SCIM filters the provider evaluates), `page_size` (default 100; paging by `startIndex` and `count`),
+  `group_name` (`displayName` or `externalId`), `name_prefix`, `only_active` (default true). Auth is a bearer token
+  (`secret`), or `"auth":"client_credentials"` with `token_url`, `client_id`, `scope` and the client secret as
+  `secret`. Group names are made valid (`Engineering Team` becomes `Engineering_Team`); members that are groups are
+  not followed; a member the provider does not list as a user (and no `user_filter`) is listed as unresolved.
+  All traffic goes through `internal/safehttp` (https, public addresses; the dev loopback exception applies).
+- *LDAP and AD.* `config`: `url` (`ldaps://host` on 636, or `ldap://host` on 389 with StartTLS; no other port, no plain
+  LDAP), `bind_dn` (a read-only account; the bind password is the `secret`), `base_dn`, `filter`, `scope` (`sub` or
+  `one`), `ca_pem` for a private CA, `page_size` (RFC 2696 paging). `ldap_simple`: `subject_attr` and `group`.
+  `ldap_group_list`: `group_name_attr` (cn), `member_attr` (member; `memberUid` for POSIX groups) and `member_rdn`
+  (when members are DNs, the RDN whose value names the person, such as `uid`; empty: the value is used as it is).
+  AD's ranged member lists (1,500 at a time) are followed. The reader is `internal/connectors/ldap` (`Reader`,
+  which has no write operation) over `internal/safedial`, so a private address is refused in production (the dev
+  allowlist `TESSERA_SAFEDIAL_ALLOW` is refused there by the configuration) and a bind password is sent only on a
+  connection already protected by TLS 1.2 or later. LDAP loaders are saved directly (no second approver: no query a
+  person wrote); only SQL loaders need two admins.
+- *SQL on Postgres.* `config`: `"engine":"postgres"` (no `database`), `query`, optional `groups_query`,
+  `incremental_query` (`@cursor` becomes a numeric parameter), `ca_pem`; the `secret` is
+  `postgres://user:password@host:5432/db`. Only `sslmode` and `connect_timeout` are accepted as options (so no
+  `sslrootcert` or `passfile` can make the server read its own files), and production refuses any `sslmode` but
+  `verify-full` (the default) when the string is saved and when it runs. The session is read-only
+  (`default_transaction_read_only`, a `READ ONLY` transaction), has a 120 s statement timeout, and more than
+  1,000,000 rows is an error. The connection goes through the address-checked dialer (ports 5432, 5433, 6432).
+  Use a read-only database login. Creating or changing it needs a second admin, like a file source.
+
+Tests: `internal/groups/loaders` (`TestSCIM_*` against an in-process SCIM server, `TestLDAP*` against an in-memory
+directory, `TestSQLPostgres_*`), `internal/connectors/ldap` (`TestReader_*` against the fake LDAP server: paging,
+LDAPS and StartTLS, no bind without TLS, bind refused), `internal/store` (`TestCheckPGDSN`, `TestRunExtQueryPG`),
+`internal/api` (`TestLoadersAPI_Postgres*`, `TestLoadersAPI_ScimAndLDAPSources`). The Postgres tests run only with
+`TESSERA_TEST_PG_URL` set.
 
 - **Data directory.** SQL and CSV files live in `TESSERA_LOADER_DATA_DIR` (absolute; unset turns file
   sources off; refused if it contains the database), **one subdirectory per tenant**:
