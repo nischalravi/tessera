@@ -18,6 +18,8 @@ const (
 	TaskMicroCertification = "micro_certification"
 	TaskAttestation        = "attestation"
 	TaskAttestationOverdue = "attestation_overdue"
+	// TaskDeletionHeld is a held deletion waiting for an approver (internal/deleteguard); its object is the hold.
+	TaskDeletionHeld = "deletion_held"
 
 	// TaskOpen and TaskDone ("open", "done") are declared with the guest lifecycle tasks and mean the
 	// same here

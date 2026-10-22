@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"io"
 	"net/http"
 	"sort"
@@ -240,6 +241,8 @@ func (s *Service) apply(ctx context.Context, tenant tenancy.ID, src *store.VmsSo
 	for _, r := range recs {
 		var res *intake.Result
 		err := s.DB.InTenant(ctx, tenant, func(tx *store.TenantTx) (err error) {
+			// the leavers this feed ends are judged under the feed's own deletion guard settings
+			defer deleteguard.ScopeSource(tx, deleteguard.SourceRef{Kind: deleteguard.SrcVMS, ID: src.ID})()
 			res, err = intake.ApplyVMS(tx, s.Keyer, r, s.now())
 			return err
 		})

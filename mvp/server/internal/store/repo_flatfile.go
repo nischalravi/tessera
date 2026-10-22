@@ -110,6 +110,11 @@ type FlatUpload struct {
 	TasksConfirmed int
 	UploadedBy     string
 	UploadedAt     time.Time
+	// Held and HoldID say how many of the file's removals the deletion guard held (not applied), and
+	// the held deletion; Removed then counts only those applied. Set by the import for its answer and its
+	// audit event, not stored (the history row is append-only).
+	Held   int
+	HoldID string
 }
 
 // FlatUploadError is one rejected row (Row 0: the file as a whole).

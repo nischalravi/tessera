@@ -15,7 +15,9 @@ func deletionGuardCovered() map[string]bool {
 	for _, k := range []string{"DeletionPolicies", "PutDeletionPolicy", "DeletionSettingsRow", "PutDeletionSettings", "LockDeletionCategory",
 		"DeletionsApplied", "RecordDeletions", "DeletionPopulation", "InsertDeletionHold", "DeletionHoldByID", "DeletionHolds",
 		"DeletionHoldsDue", "OpenDeletionHolds", "DeletionHoldItems", "SetDeletionHoldItem", "ResolveDeletionHold",
-		"OpenDeletionHoldByCorrelation", "AppendDeletionHoldItems"} {
+		"OpenDeletionHoldByCorrelation", "AppendDeletionHoldItems", "SetDeletionHoldReason",
+		"DeletionSourcePolicies", "DeletionSourcePoliciesOf", "DeletionSourcePolicy", "PutDeletionSourcePolicy", "DeleteDeletionSourcePolicy",
+		"DeletionSourceCount", "PutDeletionSourceCount", "DeletionsAppliedBySource", "RecordSourceDeletions"} {
 		out[k] = true // TestIsolation_DeletionGuard
 	}
 	return out
@@ -42,6 +44,17 @@ func TestIsolation_DeletionGuard(t *testing.T) {
 		if err := c.RecordDeletions("groups", 7, "user", now, now.Add(-time.Hour)); err != nil {
 			return err
 		}
+		drop, off := 50.0, false
+		if err := c.PutDeletionSourcePolicy(&store.DeletionSourcePolicy{Kind: "connection", SourceID: "conn-1", Category: "identities",
+			Mode: "hold_excess", MaxCount: &ten, WindowMinutes: 30, FeedDropPercent: &drop, FeedEmptyCheck: &off}, now); err != nil {
+			return err
+		}
+		if err := c.PutDeletionSourceCount("connection", "conn-1", "identities", 120, now); err != nil {
+			return err
+		}
+		if err := c.RecordSourceDeletions("connection", "conn-1", "identities", 4, now, now.Add(-time.Hour)); err != nil {
+			return err
+		}
 		hold = store.DeletionHold{Category: "groups", Mode: "hold_excess", Reason: "{}", Actor: "u", Source: "user", CorrelationID: "corr-1",
 			CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
 		return c.InsertDeletionHold(&hold, []store.DeletionHoldItem{{Kind: "group_delete", Ref: "g1", Label: "g1"}})
@@ -51,6 +64,25 @@ func TestIsolation_DeletionGuard(t *testing.T) {
 	inB(t, f, func(c *store.TenantTx) error {
 		if ps, err := c.DeletionPolicies(); err != nil || len(ps) != 0 {
 			t.Errorf("DeletionPolicies = %v, %v", ps, err)
+		}
+		if ps, err := c.DeletionSourcePolicies(); err != nil || len(ps) != 0 {
+			t.Errorf("DeletionSourcePolicies = %v, %v (A's override listed)", ps, err)
+		}
+		if ps, err := c.DeletionSourcePoliciesOf("connection", "conn-1"); err != nil || len(ps) != 0 {
+			t.Errorf("DeletionSourcePoliciesOf(A's) = %v, %v", ps, err)
+		}
+		if _, err := c.DeletionSourcePolicy("connection", "conn-1", "identities"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("DeletionSourcePolicy(A's) = %v", err)
+		}
+		if _, ok, err := c.DeletionSourceCount("connection", "conn-1", "identities"); err != nil || ok {
+			t.Errorf("DeletionSourceCount(A's) = %v, %v", ok, err)
+		}
+		if n, err := c.DeletionsAppliedBySource("connection", "conn-1", "identities", now.Add(-time.Hour)); err != nil || n != 0 {
+			t.Errorf("DeletionsAppliedBySource = %d, %v (A's ledger counted)", n, err)
+		}
+		// B writing the same source id makes its own rows and leaves A's alone
+		if err := c.DeleteDeletionSourcePolicy("connection", "conn-1", "identities"); err != nil {
+			t.Errorf("DeleteDeletionSourcePolicy = %v", err)
 		}
 		if _, err := c.DeletionSettingsRow(); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("DeletionSettingsRow = %v", err)
@@ -82,6 +114,9 @@ func TestIsolation_DeletionGuard(t *testing.T) {
 		if err := c.SetDeletionHoldItem(hold.ID, 0, "released", ""); err != nil {
 			t.Errorf("SetDeletionHoldItem(A's) = %v", err)
 		}
+		if err := c.SetDeletionHoldReason(hold.ID, "{}"); err != nil {
+			t.Errorf("SetDeletionHoldReason(A's) = %v", err)
+		}
 		// an item cannot be added to A's hold from B
 		if err := c.AppendDeletionHoldItems(&hold, []store.DeletionHoldItem{{Kind: "group_delete", Ref: "g2"}}); err == nil {
 			t.Errorf("B appended an item to A's hold")
@@ -93,6 +128,16 @@ func TestIsolation_DeletionGuard(t *testing.T) {
 	}
 	// the window is per tenant: A's 7 are A's alone
 	inA(t, f, func(c *store.TenantTx) error {
+		if p, err := c.DeletionSourcePolicy("connection", "conn-1", "identities"); err != nil || p.Mode != "hold_excess" || p.WindowMinutes != 30 ||
+			p.FeedEmptyCheck == nil || *p.FeedEmptyCheck || *p.FeedDropPercent != 50 {
+			t.Errorf("A's override = %+v, %v", p, err)
+		}
+		if n, ok, err := c.DeletionSourceCount("connection", "conn-1", "identities"); err != nil || !ok || n != 120 {
+			t.Errorf("A's last count = %d %v %v", n, ok, err)
+		}
+		if n, err := c.DeletionsAppliedBySource("connection", "conn-1", "identities", now.Add(-time.Hour)); err != nil || n != 4 {
+			t.Errorf("A's source window = %d, %v, want 4", n, err)
+		}
 		if n, err := c.DeletionsApplied("groups", now.Add(-time.Hour)); err != nil || n != 7 {
 			t.Errorf("A's window = %d, %v, want 7", n, err)
 		}

@@ -9,6 +9,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync/connsynctest"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vms/vmsfake"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
@@ -267,4 +268,54 @@ func TestImport_CSV(t *testing.T) {
 	if _, err := r.svc.Import(r.ctx, r.f.A.ID, "file", strings.NewReader(file)); err == nil {
 		t.Error("tenant A imported into tenant B's source")
 	}
+}
+
+// The leavers a contractor feed ends are judged under that feed's own deletion guard settings: with a
+// threshold of 1 an import that ends four contractors applies one and holds three (the default
+// threshold of the small tenant would let all four through).
+func TestImport_EndedContractorsAreHeldUnderTheFeedsOwnThreshold(t *testing.T) {
+	r := newRig(t)
+	r.addSource("file", store.VmsCSV, "", "{}", "")
+	end := now.AddDate(0, 0, 40).Format("2006-01-02")
+	file := func(status string) string {
+		s := "worker_id,name,email,supplier,sponsor_email,status,end_date\n"
+		for _, w := range []string{"C-1", "C-2", "C-3", "C-4"} {
+			s += w + ",Person " + w + "," + strings.ToLower(w) + "@agency.example,Acme,dana@corp.example," + status + "," + end + "\n"
+		}
+		return s
+	}
+	if rep, err := r.svc.Import(r.ctx, r.f.B.ID, "file", strings.NewReader(file("active"))); err != nil || rep.Applied["created"] != 4 {
+		t.Fatalf("create = %+v, %v", rep, err)
+	}
+	one := 1
+	r.do(func(c *store.TenantTx) error {
+		return deleteguard.SetSource(c, deleteguard.SourcePolicy{Kind: deleteguard.SrcVMS, SourceID: "file", Category: deleteguard.CatIdentities,
+			Mode: deleteguard.ModeHoldExcess, MaxCount: &one, WindowMinutes: 60}, nil, now)
+	})
+	if rep, err := r.svc.Import(r.ctx, r.f.B.ID, "file", strings.NewReader(file("ended"))); err != nil || rep.Records != 4 {
+		t.Fatalf("end = %+v, %v", rep, err)
+	}
+	r.do(func(c *store.TenantTx) error {
+		ended := 0
+		all, err := c.Lifecycles()
+		if err != nil {
+			return err
+		}
+		for _, l := range all {
+			if p, err := c.Identity(l.IdentityID); err != nil {
+				return err
+			} else if l.WorkerType == store.WorkerContractor && p.Status != "active" {
+				ended++
+			}
+		}
+		if ended != 1 {
+			t.Errorf("%d contractors ended, want the 1 the feed's threshold allows", ended)
+		}
+		hs, err := c.DeletionHolds("held", "identities", 10, 0)
+		if err != nil || len(hs) != 1 || hs[0].ItemCount != 3 || !strings.Contains(hs[0].Reason, `"source_override":true`) ||
+			!strings.Contains(hs[0].Reason, `"source_ref":"file"`) {
+			t.Errorf("holds = %+v, %v", hs, err)
+		}
+		return nil
+	})
 }

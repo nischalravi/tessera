@@ -124,13 +124,23 @@ func Release(tx *store.TenantTx, now time.Time, id, by string, ords []int, ap Ap
 	if err != nil {
 		return nil, err
 	}
+	// the releaser must be none of the people whose runs put items in the hold (#467)
+	who := map[string]bool{}
 	if h.Actor != "" {
-		same, err := tx.SameActor(h.Actor, by)
+		who[h.Actor] = true
+	}
+	for _, c := range Contributors(h.DeletionHold) {
+		if c.Actor != "" {
+			who[c.Actor] = true
+		}
+	}
+	for a := range who {
+		same, err := tx.SameActor(a, by)
 		if err != nil {
 			return nil, err
 		}
 		if same {
-			return nil, refuse(403, "same_actor", "a held deletion must be released by a different admin than the one whose request was held")
+			return nil, refuse(403, "same_actor", "a held deletion must be released by a different admin than anyone whose request or run added items to it")
 		}
 	}
 	sel, rest, err := h.selected(ords)
@@ -177,6 +187,9 @@ func Release(tx *store.TenantTx, now time.Time, id, by string, ords []int, ap Ap
 	if err := tx.ResolveDeletionHold(h.ID, res.Status, by, "", now); err != nil {
 		return nil, err
 	}
+	if err := closeTask(tx, now, h.ID, store.TaskDone, by); err != nil {
+		return nil, err
+	}
 	// the override is audited in the transaction that applies it
 	return res, audit(tx, now, "deletion_guard.released", h.DeletionHold, ojson.Object{{Key: "hold_id", Value: h.ID},
 		{Key: "category", Value: h.Category}, {Key: "approved_by", Value: by}, {Key: "requested_by", Value: h.Actor},
@@ -205,6 +218,9 @@ func Discard(tx *store.TenantTx, now time.Time, id, by, note string) (*ReleaseRe
 	if err := tx.ResolveDeletionHold(h.ID, "discarded", by, note, now); err != nil {
 		return nil, err
 	}
+	if err := closeTask(tx, now, h.ID, store.TaskDismissed, by); err != nil {
+		return nil, err
+	}
 	return res, audit(tx, now, "deletion_guard.discarded", h.DeletionHold, ojson.Object{{Key: "hold_id", Value: h.ID},
 		{Key: "category", Value: h.Category}, {Key: "discarded_by", Value: by}, {Key: "discarded", Value: res.Discards}})
 }
@@ -221,6 +237,9 @@ func expire(tx *store.TenantTx, now time.Time, h *Hold) error {
 		n++
 	}
 	if err := tx.ResolveDeletionHold(h.ID, "expired", "", "expired without a decision", now); err != nil {
+		return err
+	}
+	if err := closeTask(tx, now, h.ID, store.TaskDismissed, ""); err != nil {
 		return err
 	}
 	return audit(tx, now, "deletion_guard.expired", h.DeletionHold, ojson.Object{{Key: "hold_id", Value: h.ID},
@@ -243,4 +262,49 @@ func ExpireDue(tx *store.TenantTx, now time.Time) (int, error) {
 		}
 	}
 	return len(due), nil
+}
+
+// Relist drops the items of the open hold of a correlation that a later run no longer tries to delete:
+// listed says, of a still-held item, whether the source's latest feed lists it as present again. Each
+// such item is closed as gone ("listed again") and audited; a hold left with no held item is discarded.
+// It reports how many items it dropped. A source calls it with the items its good run lists.
+func Relist(tx *store.TenantTx, now time.Time, category, correlation string, listed func(it *store.DeletionHoldItem) bool) (int, error) {
+	h, err := tx.OpenDeletionHoldByCorrelation(category, correlation)
+	if errors.Is(err, store.ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	items, err := tx.DeletionHoldItems(h.ID)
+	if err != nil {
+		return 0, err
+	}
+	dropped, left := 0, 0
+	for _, it := range items {
+		if it.Status != "held" {
+			continue
+		}
+		if !listed(it) {
+			left++
+			continue
+		}
+		if err := tx.SetDeletionHoldItem(h.ID, it.Ord, ItemGone, "the source lists it again in a later run"); err != nil {
+			return 0, err
+		}
+		dropped++
+	}
+	if dropped == 0 {
+		return 0, nil
+	}
+	if left == 0 {
+		if err := tx.ResolveDeletionHold(h.ID, "discarded", "", "every item was listed again by a later run", now); err != nil {
+			return 0, err
+		}
+		if err := closeTask(tx, now, h.ID, store.TaskDismissed, ""); err != nil {
+			return 0, err
+		}
+	}
+	return dropped, audit(tx, now, "deletion_guard.items_relisted", h, ojson.Object{{Key: "hold_id", Value: h.ID},
+		{Key: "category", Value: h.Category}, {Key: "dropped", Value: dropped}, {Key: "remaining", Value: left}})
 }

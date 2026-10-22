@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -25,8 +26,30 @@ type deletionPolicyPayload struct {
 	Mode          string   `json:"mode"`
 }
 
+// deletionSourcePayload sets or removes one source's override for a category: its own threshold
+// (mode with max_count, max_percent and window_minutes; no mode inherits the category's) and its feed
+// sanity checks (feed_drop_percent, feed_empty_check; unset is the default, 20 and on).
+type deletionSourcePayload struct {
+	Kind            string   `json:"kind"`
+	SourceID        string   `json:"source_id"`
+	Category        string   `json:"category"`
+	Remove          bool     `json:"remove,omitempty"`
+	Mode            string   `json:"mode,omitempty"`
+	MaxCount        *int     `json:"max_count,omitempty"`
+	MaxPercent      *float64 `json:"max_percent,omitempty"`
+	WindowMinutes   int      `json:"window_minutes,omitempty"`
+	FeedDropPercent *float64 `json:"feed_drop_percent,omitempty"`
+	FeedEmptyCheck  *bool    `json:"feed_empty_check,omitempty"`
+}
+
+func (p deletionSourcePayload) policy() deleteguard.SourcePolicy {
+	return deleteguard.SourcePolicy{Kind: p.Kind, SourceID: p.SourceID, Category: p.Category, Mode: p.Mode, MaxCount: p.MaxCount,
+		MaxPercent: p.MaxPercent, WindowMinutes: p.WindowMinutes, FeedDropPercent: p.FeedDropPercent, FeedEmptyCheck: p.FeedEmptyCheck}
+}
+
 type deletionGuardPayload struct {
 	Policies        []deletionPolicyPayload `json:"policies,omitempty"`
+	Sources         []deletionSourcePayload `json:"sources,omitempty"`
 	HoldExpiryHours *int                    `json:"hold_expiry_hours,omitempty"`
 }
 
@@ -42,6 +65,9 @@ func init() {
 			for _, p := range v.Policies {
 				parts = append(parts, p.Category)
 			}
+			for _, p := range v.Sources {
+				parts = append(parts, p.Kind+" "+p.SourceID+" "+p.Category)
+			}
 			if v.HoldExpiryHours != nil {
 				parts = append(parts, "hold expiry")
 			}
@@ -52,8 +78,8 @@ func init() {
 // planDeletionGuard checks the payload and decides who approves: two admins when any policy is
 // looser than the current one.
 func planDeletionGuard(e *env, v *deletionGuardPayload) (plan, error) {
-	if len(v.Policies) == 0 && v.HoldExpiryHours == nil {
-		return plan{}, invalid("name at least one policy or hold_expiry_hours")
+	if len(v.Policies) == 0 && len(v.Sources) == 0 && v.HoldExpiryHours == nil {
+		return plan{}, invalid("name at least one policy, source or hold_expiry_hours")
 	}
 	cur, err := deleteguard.Effective(e.tx)
 	if err != nil {
@@ -78,12 +104,25 @@ func planDeletionGuard(e *env, v *deletionGuardPayload) (plan, error) {
 		if err != nil {
 			return plan{}, err
 		}
-		if deleteguard.Loosens(have[pp.Category], next, pop) {
+		if !deleteguard.IsNoop(have[pp.Category], next) && deleteguard.Loosens(have[pp.Category], next, pop) {
 			loosens = true
 		}
 	}
 	if v.HoldExpiryHours != nil && (*v.HoldExpiryHours < 1 || *v.HoldExpiryHours > 8760) {
 		return plan{}, invalid("hold_expiry_hours is 1 to 8760")
+	}
+	seenSrc := map[string]bool{}
+	for _, sp := range v.Sources {
+		k := sp.Kind + "|" + sp.SourceID + "|" + sp.Category
+		if seenSrc[k] {
+			return plan{}, invalid("%s %s %s is named twice", sp.Kind, sp.SourceID, sp.Category)
+		}
+		seenSrc[k] = true
+		l, err := sourceLoosens(e, sp)
+		if err != nil {
+			return plan{}, err
+		}
+		loosens = loosens || l
 	}
 	return plan{twoPerson: loosens, target: "deletion_guard"}, nil
 }
@@ -112,12 +151,39 @@ func applyDeletionGuard(e *env, ch *store.AdminChange, v *deletionGuardPayload) 
 		if err != nil {
 			return err
 		}
-		if err := deleteguard.Set(e.tx, next, &by, e.now); err != nil {
-			return err
+		// the displayed default saved as it is stays unset: a stored row would end the hold_all that
+		// source-driven runs get while the tenant has not set the category
+		if !deleteguard.IsNoop(old, next) {
+			if err := deleteguard.Set(e.tx, next, &by, e.now); err != nil {
+				return err
+			}
 		}
 		detail = append(detail, ojson.KV{Key: pp.Category, Value: ojson.Object{
 			{Key: "from", Value: describePolicy(old)}, {Key: "to", Value: describePolicy(next)},
-			{Key: "loosened", Value: deleteguard.Loosens(old, next, pop)}}})
+			{Key: "loosened", Value: !deleteguard.IsNoop(old, next) && deleteguard.Loosens(old, next, pop)}}})
+	}
+	for _, sp := range v.Sources {
+		old, err := deleteguard.ResolveFor(e.tx, deleteguard.SourceRef{Kind: sp.Kind, ID: sp.SourceID}, sp.Category, true)
+		if err != nil {
+			return err
+		}
+		loosened, err := sourceLoosens(e, sp)
+		if err != nil {
+			return err
+		}
+		to := "removed (the category's settings apply)"
+		if sp.Remove {
+			err = e.tx.DeleteDeletionSourcePolicy(sp.Kind, sp.SourceID, sp.Category)
+		} else {
+			next := sp.policy()
+			to = describeSource(next)
+			err = deleteguard.SetSource(e.tx, next, &by, e.now)
+		}
+		if err != nil {
+			return err
+		}
+		detail = append(detail, ojson.KV{Key: sp.Kind + ":" + sp.SourceID + ":" + sp.Category, Value: ojson.Object{
+			{Key: "from", Value: describeResolved(old)}, {Key: "to", Value: to}, {Key: "loosened", Value: loosened}}})
 	}
 	if v.HoldExpiryHours != nil {
 		was, err := deleteguard.HoldExpiryHours(e.tx)
@@ -144,4 +210,86 @@ func describePolicy(p deleteguard.Policy) string {
 		pc = fmt.Sprintf("%g%%", *p.MaxPercent)
 	}
 	return fmt.Sprintf("%s: count %s, percent %s per %d min", p.Mode, c, pc, p.WindowMinutes)
+}
+
+// sourceLoosens checks one source override of the payload (the source exists, the setting is valid) and
+// says whether it is weaker than what applies to the source now.
+func sourceLoosens(e *env, sp deletionSourcePayload) (bool, error) {
+	ref := deleteguard.SourceRef{Kind: sp.Kind, ID: sp.SourceID}
+	if !ref.Valid() {
+		return false, invalid("%q is not a source kind (connection, loader, vms_source) with an id", sp.Kind)
+	}
+	if !deleteguard.ValidCategory(sp.Category) {
+		return false, invalid("%q is not a deletion category", sp.Category)
+	}
+	if err := sourceExists(e.tx, ref); err != nil {
+		return false, err
+	}
+	cur, err := deleteguard.ResolveFor(e.tx, ref, sp.Category, true)
+	if err != nil {
+		return false, err
+	}
+	tp, err := deleteguard.PolicyOf(e.tx, sp.Category)
+	if err != nil {
+		return false, err
+	}
+	var next deleteguard.Resolved
+	if sp.Remove {
+		if sp.Mode != "" || sp.MaxCount != nil || sp.MaxPercent != nil || sp.WindowMinutes != 0 || sp.FeedDropPercent != nil || sp.FeedEmptyCheck != nil {
+			return false, invalid("a removal names no settings")
+		}
+		if _, err := e.tx.DeletionSourcePolicy(sp.Kind, sp.SourceID, sp.Category); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return false, invalid("%s %s has no override of %s to remove", sp.Kind, sp.SourceID, sp.Category)
+			}
+			return false, err
+		}
+		next = deleteguard.Resolve(tp, nil, true)
+	} else {
+		p := sp.policy()
+		if err := p.Check(); err != nil {
+			return false, invalid("%v", err)
+		}
+		next = deleteguard.Resolve(tp, &p, true)
+	}
+	pop, err := e.tx.DeletionPopulation(sp.Category)
+	if err != nil {
+		return false, err
+	}
+	return deleteguard.LoosensResolved(cur, next, pop), nil
+}
+
+// sourceExists refuses an override for a source the tenant does not have.
+func sourceExists(tx *store.TenantTx, ref deleteguard.SourceRef) error {
+	var err error
+	switch ref.Kind {
+	case deleteguard.SrcConnection:
+		_, err = tx.Connection(ref.ID)
+	case deleteguard.SrcLoader:
+		_, err = tx.GrpLoader(ref.ID)
+	case deleteguard.SrcVMS:
+		_, err = tx.VmsSource(ref.ID)
+	default:
+		return invalid("%s sources have no settings yet", ref.Kind)
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return invalid("no %s %s", ref.Kind, ref.ID)
+	}
+	return err
+}
+
+func describeSource(p deleteguard.SourcePolicy) string {
+	out := "inherits the category's thresholds"
+	if p.Mode != "" {
+		out = describePolicy(deleteguard.Policy{MaxCount: p.MaxCount, MaxPercent: p.MaxPercent, WindowMinutes: p.WindowMinutes, Mode: p.Mode})
+	}
+	return out + "; " + describeFeed(p.FeedSettings())
+}
+
+func describeResolved(r deleteguard.Resolved) string {
+	return describePolicy(r.Policy) + "; " + describeFeed(r.Feed)
+}
+
+func describeFeed(f deleteguard.Feed) string {
+	return fmt.Sprintf("feed drop limit %g%%, empty feed check %t", f.DropPercent, f.EmptyCheck)
 }

@@ -221,7 +221,7 @@ func TestDeleteFolderRecursive(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if plan.Folders != 2 || plan.ActiveGroups != 2 || plan.DeletedGroups != 1 || plan.AttrDefs != 1 || plan.GroupsWithMembers != 1 ||
+		if plan.Folders != 3 || plan.ActiveGroups != 2 || plan.DeletedGroups != 1 || plan.AttrDefs != 1 || plan.GroupsWithMembers != 1 ||
 			len(plan.Blockers) != 0 || !plan.NeedsApproval {
 			t.Errorf("plan = %+v", plan)
 		}

@@ -94,3 +94,70 @@ test("a hold is titled by what it holds and where it came from", () => {
   assert.equal(m.holdTitle({ category: "group_members", item_count: 15, source: "loader", source_id: "ldr-1" }), "15 group memberships from a group loader ldr-1");
   assert.equal(m.holdTitle({ category: "groups", item_count: 3, source: "user", source_id: "" }), "3 groups from a person");
 });
+
+// ------------------------------------------------------------ per-source settings
+
+const eff = (o: Record<string, unknown> = {}): any => ({
+  category: "identities", max_count: 50, max_percent: 2, window_minutes: 60, mode: "hold_all", overridden: false,
+  feed: { drop_percent: 20, empty_check: true }, ...o,
+});
+const srcCat = (o: Record<string, unknown> = {}): any => ({
+  category: "identities", tenant: { max_count: 50, max_percent: 2, window_minutes: 60, mode: "hold_excess", default: true },
+  override: null, effective: eff(), last_count: 120, used: 0, limit: 5, ...o,
+});
+
+test("a source's settings are read from its own path and changed through the same change request", async () => {
+  assert.equal(deletionGuard.sourcePath("connection", "c 1"), "/admin/deletion-guard/sources/connection/c%201");
+  await deletionGuard.change([], undefined, [{ kind: "loader", source_id: "L", category: "group_members", remove: true }]);
+  assert.equal(calls[0].url, "/api/admin/change-requests");
+  assert.deepEqual((calls[0].body as any).payload, { sources: [{ kind: "loader", source_id: "L", category: "group_members", remove: true }] });
+});
+
+test("source edits: nothing set is no change, a feed-only edit leaves the thresholds inherited, a cleared override is a removal", () => {
+  const c = srcCat();
+  const e = m.sourceEditOf(c);
+  assert.equal(e.mode, "inherit");
+  assert.equal(e.window_minutes, "60");
+  assert.equal(m.sourceInputOf("connection", "c1", c, e), null);
+  assert.deepEqual(m.sourceInputOf("connection", "c1", c, { ...e, feed_drop: "35", empty_check: false }),
+    { kind: "connection", source_id: "c1", category: "identities", feed_drop_percent: 35, feed_empty_check: false });
+  assert.deepEqual(m.sourceInputOf("connection", "c1", c, { ...e, mode: "hold_all", max_count: "10", max_percent: "" }),
+    { kind: "connection", source_id: "c1", category: "identities", mode: "hold_all", window_minutes: 60, max_count: 10, max_percent: null });
+  const own = srcCat({ override: { kind: "connection", source_id: "c1", category: "identities", mode: "hold_all", max_count: 10, max_percent: null, window_minutes: 60, feed_drop_percent: 35, feed_empty_check: null } });
+  const oe = m.sourceEditOf(own);
+  assert.deepEqual([oe.mode, oe.max_count, oe.feed_drop, oe.empty_check], ["hold_all", "10", "35", true]);
+  assert.equal(m.sourceInputOf("connection", "c1", own, oe), null, "unchanged");
+  assert.deepEqual(m.sourceInputOf("connection", "c1", own, { ...oe, mode: "inherit", max_count: "", feed_drop: "" }),
+    { kind: "connection", source_id: "c1", category: "identities", remove: true });
+});
+
+test("source edits are checked the way the form checks categories, plus the feed limit", () => {
+  const e = m.sourceEditOf(srcCat());
+  assert.equal(m.checkSourceEdit(e), null);
+  assert.match(m.checkSourceEdit({ ...e, feed_drop: "101" }) ?? "", /0 to 100/);
+  assert.match(m.checkSourceEdit({ ...e, feed_drop: "x" }) ?? "", /0 to 100/);
+  assert.match(m.checkSourceEdit({ ...e, mode: "hold_all" }) ?? "", /count, a percent/);
+  assert.match(m.checkSourceEdit({ ...e, mode: "hold_all", max_count: "5", window_minutes: "0" }) ?? "", /window/);
+  assert.equal(m.checkSourceEdit({ ...e, mode: "hold_all", max_count: "5" }), null);
+});
+
+test("a looser source setting is flagged so the form warns that a second admin is asked", () => {
+  const c = srcCat();
+  const looser = (o: any) => m.sourceLooksLooser(c, { kind: "connection", source_id: "c1", category: "identities", ...o });
+  assert.equal(looser({ feed_drop_percent: 30 }), true);
+  assert.equal(looser({ feed_drop_percent: 10 }), false);
+  assert.equal(looser({ feed_empty_check: false }), true);
+  assert.equal(looser({ mode: "hold_all", max_count: 3, max_percent: 2, window_minutes: 60 }), false);
+  assert.equal(looser({ mode: "hold_excess", max_count: 3, max_percent: 2, window_minutes: 60 }), true, "hold_all to hold_excess is a weaker mode");
+  assert.equal(looser({ mode: "hold_all", max_count: 500, max_percent: null, window_minutes: 60 }), true);
+  assert.equal(looser({ mode: "off", window_minutes: 60 }), true);
+  assert.equal(looser({ remove: true }), false, "back to the category's, which is the same as what applies");
+  const own = srcCat({ effective: eff({ max_count: 3, max_percent: null, feed: { drop_percent: 10, empty_check: true }, overridden: true }) });
+  assert.equal(m.sourceLooksLooser(own, { kind: "connection", source_id: "c1", category: "identities", remove: true }), true, "removing a tight override");
+});
+
+test("each kind of source links to its own settings page", () => {
+  assert.equal(m.sourceLink("connection", "a b"), "/admin/connections/a%20b");
+  assert.equal(m.sourceLink("vms_source", "v"), "/admin/contractor-feeds");
+  assert.equal(m.sourceLink("loader", "l"), "/directory/groups/loaders");
+});
