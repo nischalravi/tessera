@@ -2864,8 +2864,7 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
     admin change request (`groups.folder.delete_recursive`, the SQL loader's two-person workflow, GRP-6311) that a
     second admin approves under `POST /api/admin/change-requests/{id}/approve`; the approver's apply refuses
     `folder_changed` if the tree grew since. Audit `groups.folder.deleted_recursive` with the counts.
-  - SQLite databases made before this change reject the new change type (its `CHECK` is in `0008_admin_changes.sql`,
-    as for `retention.update`): run `./run.sh --reseed`. Postgres gets `postgres/0640_group_folder_delete.sql`.
+  - An existing SQLite database is upgraded on open: `admin_change_requests` is rebuilt in one transaction with the wider type `CHECK` (rows, indexes and triggers kept, foreign keys checked; a no-op once done), `TestUpgradeAdminChangeTypes`. Postgres gets `postgres/0640_group_folder_delete.sql`.
 
 - Errors: `404 not_found`; `409` `{error, detail}` with `name_taken`, `name_reserved_by_alias`,
   `root_folder`, `move_into_self`, `copy_into_self`, `folder_not_empty` (with `folders` and `groups`

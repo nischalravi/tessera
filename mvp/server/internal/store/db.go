@@ -432,6 +432,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	if err := d.upgradeUserIDColumns(ctx); err != nil {
 		return err
 	}
+	if err := d.upgradeAdminChangeTypes(ctx); err != nil {
+		return err
+	}
 	files, err := fs.Glob(schemaFS, "schema/*.sql")
 	if err != nil {
 		return err
