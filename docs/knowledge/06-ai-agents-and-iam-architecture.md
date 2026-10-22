@@ -71,7 +71,8 @@ Status is as of 2026-10-08. "I-D" means IETF Internet-Draft, which is work in pr
 
 | Spec | Status | Relevance to agents |
 |---|---|---|
-| OAuth 2.1 (draft-ietf-oauth-v2-1) | I-D. MCP cites -13 and -14. | Mandatory PKCE, no implicit grant, exact redirect matching. |
+| OAuth 2.1 (draft-ietf-oauth-v2-1) | I-D, still not an RFC. MCP cites -13 and -14. Datatracker shows -15 (2 Mar 2026) and -16 (dated 2 Sep 2026 **[unverified, from a BibTeX record]**); WG milestone to submit to the IESG is Dec 2026. | Mandatory PKCE, no implicit grant, exact redirect matching. |
+| draft-wzdk-scim-agent-resource, draft-kushwaha-scim-agent-governance | Individual I-Ds (Jun and Jul 2026), not WG-adopted **[adoption unverified]**. The first, by Microsoft, Okta and Nextident authors, defines a SCIM `Agent` resource (`urn:ietf:params:scim:schemas:core:2.0:Agent`); the second adds governance metadata (lifecycle state, autonomy class, validity window). | The likely wire format for provisioning agents through SCIM. Watch before designing agent SCIM schemas. |
 | RFC 8693 Token Exchange | RFC (2020) | OBO, downscoping, `act` claim for delegation chains. |
 | RFC 8707 Resource Indicators | RFC | Audience-binds tokens to a specific MCP server or API. MCP requires it. |
 | RFC 9728 Protected Resource Metadata | RFC (2025) | Discovery of the AS from the resource. MCP requires it. |
@@ -95,8 +96,8 @@ Status is as of 2026-10-08. "I-D" means IETF Internet-Draft, which is work in pr
 |---|---|---|
 | OpenID Connect Core / Discovery | Final | Agent login, discovery. |
 | **CIBA Core 1.0** | Final | Asynchronous human approval for agents. Used by Auth0's "Async Authorization". |
-| **Shared Signals Framework (SSF), CAEP, RISC** | Final 1.0 (2025) **[unverified date]** | Continuous revocation and session signals. Lets the platform kill agent sessions in near real time. Cited in draft-klrc-aiagent-auth. |
-| **AuthZEN Authorization API** | 1.0 approved as Final **[unverified date]** | Standard PEP→PDP API. Lets Tessera act as an externalized PDP for agent gateways. |
+| **Shared Signals Framework (SSF), CAEP, RISC** | Final 1.0, approved by OpenID Foundation members 16 Sep 2025 ([announcement coverage](https://biometricupdate.com/202509/openid-approves-3-standards-for-sharing-real-time-digital-identity-security-signals)). CAEP Interoperability Profile 1.0: 60-day review 27 Jul to 25 Sep 2026, member vote 26 Sep to 10 Oct 2026, **outcome not verified**. | Continuous revocation and session signals. Lets the platform kill agent sessions in near real time. Cited in draft-klrc-aiagent-auth. |
+| **AuthZEN Authorization API** | 1.0 approved as Final: member vote ran 23 Dec 2025 to 6 Jan 2026; the final spec files on openid.net/specs are dated 12 Jan 2026 ([approval notice](https://openid.net/authorization-api-1-0-final-specification-approved/)). | Standard PEP→PDP API. Lets Tessera act as an externalized PDP for agent gateways. |
 | **AI Identity Management Community Group (AIIM CG)** | Active | Whitepaper *Identity Management for Agentic AI* (7 Oct 2025, arXiv 2510.25819). Response to NIST RFI (Mar 2026). |
 
 ### 3.4 Government and security-community guidance
