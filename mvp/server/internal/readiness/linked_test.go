@@ -19,7 +19,11 @@ func TestTwoPerson_LinkedUsers(t *testing.T) {
 			if err := c.UpsertIdentity(i); err != nil {
 				t.Fatal(err)
 			}
-			return &i.ID
+			got, err := c.IdentityByExternalID(ext) // UpsertIdentity does not fill in the id
+			if err != nil {
+				t.Fatal(err)
+			}
+			return &got.ID
 		}
 		user := func(name string, identity *int64) *store.PlatformUser {
 			u := &store.PlatformUser{DisplayName: name, Status: "active", IdentityID: identity, CreatedAt: t0}
