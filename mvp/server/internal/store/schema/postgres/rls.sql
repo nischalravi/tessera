@@ -2095,3 +2095,10 @@ DROP POLICY IF EXISTS tenant_isolation ON account_link_requests;
 CREATE POLICY tenant_isolation ON account_link_requests
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE vms_sources ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vms_sources FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON vms_sources;
+CREATE POLICY tenant_isolation ON vms_sources
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

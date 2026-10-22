@@ -47,6 +47,7 @@ import (
 const (
 	SorSIS  = "sis"
 	SorHRIS = "hris"
+	SorVMS  = "vms" // contractor feeds; the source record's id is "<system>:<worker id>"
 )
 
 // Organizational sponsors (design §3).
@@ -326,8 +327,11 @@ func newIntake(c *store.TenantTx, channel, sponsor, key, typ string, effective, 
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, false, err
 	}
-	sp, eff := sponsor, effective
-	rec = &store.IntakeEvent{ID: uuid.NewString(), Channel: channel, MatchMode: store.MatchAuthoritative, SponsorOrg: &sp,
+	sp, eff := &sponsor, effective
+	if sponsor == "" {
+		sp = nil // a person, not an organization, stands behind this feed (contractors)
+	}
+	rec = &store.IntakeEvent{ID: uuid.NewString(), Channel: channel, MatchMode: store.MatchAuthoritative, SponsorOrg: sp,
 		EventKey: key, EventType: typ, EffectiveAt: &eff, Status: store.IntakeEventReceived, Detail: "{}", CreatedAt: now}
 	return rec, false, c.InsertIntakeEvent(rec)
 }
