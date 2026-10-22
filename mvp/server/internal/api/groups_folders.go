@@ -28,7 +28,8 @@ import (
 //
 //	GET    /api/groups/folders?parent=&scope=one|sub&q=&limit=&offset=
 //	POST   /api/groups/folders                   {parent, extension, display_extension, description, data_owner}
-//	GET|PATCH|DELETE /api/groups/folders/{id}
+//	GET|PATCH|DELETE /api/groups/folders/{id}    DELETE ?recursive=true deletes the whole tree (below)
+//	GET    /api/groups/folders/{id}/delete-plan  what a recursive delete removes and what blocks it
 //	POST   /api/groups/folders/{id}/move         {parent}
 //	POST   /api/groups/folders/{id}/copy         {parent, extension}
 //	GET    /api/groups/native?folder=&scope=&q=&type=&deleted=&limit=&offset=
@@ -37,6 +38,7 @@ import (
 //	POST   /api/groups/{id}/move                 {folder}
 //	POST   /api/groups/{id}/copy                 {folder, extension}
 //	POST   /api/groups/{id}/restore
+//	POST   /api/groups/{id}/purge                permanently delete a group that is already deleted (admin)
 //
 // GET /api/groups already lists the connected-system groups, so the native
 // list is GET /api/groups/native. Answers are 404 for an unknown id, 409
@@ -50,7 +52,9 @@ func (s *Server) registerGroupsFolderRoutes() {
 	s.handle(P, "/api/groups/folders", write, canWrite, s.rd(s.createGrpFolder))
 	s.handle(G, "/api/groups/folders/{id}", read, canRead, s.rd(s.getGrpFolder))
 	s.handle(PA, "/api/groups/folders/{id}", write, canWrite, s.rd(s.patchGrpFolder))
-	s.handle(D, "/api/groups/folders/{id}", write, canWrite, s.rd(s.deleteGrpFolder))
+	// phased: a recursive delete may file a change request, which opens its own transaction
+	s.handle(D, "/api/groups/folders/{id}", phased, canWrite, s.rd(s.deleteGrpFolder))
+	s.handle(G, "/api/groups/folders/{id}/delete-plan", read, canRead, s.rd(s.getGrpFolderDeletePlan))
 	s.handle(P, "/api/groups/folders/{id}/move", write, canWrite, s.rd(s.moveGrpFolder))
 	s.handle(P, "/api/groups/folders/{id}/copy", write, canWrite, s.rd(s.copyGrpFolder))
 	s.handle(G, "/api/groups/native", read, canRead, s.rd(s.listGrpGroups))
@@ -61,6 +65,7 @@ func (s *Server) registerGroupsFolderRoutes() {
 	s.handle(P, "/api/groups/{id}/move", write, canWrite, s.rd(s.moveGrpGroup))
 	s.handle(P, "/api/groups/{id}/copy", write, canWrite, s.rd(s.copyGrpGroup))
 	s.handle(P, "/api/groups/{id}/restore", write, canWrite, s.rd(s.restoreGrpGroup))
+	s.handle(P, "/api/groups/{id}/purge", write, canWrite, s.rd(s.purgeGrpGroup))
 }
 
 // ---------------------------------------------------------------- views
@@ -356,20 +361,6 @@ func (s *Server) patchGrpFolder(r *http.Request, p *params) (int, any, error) {
 	return http.StatusOK, viewFolder(out), nil
 }
 
-func (s *Server) deleteGrpFolder(r *http.Request, p *params) (int, any, error) {
-	id, err := grpPathID(p, "folder")
-	if err != nil {
-		return 0, nil, err
-	}
-	if _, err := s.grpFolderFor(r, s.grpChecker(r), id, privs.StemAdmin); err != nil {
-		return 0, nil, err
-	}
-	if err := s.grpWrite(r, func(e model.Env) error { return e.DeleteFolder(store.FolderID(id)) }); err != nil {
-		return 0, nil, err
-	}
-	return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
-}
-
 func (s *Server) moveGrpFolder(r *http.Request, p *params) (int, any, error) {
 	id, err := grpPathID(p, "folder")
 	if err != nil {
@@ -636,6 +627,20 @@ func (s *Server) deleteGrpGroup(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
+}
+
+func (s *Server) purgeGrpGroup(r *http.Request, p *params) (int, any, error) {
+	id, err := grpPathID(p, "group")
+	if err != nil {
+		return 0, nil, err
+	}
+	if _, err := s.grpGroupFor(r, s.grpChecker(r), id, privs.Admin); err != nil {
+		return 0, nil, err
+	}
+	if err := s.grpWrite(r, func(e model.Env) error { return e.PurgeGroup(store.GroupID(id)) }); err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, map[string]any{"id": id, "purged": true}, nil
 }
 
 func (s *Server) restoreGrpGroup(r *http.Request, p *params) (int, any, error) {

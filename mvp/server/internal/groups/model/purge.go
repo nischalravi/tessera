@@ -195,7 +195,8 @@ type DeletePlan struct {
 // TotalGroups is every group of the tree, deleted ones included.
 func (p *DeletePlan) TotalGroups() int { return p.ActiveGroups + p.DeletedGroups }
 
-func (p *DeletePlan) block(kind, id, name, code, format string, args ...any) {
+// Block adds a blocker (the API adds the folders the caller may not delete).
+func (p *DeletePlan) Block(kind, id, name, code, format string, args ...any) {
 	if len(p.Blockers) < maxBlockers {
 		p.Blockers = append(p.Blockers, Blocker{Kind: kind, ID: id, Name: name, Code: code, Reason: fmt.Sprintf(format, args...)})
 	}
@@ -225,7 +226,7 @@ func (e Env) PlanFolderDelete(id store.FolderID) (*DeletePlan, error) {
 	for _, sf := range p.Subtree {
 		folders[sf.ID] = true
 		if sf.ManagedBy != store.ManagedByUI {
-			p.block("folder", string(sf.ID), sf.Name, "not_ui_managed", "folder %q is managed by %s, not in the UI", sf.Name, sf.ManagedBy)
+			p.Block("folder", string(sf.ID), sf.Name, "not_ui_managed", "folder %q is managed by %s, not in the UI", sf.Name, sf.ManagedBy)
 		}
 	}
 	groups, err := e.Tx.GrpGroupsBelow(f.Name)
@@ -245,7 +246,7 @@ func (e Env) PlanFolderDelete(id store.FolderID) (*DeletePlan, error) {
 	p.Groups = groups
 	for _, g := range groups {
 		if !folders[g.FolderID] {
-			p.block("group", string(g.ID), g.Name, "outside", "group %q is not in the folder tree", g.Name)
+			p.Block("group", string(g.ID), g.Name, "outside", "group %q is not in the folder tree", g.Name)
 			continue
 		}
 		if g.Status == store.GroupDeleted {
@@ -263,12 +264,12 @@ func (e Env) PlanFolderDelete(id store.FolderID) (*DeletePlan, error) {
 		}
 		switch {
 		case g.ManagedBy == store.ManagedByPolicyRepo:
-			p.block("group", string(g.ID), g.Name, "policy_managed", "group %q is managed by the policy repository", g.Name)
+			p.Block("group", string(g.ID), g.Name, "policy_managed", "group %q is managed by the policy repository", g.Name)
 		case g.ManagedBy != store.ManagedByUI:
-			p.block("group", string(g.ID), g.Name, "not_ui_managed", "group %q is managed by %s, not in the UI", g.Name, g.ManagedBy)
+			p.Block("group", string(g.ID), g.Name, "not_ui_managed", "group %q is managed by %s, not in the UI", g.Name, g.ManagedBy)
 		}
 		if g.RecomputeState == "pending" {
-			p.block("group", string(g.ID), g.Name, "recompute_pending", "group %q is still being recomputed", g.Name)
+			p.Block("group", string(g.ID), g.Name, "recompute_pending", "group %q is still being recomputed", g.Name)
 		}
 		users, refs, err := e.groupBlockers(g, tree)
 		if err != nil {
@@ -279,11 +280,11 @@ func (e Env) PlanFolderDelete(id store.FolderID) (*DeletePlan, error) {
 			if len(named) > 3 {
 				named = named[:3]
 			}
-			p.block("group", string(g.ID), g.Name, "used_outside", "group %q is used by %d group(s) outside the folder: %s",
+			p.Block("group", string(g.ID), g.Name, "used_outside", "group %q is used by %d group(s) outside the folder: %s",
 				g.Name, len(users), strings.Join(named, ", "))
 		}
 		if len(refs) > 0 {
-			p.block("group", string(g.ID), g.Name, "referenced", "group %q is named by %s", g.Name, strings.Join(refs, " and "))
+			p.Block("group", string(g.ID), g.Name, "referenced", "group %q is named by %s", g.Name, strings.Join(refs, " and "))
 		}
 	}
 	defs, err := e.Tx.GrpAttrDefs(store.GrpAttrDefFilter{Prefix: f.Name, Limit: 5000})
@@ -293,7 +294,7 @@ func (e Env) PlanFolderDelete(id store.FolderID) (*DeletePlan, error) {
 	p.AttrDefs = len(defs)
 	for _, d := range defs {
 		if d.System {
-			p.block("attr_def", d.ID, d.Name(), "system", "the built-in attribute definition %q cannot be deleted", d.Name())
+			p.Block("attr_def", d.ID, d.Name(), "system", "the built-in attribute definition %q cannot be deleted", d.Name())
 			continue
 		}
 		if err := e.defOutsideUse(p, d, folders, tree); err != nil {
@@ -332,7 +333,7 @@ func (e Env) defOutsideUse(p *DeletePlan, d *store.GrpAttrDef, folders map[store
 				}
 			}
 			if !inside {
-				p.block("attr_def", d.ID, d.Name(), "used_outside", "attribute definition %q is assigned to something outside the folder", d.Name())
+				p.Block("attr_def", d.ID, d.Name(), "used_outside", "attribute definition %q is assigned to something outside the folder", d.Name())
 				return nil
 			}
 		}
