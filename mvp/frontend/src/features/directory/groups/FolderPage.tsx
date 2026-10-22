@@ -1,14 +1,15 @@
 import { FormEvent, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AppWindow, FolderPlus, Plus, Trash2 } from "lucide-react";
-import { GrpFolder, groups } from "../../../api";
+import { ApiError, GrpFolder, groups } from "../../../api";
 import { useSession } from "../../../app/auth";
 import { Badge, Button, Callout, CommandBar, Crumb, EmptyState, Loading, Page, Tabs, useConfirm, useToast } from "../../../components";
 import { AttributesTab } from "./AttributesTab";
 import { FolderLink, GroupBadges, GroupLink, fmtWhen } from "./common";
 import { NewApplicationDrawer, NewFolderDrawer, NewGroupDrawer } from "./forms";
+import { useDeleteTree } from "./deletes";
 import { errText, useLoad } from "./hooks";
-import { childFolders, folderLabel, folderTrail, indexFolders } from "./model";
+import { childFolders, folderLabel, folderTrail, indexFolders, isNotEmpty, plainReason } from "./model";
 import { PrivilegesTab } from "./PrivilegesTab";
 
 type TabId = "contents" | "privileges" | "attributes" | "details";
@@ -22,13 +23,15 @@ export function FolderPage() {
   const nav = useNavigate();
   const toast = useToast();
   const confirm = useConfirm();
+  const deleteTree = useDeleteTree();
   const { can } = useSession();
   const [params, setParams] = useSearchParams();
   const tab = (TABS.find((t) => t.id === params.get("tab"))?.id ?? "contents") as TabId;
   const [creating, setCreating] = useState<"group" | "folder" | "app" | null>(null);
+  const [treeOffer, setTreeOffer] = useState(false);
   const folder = useLoad(() => groups.folder(id), `folder:${id}`);
   const folders = useLoad(() => groups.listFolders(), "folders");
-  const inside = useLoad(() => groups.listGroups({ folder: id, limit: 500 }), `folder-groups:${id}`);
+  const inside = useLoad(() => groups.listGroups({ folder: id, deleted: true, limit: 500 }), `folder-groups:${id}`);
   const ix = useMemo(() => indexFolders(folders.data?.items ?? []), [folders.data]);
   const f = folder.data && folder.data.id === id ? folder.data : null;
 
@@ -52,8 +55,14 @@ export function FolderPage() {
       toast("Folder deleted");
       nav("/directory/groups");
     } catch (e) {
-      toast(errText(e), { kind: "error" });
+      toast(e instanceof ApiError ? `Could not delete ${f.name}: ${plainReason(e.code, e.message, e.body)}` : errText(e), { kind: "error" });
+      if (e instanceof ApiError && isNotEmpty(e.code)) setTreeOffer(true);
     }
+  };
+  const removeTree = async () => {
+    const res = await deleteTree(f);
+    if (res === "deleted") nav("/directory/groups");
+    if (res) setTreeOffer(false);
   };
 
   return (
@@ -66,12 +75,21 @@ export function FolderPage() {
           writable && { label: "New group", icon: <Plus size={16} />, onClick: () => setCreating("group") },
           writable && { label: "New folder", icon: <FolderPlus size={16} />, onClick: () => setCreating("folder") },
           writable && { label: "New application", icon: <AppWindow size={16} />, onClick: () => setCreating("app"), title: "Create the standard folders and groups of an application here" },
-          writable && { label: "Delete folder", icon: <Trash2 size={16} />, danger: true, onClick: remove },
+          writable && { label: "Delete folder", icon: <Trash2 size={16} />, danger: true, onClick: remove, title: "Only an empty folder can be deleted" },
+          writable && { label: "Delete folder and everything in it…", icon: <Trash2 size={16} />, danger: true, onClick: removeTree },
         ]} />
       }
       tabs={<Tabs<TabId> label="Folder sections" value={tab} onChange={(t) => setParams({ tab: t }, { replace: true })} tabs={TABS} />}
     >
       <div className="stack" role="tabpanel">
+        {treeOffer && (
+          <Callout tone="warn">
+            <div className="row" style={{ justifyContent: "space-between", gap: 12 }}>
+              <span>This folder still holds something, so it was not deleted. Remove it together with everything in it, or restore or delete its groups first.</span>
+              <Button variant="danger" icon={<Trash2 size={16} />} onClick={removeTree}>Delete folder and everything in it…</Button>
+            </div>
+          </Callout>
+        )}
         {f.managed_by !== "ui" && <Callout tone="info">This folder is managed by {f.managed_by.replace(/_/g, " ")}, so its contents are changed there, not here.</Callout>}
         {tab === "contents" && (
           <>

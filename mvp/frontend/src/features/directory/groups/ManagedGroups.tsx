@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { AppWindow, Folder, FolderPlus, Plus, RotateCcw, Trash2, Users } from "lucide-react";
-import { GrpFolder, GrpGroup, groups } from "../../../api";
+import { ApiError, GrpFolder, GrpGroup, groups } from "../../../api";
 import { useSession } from "../../../app/auth";
 import { Badge, Button, Callout, Column, Crumb, DataTable, Loading, Page, SidePanel, Tabs, useConfirm, useSelected, useToast } from "../../../components";
 import { GroupBadges, RecomputeBanner, fmtWhen } from "./common";
 import { NewApplicationDrawer, NewFolderDrawer, NewGroupDrawer } from "./forms";
+import { failureOf, useDeleteTree, usePurgeGroups } from "./deletes";
 import { errText, useLoad } from "./hooks";
-import { childFolders, deleteBody, deleteTitle, failureSummary, folderLabel, folderTrail, indexFolders, planDelete } from "./model";
+import { childFolders, deleteBody, deleteTitle, failureSummary, folderLabel, folderTrail, indexFolders, isNotEmpty, planDeleted, planDelete } from "./model";
 import { ViewToggle } from "./ViewToggle";
 
 type Row = { key: string; kind: "folder"; f: GrpFolder; items: number } | { key: string; kind: "group"; g: GrpGroup };
@@ -28,8 +29,13 @@ export function ManagedGroups() {
   const [params, setParams] = useSearchParams();
   const folderId = params.get("folder");
   const everywhere = params.get("all") === "1";
+  const showDeleted = params.get("deleted") === "1";
   const [selected, setSelected] = useSelected();
   const [creating, setCreating] = useState<"group" | "folder" | "app" | null>(null);
+  // folders a delete left in place because they still hold something: offered "delete everything in it"
+  const [notEmpty, setNotEmpty] = useState<GrpFolder[]>([]);
+  const purge = usePurgeGroups();
+  const deleteTree = useDeleteTree();
 
   const folders = useLoad(() => groups.listFolders({ limit: LIMIT }), "folders");
   const ix = useMemo(() => indexFolders(folders.data?.items ?? []), [folders.data]);
@@ -38,11 +44,11 @@ export function ManagedGroups() {
   const topId = ix.root?.id;
   const fetchGroups = useLoad(
     folders.data
-      ? () => folderId ? groups.listGroups({ folder: folderId, scope: everywhere ? "sub" : "one", limit: LIMIT })
-        : everywhere ? groups.listGroups({ limit: LIMIT })
-        : topId ? groups.listGroups({ folder: topId, limit: LIMIT }) : Promise.resolve({ items: [], limit: LIMIT, offset: 0 })
+      ? () => folderId ? groups.listGroups({ folder: folderId, scope: everywhere ? "sub" : "one", deleted: showDeleted, limit: LIMIT })
+        : everywhere ? groups.listGroups({ deleted: showDeleted, limit: LIMIT })
+        : topId ? groups.listGroups({ folder: topId, deleted: showDeleted, limit: LIMIT }) : Promise.resolve({ items: [], limit: LIMIT, offset: 0 })
       : null,
-    `native:${folderId ?? "top"}:${everywhere}:${topId ?? ""}:${folders.data ? "ready" : "wait"}`,
+    `native:${folderId ?? "top"}:${everywhere}:${showDeleted}:${topId ?? ""}:${folders.data ? "ready" : "wait"}`,
   );
 
   const rows = useMemo<Row[] | null>(() => {
@@ -67,22 +73,64 @@ export function ManagedGroups() {
   const deleteRows = async (picked: Row[]) => {
     const plan = planDelete(picked);
     if (plan.groups.length + plan.folders.length === 0) {
-      toast(`Nothing to delete here: ${plan.skipped.join(", ")} ${plan.skipped.length === 1 ? "is" : "are"} managed elsewhere.`, { kind: "error" });
+      toast(`Nothing to delete here: ${plan.skipped.join(", ")} ${plan.skipped.length === 1 ? "is" : "are"} already deleted or managed elsewhere. Use Delete permanently to remove a deleted group.`, { kind: "error" });
       return;
     }
     const ok = await confirm({ title: deleteTitle(plan), body: deleteBody(plan), confirmLabel: "Delete", danger: true });
     if (ok === null) return;
     const failed: { name: string; message: string }[] = [];
+    const stuck: GrpFolder[] = [];
     let done = 0;
     for (const g of plan.groups) {
-      try { await groups.deleteGroup(g.id); done++; } catch (e) { failed.push({ name: g.name, message: errText(e) }); }
+      try { await groups.deleteGroup(g.id); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
     }
     for (const f of plan.folders) {
-      try { await groups.deleteFolder(f.id); done++; } catch (e) { failed.push({ name: f.name, message: errText(e) }); }
+      try { await groups.deleteFolder(f.id); done++; } catch (e) {
+        failed.push(failureOf(f.name, e));
+        if (e instanceof ApiError && isNotEmpty(e.code)) stuck.push(f);
+      }
     }
     if (failed.length) toast(`${done ? `Deleted ${done}. ` : ""}Could not delete ${failed.length}: ${failureSummary(failed)}`, { kind: "error" });
     else toast(done === 1 ? "Deleted" : `Deleted ${done} items`);
+    setNotEmpty(stuck);
     setSelected(null);
+    folders.reload();
+    fetchGroups.reload();
+  };
+  /** Restore or permanently delete the deleted groups among the picked rows. */
+  const restoreRows = async (picked: Row[]) => {
+    const plan = planDeleted(picked.map((r) => (r.kind === "folder" ? { kind: "folder" as const, f: r.f } : { kind: "group" as const, g: r.g })));
+    if (plan.groups.length === 0) {
+      toast("Nothing to restore: only a deleted group can be restored. Turn on Show deleted to find them.", { kind: "error" });
+      return;
+    }
+    const failed: { name: string; message: string }[] = [];
+    let done = 0;
+    for (const g of plan.groups) {
+      try { await groups.restoreGroup(g.id); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
+    }
+    if (failed.length) toast(`${done ? `Restored ${done}. ` : ""}Could not restore ${failed.length}: ${failureSummary(failed)}`, { kind: "error" });
+    else toast(done === 1 ? "Group restored" : `${done} groups restored`);
+    setSelected(null);
+    fetchGroups.reload();
+  };
+  const purgeRows = async (picked: Row[]) => {
+    const plan = planDeleted(picked.map((r) => (r.kind === "folder" ? { kind: "folder" as const, f: r.f } : { kind: "group" as const, g: r.g })));
+    const res = await purge(plan.groups, plan.skipped);
+    if (res === null) return;
+    setSelected(null);
+    folders.reload();
+    fetchGroups.reload();
+  };
+  const deleteTreeOf = async (f: GrpFolder) => {
+    const res = await deleteTree(f);
+    if (!res) return;
+    setNotEmpty((l) => l.filter((x) => x.id !== f.id));
+    setSelected(null);
+    if (res === "deleted" && current && (current.id === f.id || current.name.startsWith(`${f.name}:`))) {
+      const parent = f.parent_id ? ix.byId.get(f.parent_id) : null;
+      nav(parent && parent.name !== "" ? `/directory/groups?folder=${parent.id}` : "/directory/groups");
+    }
     folders.reload();
     fetchGroups.reload();
   };
@@ -136,15 +184,22 @@ export function ManagedGroups() {
           { id: "kind", label: "Type", options: [{ value: "folder", label: "Folders" }, { value: "group", label: "Groups and roles" }], get: (r) => r.kind },
           { id: "def", label: "Definition", options: [{ value: "basic", label: "Basic" }, { value: "composite", label: "Composite" }, { value: "policy", label: "Policy" }], get: (r) => (r.kind === "group" ? r.g.definition : null) },
           { id: "role", label: "Group or role", options: [{ value: "group", label: "Group" }, { value: "role", label: "Role" }], get: (r) => (r.kind === "group" ? r.g.type : null) },
-          { id: "status", label: "Status", options: [{ value: "active", label: "Active" }, { value: "disabled", label: "Disabled" }], get: (r) => (r.kind === "group" ? r.g.status : null) },
+          { id: "status", label: "Status", options: [{ value: "active", label: "Active" }, { value: "disabled", label: "Disabled" }, ...(showDeleted ? [{ value: "deleted", label: "Deleted" }] : [])], get: (r) => (r.kind === "group" ? r.g.status : null) },
         ]}
         commands={[
           writable && { label: "New group", icon: <Plus size={16} />, onClick: () => setCreating("group"), disabled: !current, title: current ? undefined : "Open a folder first" },
           writable && { label: "New folder", icon: <FolderPlus size={16} />, onClick: () => setCreating("folder") },
           writable && { label: "New application", icon: <AppWindow size={16} />, onClick: () => setCreating("app"), title: "Create the standard folders and groups of an application" },
           writable && current && { label: "Delete this folder", icon: <Trash2 size={16} />, danger: true, onClick: deleteCurrent, disabled: current.managed_by !== "ui", title: current.managed_by !== "ui" ? `Managed by ${current.managed_by.replace(/_/g, " ")}, so changed there` : "Only an empty folder can be deleted" },
+          writable && current && { label: "Delete folder and everything in it…", icon: <Trash2 size={16} />, danger: true, onClick: () => deleteTreeOf(current), disabled: current.managed_by !== "ui", title: current.managed_by !== "ui" ? `Managed by ${current.managed_by.replace(/_/g, " ")}, so changed there` : "Delete this folder with its subfolders and groups" },
         ]}
-        bulkActions={writable ? [{ label: "Delete", icon: <Trash2 size={16} />, danger: true, run: deleteRows }] : undefined}
+        bulkActions={writable ? [
+          { label: "Delete", icon: <Trash2 size={16} />, danger: true, run: deleteRows },
+          ...(showDeleted ? [
+            { label: "Restore", icon: <RotateCcw size={16} />, run: restoreRows },
+            { label: "Delete permanently", icon: <Trash2 size={16} />, danger: true, run: purgeRows },
+          ] : []),
+        ] : undefined}
         onRefresh={() => { folders.reload(); fetchGroups.reload(); }}
         rowLabel={nameOf}
         onRowClick={(r) => setSelected(r.key)}
@@ -156,12 +211,26 @@ export function ManagedGroups() {
               <input type="checkbox" style={{ width: 24, height: 24 }} checked={everywhere} onChange={(e) => setParam("all", e.target.checked ? "1" : null)} />
               <span>{current ? "Include subfolders" : "Search every folder"}</span>
             </label>
+            <label className="row tight small">
+              <input type="checkbox" style={{ width: 24, height: 24 }} checked={showDeleted} onChange={(e) => setParam("deleted", e.target.checked ? "1" : null)} />
+              <span>Show deleted</span>
+            </label>
           </>
         }
         empty={<EmptyFolder writable={writable} inFolder={!!current} />}
       />
+      {notEmpty.map((f) => (
+        <Callout key={f.id} tone="warn">
+          <div className="row" style={{ justifyContent: "space-between", gap: 12 }}>
+            <span><strong className="sys">{f.name}</strong> was not deleted because it still holds something. Remove it together with everything in it, or restore or delete its groups first.</span>
+            <Button variant="danger" icon={<Trash2 size={16} />} onClick={() => deleteTreeOf(f)}>Delete folder and everything in it…</Button>
+          </div>
+        </Callout>
+      ))}
       {fetchGroups.data && fetchGroups.data.items.length >= LIMIT && <Callout tone="warn">Only the first {LIMIT} groups are listed. Open a folder to narrow the list.</Callout>}
-      {open && <Panel row={open} onClose={() => setSelected(null)} canDelete={writable && managedByUi(open)} onDelete={() => deleteRows([open])} onRestore={writable && open.kind === "group" && open.g.status === "deleted" ? () => restoreGroup(open.g) : undefined} />}
+      {open && <Panel row={open} onClose={() => setSelected(null)} canDelete={writable && managedByUi(open)} onDelete={() => deleteRows([open])} onDeleteTree={writable && open.kind === "folder" && managedByUi(open) ? () => deleteTreeOf(open.f) : undefined}
+        onRestore={writable && open.kind === "group" && open.g.status === "deleted" && managedByUi(open) ? () => restoreGroup(open.g) : undefined}
+        onPurge={writable && open.kind === "group" && open.g.status === "deleted" && managedByUi(open) ? () => purgeRows([open]) : undefined} />}
       {creating === "folder" && <NewFolderDrawer parent={current} onClose={() => setCreating(null)} />}
       {creating === "group" && current && <NewGroupDrawer folder={current} onClose={() => setCreating(null)} />}
       {creating === "app" && <NewApplicationDrawer parent={current} onClose={() => setCreating(null)} />}
@@ -179,12 +248,24 @@ function EmptyFolder({ writable, inFolder }: { writable: boolean; inFolder: bool
 }
 
 /** The side panel of a row: a short summary; the full page has every tab. */
-interface PanelActions { canDelete: boolean; onDelete: () => void; onRestore?: () => void }
+interface PanelActions { canDelete: boolean; onDelete: () => void; onRestore?: () => void; onPurge?: () => void; onDeleteTree?: () => void }
 
-function PanelActions({ canDelete, onDelete, onRestore, managedBy }: PanelActions & { managedBy: string }) {
-  if (onRestore) return <div><Button icon={<RotateCcw size={16} />} onClick={onRestore}>Restore</Button></div>;
+function PanelActions({ canDelete, onDelete, onRestore, onPurge, onDeleteTree, managedBy }: PanelActions & { managedBy: string }) {
+  if (onRestore || onPurge) {
+    return (
+      <div className="row" style={{ flexWrap: "wrap" }}>
+        {onRestore && <Button icon={<RotateCcw size={16} />} onClick={onRestore}>Restore</Button>}
+        {onPurge && <Button variant="danger" icon={<Trash2 size={16} />} onClick={onPurge}>Delete permanently</Button>}
+      </div>
+    );
+  }
   if (!canDelete) return managedBy !== "ui" ? <p className="small muted">Managed by {managedBy.replace(/_/g, " ")}, so it is changed there, not here.</p> : null;
-  return <div><Button variant="danger" icon={<Trash2 size={16} />} onClick={onDelete}>Delete</Button></div>;
+  return (
+    <div className="row" style={{ flexWrap: "wrap" }}>
+      <Button variant="danger" icon={<Trash2 size={16} />} onClick={onDelete}>Delete</Button>
+      {onDeleteTree && <Button variant="danger" icon={<Trash2 size={16} />} onClick={onDeleteTree}>Delete folder and everything in it…</Button>}
+    </div>
+  );
 }
 
 function Panel({ row, onClose, ...act }: { row: Row; onClose: () => void } & PanelActions) {

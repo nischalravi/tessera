@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { GrpGroup, groups } from "../../../api";
 import { useSession } from "../../../app/auth";
@@ -8,6 +8,7 @@ import { AttributesTab } from "./AttributesTab";
 import { DefinitionTab } from "./DefinitionTab";
 import { GroupBadges, GroupLink, RecomputeBanner } from "./common";
 import { HistoryTab } from "./HistoryTab";
+import { usePurgeGroups } from "./deletes";
 import { errText, useLoad } from "./hooks";
 import { MembersTab } from "./MembersTab";
 import { folderLabel, folderTrail, indexFolders } from "./model";
@@ -24,6 +25,8 @@ export function GroupPage() {
   const { id = "" } = useParams();
   const toast = useToast();
   const confirm = useConfirm();
+  const nav = useNavigate();
+  const purge = usePurgeGroups();
   const { can } = useSession();
   const [params, setParams] = useSearchParams();
   const tab = (TABS.find((t) => t.id === params.get("tab"))?.id ?? "members") as TabId;
@@ -56,6 +59,10 @@ export function GroupPage() {
       toast(errText(e), { kind: "error" });
     }
   };
+  const purgeNow = async () => {
+    const res = await purge([g]);
+    if (res && res.done) nav("/directory/groups");
+  };
   const restore = async () => {
     try {
       await groups.restoreGroup(g.id);
@@ -75,13 +82,14 @@ export function GroupPage() {
           can("groups.write") && !deleted && { label: "Edit details", icon: <Pencil size={16} />, onClick: () => setEdit(true), disabled: !handEdited },
           can("groups.write") && !deleted && { label: "Delete", icon: <Trash2 size={16} />, danger: true, onClick: remove, disabled: !handEdited },
           can("groups.write") && deleted && { label: "Restore", icon: <RotateCcw size={16} />, onClick: restore },
+          can("groups.write") && deleted && { label: "Delete permanently", icon: <Trash2 size={16} />, danger: true, onClick: purgeNow, disabled: !handEdited },
         ]} />
       }
       tabs={<Tabs<TabId> label="Group sections" value={tab} onChange={(t) => setParams({ tab: t }, { replace: true })} tabs={TABS} />}
     >
       <div className="stack" role="tabpanel">
         <RecomputeBanner state={g.recompute_state} />
-        {deleted && <Callout tone="warn">This group is deleted. It has no members until it is restored.</Callout>}
+        {deleted && <Callout tone="warn">This group is deleted. It has no members until it is restored. Delete it permanently to remove it for good.</Callout>}
         {!handEdited && !deleted && <Callout tone="info">This group is managed by {g.managed_by.replace(/_/g, " ")}, so it is changed there, not here.</Callout>}
         {tab === "members" && (
           <>

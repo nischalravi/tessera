@@ -326,6 +326,16 @@ func TestDeleteFolderRecursiveRefusals(t *testing.T) {
 		if got := blockerCodes(plan); !slices.Equal(got, []string{"attr_def:used_outside"}) {
 			t.Errorf("blockers = %v", got)
 		}
+		// a loader that targets a folder of the tree
+		if err := e.Tx.InsertGrpLoader(&store.GrpLoader{Name: "Staff", Type: "csv", Config: `{"path":"a.csv","group":"g","subject_column":"id"}`,
+			TargetFolder: a.ID, NameTemplate: "{{.Name}}", OnMissingGroup: "empty", Schedule: "@daily", Failsafe: `{}`,
+			CreatedAt: e.Now, UpdatedAt: e.Now}); err != nil {
+			return err
+		}
+		plan, _ = e.PlanFolderDelete(app.ID)
+		if got := blockerCodes(plan); !slices.Contains(got, "folder:referenced") {
+			t.Errorf("blockers = %v", got)
+		}
 		// the root cannot be deleted this way
 		root, _ := e.EnsureRoot()
 		_, err = e.PlanFolderDelete(root.ID)

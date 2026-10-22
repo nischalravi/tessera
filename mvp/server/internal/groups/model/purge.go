@@ -202,6 +202,15 @@ func (p *DeletePlan) Block(kind, id, name, code, format string, args ...any) {
 	}
 }
 
+func folderIn(fs []*store.Folder, id store.FolderID) *store.Folder {
+	for _, f := range fs {
+		if f.ID == id {
+			return f
+		}
+	}
+	return nil
+}
+
 func depth(name string) int { return strings.Count(name, ":") }
 
 // PlanFolderDelete reads a folder tree and says what deleting it would remove
@@ -227,6 +236,16 @@ func (e Env) PlanFolderDelete(id store.FolderID) (*DeletePlan, error) {
 		folders[sf.ID] = true
 		if sf.ManagedBy != store.ManagedByUI {
 			p.Block("folder", string(sf.ID), sf.Name, "not_ui_managed", "folder %q is managed by %s, not in the UI", sf.Name, sf.ManagedBy)
+		}
+	}
+	// a loader's target folder is a foreign key: it must go (or move) first
+	loaders, err := e.Tx.GrpLoaders()
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range loaders {
+		if sf := folderIn(p.Subtree, l.TargetFolder); sf != nil {
+			p.Block("folder", string(sf.ID), sf.Name, "referenced", "folder %q is the target of the loader %q; delete the loader or point it elsewhere first", sf.Name, l.Name)
 		}
 	}
 	groups, err := e.Tx.GrpGroupsBelow(f.Name)

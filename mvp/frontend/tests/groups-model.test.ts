@@ -246,3 +246,54 @@ test("planDelete orders groups before folders, deepest folder first, and skips w
   assert.match(m.deleteBody({ folders: [1] as any, groups: [1] as any, skipped: [] }), /empty folder.*restored/);
   assert.equal(m.failureSummary([{ name: "TEST", message: "folder is not empty" }, { name: "G", message: "not found" }]), "TEST: folder is not empty; G: not found");
 });
+
+test("planDeleted picks the deleted groups the UI manages and skips the rest", () => {
+  const f = (name: string) => ({ kind: "folder" as const, f: { name, managed_by: "ui" } as any });
+  const g = (name: string, status: string, managed_by = "ui") => ({ kind: "group" as const, g: { name, status, managed_by } as any });
+  const p = m.planDeleted([g("A:G", "deleted"), g("A:H", "active"), g("A:I", "deleted", "loader"), f("A")]);
+  assert.deepEqual(p.groups.map((x) => x.name), ["A:G"]);
+  assert.deepEqual(p.skipped, ["A:H", "A:I", "A"]);
+  assert.equal(m.purgeTitle(1), "Delete 1 group permanently?");
+  assert.equal(m.purgeTitle(3), "Delete 3 groups permanently?");
+  assert.match(m.purgeBody(2, ["X"]), /cannot be restored.*audit history stays.*another group still uses.*1 item that is not deleted/);
+});
+
+test("the tree summary says what goes, in plain words", () => {
+  const plan = { folder_id: "f", name: "app", folders: 2, groups: 3, active_groups: 2, deleted_groups: 1, attr_defs: 1, groups_with_members: 2, memberships: 12,
+    needs_approval: true, blockers: [], blocker_count: 0 };
+  assert.deepEqual(m.treeSummary(plan), ["2 subfolders below it", "3 groups (1 already deleted)", "1 attribute definition", "12 memberships in 2 groups, which stop giving access"]);
+  assert.deepEqual(m.treeSummary({ ...plan, folders: 0, groups: 0, deleted_groups: 0, attr_defs: 0, memberships: 0, groups_with_members: 0 }), []);
+  assert.deepEqual(m.treeSummary({ ...plan, memberships: 1, groups_with_members: 1, folders: 1, groups: 1, deleted_groups: 0, attr_defs: 0 }),
+    ["1 subfolder below it", "1 group", "1 membership in 1 group, which stops giving access"]);
+});
+
+test("blockers are listed short, with a count of the rest", () => {
+  const b = Array.from({ length: 7 }, (_, i) => ({ reason: `reason ${i}` }));
+  assert.deepEqual(m.blockerLines(b, 3), ["reason 0", "reason 1", "reason 2", "and 4 more"]);
+  assert.deepEqual(m.blockerLines(b.slice(0, 2)), ["reason 0", "reason 1"]);
+});
+
+test("the outcome of a tree delete says whether anything was deleted or a second admin must approve", () => {
+  const done = m.treeOutcome("app", { id: "f", deleted: true, recursive: true, folders: 3, groups: 2, attr_defs: 0, memberships: 4 });
+  assert.equal(done.requested, false);
+  assert.equal(done.message, "Deleted app and everything in it: 3 folders, 2 groups.");
+  const pending = m.treeOutcome("app", { status: "pending_approval", change_request_id: "c", type: "t", folder_id: "f", expires_at: null, reason: "2 group(s) in the folder have members", detail: "" });
+  assert.equal(pending.requested, true);
+  assert.match(pending.message, /^Nothing is deleted yet\. A request to delete app and everything in it was created: a second admin must approve it/);
+});
+
+test("a failure names what blocked and why, in plain words", () => {
+  assert.equal(m.isNotEmpty("folder_not_empty"), true);
+  assert.equal(m.isNotEmpty("not_found"), false);
+  assert.equal(m.plainReason("folder_not_empty", "x", { folders: 0, groups: 1, deleted_groups: 1, attr_defs: 0 }),
+    "it still holds 1 group (1 deleted); restore or purge the deleted groups, or delete the folder with everything in it");
+  assert.equal(m.plainReason("folder_not_empty", "x", { folders: 2, groups: 0, deleted_groups: 0, attr_defs: 1 }),
+    "it still holds 2 subfolders, 1 attribute definition; delete the folder with everything in it to remove them too");
+  assert.equal(m.plainReason("group_in_use", "x", { groups: ["app:parent"] }), "app:parent still uses it as a member or factor; remove it there first");
+  assert.equal(m.plainReason("group_in_use", "x", { groups: ["a", "b"] }), "a, b still use it as a member or factor; remove it there first");
+  assert.equal(m.plainReason("recursive_delete_blocked", "x", { blockers: [{ reason: "one" }, { reason: "two" }] }), "one; two");
+  assert.equal(m.plainReason("privilege_required", "x", { privilege: "admin" }), "you do not hold the admin privilege on it");
+  assert.equal(m.plainReason("not_deleted", "x"), "it is not deleted yet");
+  assert.equal(m.plainReason("something_else", "the server said so"), "the server said so");
+  assert.equal(m.failureSummary([{ name: "app", message: m.plainReason("group_in_use", "", { groups: ["p"] }) }]), "app: p still uses it as a member or factor; remove it there first");
+});
