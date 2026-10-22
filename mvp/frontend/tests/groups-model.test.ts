@@ -297,3 +297,11 @@ test("a failure names what blocked and why, in plain words", () => {
   assert.equal(m.plainReason("something_else", "the server said so"), "the server said so");
   assert.equal(m.failureSummary([{ name: "app", message: m.plainReason("group_in_use", "", { groups: ["p"] }) }]), "app: p still uses it as a member or factor; remove it there first");
 });
+
+test("a deleted group says who deleted it, when, why and with which folder", () => {
+  const when = (iso: string) => `at ${iso.slice(0, 10)}`;
+  const g = { status: "deleted", deleted_by: "Alice (tenant admin)", deleted_at: "2026-10-22T14:10:00Z", deleted_reason: "retired", deleted_with_folder: "app" };
+  assert.equal(m.deletedLine(g, when), "Deleted by Alice (tenant admin) on at 2026-10-22 — reason: retired — deleted with folder app");
+  assert.equal(m.deletedLine({ status: "deleted" }, when), "Deleted");
+  assert.equal(m.deletedLine({ ...g, status: "active" }, when), "");
+});

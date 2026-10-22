@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
@@ -100,19 +101,25 @@ func viewFolder(f *store.Folder) folderView {
 }
 
 type groupView struct {
-	ID                string    `json:"id"`
-	FolderID          string    `json:"folder_id"`
-	Extension         string    `json:"extension"`
-	DisplayExtension  string    `json:"display_extension"`
-	Name              string    `json:"name"`
-	DisplayName       string    `json:"display_name"`
-	Description       string    `json:"description"`
-	IDIndex           int64     `json:"id_index"`
-	Type              string    `json:"type"`
-	Definition        string    `json:"definition"`
-	CompositeOp       *string   `json:"composite_op"`
+	ID               string  `json:"id"`
+	FolderID         string  `json:"folder_id"`
+	Extension        string  `json:"extension"`
+	DisplayExtension string  `json:"display_extension"`
+	Name             string  `json:"name"`
+	DisplayName      string  `json:"display_name"`
+	Description      string  `json:"description"`
+	IDIndex          int64   `json:"id_index"`
+	Type             string  `json:"type"`
+	Definition       string  `json:"definition"`
+	CompositeOp      *string `json:"composite_op"`
+	// who deleted it, when and why, while it is deleted
+	DeletedBy         *string   `json:"deleted_by,omitempty"`
+	DeletedAt         *string   `json:"deleted_at,omitempty"`
+	DeletedReason     *string   `json:"deleted_reason,omitempty"`
+	DeletedWithFolder *string   `json:"deleted_with_folder,omitempty"`
 	Factors           *[]string `json:"factors,omitempty"` // composites, on single-group answers
 	ManagedBy         string    `json:"managed_by"`
+	LoaderID          *string   `json:"loader_id,omitempty"` // the loader that fills a loader-managed group
 	DataOwner         *string   `json:"data_owner"`
 	MemberDescription *string   `json:"member_description"`
 	Status            string    `json:"status"`
@@ -136,9 +143,20 @@ func viewGroup(g *store.NativeGroup) groupView {
 		MemberDescription: g.MemberDescription, Status: g.Status, Requestable: g.Requestable,
 		EffectiveCount: g.EffectiveCount, EffectiveVersion: g.EffectiveVersion, RecomputeState: g.RecomputeState,
 		CreatedAt: store.RT(g.CreatedAt), CreatedBy: g.CreatedBy, Version: g.Version}
+	v.LoaderID = g.LoaderID
 	if g.CompositeOp != nil {
 		op := string(*g.CompositeOp)
 		v.CompositeOp = &op
+	}
+	if g.Status == store.GroupDeleted && g.DeletedAt != nil {
+		at, by, why, with := store.RT(*g.DeletedAt), g.DeletedBy, g.DeletedReason, g.DeletedWithFolder
+		v.DeletedAt, v.DeletedBy = &at, &by
+		if why != "" {
+			v.DeletedReason = &why
+		}
+		if with != "" {
+			v.DeletedWithFolder = &with
+		}
 	}
 	if g.EnabledFrom != nil {
 		s := store.RT(*g.EnabledFrom)
@@ -222,7 +240,49 @@ func (s *Server) grpEnv(r *http.Request, c *store.TenantTx, now time.Time) model
 		u := pr.UserID.String()
 		env.By = &u
 	}
+	if r.Method != http.MethodGet {
+		env.ByDisplay = s.actorLabel(r, c)
+	}
 	return env
+}
+
+// actorLabel is the acting person as it is kept with what they delete: the name of the identity their user is
+// linked to (else the user's own name), and "(tenant admin)" for that role.
+func (s *Server) actorLabel(r *http.Request, c *store.TenantTx) string {
+	pr := principal(r)
+	name := pr.Display
+	if pr.IdentityID != nil {
+		if i, err := c.Identity(*pr.IdentityID); err == nil && i.Name != "" {
+			name = i.Name
+		}
+	}
+	if name == "" {
+		name = "a user"
+	}
+	if pr.ActiveRoles.Has(auth.RoleTenantAdmin) {
+		name += " (tenant admin)"
+	}
+	return name
+}
+
+const maxReason = 500
+
+// deleteReason is the optional body of a delete: why. required says the route refuses without one.
+func deleteReason(r *http.Request, required bool) (string, error) {
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if err := decodeBody(r, &in, true); err != nil {
+		return "", err
+	}
+	in.Reason = strings.TrimSpace(in.Reason)
+	switch {
+	case len(in.Reason) > maxReason:
+		return "", badRequest("invalid_reason", "reason is at most 500 characters")
+	case required && in.Reason == "":
+		return "", badRequest("reason_required", "say why in reason")
+	}
+	return in.Reason, nil
 }
 
 // grpWrite runs fn in the request's write transaction with a model.Env.
@@ -627,7 +687,11 @@ func (s *Server) deleteGrpGroup(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	col := &deleteguard.Collector{}
-	if err := s.grpWrite(r, func(e model.Env) error { e.Held = col; return e.DeleteGroup(store.GroupID(id)) }); err != nil {
+	reason, err := deleteReason(r, false)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := s.grpWrite(r, func(e model.Env) error { e.Held = col; e.Reason = reason; return e.DeleteGroup(store.GroupID(id)) }); err != nil {
 		return 0, nil, err
 	}
 	if res := col.Result(); res != nil {
@@ -645,7 +709,11 @@ func (s *Server) purgeGrpGroup(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	col := &deleteguard.Collector{}
-	if err := s.grpWrite(r, func(e model.Env) error { e.Held = col; return e.PurgeGroup(store.GroupID(id)) }); err != nil {
+	reason, err := deleteReason(r, true)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := s.grpWrite(r, func(e model.Env) error { e.Held = col; e.Reason = reason; return e.PurgeGroup(store.GroupID(id)) }); err != nil {
 		return 0, nil, err
 	}
 	if res := col.Result(); res != nil {

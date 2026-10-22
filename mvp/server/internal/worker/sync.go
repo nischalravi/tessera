@@ -31,18 +31,57 @@ func RunSync(ctx context.Context, tx *store.TenantTx, now time.Time, conns []con
 }
 
 func discoverAll(ctx context.Context, conns []connectors.Connector, full bool) ([]*connectors.DiscoveryResult, error) {
+	results, _, err := discoverGuarded(ctx, conns, full, nil)
+	return results, err
+}
+
+// callGuard is what discoverGuarded needs of a Guard: connection ids by system
+// name, and the guarded call. A system with no connection is called unguarded
+// (a demo connector, a flat file).
+type callGuard struct {
+	do  func(ctx context.Context, connID string, fn func(context.Context) error) error
+	ids map[string]string
+}
+
+// discoverGuarded is discoverAll under per-target limits. A connector whose
+// breaker is open, or whose rate limit is spent, is skipped (named in the
+// second result) instead of failing the whole sync: the others are read, and
+// the skipped one is read again by the next sync once the breaker closes.
+func discoverGuarded(ctx context.Context, conns []connectors.Connector, full bool, g *callGuard) ([]*connectors.DiscoveryResult, []string, error) {
 	if full {
 		ctx = connsync.WithMode(ctx, connsync.Full)
 	}
 	var results []*connectors.DiscoveryResult
+	var skipped []string
 	for _, cn := range conns {
-		res, err := cn.Discover(ctx)
+		var res *connectors.DiscoveryResult
+		discover := func(ctx context.Context) (err error) {
+			res, err = cn.Discover(ctx)
+			return err
+		}
+		var err error
+		if id := g.id(cn.System()); id != "" {
+			err = g.do(ctx, id, discover)
+			if errors.Is(err, ErrBreakerOpen) || errors.Is(err, ErrRateLimited) {
+				skipped = append(skipped, cn.System())
+				continue
+			}
+		} else {
+			err = discover(ctx)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("%s: discover: %w", cn.System(), err)
+			return nil, nil, fmt.Errorf("%s: discover: %w", cn.System(), err)
 		}
 		results = append(results, res)
 	}
-	return results, nil
+	return results, skipped, nil
+}
+
+func (g *callGuard) id(system string) string {
+	if g == nil || g.do == nil {
+		return ""
+	}
+	return g.ids[system]
 }
 
 func ingestResults(tx *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult, actor string) (ojson.Object, error) {
@@ -73,7 +112,11 @@ func ingestResults(tx *store.TenantTx, now time.Time, results []*connectors.Disc
 // the records. window keys the agent jobs (the queue job's id).
 func (d *Deps) syncTenant(ctx context.Context, t tenancy.ID, now time.Time, conns []connectors.Connector, full bool, actor, window string) (ojson.Object, error) {
 	cps := &bufferedCheckpoints{db: d.DB, tenant: t, pending: map[[2]string]*pendingCheckpoint{}}
-	results, err := discoverAll(connsync.WithStore(ctx, cps), conns, full)
+	g, err := d.callGuard(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	results, skipped, err := discoverGuarded(connsync.WithStore(ctx, cps), conns, full, g)
 	if err != nil {
 		return nil, err
 	}
@@ -93,9 +136,43 @@ func (d *Deps) syncTenant(ctx context.Context, t tenancy.ID, now time.Time, conn
 		if n > 0 {
 			out = append(out, ojson.KV{Key: "agent_jobs_queued", Value: n})
 		}
+		if len(skipped) > 0 {
+			out = append(out, ojson.KV{Key: "skipped_by_limits", Value: skipped})
+			if err := tx.Audit(now, actor, "connectors.sync_skipped", ojson.Object{{Key: "systems", Value: skipped},
+				{Key: "reason", Value: "circuit breaker open or rate limit spent"}, {Key: "job_id", Value: window}}); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	return out, err
+}
+
+// callGuard builds the tenant's guard for one sync: nil when the worker has
+// no Guard.
+func (d *Deps) callGuard(ctx context.Context, t tenancy.ID) (*callGuard, error) {
+	if d.Guard == nil {
+		return nil, nil
+	}
+	ids := map[string]string{}
+	err := d.DB.ReadTenant(ctx, t, func(tx *store.TenantTx) error {
+		cs, err := tx.Connections()
+		if err != nil {
+			return err
+		}
+		for _, c := range cs {
+			if c.RetiredAt == nil {
+				ids[c.System] = c.ID
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &callGuard{ids: ids, do: func(ctx context.Context, connID string, fn func(context.Context) error) error {
+		return d.Guard.Do(ctx, t, connID, fn)
+	}}, nil
 }
 
 type pendingCheckpoint struct {

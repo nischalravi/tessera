@@ -31,8 +31,11 @@ type Beater struct {
 	Mode    string // store.WorkerModeWorker or store.WorkerModeAPI
 	Version string
 	Every   time.Duration // BeatEvery
-	Clock   func() time.Time
-	Log     *slog.Logger
+	// Guard, when set, has its per-target breaker state published with each
+	// beat, so it is visible in GET /api/queue/workers.
+	Guard *Guard
+	Clock func() time.Time
+	Log   *slog.Logger
 
 	started time.Time
 }
@@ -71,10 +74,28 @@ func (b *Beater) Beat(ctx context.Context) error {
 	}
 	var first error
 	now := b.now()
+	var snap []TargetState
+	if b.Guard != nil {
+		snap = b.Guard.Snapshot()
+	}
 	for _, t := range tenants {
 		if err := b.DB.InTenant(ctx, t.ID, func(tx *store.TenantTx) error {
 			if err := tx.BeatQueueWorker(w, now); err != nil {
 				return err
+			}
+			if b.Guard != nil {
+				var mine []store.WorkerTargetState
+				for _, s := range snap {
+					if s.Tenant == t.ID {
+						mine = append(mine, s.WorkerTargetState)
+					}
+				}
+				if err := tx.ReplaceWorkerTargetStates(id, mine, now); err != nil {
+					return err
+				}
+				if _, err := tx.PruneWorkerTargetStates(now.Add(-forgetAfter)); err != nil {
+					return err
+				}
 			}
 			_, err := tx.PruneQueueWorkers(now.Add(-forgetAfter))
 			return err
@@ -132,7 +153,12 @@ func (b *Beater) Forget() {
 		return
 	}
 	for _, t := range tenants {
-		if err := b.DB.InTenant(ctx, t.ID, func(tx *store.TenantTx) error { return tx.DeleteQueueWorker(id) }); err != nil {
+		if err := b.DB.InTenant(ctx, t.ID, func(tx *store.TenantTx) error {
+			if err := tx.ClearWorkerTargetStates(id); err != nil {
+				return err
+			}
+			return tx.DeleteQueueWorker(id)
+		}); err != nil {
 			b.log().Warn("worker: removing the health row failed", "err", err)
 		}
 	}

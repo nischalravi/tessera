@@ -116,6 +116,13 @@ PUT    /api/oauth-apps/{app_id}/owner                oauthapps.manage -  # issue
 POST   /api/oauth-apps/revoke-vendor                 oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/oauth-apps/{app_id}/revoke               oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/oauth-apps/{app_id}/grants/{grant_id}/revoke oauthapps.revoke STEP_UP_POLICY  # issue #107
+GET    /api/vms/sources                              connections.read -  # issue #304
+POST   /api/vms/sources                              connections.manage -  # issue #304
+PUT    /api/vms/sources/{source_id}                  connections.manage -  # issue #304
+DELETE /api/vms/sources/{source_id}                  connections.manage -  # issue #304
+POST   /api/vms/sync                                 lifecycle.manage -  # issue #304
+POST   /api/vms/sources/{source_id}/import           lifecycle.manage -  # issue #304
+GET    /api/vms/records                              connections.read -  # issue #304
 POST   /api/admin/archive/segments/{segment_id}/verify audit.verify  -  # issue #298
 GET    /api/admin/archive/segments/{segment_id}/export audit.read    STEP_UP_ADMIN  # issue #298
 GET    /api/readiness/templates                      connections.read   -
@@ -440,6 +447,9 @@ GET    /api/queue/jobs                               jobs.read       -  # issue 
 GET    /api/queue/schedules                          jobs.read       -  #
 GET    /api/queue/workers                            jobs.read       -  # issue #302
 POST   /api/queue/jobs/{job_id}/retry                jobs.manage     STEP_UP_POLICY  #
+GET    /api/queue/limits                             connections.read    -  # issue #302
+PUT    /api/queue/limits                             connections.manage  STEP_UP_POLICY
+DELETE /api/queue/limits                             connections.manage  STEP_UP_POLICY
 GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
 PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
 DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY

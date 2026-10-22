@@ -6,22 +6,23 @@ import { useSession } from "../../../app/auth";
 import { Button, Callout, CommandBar, Drawer, EmptyState, Loading, Page, Tabs, useConfirm, useToast } from "../../../components";
 import { AttributesTab } from "./AttributesTab";
 import { DefinitionTab } from "./DefinitionTab";
-import { GroupBadges, GroupLink, RecomputeBanner } from "./common";
+import { GroupBadges, GroupLink, RecomputeBanner, fmtWhen } from "./common";
 import { HistoryTab } from "./HistoryTab";
 import { usePurgeGroups } from "./deletes";
+import { LoaderTab } from "./LoaderTab";
 import { errText, useLoad } from "./hooks";
 import { MembersTab } from "./MembersTab";
 import { isHeld } from "../../admin/deletionGuardModel";
-import { folderLabel, folderTrail, indexFolders } from "./model";
+import { deletedLine, folderLabel, folderTrail, indexFolders } from "./model";
 import { PrivilegesTab } from "./PrivilegesTab";
 
-type TabId = "members" | "definition" | "privileges" | "usage" | "history" | "attributes";
+type TabId = "members" | "source" | "definition" | "privileges" | "usage" | "history" | "attributes";
 const TABS: { id: TabId; label: string }[] = [
-  { id: "members", label: "Members" }, { id: "definition", label: "Definition" }, { id: "privileges", label: "Privileges" },
+  { id: "members", label: "Members" }, { id: "source", label: "Source" }, { id: "definition", label: "Definition" }, { id: "privileges", label: "Privileges" },
   { id: "usage", label: "Usage" }, { id: "history", label: "History" }, { id: "attributes", label: "Attributes" },
 ];
 
-/** A managed group: members, definition, privileges, usage, history and attributes (design §10.13). */
+/** A managed group: members, membership source, definition, privileges, usage, history and attributes (design §10.13). */
 export function GroupPage() {
   const { id = "" } = useParams();
   const toast = useToast();
@@ -51,10 +52,11 @@ export function GroupPage() {
   const trail = folderTrail(ix, g.folder_id);
 
   const remove = async () => {
-    const ok = await confirm({ title: `Delete ${g.name}?`, body: "The group is deleted and its members stop counting. It can be restored afterwards.", confirmLabel: "Delete", danger: true });
+    const ok = await confirm({ title: `Delete ${g.name}?`, body: "The group is deleted and its members stop counting. It can be restored afterwards.", confirmLabel: "Delete", danger: true,
+      reason: { label: "Reason (optional)", placeholder: "Why is it being deleted?" } });
     if (ok === null) return;
     try {
-      const res = await groups.deleteGroup(g.id);
+      const res = await groups.deleteGroup(g.id, ok || undefined);
       if (isHeld(res)) toast(`${res.message}. The group stays until a second admin releases it.`, { kind: "info", action: { label: "Open held deletion", run: () => nav(`/admin/held-deletions?selected=${encodeURIComponent(res.hold_id)}`) } });
       else toast("Group deleted");
     } catch (e) {
@@ -91,7 +93,7 @@ export function GroupPage() {
     >
       <div className="stack" role="tabpanel">
         <RecomputeBanner state={g.recompute_state} />
-        {deleted && <Callout tone="warn">This group is deleted. It has no members until it is restored. Delete it permanently to remove it for good.</Callout>}
+        {deleted && <Callout tone="warn">{deletedLine(g, fmtWhen)}. It has no members until it is restored. Delete it permanently to remove it for good.</Callout>}
         {!handEdited && !deleted && <Callout tone="info">This group is managed by {g.managed_by.replace(/_/g, " ")}, so it is changed there, not here.</Callout>}
         {tab === "members" && (
           <>
@@ -104,6 +106,7 @@ export function GroupPage() {
             <MembersTab g={g} canWrite={canWrite} />
           </>
         )}
+        {tab === "source" && <LoaderTab g={g} />}
         {tab === "definition" && <DefinitionTab g={g} canWrite={canWrite} />}
         {tab === "privileges" && <PrivilegesTab kind="group" id={g.id} name={g.name} canWrite={can("groups.write") && !deleted} />}
         {tab === "usage" && <Usage g={g} />}

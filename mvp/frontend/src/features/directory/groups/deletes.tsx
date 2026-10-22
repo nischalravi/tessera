@@ -42,14 +42,15 @@ export function usePurgeGroups() {
       toast(skipped.length ? `Nothing to delete permanently: ${skipped.join(", ")} ${skipped.length === 1 ? "is" : "are"} not a deleted group managed here.` : "Nothing to delete permanently.", { kind: "error" });
       return null;
     }
-    const ok = await confirm({ title: purgeTitle(list.length), body: purgeBody(list.length, skipped), confirmLabel: "Delete permanently", danger: true });
+    const ok = await confirm({ title: purgeTitle(list.length), body: purgeBody(list.length, skipped), confirmLabel: "Delete permanently", danger: true,
+      reason: { label: "Reason", required: true, placeholder: "Why is this being removed for good?" } });
     if (ok === null) return null;
     const failed: { name: string; message: string }[] = [];
     const answers: unknown[] = [];
     const batch = newBatch();
     let done = 0;
     for (const g of list) {
-      try { answers.push(await groups.purgeGroup(g.id, batch)); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
+      try { answers.push(await groups.purgeGroup(g.id, ok, batch)); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
     }
     const held = answers.filter(isHeld).length;
     if (failed.length) toast(`${done ? `Deleted ${done - held} permanently. ` : ""}Could not delete ${failed.length}: ${failureSummary(failed)}`, { kind: "error" });
@@ -103,10 +104,11 @@ export function useDeleteTree() {
       confirmLabel: plan.needs_approval ? "Request deletion" : "Delete everything",
       danger: true,
       typeToConfirm: f.name,
+      reason: { label: "Reason", required: true, placeholder: "Why is this folder and everything in it being deleted?" },
     });
     if (ok === null) return null;
     try {
-      const res = await groups.deleteFolderRecursive(f.id);
+      const res = await groups.deleteFolderRecursive(f.id, ok);
       if ("hold_id" in res) {
         // the deletion guard stopped part of it: the groups it let through are gone, the rest waits for a second admin
         toast(`${res.message}. ${f.name} stays until the rest is released.`, { kind: "info", action: { label: "Open held deletion", run: () => nav(`/admin/held-deletions?selected=${encodeURIComponent(res.hold_id)}`) } });

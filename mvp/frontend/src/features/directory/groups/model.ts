@@ -479,3 +479,12 @@ export function plainReason(code: string | null | undefined, message: string, bo
       return message;
   }
 }
+
+/** "Deleted by Alice (tenant admin) on 22 Oct 2026, 14:10: reason: …, with folder X" for a deleted group; "" when it is not. */
+export function deletedLine(g: Pick<GrpGroup, "status" | "deleted_by" | "deleted_at" | "deleted_reason" | "deleted_with_folder">, when: (iso: string) => string): string {
+  if (g.status !== "deleted") return "";
+  const parts = [`Deleted${g.deleted_by ? ` by ${g.deleted_by}` : ""}${g.deleted_at ? ` on ${when(g.deleted_at)}` : ""}`];
+  if (g.deleted_reason) parts.push(`reason: ${g.deleted_reason}`);
+  if (g.deleted_with_folder) parts.push(`deleted with folder ${g.deleted_with_folder}`);
+  return parts.join(" — ");
+}

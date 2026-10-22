@@ -29,8 +29,18 @@ type Config struct {
 	// AllowedTargets are the host:port pairs (host name, IP, or CIDR:port;
 	// ports 389 and 636) the agent may contact. Anything else is refused.
 	AllowedTargets []string `json:"allowed_targets"`
+	// AllowedPushTargets are the host:port pairs (host name, IP, or CIDR:port;
+	// ports 443 and 8443) of the HTTPS provisioning targets (SCIM, Okta-style
+	// APIs) the agent may push to for Tessera (issue #302). A separate list from
+	// allowed_targets: allowing a directory never allows a web service. Empty:
+	// the agent refuses every provisioning push.
+	AllowedPushTargets []string `json:"allowed_push_targets,omitempty"`
+	// PushCAFile is the PEM CA bundle push targets' certificates are verified
+	// against (an internal CA); without it the system roots are used.
+	PushCAFile string `json:"push_ca_file,omitempty"`
 
-	allow []safedial.AllowEntry
+	allow     []safedial.AllowEntry
+	allowPush []safedial.AllowEntry
 }
 
 // LoadConfig reads and validates the configuration file at path.
@@ -69,8 +79,21 @@ func ParseConfig(raw []byte) (*Config, error) {
 		}
 	}
 	c.allow = allow
+	allowPush, err := safedial.ParseAllowHTTPS(strings.Join(c.AllowedPushTargets, ","))
+	if err != nil {
+		return nil, fmt.Errorf("agent: allowed_push_targets: %w", err)
+	}
+	for _, t := range c.AllowedPushTargets {
+		if strings.Contains(t, ",") {
+			return nil, fmt.Errorf("agent: allowed_push_targets: %q must be one entry", t)
+		}
+	}
+	c.allowPush = allowPush
 	return &c, nil
 }
+
+// AllowPush returns the parsed local allowlist of push targets.
+func (c *Config) AllowPush() []safedial.AllowEntry { return c.allowPush }
 
 // Allow returns the parsed local allowlist.
 func (c *Config) Allow() []safedial.AllowEntry { return c.allow }
@@ -78,11 +101,19 @@ func (c *Config) Allow() []safedial.AllowEntry { return c.allow }
 // AllowlistHash is a stable SHA-256 (hex) of the allowlist, reported in
 // heartbeats so Admin shows when it changes. The list itself is not sent.
 func (c *Config) AllowlistHash() string {
-	l := make([]string, 0, len(c.AllowedTargets))
+	l := make([]string, 0, len(c.AllowedTargets)+len(c.AllowedPushTargets))
 	for _, t := range c.AllowedTargets {
 		l = append(l, strings.ToLower(strings.TrimSpace(t)))
 	}
 	sort.Strings(l)
+	// the push list joins the hash only when there is one, so an agent that does not use pushes
+	// keeps the hash it always had (a change of hash is an audited event)
+	var push []string
+	for _, t := range c.AllowedPushTargets {
+		push = append(push, "push:"+strings.ToLower(strings.TrimSpace(t)))
+	}
+	sort.Strings(push)
+	l = append(l, push...)
 	h := sha256.Sum256([]byte(strings.Join(l, "\n")))
 	return hex.EncodeToString(h[:])
 }

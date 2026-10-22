@@ -1,84 +1,82 @@
 package provision_test
 
 import (
-	"fmt"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/fake"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
-	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/worker"
 )
 
-// Disable and delete operations count against the accounts threshold: past it the operation is
-// not queued but held with everything needed to queue it again; a different admin's release
-// queues it (an approved override that is not counted again). Other kinds are not guarded.
-func TestDisableOperationsOverTheThresholdAreHeldAndReleased(t *testing.T) {
-	e := setup(t, fake.Options{})
-	limit := 2
-	e.inA(func(c *store.TenantTx) error {
-		return deleteguard.Set(c, deleteguard.Policy{Category: deleteguard.CatAccounts, MaxCount: &limit, WindowMinutes: 60, Mode: deleteguard.ModeHoldExcess}, nil, e.now)
-	})
-	submit := func(c *store.TenantTx, kind string, i int) *store.ProvOp {
-		t.Helper()
-		op, routed, err := provision.Submit(c, e.now, provision.Change{System: e.system, Kind: kind,
-			Account: target.Account{Username: fmt.Sprintf("leaver%d", i)}, Source: provision.SourceJML, Key: fmt.Sprintf("guard:%s:%d", kind, i)})
-		if err != nil || !routed {
-			t.Fatalf("submit %s %d: routed %v, %v", kind, i, routed, err)
-		}
-		return op
+// A target that keeps failing opens its breaker; the operations queued behind
+// it are put back, with their attempts given back (they were not sent), and go
+// through once the target recovers and the cooldown has passed.
+func TestEngine_OpenBreakerDefersOperationsWithoutBurningAttempts(t *testing.T) {
+	e := setup(t, fake.Options{Fault: fake.FailWrites})
+	e.fake.AddUser(aliceName, "Alice", true)
+	e.eng.Guard = &worker.Guard{DB: e.f.DB, Clock: func() time.Time { return e.now },
+		Defaults: &worker.Limits{MaxConcurrency: 2, BreakerThreshold: 2, BreakerCooldown: time.Minute}}
+	completed = 0
+	ops := []*string{}
+	for _, k := range []string{"g:1", "g:2", "g:3"} {
+		ops = append(ops, &e.submit(target.DisableAccount, k).ID)
 	}
-	e.inA(func(c *store.TenantTx) error {
-		var held, queued int
-		for i := 0; i < 4; i++ {
-			op := submit(c, target.DisableAccount, i)
-			if op.Status == provision.Held {
-				held++
-			} else {
-				queued++
+	st := e.run() // two sends fail and open the breaker; the third is not sent
+	if st.Processed != 3 || st.Retrying != 3 || st.Failed != 0 {
+		t.Fatalf("stats = %+v", st)
+	}
+	attempts := map[string]int{}
+	var deferred int
+	for _, id := range ops {
+		o := e.op(*id)
+		attempts[o.IdempotencyKey] = o.Attempts
+		if o.Status != provision.Queued {
+			t.Errorf("%s: status = %s", o.IdempotencyKey, o.Status)
+		}
+		if o.LastError != nil && strings.HasPrefix(*o.LastError, "waiting: ") {
+			deferred++
+			if !strings.Contains(*o.LastError, "circuit breaker is open") || !o.NextAttemptAt.Equal(e.now.Add(time.Minute)) {
+				t.Errorf("deferred op: %v, next %s", *o.LastError, o.NextAttemptAt)
 			}
 		}
-		if queued != 2 || held != 2 {
-			t.Errorf("queued %d held %d, want 2 and 2", queued, held)
+	}
+	if deferred != 1 || attempts["g:1"] != 1 || attempts["g:2"] != 1 || attempts["g:3"] != 0 {
+		t.Errorf("deferred = %d, attempts = %v (want the third given back its attempt)", deferred, attempts)
+	}
+	// the two failed ones are due again at once (no backoff here): the open breaker refuses them
+	// without sending, and their attempts are given back instead of running out at 3
+	for i := 0; i < 5; i++ {
+		e.run()
+	}
+	for _, id := range ops {
+		if o := e.op(*id); o.Status != provision.Queued || o.Attempts > 1 {
+			t.Errorf("%s after waiting out the breaker: %+v", o.IdempotencyKey, o)
 		}
-		// an entitlement removal or an add is not an account removal: never held
-		for i := 0; i < 3; i++ {
-			op, _, err := provision.Submit(c, e.now, provision.Change{System: e.system, Kind: target.AddEntitlement,
-				Account: target.Account{Username: "someone"}, Group: target.Group{Name: "g"}, Source: provision.SourceAPI, Key: fmt.Sprintf("guard:add:%d", i)})
-			if err != nil || op.Status != provision.Queued {
-				t.Errorf("add entitlement = %+v, %v", op, err)
-			}
+	}
+	writes := 0
+	for _, r := range e.fake.Requests() {
+		if !strings.HasPrefix(r, "GET ") {
+			writes++
 		}
-		ops, err := c.ProvOps(store.ProvOpFilter{})
-		if err != nil {
-			return err
+	}
+	if n := writes; n != 2 {
+		t.Errorf("the target received %d writes, want 2 (the breaker held the rest back)", n)
+	}
+	// the target recovers; after the cooldown a probe goes through and the rest follow
+	e.fake.SetFault("")
+	e.now = e.now.Add(2 * time.Minute)
+	for i := 0; i < 3; i++ {
+		e.run()
+	}
+	for _, id := range ops {
+		if o := e.op(*id); o.Status != provision.Verified {
+			t.Errorf("%s after recovery: %s (%v)", o.IdempotencyKey, o.Status, o.LastError)
 		}
-		if len(ops) != 5 {
-			t.Errorf("%d operations stored, want the 2 disables and 3 adds", len(ops))
-		}
-		hs, err := c.DeletionHolds("held", deleteguard.CatAccounts, 10, 0)
-		if err != nil || len(hs) != 1 || hs[0].ItemCount != 2 || hs[0].Source != "provisioner" || hs[0].SourceID != e.conn {
-			t.Fatalf("holds %+v %v", hs, err)
-		}
-		// the same intent submitted again while it is held joins the hold without duplicating its item
-		submit(c, target.DisableAccount, 3)
-		if h, _ := c.DeletionHoldByID(hs[0].ID); h.ItemCount != 2 {
-			t.Errorf("a retried held operation made %d items", h.ItemCount)
-		}
-		// release: the operations are queued, and the window is not charged again
-		before, _ := c.DeletionsApplied(deleteguard.CatAccounts, e.now.Add(-1))
-		res, err := deleteguard.Release(c, e.now, hs[0].ID, "approver", nil, deleteguard.Appliers{provision.ItemOp: provision.ReleaseHeld})
-		if err != nil || res.Released != 2 {
-			t.Fatalf("release = %+v, %v", res, err)
-		}
-		if after, _ := c.DeletionsApplied(deleteguard.CatAccounts, e.now.Add(-1)); after != before {
-			t.Errorf("the window grew from %d to %d on a release", before, after)
-		}
-		ops, _ = c.ProvOps(store.ProvOpFilter{})
-		if len(ops) != 7 {
-			t.Errorf("%d operations after the release, want 7", len(ops))
-		}
-		return nil
-	})
+	}
+	if completed != 3 {
+		t.Errorf("completions = %d", completed)
+	}
 }

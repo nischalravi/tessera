@@ -47,7 +47,10 @@ export const RAIL: RailGroup[] = [
       { id: "machine", label: "Machine identities & agents", icon: Bot, path: "/directory/machine", keywords: "nhi service accounts api keys ai agents bots secrets" },
       {
         id: "groups", label: "Groups", icon: UsersRound, path: "/directory/groups", also: ["/directory/entitlements"], keywords: "okta groups teams",
-        pages: [{ path: "/directory/entitlements", label: "Entitlements", keywords: "groups permissions aws roles snowflake okta" }],
+        pages: [
+          { path: "/directory/entitlements", label: "Entitlements", keywords: "groups permissions aws roles snowflake okta" },
+          { path: "/directory/groups/loaders", label: "Group loaders", keywords: "membership sources loader sync sql csv scim ldap provisioning automatic members grouper schedule failsafe held" },
+        ],
       },
       {
         id: "rotation", label: "Secret rotation", icon: RotateCw, path: "/rotation/secrets", also: ["/rotation"], keywords: "credentials vault rotate keys tokens api keys aws iam secrets manager hashicorp github deploy key vendor compromised breach",

@@ -89,6 +89,12 @@ CREATE TABLE IF NOT EXISTS grp_groups (
   created_at TEXT NOT NULL,
   created_by TEXT,
   version INTEGER NOT NULL DEFAULT 1,
+  -- who deleted it, when and why (set by a soft delete, cleared by a restore; the purge keeps them in the audit trail)
+  deleted_by_user_id TEXT,
+  deleted_by_display TEXT,
+  deleted_at TEXT,
+  deleted_reason TEXT,
+  deleted_with_folder TEXT,
   UNIQUE (tenant_id, name),
   UNIQUE (tenant_id, id_index),
   CHECK ((definition = 'composite') = (composite_op IS NOT NULL)),

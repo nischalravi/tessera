@@ -814,3 +814,57 @@ func TestRotationFakeAdapters(t *testing.T) {
 		}
 	}
 }
+
+// The worker's /metrics listener (issue #302) is off by default and refuses a
+// public bind unless it is explicitly allowed, in prod and elsewhere.
+func TestWorkerMetricsAddr(t *testing.T) {
+	prod := func(kv ...string) map[string]string { return with(safeProd(), kv...) }
+	dev := func(kv ...string) map[string]string { return with(map[string]string{"TESSERA_ENV": "dev"}, kv...) }
+	for _, e := range []map[string]string{prod(), dev()} {
+		if c, err := config.Load(env(e)); err != nil || c.WorkerMetricsAddr != "" {
+			t.Errorf("default: %q, %v (want off)", c.WorkerMetricsAddr, err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		ok   bool
+		addr string
+	}{
+		{"prod loopback", prod("TESSERA_WORKER_METRICS_ADDR", "127.0.0.1:9465"), true, "127.0.0.1:9465"},
+		{"prod private", prod("TESSERA_WORKER_METRICS_ADDR", "10.1.2.3:9465"), true, "10.1.2.3:9465"},
+		{"prod link-local v6", prod("TESSERA_WORKER_METRICS_ADDR", "[fe80::1]:9465"), true, "[fe80::1]:9465"},
+		{"prod off", prod("TESSERA_WORKER_METRICS_ADDR", "off"), true, ""},
+		{"prod public ip", prod("TESSERA_WORKER_METRICS_ADDR", "203.0.113.9:9465"), false, ""},
+		{"prod wildcard", prod("TESSERA_WORKER_METRICS_ADDR", "0.0.0.0:9465"), false, ""},
+		{"prod bare port", prod("TESSERA_WORKER_METRICS_ADDR", ":9465"), false, ""},
+		{"prod v6 wildcard", prod("TESSERA_WORKER_METRICS_ADDR", "[::]:9465"), false, ""},
+		{"prod hostname", prod("TESSERA_WORKER_METRICS_ADDR", "worker.example.com:9465"), false, ""},
+		{"prod localhost name", prod("TESSERA_WORKER_METRICS_ADDR", "localhost:9465"), false, ""},
+		{"prod public allowed", prod("TESSERA_WORKER_METRICS_ADDR", "203.0.113.9:9465", "TESSERA_WORKER_METRICS_ALLOW_PUBLIC", "true"), true, "203.0.113.9:9465"},
+		{"prod wildcard allowed", prod("TESSERA_WORKER_METRICS_ADDR", ":9465", "TESSERA_WORKER_METRICS_ALLOW_PUBLIC", "true"), true, ":9465"},
+		{"prod allow flag without address", prod("TESSERA_WORKER_METRICS_ALLOW_PUBLIC", "true"), false, ""},
+		{"prod bad port", prod("TESSERA_WORKER_METRICS_ADDR", "10.0.0.1:0"), false, ""},
+		{"prod no port", prod("TESSERA_WORKER_METRICS_ADDR", "10.0.0.1"), false, ""},
+		{"dev loopback", dev("TESSERA_WORKER_METRICS_ADDR", "127.0.0.1:9465"), true, "127.0.0.1:9465"},
+		{"dev wildcard", dev("TESSERA_WORKER_METRICS_ADDR", ":9465"), false, ""},
+		{"dev public", dev("TESSERA_WORKER_METRICS_ADDR", "198.51.100.1:9465"), false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := config.Load(env(tc.env))
+			if (err == nil) != tc.ok {
+				t.Fatalf("err = %v, want ok=%v", err, tc.ok)
+			}
+			if err == nil && c.WorkerMetricsAddr != tc.addr {
+				t.Errorf("addr = %q, want %q", c.WorkerMetricsAddr, tc.addr)
+			}
+		})
+	}
+	// the flag of `tessera worker` goes through the same check
+	if _, err := config.CheckWorkerMetricsAddr("203.0.113.9:1", false); err == nil {
+		t.Error("a public address passed the flag check")
+	}
+	if a, err := config.CheckWorkerMetricsAddr(" 127.0.0.1:1 ", false); err != nil || a != "127.0.0.1:1" {
+		t.Errorf("loopback flag = %q, %v", a, err)
+	}
+}

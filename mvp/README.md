@@ -417,7 +417,8 @@ commands, no raw LDAP, no proxying). The server sends typed jobs; the agent open
 - **Server listener.** Set `TESSERA_AGENT_ADDR` with `TESSERA_AGENT_TLS_CERT` and `TESSERA_AGENT_TLS_KEY`
   (a separate mutual-TLS port serving only `/agent/v1/*`).
 - **Agent config** (JSON): `{"server_url":"https://tessera.example:8443","server_ca_file":"ca.pem",
-  "state_dir":"/var/lib/tessera-agent","allowed_targets":["ldap.corp.example:636"]}`; then
+  "state_dir":"/var/lib/tessera-agent","allowed_targets":["ldap.corp.example:636"]}`, plus
+  `allowed_push_targets` and `push_ca_file` for provisioning pushes (see below); then
   `tessera-agent run -config agent.json`.
 - API: `GET /api/agents`, `POST /api/agents` (step-up; returns the code once), `POST /api/agents/{id}/revoke`
   (step-up). Table `directory_agents`, `agent_enrolments` (schema 0250).
@@ -447,11 +448,54 @@ open inbound at the customer; the agent needs only HTTPS out to `TESSERA_AGENT_A
   every membership must name an account and a group of the same listing), then ingested with `ingest.Discovery`
   into the connection's own system, drift is reconciled, and the job is finished, in one transaction, with
   `connectors.sync` and `agent.job_done` audited (`agent.job_failed` for failures).
-- **Secrets.** The directory password is never sent to the agent for a job: it stays in the agent's local
-  credential store (the existing Directory Agent design), and a job carries only its name. Sealing a
-  server-held secret to an agent key would need a key-agreement design that does not exist yet.
-- **Not covered.** Provisioning pushes to a private target and per-target rate limits or circuit breakers do
-  not go through agents yet (see "Connector workers").
+- **Secrets.** The directory password is never sent to the agent for a sync: it stays in the agent's local
+  credential store (the existing Directory Agent design), and a job carries only its name. A server-held
+  credential (the token of a private provisioning target) is different: it is sealed to the agent's key, below.
+
+##### Provisioning pushes to private targets through an agent (issue #302)
+
+A SCIM or Okta-style target in a private network, which the server cannot dial, is reached through an agent. Set
+`agent_id` on the target (`PUT /api/provisioning/targets/{connection id}` `{"kind":"scim","base_url":"https://scim.corp.example/scim/v2",
+"agent_id":"…","token":"…","write_back":true}`: an active agent of the tenant, https only, not the dev fake target;
+step-up as before; the audit event `provision.target_set` names the agent). The token is stored sealed under the
+KEK exactly as for a direct target.
+
+- **Flow.** For an operation on such a target the provisioning engine does not call the target. It queues a
+  `provision_push` job (`agent_jobs`, kind `provision_push`, `op_id` = the operation; schema 0461 and Postgres
+  migration 0622) addressed to `(tenant, agent)`, leaves the operation `sent` and audits `provision.dispatched`. The
+  agent claims it over the same mTLS pull channel, applies the change with the SCIM or Okta connector from inside its
+  network, re-reads the target (three reads, 2 s apart) and reports `{applied, verified, expected, observed}` or an
+  error to `POST /agent/v1/jobs/report`. The report finishes the operation in the **same transaction** that finishes
+  the job, with both audit events: `provision.verified` (the completion runs, findings resolve) or
+  `provision.mismatch` (a finding) plus `agent.job_done`, each naming the agent (`via_agent`). Nothing the agent
+  sends is trusted for addressing: tenant and agent come from the pinned key, and a report for a job not leased to
+  that (tenant, agent) is `404 unknown_job`.
+- **Failures.** A transient failure (`failed`, `rate_limited`) is retried, three attempts per job; when they are
+  used up, the job fails and so does the operation (`provision.failed`, with the reason, retryable by an operator
+  as any failed operation). A permanent refusal (`target_refused`), a target not on the agent's allowlist
+  (`target_not_allowed`), a missing credential or a bad request fails the operation at once. An agent that is away
+  just leaves the operation `sent`: no attempt is spent while a job is open. Revoking the agent fails the
+  operations it held, with the reason, in the revoking transaction; an operation dispatched to a revoked or
+  deleted agent fails at once. If the target shows the change but Tessera cannot apply its side of it (the
+  completion fails), the operation and the job fail in a second transaction; nothing is half done.
+- **Sealed credentials.** The agent generates an X25519 key pair (`<state_dir>/identity/seal.key`, mode 0600) and
+  registers the public half with `POST /agent/v1/seal-key` over its authenticated channel (at start, then every 6
+  hours; the same key changes nothing, a new one replaces it and is audited as `agent.seal_key_registered`;
+  table `agent_seal_keys`, schema 0621). When the server hands out a push job it opens the target's token under
+  the KEK and seals it to that key (`internal/seal` `SealToAgent`: ephemeral X25519, HKDF-SHA256, AES-256-GCM)
+  with the additional data **tenant | agent | connection | job**. Only that agent, for that job, can open it: another
+  agent, tenant, connection or job fails to. The blob is made at claim time, never stored: the job row, the
+  audit trail and the log hold no credential, in the clear or sealed. An agent that has not registered a key
+  (an older build) cannot be handed a credential: the job fails when claimed, with that reason. Upgrading a SQLite
+  database drops and recreates `agent_jobs` once (it holds only queued work: the next pass queues it again).
+- **Agent configuration.** `allowed_push_targets`: host:port entries (host name, IP or CIDR; ports **443 and 8443**
+  only; the same rules as `allowed_targets`) of the HTTPS targets the agent may push to, a separate list from the
+  LDAP one, empty by default: the agent refuses every push. `push_ca_file`: a PEM CA bundle to verify those
+  targets' certificates against (an internal CA); without it the system roots. The agent dials only through its
+  policy-checked dialer: HTTPS with a verified certificate, no plain HTTP, no redirects, no proxy, never
+  metadata or link-local space. The push list joins the allowlist hash in heartbeats only when it is not empty.
+- **Limits.** The per-target limits and circuit breakers above apply to calls the server or a worker makes; a push
+  through an agent is bounded by the job's lease (10 minutes), its three attempts and the agent's one-at-a-time loop.
 
 ### Connector workers (issue #302)
 
@@ -497,6 +541,33 @@ worker you did not intend, though a duplicate is harmless: claims and operation 
   (`worker-<10 hex>`, also the `lease_owner` of its jobs). Host name, PID and build are not in the API (there is
   no platform-level operator role to show them to) and are not stored per tenant: each process logs them once
   at start (`worker started`) for the platform operator (#403).
+- **Per-target limits and circuit breakers.** Every call a worker (or the API process) makes to a customer's
+  system, a connector's read or a provisioning write and its re-read, goes through one guard per target (a
+  connection of a tenant). It enforces, per **worker process**: a concurrency limit (calls in flight), a
+  rate limit (token bucket, calls per minute with a burst) and a circuit breaker (after N failed calls in a row
+  the breaker opens and calls are refused without being made for the cooldown, then one probe call decides).
+  A call cancelled by shutdown, or refused by the target as a bad request (a permanent error), is not a failure.
+  A provisioning operation whose call is refused is put back with the attempt given back (it waits, it does not
+  fail); a sync skips a connector whose breaker is open, reads the others and audits `connectors.sync_skipped`.
+  N workers allow N times the limits; the guard keeps no cross-process counter (that would cost a database write
+  per call). Defaults come from the worker's flags, `-target-concurrency` (4), `-target-rate` (0 = none),
+  `-target-breaker-failures` (5, 0 = no breaker) and `-target-breaker-cooldown` (30 s); a connection overrides
+  any of them (0 = the default) with `PUT /api/queue/limits` `{"connection_id":…,"max_concurrency":…,
+  "rate_per_min":…,"burst":…,"breaker_threshold":…,"breaker_cooldown_seconds":…}` (`connections.manage`, step-up,
+  audited `connection.limits_set`; `GET /api/queue/limits[?connection_id=]`, `DELETE /api/queue/limits?connection_id=`,
+  `connection.limits_cleared`; table `connection_limits`, schema 0620). Workers re-read them every 30 s.
+  **Breaker state is part of worker health:** each beat publishes the worker's targets (`worker_target_states`,
+  schema 0620), and `GET /api/queue/workers` lists them per worker (`targets`: connection, `breaker` closed /
+  open / half_open, consecutive failures, `open_until`, last error, in flight, calls, failures, rejected). Admin
+  → Jobs shows a Targets column and a banner while a breaker is open.
+- **Metrics.** `tessera worker -metrics-addr 127.0.0.1:9465` (or `TESSERA_WORKER_METRICS_ADDR`; off when unset)
+  serves Prometheus text on `/metrics` and nothing else: `tessera_worker_jobs_total{kind,result}`,
+  `tessera_worker_job_duration_seconds{kind}`, `tessera_worker_jobs_running`, `tessera_worker_concurrency`,
+  `tessera_worker_target_calls_total{outcome}` (ok, error, breaker_rejected, rate_limited),
+  `tessera_worker_targets{state}`, followed by the shared process, database and connector metrics. No label names a
+  tenant, connection or worker. The address must be an IP literal on a loopback, private or link-local network;
+  a wildcard, public address or host name is refused (at start and by `config.Load`, in every environment)
+  unless `TESSERA_WORKER_METRICS_ALLOW_PUBLIC=true` says that a network policy limits the scraper.
 - **High availability.** Run N workers (2 or more, on different hosts) against **Postgres**: a job is leased by
   `FOR UPDATE SKIP LOCKED`, so each runs on one worker at a time, a worker that disappears costs one lease
   period of delay, and schedules fire once per window however many workers poll. Size `-lease` above the
@@ -2184,6 +2255,44 @@ inside a tenant transaction, so each change and its audit event commit together.
   the default `demo` spec or `TESSERA_CONNECTORS`), so the seeded demo tenant is unchanged.
   Not yet stored: date of birth and phone (sealed by the PR that first needs them).
 
+### Contractors from a VMS (Fieldglass, Beeline, CSV; issue #304)
+
+`internal/connectors/vms` reads contractor assignments from a vendor-management system; `internal/intake/vms.go`
+maps each record onto the contractor lifecycle of issue #159; `internal/vms` runs a tenant's feeds. Schema `0600`
+(`vms_sources`). A record becomes an intake event of channel `vms` (`intake_events`), so the SIS and HRIS history
+and the review queue are shared.
+
+- **Rules.** Every contractor needs a **sponsor**: an active employee named by employee id or e-mail. A record with
+  no sponsor, an unknown or ambiguous one, or one who cannot sponsor is **held in review and creates nobody**
+  (reasons: `sponsor_required|sponsor_not_found|sponsor_ambiguous|sponsor_not_eligible|sponsor_is_self`). A
+  record needs an **end date** (else rejected, `end_required`); one past `lifecycle.MaxTermDays` is clamped
+  (`end_clamped`, the next sync moves it on). The end date is the lifecycle's end date, so the existing sweep
+  warns the sponsor (14, 7, 1 days) and on the day contains the person and runs the leaver plan. A record whose
+  status is ended (completed, terminated, cancelled) ends the term at once. A record whose e-mail belongs to
+  another person is held (`email_matches_another_person`); a returning contractor whose term ended is held
+  (`term_already_ended`). A record older than the one applied last changes nothing. Replays are no-ops (the
+  event id is a digest of the facts).
+- **Feeds.** `fieldglass` and `beeline` over their REST APIs (OAuth client credentials, paged, with a watermark
+  per source; a failed sync keeps the watermark); `csv` uploaded (`POST /api/vms/sources/{id}/import`, the file as
+  `text/csv`, at most 1 MiB through the API) or fetched over HTTPS (`base_url` + `settings.csv_path`). CSV columns:
+  `worker_id, name|first_name+last_name, email, supplier, role, sponsor_email, sponsor_employee_id, status,
+  start_date, end_date, updated_at`; `settings.mapping` renames them, `settings.date_format` is a Go layout.
+  Every call goes through `internal/safehttp`; a paging link must stay on the configured host; the credential
+  (`client_id:client_secret`, or a bearer token for a fetched CSV) is sealed under the KEK, bound to its row,
+  write-only, and a change of base URL needs a new one.
+- **API.** `GET|POST /api/vms/sources`, `PUT|DELETE /api/vms/sources/{id}` (connections.read|manage),
+  `POST /api/vms/sync {source_id?}` and `POST /api/vms/sources/{id}/import` (`lifecycle.manage`, because they
+  create and end people), `GET /api/vms/records`. Queue job `vms_sync` runs hourly per tenant (a tenant with
+  nothing to read leaves no run). Audit events: `vms.source_created|updated|removed`, `vms.sync`,
+  `intake.vms.<outcome>`, `lifecycle.set`.
+- **UI.** Settings > Admin > Contractor feeds.
+- **Not verified against a real tenant.** No Fieldglass or Beeline tenant was available. The response shapes are
+  documented in `fieldglass.go` and `beeline.go` and exercised by the in-process fake
+  (`internal/connectors/vms/vmsfake`: paging, 401, 429 with Retry-After, 5xx, malformed JSON, an off-host next
+  link, a looping page, a wrong token type); the endpoint paths are settings. The first real tenant should
+  confirm the field names and the OAuth token path. **SFTP** drops are not read: there is no SFTP client in
+  the module's dependencies, so a drop is uploaded as CSV for now.
+
 ### Identity containment (kill switch)
 
 A disabled account does not end its live sessions, refresh tokens or OAuth consents. Two plan
@@ -2820,7 +2929,8 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
 - Purging and deleting a tree (a soft-deleted group still counts as held by its folder, so it blocks
   `DELETE /api/groups/folders/{id}`; `folder_not_empty` says how many of the groups are deleted). The UI lists
   deleted groups under **Show deleted** and offers Restore and **Delete permanently**.
-  - `POST /api/groups/{id}/purge` removes a deleted group's memberships, nesting and composite edges, privileges (on it and
+  - Who deleted what: a soft delete (`DELETE /api/groups/{id}`, optional body `{reason}`) stores `deleted_by_user_id`, `deleted_by_display` (the linked person's name and, for a tenant admin, "(tenant admin)"), `deleted_at`, `deleted_reason` and, for a recursive delete, `deleted_with_folder` on the group row; the group JSON carries `deleted_by`, `deleted_at`, `deleted_reason`, `deleted_with_folder` while it is deleted, and a restore clears them (the restore is audited with its actor). A purge and a recursive delete require `{reason}` in the body (`422 reason_required`); `groups.group.purged` and `groups.folder.deleted_recursive` carry the reason, the original deleter and the folder. The columns are in `0280_groups.sql` (SQLite databases made before get them at start) and `postgres/0641_group_deleted_by.sql`.
+  - `POST /api/groups/{id}/purge` `{reason}` removes a deleted group's memberships, nesting and composite edges, privileges (on it and
     held by it), rules, attribute assignments, attestation settings, aliases and levels, and its row. The audit ledger and
     the event log keep its history (`groups.group.purged`, event `group.purged`). Refused with `409 group_in_use` (and
     `groups`: the names) while another group has it as a member or composite factor, `group_referenced` while a loader's
@@ -2836,8 +2946,7 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
     admin change request (`groups.folder.delete_recursive`, the SQL loader's two-person workflow, GRP-6311) that a
     second admin approves under `POST /api/admin/change-requests/{id}/approve`; the approver's apply refuses
     `folder_changed` if the tree grew since. Audit `groups.folder.deleted_recursive` with the counts.
-  - SQLite databases made before this change reject the new change type (its `CHECK` is in `0008_admin_changes.sql`,
-    as for `retention.update`): run `./run.sh --reseed`. Postgres gets `postgres/0640_group_folder_delete.sql`.
+  - An existing SQLite database is upgraded on open: `admin_change_requests` is rebuilt in one transaction with the wider type `CHECK` (rows, indexes and triggers kept, foreign keys checked; a no-op once done), `TestUpgradeAdminChangeTypes`. Postgres gets `postgres/0640_group_folder_delete.sql`.
 
 - Errors: `404 not_found`; `409` `{error, detail}` with `name_taken`, `name_reserved_by_alias`,
   `root_folder`, `move_into_self`, `copy_into_self`, `folder_not_empty` (with `folders` and `groups`
@@ -4059,10 +4168,24 @@ server decides access on each request (the UI only hides what cannot work).
 | Screen | Route | What it has |
 |---|---|---|
 | Folder browser | `/directory/groups[?folder=<id>]` | breadcrumb, folders then groups with type badges and member counts, only what the caller may view; filter chips (type, definition, group or role, status), search, *Include subfolders*, CSV export; a row opens the side panel (overview, first members) with *Open group page* / *Open folder page*; commands *New group*, *New folder*, *New application* |
-| Group page | `/directory/groups/<id>[?tab=]` | header (path, type badges, owner, status, a *Recalculating…* banner while `recompute_state` is pending); tabs **Members** (direct / indirect / effective / composite, search, enabled filter, paging, add and remove, CSV import and export, a *Trace* drawer with every path), **Definition** (composite operator and factors as a set expression; edit or convert), **Privileges** (direct rows, grant, revoke, and the explanation of every path), **Usage** (what a composite is built from), **History** (members on a date, compare two dates, anyone in a period), **Attributes** (object types with lint findings, attribute assignments) |
+| Group page | `/directory/groups/<id>[?tab=]` | header (path, type badges, owner, status, a *Recalculating…* banner while `recompute_state` is pending); tabs **Members** (direct / indirect / effective / composite, search, enabled filter, paging, add and remove, CSV import and export, a *Trace* drawer with every path), **Definition** (composite operator and factors as a set expression; edit or convert), **Privileges** (direct rows, grant, revoke, and the explanation of every path), **Usage** (what a composite is built from), **History** (members on a date, compare two dates, anyone in a period), **Attributes** (object types with lint findings, attribute assignments), and **Source** (the membership source that fills the group: see below) |
+| Loaders | `/directory/groups/loaders[?selected=<id>]` | every membership source the caller may view with its state (On, Off, Held, Last run failed), kind, folder, last run, how long ago it loaded and its schedule; filter chips, search, CSV export; a row opens the loader in the side panel; *Add a source* opens the wizard; a banner counts held runs |
 | Folder page | `/directory/groups/folders/<id>[?tab=]` | contents, privileges with inheritance scope (`groups`, `folders`, `attr_defs`; one level or all), object types and attributes, details |
 | Change preview | a drawer | every member add or remove, CSV import and composite save calls `POST /api/groups:simulate` first and shows "+1,204 / −13 identities in 4 groups" with the groups changed; nothing is written until *Apply*. Batches carry an `Idempotency-Key` |
 | New application | a drawer | the Deployment Guide layout in one step (app, security and service folders; admin, reference, allow, allow-manual, deny groups; policy group `allow − deny`) as separate changes, safe to run again |
+
+**Membership sources (group loaders, GR-10).** Screens: `LoaderTab.tsx` (the group page's **Source** tab),
+`LoaderPanel.tsx` (state, schedule, *Run now*, *Preview*, *Turn on/off*, held runs to approve or reject with their
+failsafe trips, impact and plan, unresolved people, run history), `LoaderWizard.tsx` (*Add a source*: kind,
+source fields per type, how people are matched, name template and what to do when the source stops returning a
+group, schedule and failsafe limits, review), `LoadersPage.tsx` and `LoaderRuns.tsx`. The client is `groupLoaders`
+in `src/api.ts` (one typed function per route of `/api/groups/loaders` and `/api/groups/loader-tasks`); the pure
+logic (form to `LoaderSpec`, the checks that mirror the server's, words for runs) is `loaderModel.ts`, tested by
+`tests/group-loaders.test.ts`. A loader makes and owns its own groups, so a group edited by hand has no source and
+the tab offers *Add a source* in its folder. A group a loader fills carries `loader_id` in its API answer. A source
+that is not a SQL query is saved turned off and previewed at once, so the plan is seen before anything changes;
+a SQL source answers `202` and waits for a second administrator (*Admin, Change requests*), so it can be previewed
+once approved. Held runs also appear in the Inbox (filter chip *Loaders*) and link to the loader.
 
 **Inbox.** One queue for JIT and catalog approvals, access-review items, joiner/mover/leaver
 tasks and delegations, with keys: `j`/`k` move, `a` approve or keep, `d` deny, `r` revoke,

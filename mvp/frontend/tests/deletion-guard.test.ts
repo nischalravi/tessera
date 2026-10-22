@@ -40,7 +40,7 @@ test("holds are read with filters, decided with a POST, and thresholds change th
 });
 
 test("a bulk action sends one batch id so its holds join into one", async () => {
-  await groups.deleteGroup("g1", "b-1");
+  await groups.deleteGroup("g1", undefined, "b-1");
   assert.equal(calls[0].headers["x-deletion-batch"], "b-1");
   await groups.removeMember("g1", "7");
   assert.equal(calls[1].headers["x-deletion-batch"], undefined);

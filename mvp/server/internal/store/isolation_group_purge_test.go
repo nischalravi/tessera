@@ -11,7 +11,7 @@ import (
 
 func groupPurgeCovered() map[string]bool {
 	return map[string]bool{"DeleteGrpGroup": true, "DeleteGrpLevel": true, "GrpGroupUsers": true, "GrpGroupRefs": true,
-		"GrpFolderDeletedGroupCount": true}
+		"GrpFolderDeletedGroupCount": true, "SetGrpGroupDeleted": true}
 }
 
 // TestIsolation_GroupPurge: the purge statements see and change only the
@@ -54,16 +54,23 @@ func TestIsolation_GroupPurge(t *testing.T) {
 		if err := c.DeleteGrpLevel(store.GroupID(a.group)); err != nil {
 			t.Errorf("DeleteGrpLevel(A's) = %v", err)
 		}
+		at := storetest.Now
+		if err := c.SetGrpGroupDeleted(store.GroupID(a.group), nil, "x", &at, "r", ""); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetGrpGroupDeleted(A's) = %v, want ErrNotFound", err)
+		}
 		// B's own row is deleted
 		if err := c.DeleteGrpGroup(store.GroupID(b.group)); err != nil {
 			t.Errorf("DeleteGrpGroup(B's) = %v", err)
 		}
 		return nil
 	})
-	// A's group is still there
+	// A's group is still there, and was not marked deleted by B
 	err = f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
 		if _, err := c.GrpGroup(store.GroupID(a.group)); err != nil {
 			t.Errorf("A's group = %v after B's purge calls", err)
+		}
+		if g, _ := c.GrpGroup(store.GroupID(a.group)); g != nil && (g.DeletedAt != nil || g.DeletedBy != "") {
+			t.Errorf("A's group was marked by B: %+v", g)
 		}
 		return nil
 	})
