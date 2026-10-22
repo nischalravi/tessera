@@ -25,6 +25,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/entra"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
@@ -40,6 +41,9 @@ import (
 //
 // Privileged-access vaults (issue #304): "cyberark", "delinea" and "beyondtrust" read safes, their
 // members and vaulted accounts (TESSERA_CYBERARK_*, TESSERA_DELINEA_*, TESSERA_BEYONDTRUST_*).
+//
+// ERPs (issue #304): "sap" and "oracle" read roles, t-codes and authorization objects as
+// fine-grained entitlements (TESSERA_SAP_*, TESSERA_ORACLE_*).
 //
 // Register adds the okta, entra, google, workday, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
@@ -62,6 +66,11 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	for _, vendor := range pam.Vendors {
 		connectors.Factories[vendor] = func(now time.Time) (connectors.Connector, error) {
 			return pam.FromEnv(vendor, os.Getenv, rt, hc, func() time.Time { return now })
+		}
+	}
+	for _, system := range erp.Systems {
+		connectors.Factories[system] = func(now time.Time) (connectors.Connector, error) {
+			return erp.FromEnv(system, os.Getenv, rt, hc, func() time.Time { return now })
 		}
 	}
 	connectors.Factories["aws-agentcore"] = func(now time.Time) (connectors.Connector, error) {

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync/connsynctest"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp/erpfake"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam/pamfake"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/fake"
@@ -71,6 +72,63 @@ func TestEngine_VaultSafeMembership(t *testing.T) {
 			}
 			if got := e.op(op.ID); got.Status == provision.Verified {
 				t.Errorf("a dropped write was counted as done: %+v", got)
+			}
+		})
+	}
+}
+
+// Role assignment in an ERP goes through the engine the same way.
+func TestEngine_ERPRoleAssignment(t *testing.T) {
+	for _, kind := range provision.ERPKinds {
+		t.Run(kind, func(t *testing.T) {
+			e := setup(t, fake.Options{})
+			fk := erpfake.New(kind, "client", "pw")
+			fk.Set([]erpfake.Role{{ID: "Z_AP_PAY"}}, []erpfake.User{{ID: "BOB"}})
+			srv := connsynctest.New(t, fk)
+			hc, err := safehttp.NewForTest(t, srv.Options(0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.eng.HTTP, e.eng.Runtime = hc, connsynctest.Runtime
+			id := store.NewID()
+			enc, _ := provision.SealToken(e.sealer, e.f.A.ID, id, "client:pw")
+			e.inA(func(c *store.TenantTx) error {
+				if old, err := c.ProvTarget(e.conn); err == nil {
+					id = old.ID
+					enc, _ = provision.SealToken(e.sealer, e.f.A.ID, id, "client:pw")
+				}
+				return c.UpsertProvTarget(&store.ProvTarget{ID: id, ConnectionID: e.conn, Kind: kind, BaseURL: srv.URL, Settings: "{}",
+					CredentialEnc: enc, WriteBack: true, CreatedBy: "admin"}, e.now)
+			})
+			change := func(k, key string) *store.ProvOp {
+				var op *store.ProvOp
+				e.inA(func(c *store.TenantTx) (err error) {
+					op, _, err = provision.Submit(c, e.now, provision.Change{System: e.system, Kind: k, Account: target.Account{Username: "BOB"},
+						Group: target.Group{ExternalID: "Z_AP_PAY", Name: "Z_AP_PAY"}, Source: provision.SourceJML, Key: key})
+					return
+				})
+				return op
+			}
+			op := change(target.AddEntitlement, "e:"+kind+":add")
+			if st := e.run(); st.Verified != 1 || len(fk.UserRoles("BOB")) != 1 {
+				t.Fatalf("add: stats %+v, op %+v", st, e.op(op.ID))
+			}
+			op = change(target.RemoveEntitlement, "e:"+kind+":rm")
+			if st := e.run(); st.Verified != 1 || len(fk.UserRoles("BOB")) != 0 {
+				t.Fatalf("remove: stats %+v, op %+v", st, e.op(op.ID))
+			}
+			// a wrong credential fails the operation without a retry storm
+			enc, _ = provision.SealToken(e.sealer, e.f.A.ID, id, "client:wrong")
+			e.inA(func(c *store.TenantTx) error {
+				return c.UpsertProvTarget(&store.ProvTarget{ID: id, ConnectionID: e.conn, Kind: kind, BaseURL: srv.URL, Settings: "{}",
+					CredentialEnc: enc, WriteBack: true, CreatedBy: "admin"}, e.now)
+			})
+			op = change(target.AddEntitlement, "e:"+kind+":bad")
+			for i := 0; i < 6; i++ {
+				e.run()
+			}
+			if got := e.op(op.ID); got.Status == provision.Verified {
+				t.Errorf("a wrong credential verified: %+v", got)
 			}
 		})
 	}
