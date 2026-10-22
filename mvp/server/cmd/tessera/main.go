@@ -680,7 +680,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(sweepDone)
 		// the queue and its health beat: Admin -> Jobs shows this process as a worker
 		worker.Serve(ctx, srv.Queue(), &worker.Beater{DB: st, Queue: srv.Queue(), Mode: store.WorkerModeAPI,
-			Version: agent.Version, Clock: clock, Log: logger})
+			Version: agent.Version, Clock: clock, Log: logger, Guard: srv.Guard()})
 	}()
 	reviewsDone := make(chan struct{})
 	go func() {
