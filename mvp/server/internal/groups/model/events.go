@@ -48,6 +48,14 @@ func (e Env) emitGroup(typ string, g *store.NativeGroup, extra map[string]any) e
 	return pit.Emit(e.Tx, ev)
 }
 
+// emitGroupPurged writes the group.purged event of a group whose row is about
+// to go: it carries the name, no snapshot, and ends the group's history object.
+func (e Env) emitGroupPurged(g *store.NativeGroup) error {
+	ev := e.stamp(events.New(events.GroupPurged, string(g.ID), e.Now, store.CauseAPI))
+	ev.Data = events.Data(map[string]any{"name": g.Name, "folder_id": string(g.FolderID)})
+	return pit.Emit(e.Tx, ev)
+}
+
 // emitDirect writes the event of a direct membership row.
 func (e Env) emitDirect(typ string, m *store.DirectMembership) error {
 	return pit.Emit(e.Tx, e.stamp(pit.DirectEvent(typ, m, e.Now, store.CauseAPI)))

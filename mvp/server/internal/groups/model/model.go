@@ -7,6 +7,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -1134,10 +1135,27 @@ func (e Env) DeleteFolder(id store.FolderID) error {
 		return err
 	}
 	if folders+groups+defs > 0 {
-		ce := conflict("folder_not_empty", "the folder still holds %d subfolder(s), %d group(s) and %d attribute definition(s)", folders, groups, defs)
-		ce.Extra = map[string]any{"folders": folders, "groups": groups, "attr_defs": defs}
+		deleted, err := e.Tx.GrpFolderDeletedGroupCount(f.ID)
+		if err != nil {
+			return err
+		}
+		held := fmt.Sprintf("%d group(s)", groups)
+		if deleted > 0 {
+			it := "them"
+			if deleted == 1 {
+				it = "it"
+			}
+			held = fmt.Sprintf("%d group(s) (%d deleted, restore or purge %s)", groups, deleted, it)
+		}
+		ce := conflict("folder_not_empty", "the folder still holds %d subfolder(s), %s and %d attribute definition(s)", folders, held, defs)
+		ce.Extra = map[string]any{"folders": folders, "groups": groups, "deleted_groups": deleted, "attr_defs": defs}
 		return ce
 	}
+	return e.removeFolder(f)
+}
+
+// removeFolder deletes the row of an empty folder and what hangs off it.
+func (e Env) removeFolder(f *store.Folder) error {
 	if err := e.Tx.DeleteGrpAliasesOf(store.AliasFolder, string(f.ID)); err != nil {
 		return err
 	}

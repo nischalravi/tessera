@@ -287,6 +287,28 @@ func RevokeAllOf(e Env, o Object) (int, error) {
 	return len(rows), nil
 }
 
+// RevokeAllHeldBy removes every row that names the group as its holder: a
+// purged group can no longer hold a privilege. Each removal writes its event.
+func RevokeAllHeldBy(e Env, g store.GroupID) (int, error) {
+	rows, err := e.Tx.GrpPrivilegesOfHolderGroup(g)
+	if err != nil {
+		return 0, err
+	}
+	for _, r := range rows {
+		if err := e.Tx.DeleteGrpPrivilege(r.ID); err != nil {
+			return 0, err
+		}
+		if err := e.emit(events.PrivilegeRevoked, r); err != nil {
+			return 0, err
+		}
+		if err := e.audit("groups.privilege.revoked", "group_privilege", r.ID, append(rowDetail(r),
+			ojson.KV{Key: "reason", Value: "holder_purged"})); err != nil {
+			return 0, err
+		}
+	}
+	return len(rows), nil
+}
+
 // creatorPrivilege is what the creator of an object is given: admin of a group,
 // stem_admin of a folder, attr_admin of an attribute definition (Grouper's
 // creator privileges, G-40).

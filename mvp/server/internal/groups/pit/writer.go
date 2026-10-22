@@ -71,7 +71,7 @@ func Apply(tx *store.TenantTx, e *events.Event) error {
 		}
 		return tx.OpenPitObject(e.ObjectType, e.ObjectID, d.Snapshot, at, seq)
 
-	case events.FolderDeleted:
+	case events.FolderDeleted, events.GroupPurged:
 		return tx.ClosePitObject(e.ObjectType, e.ObjectID, at, seq)
 
 	case events.MembershipDirectAdded, events.MembershipDirectDatesChanged:
