@@ -4513,7 +4513,17 @@ export interface GrpGroup {
   enabled_from: string | null; disabled_at: string | null; requestable: boolean; effective_count: number;
   /** clean, pending (a queued recompute is running: the members are stale) or failed */
   recompute_state: string; created_at: string; version: number;
+  /** While status is deleted: who deleted it (name, role), when, why, and the folder whose delete took it along. */
+  deleted_by?: string; deleted_at?: string; deleted_reason?: string; deleted_with_folder?: string;
 }
+export interface GrpDeleteBlocker { kind: "folder" | "group" | "attr_def"; id: string; name: string; code: string; reason: string }
+export interface GrpDeletePlan {
+  folder_id: string; name: string; folders: number; groups: number; active_groups: number; deleted_groups: number; attr_defs: number;
+  groups_with_members: number; memberships: number; needs_approval: boolean; approval_reason?: string;
+  blockers: GrpDeleteBlocker[]; blocker_count: number;
+}
+export interface GrpTreeDeleted { id: string; deleted: true; recursive: true; folders: number; groups: number; attr_defs: number; memberships: number }
+export interface GrpTreePending { status: "pending_approval"; change_request_id: string; type: string; folder_id: string; expires_at: string | null; reason?: string; detail: string }
 export interface GrpList<T> { items: T[]; limit: number; offset: number }
 export interface GrpDirectMember {
   id: string; type: "identity" | "group"; identity_id: number | null; group_id: string | null; name: string;
@@ -4571,6 +4581,13 @@ export const groups = {
   updateFolder: (id: string, b: { extension?: string; display_extension?: string; description?: string; data_owner?: string; version?: number }) =>
     api<GrpFolder>(`/groups/folders/${gid(id)}`, b, "PATCH"),
   deleteFolder: (id: string) => api<{ id: string; deleted: boolean }>(`/groups/folders/${gid(id)}`, undefined, "DELETE"),
+  /** What deleting the folder and everything in it would remove, and what blocks it. */
+  folderDeletePlan: (id: string) => api<GrpDeletePlan>(`/groups/folders/${gid(id)}/delete-plan`),
+  /**
+   * Delete the folder and its whole tree. Needs a fresh phishing-resistant sign-in (the client resumes the call after
+   * the step-up). A large or populated tree answers 202 with a change request that a second admin approves.
+   */
+  deleteFolderRecursive: (id: string, reason: string) => api<GrpTreeDeleted | GrpTreePending>(`/groups/folders/${gid(id)}${qs({ recursive: true })}`, { reason }, "DELETE"),
   // groups
   listGroups: (o: { folder?: string; scope?: "one" | "sub"; q?: string; type?: string; deleted?: boolean; limit?: number; offset?: number } = {}) =>
     api<GrpList<GrpGroup>>(`/groups/native${qs({ limit: 500, ...o })}`),
@@ -4578,8 +4595,10 @@ export const groups = {
   createGroup: (b: { folder: string; extension: string; display_extension?: string; description?: string; type?: string; data_owner?: string; member_description?: string; requestable?: boolean; definition?: string; composite_op?: string; factors?: string[] }) =>
     api<GrpGroup>("/groups", b),
   updateGroup: (id: string, b: Record<string, unknown>) => api<GrpGroup>(`/groups/${gid(id)}`, b, "PATCH"),
-  deleteGroup: (id: string) => api<{ id: string; deleted: boolean }>(`/groups/${gid(id)}`, undefined, "DELETE"),
+  deleteGroup: (id: string, reason?: string) => api<{ id: string; deleted: boolean }>(`/groups/${gid(id)}`, reason ? { reason } : undefined, "DELETE"),
   restoreGroup: (id: string) => api<GrpGroup>(`/groups/${gid(id)}/restore`, {}),
+  /** Permanently delete a group that is already deleted. 409 group_in_use names the groups that still use it. */
+  purgeGroup: (id: string, reason: string) => api<{ id: string; purged: boolean }>(`/groups/${gid(id)}/purge`, { reason }),
   // members
   members: <T = GrpDirectMember | GrpEffectiveMember>(id: string, o: { filter?: MemberFilter; q?: string; sort?: string; enabled?: boolean; page?: number; limit?: number } = {}) =>
     api<GrpMembers<T>>(`/groups/${gid(id)}/members${qs(o)}`),

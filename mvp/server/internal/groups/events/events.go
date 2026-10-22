@@ -33,6 +33,7 @@ const (
 	GroupMoved             = "group.moved"
 	GroupDeleted           = "group.deleted"
 	GroupRestored          = "group.restored"
+	GroupPurged            = "group.purged"
 	GroupDisabled          = "group.disabled"
 	GroupEnabled           = "group.enabled"
 	GroupDefinitionChanged = "group.definition_changed"
@@ -75,7 +76,7 @@ var objectOf = func() map[string]string {
 		}
 	}
 	add(store.EventObjFolder, FolderCreated, FolderUpdated, FolderRenamed, FolderMoved, FolderDeleted)
-	add(store.EventObjGroup, GroupCreated, GroupUpdated, GroupRenamed, GroupMoved, GroupDeleted, GroupRestored,
+	add(store.EventObjGroup, GroupCreated, GroupUpdated, GroupRenamed, GroupMoved, GroupDeleted, GroupRestored, GroupPurged,
 		GroupDisabled, GroupEnabled, GroupDefinitionChanged, MembershipDirectAdded, MembershipDirectRemoved,
 		MembershipDirectDatesChanged, MembershipEffectiveAdded, MembershipEffectiveRemoved)
 	add(store.EventObjPrivilege, PrivilegeGranted, PrivilegeRevoked)

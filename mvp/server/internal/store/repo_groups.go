@@ -35,7 +35,8 @@ const folderCols = `f.id, f.tenant_id, f.parent_id, f.extension, f.display_exten
 const grpGroupCols = `g.id, g.tenant_id, g.folder_id, g.extension, g.display_extension, g.name, g.display_name,
 	g.description, g.id_index, g.kind, g.definition, g.composite_op, g.policy_ref, g.managed_by, g.loader_id,
 	g.object_types, g.data_owner, g.member_description, g.enabled_from, g.disabled_at, g.status, g.requestable,
-	g.effective_count, g.effective_version, g.recompute_state, g.external_ref, g.created_at, g.created_by, g.version`
+	g.effective_count, g.effective_version, g.recompute_state, g.external_ref, g.created_at, g.created_by, g.version,
+	g.deleted_by_user_id, g.deleted_by_display, g.deleted_at, g.deleted_reason, g.deleted_with_folder`
 
 // The prefix tests are the case-insensitive "strictly below the ':' path"
 // match; @below is the lower-cased path plus ':' (see belowArg). They avoid
@@ -170,11 +171,12 @@ func scanGrpFolder(s scanner) (*Folder, error) {
 func scanGrpGroup(s scanner) (*NativeGroup, error) {
 	var g NativeGroup
 	var tenant, created, objTypes, kind, def, managed string
-	var op, policy, loader, owner, memberDesc, from, to, ext, by sql.NullString
+	var op, policy, loader, owner, memberDesc, from, to, ext, by, delUser, delDisplay, delAt, delReason, delFolder sql.NullString
 	var requestable int
 	if err := s.Scan(&g.ID, &tenant, &g.FolderID, &g.Extension, &g.DisplayExtension, &g.Name, &g.DisplayName, &g.Description,
 		&g.IDIndex, &kind, &def, &op, &policy, &managed, &loader, &objTypes, &owner, &memberDesc, &from, &to, &g.Status,
-		&requestable, &g.EffectiveCount, &g.EffectiveVersion, &g.RecomputeState, &ext, &created, &by, &g.Version); err != nil {
+		&requestable, &g.EffectiveCount, &g.EffectiveVersion, &g.RecomputeState, &ext, &created, &by, &g.Version,
+		&delUser, &delDisplay, &delAt, &delReason, &delFolder); err != nil {
 		return nil, err
 	}
 	var err error
@@ -188,7 +190,11 @@ func scanGrpGroup(s scanner) (*NativeGroup, error) {
 	}
 	g.PolicyRef, g.LoaderID, g.DataOwner, g.MemberDescription = strp(policy), strp(loader), strp(owner), strp(memberDesc)
 	g.ExternalRef, g.CreatedBy = strp(ext), strp(by)
+	g.DeletedByUser, g.DeletedBy, g.DeletedReason, g.DeletedWithFolder = strp(delUser), delDisplay.String, delReason.String, delFolder.String
 	if g.ObjectTypes, err = decodeObjectTypes(objTypes); err != nil {
+		return nil, err
+	}
+	if g.DeletedAt, err = rtp(delAt); err != nil {
 		return nil, err
 	}
 	if g.EnabledFrom, err = rtp(from); err != nil {

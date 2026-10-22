@@ -2977,13 +2977,37 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
   | `POST /api/groups` `{folder, extension, type, requestable, ...}` | create a basic group (`201`) |
   | `GET\|PATCH\|DELETE /api/groups/{id}` | read, edit or rename (`status` active or disabled), soft delete |
   | `POST /api/groups/{id}/move` `{folder}`, `.../copy` `{folder, extension}`, `.../restore` | move, copy, restore |
+  | `POST /api/groups/{id}/purge` | permanently delete a group that is already deleted (`admin` on it) |
+  | `DELETE /api/groups/folders/{id}?recursive=true`, `GET /api/groups/folders/{id}/delete-plan` | delete a folder and everything in it; the plan says what goes and what blocks it |
+
+- Purging and deleting a tree (a soft-deleted group still counts as held by its folder, so it blocks
+  `DELETE /api/groups/folders/{id}`; `folder_not_empty` says how many of the groups are deleted). The UI lists
+  deleted groups under **Show deleted** and offers Restore and **Delete permanently**.
+  - Who deleted what: a soft delete (`DELETE /api/groups/{id}`, optional body `{reason}`) stores `deleted_by_user_id`, `deleted_by_display` (the linked person's name and, for a tenant admin, "(tenant admin)"), `deleted_at`, `deleted_reason` and, for a recursive delete, `deleted_with_folder` on the group row; the group JSON carries `deleted_by`, `deleted_at`, `deleted_reason`, `deleted_with_folder` while it is deleted, and a restore clears them (the restore is audited with its actor). A purge and a recursive delete require `{reason}` in the body (`422 reason_required`); `groups.group.purged` and `groups.folder.deleted_recursive` carry the reason, the original deleter and the folder. The columns are in `0280_groups.sql` (SQLite databases made before get them at start) and `postgres/0641_group_deleted_by.sql`.
+  - `POST /api/groups/{id}/purge` `{reason}` removes a deleted group's memberships, nesting and composite edges, privileges (on it and
+    held by it), rules, attribute assignments, attestation settings, aliases and levels, and its row. The audit ledger and
+    the event log keep its history (`groups.group.purged`, event `group.purged`). Refused with `409 group_in_use` (and
+    `groups`: the names) while another group has it as a member or composite factor, `group_referenced` while a loader's
+    `and_group`, an attestation campaign or item, a reviewer setting or a provisioning sync names it, `not_deleted`,
+    `policy_managed`, `folder_mirrored`, `recompute_pending`.
+  - `?recursive=true` deletes the folder, its subfolders deepest first, its groups (soft-deleted, then purged, a group
+    before the groups it nests) and its attribute definitions in one transaction. It needs `stem_admin` on every folder
+    of the tree (`stem_admin` on the top covers the rest) and a fresh `STEP_UP_POLICY` sign-in. It is refused with
+    `409 recursive_delete_blocked` and `blockers: [{kind, id, name, code, reason}]` unless every item is UI-managed
+    (`managed_by` ui), no folder is a loader's target, no group is policy-managed, used by a group outside the tree or named by loader, attestation or
+    provisioning configuration, and nothing outside the tree has an assignment of a definition of it. A tree of more
+    than 50 groups, or one where any group has direct members, does not apply at once: the answer is `202` with an
+    admin change request (`groups.folder.delete_recursive`, the SQL loader's two-person workflow, GRP-6311) that a
+    second admin approves under `POST /api/admin/change-requests/{id}/approve`; the approver's apply refuses
+    `folder_changed` if the tree grew since. Audit `groups.folder.deleted_recursive` with the counts.
+  - An existing SQLite database is upgraded on open: `admin_change_requests` is rebuilt in one transaction with the wider type `CHECK` (rows, indexes and triggers kept, foreign keys checked; a no-op once done), `TestUpgradeAdminChangeTypes`. Postgres gets `postgres/0640_group_folder_delete.sql`.
 
 - Errors: `404 not_found`; `409` `{error, detail}` with `name_taken`, `name_reserved_by_alias`,
   `root_folder`, `move_into_self`, `copy_into_self`, `folder_not_empty` (with `folders` and `groups`
   counts), `folder_mirrored`, `group_deleted`, `not_deleted`, `version_conflict`; `422` with
   `invalid_name`, `invalid_type`, `invalid_status`, `invalid_scope`, and so on.
 - Audit events `groups.folder.{created,updated,renamed,moved,copied,deleted}` and
-  `groups.group.{created,updated,renamed,moved,copied,deleted,restored}`, written in the change's
+  `groups.group.{created,updated,renamed,moved,copied,deleted,restored,purged}`, `groups.folder.deleted_recursive`, written in the change's
   transaction with the acting user; `GET /api/audit?target_type=group&target_id=` filters by object.
 
 #### Membership engine (GR-2, issue #45)

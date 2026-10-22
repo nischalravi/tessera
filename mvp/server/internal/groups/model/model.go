@@ -7,6 +7,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -58,6 +59,10 @@ type Env struct {
 	// deprovisioning rule would refuse (GR-14). The API sets it only after it
 	// checked the caller holds admin on the group; it is audited.
 	VetoOverride string
+	// ByDisplay is the acting person's name as it is kept with what they delete; Reason is why (optional for a
+	// delete, required by the API for a purge and a recursive delete).
+	ByDisplay string
+	Reason    string
 }
 
 // Guard vets changes before the model makes them (internal/groups/rules
@@ -1134,10 +1139,27 @@ func (e Env) DeleteFolder(id store.FolderID) error {
 		return err
 	}
 	if folders+groups+defs > 0 {
-		ce := conflict("folder_not_empty", "the folder still holds %d subfolder(s), %d group(s) and %d attribute definition(s)", folders, groups, defs)
-		ce.Extra = map[string]any{"folders": folders, "groups": groups, "attr_defs": defs}
+		deleted, err := e.Tx.GrpFolderDeletedGroupCount(f.ID)
+		if err != nil {
+			return err
+		}
+		held := fmt.Sprintf("%d group(s)", groups)
+		if deleted > 0 {
+			it := "them"
+			if deleted == 1 {
+				it = "it"
+			}
+			held = fmt.Sprintf("%d group(s) (%d deleted, restore or purge %s)", groups, deleted, it)
+		}
+		ce := conflict("folder_not_empty", "the folder still holds %d subfolder(s), %s and %d attribute definition(s)", folders, held, defs)
+		ce.Extra = map[string]any{"folders": folders, "groups": groups, "deleted_groups": deleted, "attr_defs": defs}
 		return ce
 	}
+	return e.removeFolder(f)
+}
+
+// removeFolder deletes the row of an empty folder and what hangs off it.
+func (e Env) removeFolder(f *store.Folder) error {
 	if err := e.Tx.DeleteGrpAliasesOf(store.AliasFolder, string(f.ID)); err != nil {
 		return err
 	}
@@ -1164,8 +1186,12 @@ func (e Env) DeleteFolder(id store.FolderID) error {
 }
 
 // DeleteGroup soft-deletes a group: it keeps its row and name, is hidden from
-// listings and is an empty set. Deleting a deleted group changes nothing.
-func (e Env) DeleteGroup(id store.GroupID) error {
+// listings and is an empty set. Deleting a deleted group changes nothing. The
+// row records who deleted it, when and why (Env.ByDisplay, Env.Reason).
+func (e Env) DeleteGroup(id store.GroupID) error { return e.deleteGroup(id, "") }
+
+// deleteGroup is the one soft delete; withFolder names the folder whose recursive delete asks for it.
+func (e Env) deleteGroup(id store.GroupID, withFolder string) error {
 	g, err := e.Group(id)
 	if err != nil {
 		return err
@@ -1187,6 +1213,11 @@ func (e Env) DeleteGroup(id store.GroupID) error {
 	if err := e.Tx.UpdateGrpGroup(g); err != nil {
 		return wrap(err)
 	}
+	at := e.Now
+	if err := e.Tx.SetGrpGroupDeleted(g.ID, e.By, e.ByDisplay, &at, e.Reason, withFolder); err != nil {
+		return err
+	}
+	g.DeletedByUser, g.DeletedBy, g.DeletedAt, g.DeletedReason, g.DeletedWithFolder = e.By, e.ByDisplay, &at, e.Reason, withFolder
 	if err := e.emitGroup(events.GroupDeleted, g, nil); err != nil {
 		return err
 	}
@@ -1194,8 +1225,14 @@ func (e Env) DeleteGroup(id store.GroupID) error {
 	if _, err := e.eng().RecomputeGroup(e.Tx, e.Now, g.ID); err != nil {
 		return e.engineErr(err)
 	}
-	return e.audit("groups.group.deleted", "group", string(g.ID), ojson.Object{{Key: "group_id", Value: string(g.ID)},
-		{Key: "name", Value: g.Name}})
+	detail := ojson.Object{{Key: "group_id", Value: string(g.ID)}, {Key: "name", Value: g.Name}}
+	if e.Reason != "" {
+		detail = append(detail, ojson.KV{Key: "reason", Value: e.Reason})
+	}
+	if withFolder != "" {
+		detail = append(detail, ojson.KV{Key: "with_folder", Value: withFolder})
+	}
+	return e.audit("groups.group.deleted", "group", string(g.ID), detail)
 }
 
 // RestoreGroup brings a soft-deleted group back as active.
@@ -1221,6 +1258,10 @@ func (e Env) RestoreGroup(id store.GroupID) (*store.NativeGroup, error) {
 	if err := e.Tx.UpdateGrpGroup(g); err != nil {
 		return nil, wrap(err)
 	}
+	if err := e.Tx.SetGrpGroupDeleted(g.ID, nil, "", nil, "", ""); err != nil {
+		return nil, err
+	}
+	g.DeletedByUser, g.DeletedBy, g.DeletedAt, g.DeletedReason, g.DeletedWithFolder = nil, "", nil, "", ""
 	if err := e.emitGroup(events.GroupRestored, g, nil); err != nil {
 		return nil, err
 	}

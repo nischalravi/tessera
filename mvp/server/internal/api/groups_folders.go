@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
@@ -28,7 +29,8 @@ import (
 //
 //	GET    /api/groups/folders?parent=&scope=one|sub&q=&limit=&offset=
 //	POST   /api/groups/folders                   {parent, extension, display_extension, description, data_owner}
-//	GET|PATCH|DELETE /api/groups/folders/{id}
+//	GET|PATCH|DELETE /api/groups/folders/{id}    DELETE ?recursive=true deletes the whole tree (below)
+//	GET    /api/groups/folders/{id}/delete-plan  what a recursive delete removes and what blocks it
 //	POST   /api/groups/folders/{id}/move         {parent}
 //	POST   /api/groups/folders/{id}/copy         {parent, extension}
 //	GET    /api/groups/native?folder=&scope=&q=&type=&deleted=&limit=&offset=
@@ -37,6 +39,7 @@ import (
 //	POST   /api/groups/{id}/move                 {folder}
 //	POST   /api/groups/{id}/copy                 {folder, extension}
 //	POST   /api/groups/{id}/restore
+//	POST   /api/groups/{id}/purge                permanently delete a group that is already deleted (admin)
 //
 // GET /api/groups already lists the connected-system groups, so the native
 // list is GET /api/groups/native. Answers are 404 for an unknown id, 409
@@ -50,7 +53,9 @@ func (s *Server) registerGroupsFolderRoutes() {
 	s.handle(P, "/api/groups/folders", write, canWrite, s.rd(s.createGrpFolder))
 	s.handle(G, "/api/groups/folders/{id}", read, canRead, s.rd(s.getGrpFolder))
 	s.handle(PA, "/api/groups/folders/{id}", write, canWrite, s.rd(s.patchGrpFolder))
-	s.handle(D, "/api/groups/folders/{id}", write, canWrite, s.rd(s.deleteGrpFolder))
+	// phased: a recursive delete may file a change request, which opens its own transaction
+	s.handle(D, "/api/groups/folders/{id}", phased, canWrite, s.rd(s.deleteGrpFolder))
+	s.handle(G, "/api/groups/folders/{id}/delete-plan", read, canRead, s.rd(s.getGrpFolderDeletePlan))
 	s.handle(P, "/api/groups/folders/{id}/move", write, canWrite, s.rd(s.moveGrpFolder))
 	s.handle(P, "/api/groups/folders/{id}/copy", write, canWrite, s.rd(s.copyGrpFolder))
 	s.handle(G, "/api/groups/native", read, canRead, s.rd(s.listGrpGroups))
@@ -61,6 +66,7 @@ func (s *Server) registerGroupsFolderRoutes() {
 	s.handle(P, "/api/groups/{id}/move", write, canWrite, s.rd(s.moveGrpGroup))
 	s.handle(P, "/api/groups/{id}/copy", write, canWrite, s.rd(s.copyGrpGroup))
 	s.handle(P, "/api/groups/{id}/restore", write, canWrite, s.rd(s.restoreGrpGroup))
+	s.handle(P, "/api/groups/{id}/purge", write, canWrite, s.rd(s.purgeGrpGroup))
 }
 
 // ---------------------------------------------------------------- views
@@ -93,17 +99,22 @@ func viewFolder(f *store.Folder) folderView {
 }
 
 type groupView struct {
-	ID                string    `json:"id"`
-	FolderID          string    `json:"folder_id"`
-	Extension         string    `json:"extension"`
-	DisplayExtension  string    `json:"display_extension"`
-	Name              string    `json:"name"`
-	DisplayName       string    `json:"display_name"`
-	Description       string    `json:"description"`
-	IDIndex           int64     `json:"id_index"`
-	Type              string    `json:"type"`
-	Definition        string    `json:"definition"`
-	CompositeOp       *string   `json:"composite_op"`
+	ID               string  `json:"id"`
+	FolderID         string  `json:"folder_id"`
+	Extension        string  `json:"extension"`
+	DisplayExtension string  `json:"display_extension"`
+	Name             string  `json:"name"`
+	DisplayName      string  `json:"display_name"`
+	Description      string  `json:"description"`
+	IDIndex          int64   `json:"id_index"`
+	Type             string  `json:"type"`
+	Definition       string  `json:"definition"`
+	CompositeOp      *string `json:"composite_op"`
+	// who deleted it, when and why, while it is deleted
+	DeletedBy         *string   `json:"deleted_by,omitempty"`
+	DeletedAt         *string   `json:"deleted_at,omitempty"`
+	DeletedReason     *string   `json:"deleted_reason,omitempty"`
+	DeletedWithFolder *string   `json:"deleted_with_folder,omitempty"`
 	Factors           *[]string `json:"factors,omitempty"` // composites, on single-group answers
 	ManagedBy         string    `json:"managed_by"`
 	LoaderID          *string   `json:"loader_id,omitempty"` // the loader that fills a loader-managed group
@@ -134,6 +145,16 @@ func viewGroup(g *store.NativeGroup) groupView {
 	if g.CompositeOp != nil {
 		op := string(*g.CompositeOp)
 		v.CompositeOp = &op
+	}
+	if g.Status == store.GroupDeleted && g.DeletedAt != nil {
+		at, by, why, with := store.RT(*g.DeletedAt), g.DeletedBy, g.DeletedReason, g.DeletedWithFolder
+		v.DeletedAt, v.DeletedBy = &at, &by
+		if why != "" {
+			v.DeletedReason = &why
+		}
+		if with != "" {
+			v.DeletedWithFolder = &with
+		}
 	}
 	if g.EnabledFrom != nil {
 		s := store.RT(*g.EnabledFrom)
@@ -216,7 +237,49 @@ func (s *Server) grpEnv(r *http.Request, c *store.TenantTx, now time.Time) model
 		u := pr.UserID.String()
 		env.By = &u
 	}
+	if r.Method != http.MethodGet {
+		env.ByDisplay = s.actorLabel(r, c)
+	}
 	return env
+}
+
+// actorLabel is the acting person as it is kept with what they delete: the name of the identity their user is
+// linked to (else the user's own name), and "(tenant admin)" for that role.
+func (s *Server) actorLabel(r *http.Request, c *store.TenantTx) string {
+	pr := principal(r)
+	name := pr.Display
+	if pr.IdentityID != nil {
+		if i, err := c.Identity(*pr.IdentityID); err == nil && i.Name != "" {
+			name = i.Name
+		}
+	}
+	if name == "" {
+		name = "a user"
+	}
+	if pr.ActiveRoles.Has(auth.RoleTenantAdmin) {
+		name += " (tenant admin)"
+	}
+	return name
+}
+
+const maxReason = 500
+
+// deleteReason is the optional body of a delete: why. required says the route refuses without one.
+func deleteReason(r *http.Request, required bool) (string, error) {
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if err := decodeBody(r, &in, true); err != nil {
+		return "", err
+	}
+	in.Reason = strings.TrimSpace(in.Reason)
+	switch {
+	case len(in.Reason) > maxReason:
+		return "", badRequest("invalid_reason", "reason is at most 500 characters")
+	case required && in.Reason == "":
+		return "", badRequest("reason_required", "say why in reason")
+	}
+	return in.Reason, nil
 }
 
 // grpWrite runs fn in the request's write transaction with a model.Env.
@@ -356,20 +419,6 @@ func (s *Server) patchGrpFolder(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, viewFolder(out), nil
-}
-
-func (s *Server) deleteGrpFolder(r *http.Request, p *params) (int, any, error) {
-	id, err := grpPathID(p, "folder")
-	if err != nil {
-		return 0, nil, err
-	}
-	if _, err := s.grpFolderFor(r, s.grpChecker(r), id, privs.StemAdmin); err != nil {
-		return 0, nil, err
-	}
-	if err := s.grpWrite(r, func(e model.Env) error { return e.DeleteFolder(store.FolderID(id)) }); err != nil {
-		return 0, nil, err
-	}
-	return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
 }
 
 func (s *Server) moveGrpFolder(r *http.Request, p *params) (int, any, error) {
@@ -634,10 +683,32 @@ func (s *Server) deleteGrpGroup(r *http.Request, p *params) (int, any, error) {
 	if _, err := s.grpGroupFor(r, s.grpChecker(r), id, privs.Admin); err != nil {
 		return 0, nil, err
 	}
-	if err := s.grpWrite(r, func(e model.Env) error { return e.DeleteGroup(store.GroupID(id)) }); err != nil {
+	reason, err := deleteReason(r, false)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := s.grpWrite(r, func(e model.Env) error { e.Reason = reason; return e.DeleteGroup(store.GroupID(id)) }); err != nil {
 		return 0, nil, err
 	}
 	return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
+}
+
+func (s *Server) purgeGrpGroup(r *http.Request, p *params) (int, any, error) {
+	id, err := grpPathID(p, "group")
+	if err != nil {
+		return 0, nil, err
+	}
+	if _, err := s.grpGroupFor(r, s.grpChecker(r), id, privs.Admin); err != nil {
+		return 0, nil, err
+	}
+	reason, err := deleteReason(r, true)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := s.grpWrite(r, func(e model.Env) error { e.Reason = reason; return e.PurgeGroup(store.GroupID(id)) }); err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, map[string]any{"id": id, "purged": true}, nil
 }
 
 func (s *Server) restoreGrpGroup(r *http.Request, p *params) (int, any, error) {

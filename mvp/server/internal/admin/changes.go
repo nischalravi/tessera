@@ -293,14 +293,14 @@ func (s *Service) Submit(ctx context.Context, p *auth.Principal, in SubmitInput)
 	return s.submit(ctx, p, in)
 }
 
-// SubmitChecked files a groups.loader.save request for a caller whose own route
-// has already checked what that needs (groups.loader.admin, a fresh
-// STEP_UP_POLICY and stem_admin on the loader's folder): a policy admin
-// configures loaders but holds no admin.change.request. It files no other type.
+// SubmitChecked files a groups.loader.save or groups.folder.delete_recursive
+// request for a caller whose own route has already checked what that needs
+// (groups.loader.admin or groups.write, a fresh STEP_UP_POLICY and stem_admin on
+// the folders): such a caller holds no admin.change.request. It files no other type.
 // Approval is the workflow's: another admin, with admin.change.approve.
 func (s *Service) SubmitChecked(ctx context.Context, p *auth.Principal, in SubmitInput) (*store.AdminChange, error) {
-	if in.Type != TypeGroupLoaderSave {
-		return nil, invalid("only %s requests are filed this way", TypeGroupLoaderSave)
+	if in.Type != TypeGroupLoaderSave && in.Type != TypeGroupFolderDelete {
+		return nil, invalid("only %s and %s requests are filed this way", TypeGroupLoaderSave, TypeGroupFolderDelete)
 	}
 	if p == nil || p.UserID == nil {
 		return nil, newErr(http.StatusForbidden, "forbidden", "a signed-in user is required")

@@ -442,6 +442,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	if err := d.upgradeUserIDColumns(ctx); err != nil {
 		return err
 	}
+	if err := d.upgradeAdminChangeTypes(ctx); err != nil {
+		return err
+	}
 	files, err := fs.Glob(schemaFS, "schema/*.sql")
 	if err != nil {
 		return err
@@ -545,6 +548,8 @@ func (d *DB) upgradeProvTargetKinds(ctx context.Context) error {
 func (d *DB) upgradeUserIDColumns(ctx context.Context) error {
 	for _, c := range []struct{ table, column string }{
 		{"identity_disables", "disabled_by_user_id"}, {"readiness_attestations", "actor_user_id"},
+		{"grp_groups", "deleted_by_user_id"}, {"grp_groups", "deleted_by_display"}, {"grp_groups", "deleted_at"},
+		{"grp_groups", "deleted_reason"}, {"grp_groups", "deleted_with_folder"},
 	} {
 		var exists, n int
 		if err := d.sql.QueryRowContext(ctx,

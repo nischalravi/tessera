@@ -87,6 +87,25 @@ test("a composite is set with PUT and a conversion with POST", async () => {
   assert.deepEqual(calls.map((c) => `${c.method} ${c.url}`), ["PUT /api/groups/g/composite", "POST /api/groups/g/convert-to-composite"]);
 });
 
+test("restoring, purging and deleting a folder tree use their own routes", async () => {
+  await groups.listGroups({ folder: "f", deleted: true });
+  await groups.restoreGroup("g");
+  await groups.purgeGroup("g", "cleanup");
+  await groups.folderDeletePlan("f");
+  await groups.deleteFolderRecursive("f", "cleanup");
+  await groups.deleteFolder("f");
+  assert.deepEqual(calls.map((c) => `${c.method} ${c.url}`), [
+    "GET /api/groups/native?limit=500&folder=f&deleted=true",
+    "POST /api/groups/g/restore",
+    "POST /api/groups/g/purge",
+    "GET /api/groups/folders/f/delete-plan",
+    "DELETE /api/groups/folders/f?recursive=true",
+    "DELETE /api/groups/folders/f",
+  ]);
+  assert.deepEqual(calls[2].body, { reason: "cleanup" });
+  assert.deepEqual(calls[4].body, { reason: "cleanup" });
+});
+
 // ---------------------------------------------------------------- repo rules
 
 const SRC = new URL("../src/", import.meta.url).pathname;
