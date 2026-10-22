@@ -27,7 +27,7 @@ type env struct {
 	gl    *guestlife.Service
 	carol sponsorship.Actor // Bob's and Alice's manager, an eligible sponsor
 	bob   sponsorship.Actor
-	admin sponsorship.Actor // holds sponsorships.approve, is nobody's identity
+	admin sponsorship.Actor // holds sponsorships.approve, linked to a person who sponsors nothing
 	alice sponsorship.Actor // neither a manager of Bob nor an approver
 }
 
@@ -42,8 +42,16 @@ func newEnv(t *testing.T) *env {
 	sp := sponsorship.New(storetest.IdentityKeyer(t))
 	gl := guestlife.New(sp)
 	gl.Secrets, gl.BaseURL = notify.NewSecrets(), "https://tessera.example"
+	// the sponsor admin is a linked person of no sponsorship: an unlinked approver is refused (#446)
+	var pat int64
+	if err := f.DB.InTenant(context.Background(), f.B.ID, func(tx *store.TenantTx) (err error) {
+		pat, err = tx.InsertIdentity(&store.Identity{TenantID: f.B.ID, ExternalID: "pat-admin", Name: "Pat", Type: "human", Status: "active", CreatedAt: now})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	e := &env{t: t, f: f, sp: sp, gl: gl, carol: actor("Carol", &carol, false), bob: actor("Bob", &bob, false),
-		admin: actor("Pat", nil, true), alice: actor("Alice", &alice, false)}
+		admin: actor("Pat", &pat, true), alice: actor("Alice", &alice, false)}
 	// resolved_by and updated_by reference platform_users; Postgres enforces
 	// it, so each actor is a real user of the tenant.
 	e.must(func(tx *store.TenantTx) error {
@@ -236,6 +244,13 @@ func TestSponsorLeaver_TransfersOrEnds(t *testing.T) {
 	e.wantCode(e.resolve(e.alice, taskOf(a), guestlife.ActionAccept, day(1)), "task_not_found")
 	e.wantCode(e.resolve(e.carol, taskOf(a), "nonsense", day(1)), "invalid_action")
 	e.wantCode(e.resolve(e.carol, taskOf(a), guestlife.ActionKeep, day(1)), "invalid_action") // only after a move
+	// nobody decides a task about their own identity, an approver included; an unlinked approver is refused (#446)
+	e.wantCode(e.resolve(actor("Bob", &bob, true), taskOf(a), guestlife.ActionDecline, day(1)), "self_decision")
+	e.wantCode(e.resolve(e.bob, taskOf(a), guestlife.ActionDecline, day(1)), "self_decision")
+	e.wantCode(e.resolve(actor("Unlinked", nil, true), taskOf(a), guestlife.ActionDecline, day(1)), "actor_unlinked")
+	if s := e.get(a.ID); s.Status != store.SponsorActive || s.SponsorIdentityID != bob {
+		t.Errorf("a refused decision changed the sponsorship: %+v", s)
+	}
 	// accepting moves the sponsorship, after a fresh policy check as the new sponsor
 	if err := e.resolve(e.carol, taskOf(a), guestlife.ActionAccept, day(1)); err != nil {
 		t.Fatal(err)

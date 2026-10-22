@@ -99,6 +99,11 @@ func TestSodMitigationAPI_Flow(t *testing.T) {
 	// four-eyes: the requester cannot decide it, a viewer cannot, another admin can
 	call(operator, "POST", "/api/sod/mitigations/"+mid+"/approve", `{}`, 403) // operators lack sod.approve
 	call(viewer, "POST", "/api/sod/mitigations/"+mid+"/approve", `{}`, 403)
+	// a decider with no linked identity is refused (#446)
+	unlinked := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ul@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, storetest.Now)
+	if rec := reqDo(h, unlinked, "POST", "/api/sod/mitigations/"+mid+"/approve", `{}`); rec.Code != 403 || !strings.Contains(rec.Body.String(), `"decider_unlinked"`) {
+		t.Errorf("unlinked decider: %d %s", rec.Code, rec.Body)
+	}
 	call(admin2, "POST", "/api/sod/mitigations/"+mid+"/reject", `{}`, 422) // a note is required
 	m = call(admin2, "POST", "/api/sod/mitigations/"+mid+"/approve", `{"note":"fine"}`, 200)
 	if m["status"] != "active" {

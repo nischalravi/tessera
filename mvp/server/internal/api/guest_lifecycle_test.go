@@ -138,8 +138,9 @@ func TestGuestLifecycleAPI_SponsorLeaverTaskThroughHRIS(t *testing.T) {
 	seeded := seedSponsorships(t, f)[f.B.ID]
 	h := newIsolationServer(f).Handler()
 	b := f.B.IDs
-	// nobody's identity on purpose (reqLogin links policy admins, approver_unlinked #443)
-	admin := signIn(t, f.DB, f.B.ID, authtest.User{Email: "pa@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, storetest.Now)
+	// reqLogin links policy admins to an identity (approver_unlinked #443)
+	admin := reqLogin(t, f, "pa@b.example", []auth.Role{auth.RolePolicyAdmin}, "")
+	unlinked := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ul@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, storetest.Now)
 	bobAdmin := reqLogin(t, f, "bobadmin@b.example", []auth.Role{auth.RolePolicyAdmin}, "bob") // an approver who is also an eligible sponsor
 	aliceUser := reqLogin(t, f, "alice@b.example", []auth.Role{auth.RoleViewer}, "alice")
 	var ev int64
@@ -168,8 +169,7 @@ func TestGuestLifecycleAPI_SponsorLeaverTaskThroughHRIS(t *testing.T) {
 	guestsDo(t, h, aliceUser, "POST", "/api/guest-lifecycle/tasks/"+task+"/resolve", `{"action":"accept"}`, 404)
 	guestsDo(t, h, admin, "POST", "/api/guest-lifecycle/tasks/"+task+"/resolve", `{"action":"bogus"}`, 422)
 	guestsDo(t, h, admin, "POST", "/api/guest-lifecycle/tasks/"+task+"/resolve", `{"action":"accept","x":1}`, 422)
-	// an admin who is nobody's identity cannot take a sponsorship over: they ask someone who can sponsor
-	guestsDo(t, h, admin, "POST", "/api/guest-lifecycle/tasks/"+task+"/resolve", `{"action":"accept"}`, 422)
+	guestsDo(t, h, unlinked, "POST", "/api/guest-lifecycle/tasks/"+task+"/resolve", `{"action":"accept"}`, 403)
 	res := guestsJSON[struct {
 		Status  string  `json:"status"`
 		Outcome *string `json:"outcome"`

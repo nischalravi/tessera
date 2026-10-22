@@ -131,6 +131,9 @@ func (s *Service) ScanDepartures(tx *store.TenantTx, now time.Time) (int, error)
 // mayAct reports whether the actor may decide a task: sponsor admins, the
 // manager of the person who left (transfer), the sponsor (renewals, dual status).
 func mayAct(tx *store.TenantTx, by Actor, t *store.LifecycleTask, ss *store.Sponsorship) (bool, error) {
+	if by.IdentityID != nil && *by.IdentityID == t.SubjectIdentityID {
+		return false, nil // nobody, an approver included, decides a task about themselves (#446)
+	}
 	if by.Approver {
 		return true, nil
 	}
@@ -174,6 +177,12 @@ func (s *Service) Resolve(tx *store.TenantTx, by Actor, taskID, action string, n
 	ss, err := tx.Sponsorship(t.SponsorshipID)
 	if err != nil {
 		return nil, err
+	}
+	if by.IdentityID != nil && *by.IdentityID == t.SubjectIdentityID {
+		return nil, refuse(403, "self_decision", "you cannot decide a task about yourself")
+	}
+	if by.Approver && by.UserID != uuid.Nil && by.IdentityID == nil {
+		return nil, refuse(403, "actor_unlinked", "your account is not linked to an identity, so it cannot decide tasks; ask an administrator to link it")
 	}
 	if ok, err := mayAct(tx, by, t, ss); err != nil {
 		return nil, err

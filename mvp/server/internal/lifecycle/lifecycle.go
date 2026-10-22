@@ -304,6 +304,8 @@ func Extend(tx *store.TenantTx, identityID int64, to time.Time, reason string, b
 		return nil, refuse(403, "not_sponsor", "only the sponsor or a lifecycle admin can extend")
 	case by.IdentityID != nil && *by.IdentityID == identityID:
 		return nil, refuse(403, "self_extension", "nobody extends their own term")
+	case by.UserID != uuid.Nil && by.IdentityID == nil: // cannot be shown not to be the person: fail closed (#446)
+		return nil, refuse(403, "actor_unlinked", "your account is not linked to an identity, so it cannot extend a term; ask an administrator to link it")
 	case l.EndedAt != nil:
 		return nil, refuse(409, "ended", "this term has ended")
 	case l.EndsAt == nil:
