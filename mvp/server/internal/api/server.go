@@ -428,7 +428,8 @@ func New(cfg Config) *Server {
 	// every in-process call to a customer's system runs under the per-connection limits and breaker
 	s.guard = &worker.Guard{DB: cfg.Store, Clock: func() time.Time { return s.clock() }}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
-		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning"), Guard: s.guard}
+		Runtime: connsync.Runtime{Env: cfg.Env, AllowLoopback: cfg.Env == config.Dev},
+		Clock:   func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning"), Guard: s.guard}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
 	if cfg.RPID != "" && cfg.PublicOrigin != "" {

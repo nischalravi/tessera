@@ -76,6 +76,7 @@ type targetView struct {
 	Kind           string  `json:"kind"`
 	BaseURL        string  `json:"base_url"`
 	Dialect        string  `json:"dialect,omitempty"`
+	APIRoot        string  `json:"api_root,omitempty"`
 	Fault          string  `json:"fault,omitempty"`
 	OnDeprovision  string  `json:"on_deprovision,omitempty"` // "delete": accounts are deleted after the grace period (issue #74)
 	AgentID        string  `json:"agent_id,omitempty"`       // the Directory Agent that reaches this target (issue #302)
@@ -89,7 +90,7 @@ func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -242,10 +243,13 @@ func (s *Server) listTargets(r *http.Request, _ *params) (int, any, error) {
 // omitted token keeps the stored credential, unless the edit changes the kind
 // or origin, which then needs a new token (422 credential_required).
 type targetInput struct {
-	Kind      string `json:"kind"`
-	BaseURL   string `json:"base_url"`
-	Dialect   string `json:"dialect"`
-	Fault     string `json:"fault"`
+	Kind    string `json:"kind"`
+	BaseURL string `json:"base_url"`
+	Dialect string `json:"dialect"`
+	Fault   string `json:"fault"`
+	// APIRoot overrides the API path of a vault target.
+	APIRoot string `json:"api_root"`
+	// Token is the credential: an API token (Okta, SCIM) or "user:secret" (a vault).
 	Token     string `json:"token"`
 	WriteBack bool   `json:"write_back"`
 	// OnDeprovision is "disable" (the default: leave a deprovisioned guest's
@@ -263,7 +267,7 @@ type targetInput struct {
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	var st provision.Settings
 	switch in.Kind {
-	case provision.KindSCIM, provision.KindOkta:
+	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust:
 		if s.cfg.Env == "prod" && !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://") {
 			return st, badRequest("invalid_base_url", "base_url must be https")
 		}
@@ -289,16 +293,21 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, cyberark, delinea, beyondtrust or fake")
 	}
+	vault := slices.Contains(provision.PAMKinds, in.Kind)
 	switch {
-	case in.Kind == provision.KindOkta && in.Dialect != "":
+	case (in.Kind == provision.KindOkta || vault) && in.Dialect != "":
 		return st, badRequest("invalid_dialect", "dialect applies to SCIM targets only")
-	case in.Kind != provision.KindOkta && !slices.Contains([]string{"", "standard", "entra"}, in.Dialect):
+	case in.Kind != provision.KindOkta && !vault && !slices.Contains([]string{"", "standard", "entra"}, in.Dialect):
 		return st, badRequest("invalid_dialect", "dialect must be standard or entra")
+	case in.APIRoot != "" && !vault:
+		return st, badRequest("invalid_api_root", "api_root applies to vault targets only")
+	case in.APIRoot != "" && (!strings.HasPrefix(in.APIRoot, "/") || strings.Contains(in.APIRoot, "..") || strings.Contains(in.APIRoot, "//") || len(in.APIRoot) > 200):
+		return st, badRequest("invalid_api_root", "api_root must be an absolute path")
 	}
-	st.Dialect = in.Dialect
-	if in.Kind == provision.KindOkta {
+	st.Dialect, st.APIRoot = in.Dialect, in.APIRoot
+	if in.Kind == provision.KindOkta || vault {
 		st.Dialect = ""
 	}
 	if in.AgentID != "" {
@@ -377,6 +386,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		credential = "kept"
 	}
 	switch {
+	case in.Token != "" && slices.Contains(provision.PAMKinds, in.Kind) && !strings.Contains(strings.Trim(in.Token, ":"), ":"):
+		return 0, nil, badRequest("invalid_credential", "a vault credential is user:secret")
 	case in.Token != "":
 		if t.CredentialEnc, err = provision.SealToken(s.provSeal, c.Tenant(), t.ID, in.Token); err != nil {
 			return 0, nil, err
@@ -397,6 +408,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 			Msg: "changing the target's kind or origin (scheme, host, port) needs a new token; the stored credential does not move with it"}
 	case in.Kind == provision.KindOkta && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
+	case slices.Contains(provision.PAMKinds, in.Kind) && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "a vault target needs its credential as user:secret")
 	}
 	if err := c.UpsertProvTarget(t, now); err != nil {
 		return 0, nil, err

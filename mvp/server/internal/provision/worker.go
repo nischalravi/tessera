@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/okta"
@@ -25,7 +28,18 @@ const (
 	KindSCIM = "scim"
 	KindOkta = "okta"
 	KindFake = "fake"
+
+	// Vault targets (issue #304): safe membership in a privileged-access vault.
+	KindCyberArk    = "cyberark"
+	KindDelinea     = "delinea"
+	KindBeyondTrust = "beyondtrust"
+	// ERP targets: role assignment in SAP and Oracle (internal/connectors/erp).
+	KindSAP    = "sap"
+	KindOracle = "oracle"
 )
+
+// PAMKinds are the vault target kinds; the kind is the vendor's name in internal/connectors/pam.
+var PAMKinds = []string{KindCyberArk, KindDelinea, KindBeyondTrust}
 
 // WorkerActor is the system actor of worker events.
 const WorkerActor = "provisioning.worker"
@@ -40,6 +54,8 @@ type Settings struct {
 	// period after their last affiliation ended has passed: "disable" (the
 	// default: leave it disabled) or "delete" it in the target (issue #74).
 	OnDeprovision string `json:"on_deprovision,omitempty"`
+	// APIRoot overrides the API path of a vault or ERP target (default: the vendor's).
+	APIRoot string `json:"api_root,omitempty"`
 	// AgentID, when set, is the Directory Agent that reaches this target: the
 	// target is in a private network the server cannot dial. The engine then
 	// queues a provision_push job for that agent (internal/agent pull channel)
@@ -68,6 +84,9 @@ type Engine struct {
 	Batch int
 	// CallTimeout bounds one connector call (30s).
 	CallTimeout time.Duration
+	// Runtime says whether the dev loopback exception applies to vault and ERP
+	// targets (connsync.RuntimeFromConfig). The zero value is the production rules.
+	Runtime connsync.Runtime
 	// Build creates the connector of a target (tests inject fakes).
 	Build func(t *store.ProvTarget, token string) (target.Connector, error)
 	// Guard, when set, runs every call to a target under that target's
@@ -196,8 +215,25 @@ func (e *Engine) build(pt *store.ProvTarget, token string) (target.Connector, er
 		return c, nil
 	case KindOkta:
 		return &okta.Client{HTTP: e.HTTP, BaseURL: pt.BaseURL, Token: token}, nil
+	case KindCyberArk, KindDelinea, KindBeyondTrust:
+		return e.buildVault(pt, token, s)
 	}
 	return nil, fmt.Errorf("unknown target kind %q", pt.Kind)
+}
+
+// buildVault builds the target of a vault. The credential is "user:secret"
+// (BeyondTrust: "run-as user:API key").
+func (e *Engine) buildVault(pt *store.ProvTarget, token string, s Settings) (target.Connector, error) {
+	i := strings.IndexByte(token, ':')
+	if i <= 0 || i == len(token)-1 {
+		return nil, errors.New("the vault credential is user:secret")
+	}
+	v, err := pam.Open(pam.Config{Vendor: pt.Kind, BaseURL: pt.BaseURL, Username: token[:i], Secret: connsync.NewSecret(token[i+1:]),
+		APIRoot: s.APIRoot}, e.Runtime, e.HTTP, e.Clock)
+	if err != nil {
+		return nil, err
+	}
+	return &pam.Target{V: v}, nil
 }
 
 func (e *Engine) workerCtx(ctx context.Context) context.Context {

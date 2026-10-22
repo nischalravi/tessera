@@ -2293,6 +2293,35 @@ and the review queue are shared.
   confirm the field names and the OAuth token path. **SFTP** drops are not read: there is no SFTP client in
   the module's dependencies, so a drop is uploaded as CSV for now.
 
+### Privileged-access vaults (CyberArk, Delinea, BeyondTrust; issue #304)
+
+`internal/connectors/pam` reads a vault into the graph and writes safe membership back through provisioning. Tessera
+integrates with the vault; it does not replace it.
+
+- **Read.** `TESSERA_CONNECTORS=cyberark` (or `delinea`, `beyondtrust`) with `TESSERA_<VENDOR>_BASE_URL`, `_USER`,
+  `_SECRET` (a `file:`/`env:` reference) and optionally `_API_ROOT`. A safe (CyberArk safe, Delinea folder,
+  BeyondTrust smart rule) is a `vault_safe` resource with one permission per safe permission (privileged where it
+  reveals or changes secrets). Four **profiles** per safe are requestable groups (`vault_safe_access`, id
+  `<safe id>/<profile>`): `list`, `use`, `read` (privileged), `manage` (privileged), each including the one before.
+  A member (user, group or role) is an account `member_of` the highest profile it holds and `direct_grant`ed any
+  permission beyond it, so nothing a member can do is hidden by the profile. A vaulted account is an account of kind
+  `vaulted` with a `password` secret and its last rotation. Delinea and BeyondTrust report roles; the reader maps
+  them to the same permission names (Delinea List/View/Edit/Owner; BeyondTrust Read Only/Requestor/Approver).
+- **Write.** Target kinds `cyberark`, `delinea`, `beyondtrust` (Admin > Provisioning; credential `user:secret`, sealed,
+  write-only; optional `api_root`). The engine adds or removes a member at a profile (`add_entitlement`,
+  `remove_entitlement`, group id `<safe id>/<profile>`, `account.attrs.member_type` user|group|role), and counts it done
+  only after a re-read of the safe agrees. So requests, reviews, JIT and the leaver plan all reach the vault the way
+  they reach any target. Idempotent: it reads first. Adding at or below the profile held is already true; removing a
+  profile below the held one is refused (permanent). Accounts are never created or disabled in a vault. Delinea cannot
+  express `use` and BeyondTrust only `list` and `use`: those are permanent errors, not guesses.
+- **Schema.** `provisioning_targets.kind` now allows the vault and ERP kinds. A SQLite database is upgraded in
+  place on open (the table is rebuilt, rows and sealed credentials kept); Postgres has migration `0601`.
+- **Not verified against real vaults.** The shapes are documented in each vendor file and exercised by
+  `pamfake`, which keeps each vendor's own state (CyberArk flags, Delinea roles, BeyondTrust role ids) so the
+  contract tests prove the translation, and injects a refused login, throttling, 5xx, malformed answers, failing
+  writes and writes accepted and dropped. BeyondTrust's role names and the Delinea secret-role mapping in particular
+  need confirming on a real tenant.
+
 ### Identity containment (kill switch)
 
 A disabled account does not end its live sessions, refresh tokens or OAuth consents. Two plan
