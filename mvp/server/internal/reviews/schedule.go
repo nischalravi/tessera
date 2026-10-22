@@ -311,8 +311,30 @@ func progress(tx *store.TenantTx, l *store.ReviewLaunch, now time.Time, res *Tic
 		return err
 	}
 	if co.How == IncompleteEscalate && l.EscalatedAt == nil && co.EscalateTo != nil {
+		// an item about the escalation target goes to the security lead, else
+		// stays with its reviewer: the subject never reviews their own access
+		people, all, err := tx.IdentityMap()
+		if err != nil {
+			return err
+		}
+		target := people[*co.EscalateTo]
+		var lead *store.Identity
+		for _, i := range all {
+			if i.Title != nil && *i.Title == "Head of Security" {
+				lead = i
+				break
+			}
+		}
 		for _, it := range open {
-			if err := tx.SetItemReviewer(it.ID, *co.EscalateTo); err != nil {
+			to := *co.EscalateTo
+			if subj := people[it.IdentityID]; subj != nil && target != nil {
+				pick := avoidSelf(nil, subj, target, lead)
+				if pick == nil {
+					continue // no one else can review it: it stays as assigned
+				}
+				to = pick.ID
+			}
+			if err := tx.SetItemReviewer(it.ID, to); err != nil {
 				return err
 			}
 		}

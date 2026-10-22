@@ -495,7 +495,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	// each tenant has an OAuth client; tenant A's carries the sentinel
 	seedClient(t, f.DB, f.A.ID, "tsc_client_a", "ETL "+storetest.Sentinel)
 	seedClient(t, f.DB, f.B.ID, "tsc_client_b", "ETL B")
-	srv := isolationServer(t, f, f.B.ID)
+	srv := asLinkedAdmin(t, newIsolationServer(f), f.DB, f.B.ID, storetest.Now) // decides a review item
 	h := srv.Handler()
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)

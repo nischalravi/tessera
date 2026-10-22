@@ -84,7 +84,10 @@ func newWorld(t *testing.T) *world {
 			}
 			return u.ID
 		}
-		w.admin, w.author = user("admin", nil), user("author", &w.ivan)
+		// the admin decides attestations, so it is linked to an identity of its own (a decider with no
+		// linked identity is refused, issue #439)
+		adminIdent := ident("Admin", "IT")
+		w.admin, w.author = user("admin", &adminIdent), user("author", &w.ivan)
 		if err := c.InsertRoleAssignment(&store.RoleAssignment{UserID: w.admin, Role: "tenant_admin", Source: "bootstrap", CreatedAt: storetest.Now}); err != nil {
 			t.Fatal(err)
 		}
