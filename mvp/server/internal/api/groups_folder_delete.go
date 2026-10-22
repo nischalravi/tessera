@@ -130,6 +130,10 @@ func (s *Server) deleteGrpFolder(r *http.Request, p *params) (int, any, error) {
 		}
 		return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
 	}
+	reason, err := deleteReason(r, true)
+	if err != nil {
+		return 0, nil, err
+	}
 	// destructive: a fresh phishing-resistant sign-in, like the other policy-level group changes
 	if d := auth.Check(principal(r), auth.PermGroupsWrite, &auth.StepUpPolicy, s.clock()); d != nil {
 		return 0, nil, denial{d}
@@ -147,7 +151,7 @@ func (s *Server) deleteGrpFolder(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, grpErr(plan.BlockedError())
 	}
 	if plan.NeedsApproval {
-		ch, err := s.submitFolderDelete(ctx, r, plan)
+		ch, err := s.submitFolderDelete(ctx, r, plan, reason)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -168,7 +172,9 @@ func (s *Server) deleteGrpFolder(r *http.Request, p *params) (int, any, error) {
 		if again.NeedsApproval {
 			return grpErr(&model.Error{Kind: model.Conflict, Code: "folder_changed", Msg: "the folder changed while it was being deleted; try again"})
 		}
-		_, res, err = s.grpEnv(r, c, s.clock()).DeleteFolderRecursive(store.FolderID(id))
+		env := s.grpEnv(r, c, s.clock())
+		env.Reason = reason
+		_, res, err = env.DeleteFolderRecursive(store.FolderID(id))
 		return grpErr(err)
 	})
 	if err != nil {
@@ -179,9 +185,13 @@ func (s *Server) deleteGrpFolder(r *http.Request, p *params) (int, any, error) {
 }
 
 // submitFolderDelete files the groups.folder.delete_recursive request.
-func (s *Server) submitFolderDelete(ctx context.Context, r *http.Request, p *model.DeletePlan) (*store.AdminChange, error) {
+func (s *Server) submitFolderDelete(ctx context.Context, r *http.Request, p *model.DeletePlan, reason string) (*store.AdminChange, error) {
+	var by string
+	if err := s.store.ReadTenant(ctx, principal(r).TenantID, func(c *store.TenantTx) error { by = s.actorLabel(r, c); return nil }); err != nil {
+		return nil, err
+	}
 	payload, err := json.Marshal(map[string]any{"folder_id": string(p.Folder.ID), "name": p.Folder.Name, "folders": p.Folders,
-		"groups": p.TotalGroups(), "memberships": p.Memberships})
+		"groups": p.TotalGroups(), "memberships": p.Memberships, "reason": reason, "by_display": by})
 	if err != nil {
 		return nil, err
 	}

@@ -6,12 +6,12 @@ import { useSession } from "../../../app/auth";
 import { Button, Callout, CommandBar, Drawer, EmptyState, Loading, Page, Tabs, useConfirm, useToast } from "../../../components";
 import { AttributesTab } from "./AttributesTab";
 import { DefinitionTab } from "./DefinitionTab";
-import { GroupBadges, GroupLink, RecomputeBanner } from "./common";
+import { GroupBadges, GroupLink, RecomputeBanner, fmtWhen } from "./common";
 import { HistoryTab } from "./HistoryTab";
 import { usePurgeGroups } from "./deletes";
 import { errText, useLoad } from "./hooks";
 import { MembersTab } from "./MembersTab";
-import { folderLabel, folderTrail, indexFolders } from "./model";
+import { deletedLine, folderLabel, folderTrail, indexFolders } from "./model";
 import { PrivilegesTab } from "./PrivilegesTab";
 
 type TabId = "members" | "definition" | "privileges" | "usage" | "history" | "attributes";
@@ -50,10 +50,11 @@ export function GroupPage() {
   const trail = folderTrail(ix, g.folder_id);
 
   const remove = async () => {
-    const ok = await confirm({ title: `Delete ${g.name}?`, body: "The group is deleted and its members stop counting. It can be restored afterwards.", confirmLabel: "Delete", danger: true });
+    const ok = await confirm({ title: `Delete ${g.name}?`, body: "The group is deleted and its members stop counting. It can be restored afterwards.", confirmLabel: "Delete", danger: true,
+      reason: { label: "Reason (optional)", placeholder: "Why is it being deleted?" } });
     if (ok === null) return;
     try {
-      await groups.deleteGroup(g.id);
+      await groups.deleteGroup(g.id, ok || undefined);
       toast("Group deleted");
     } catch (e) {
       toast(errText(e), { kind: "error" });
@@ -89,7 +90,7 @@ export function GroupPage() {
     >
       <div className="stack" role="tabpanel">
         <RecomputeBanner state={g.recompute_state} />
-        {deleted && <Callout tone="warn">This group is deleted. It has no members until it is restored. Delete it permanently to remove it for good.</Callout>}
+        {deleted && <Callout tone="warn">{deletedLine(g, fmtWhen)}. It has no members until it is restored. Delete it permanently to remove it for good.</Callout>}
         {!handEdited && !deleted && <Callout tone="info">This group is managed by {g.managed_by.replace(/_/g, " ")}, so it is changed there, not here.</Callout>}
         {tab === "members" && (
           <>

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"time"
 )
 
 // Statements for purging a soft-deleted group and for deleting a folder tree
@@ -10,6 +11,9 @@ import (
 // statement is bound to the transaction's tenant.
 
 var (
+	grpGroupSetDeleted = tq("grp_groups.set_deleted", `UPDATE grp_groups SET deleted_by_user_id = @by_user, deleted_by_display = @by_display,
+		deleted_at = @at, deleted_reason = @reason, deleted_with_folder = @with_folder
+		WHERE tenant_id = @tenant AND id = @id`)
 	grpGroupDelete = tq("grp_groups.delete", `DELETE FROM grp_groups WHERE tenant_id = @tenant AND id = @id`)
 	grpLevelDelete = tq("grp_levels.delete", `DELETE FROM grp_levels WHERE tenant_id = @tenant AND group_id = @group_id`)
 	// the groups that still use a group: as a nested member or as a composite factor
@@ -91,4 +95,20 @@ func (tx *TenantTx) GrpGroupRefs(id GroupID) ([]string, error) {
 // GrpFolderDeletedGroupCount counts the soft-deleted groups directly in a folder.
 func (tx *TenantTx) GrpFolderDeletedGroupCount(id FolderID) (int, error) {
 	return tx.count(grpFolderDeletedGroups, sql.Named("id", string(id)))
+}
+
+// SetGrpGroupDeleted records who deleted a group, when, why and (for a recursive delete) with which folder; a
+// nil at clears all of it (a restore). The status change itself is UpdateGrpGroup's.
+func (tx *TenantTx) SetGrpGroupDeleted(id GroupID, byUser *string, byDisplay string, at *time.Time, reason, withFolder string) error {
+	var when any
+	if at != nil {
+		when = RT(*at)
+	}
+	var user, disp, why, folder any
+	if at != nil {
+		user, disp, why, folder = SP(byUser), byDisplay, reason, withFolder
+	}
+	res, err := tx.exec(grpGroupSetDeleted, sql.Named("id", string(id)), sql.Named("by_user", user), sql.Named("by_display", disp),
+		sql.Named("at", when), sql.Named("reason", why), sql.Named("with_folder", folder))
+	return rowsOrNotFound(res, err)
 }

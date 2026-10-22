@@ -90,9 +90,9 @@ test("a composite is set with PUT and a conversion with POST", async () => {
 test("restoring, purging and deleting a folder tree use their own routes", async () => {
   await groups.listGroups({ folder: "f", deleted: true });
   await groups.restoreGroup("g");
-  await groups.purgeGroup("g");
+  await groups.purgeGroup("g", "cleanup");
   await groups.folderDeletePlan("f");
-  await groups.deleteFolderRecursive("f");
+  await groups.deleteFolderRecursive("f", "cleanup");
   await groups.deleteFolder("f");
   assert.deepEqual(calls.map((c) => `${c.method} ${c.url}`), [
     "GET /api/groups/native?limit=500&folder=f&deleted=true",
@@ -102,6 +102,8 @@ test("restoring, purging and deleting a folder tree use their own routes", async
     "DELETE /api/groups/folders/f?recursive=true",
     "DELETE /api/groups/folders/f",
   ]);
+  assert.deepEqual(calls[2].body, { reason: "cleanup" });
+  assert.deepEqual(calls[4].body, { reason: "cleanup" });
 });
 
 // ---------------------------------------------------------------- repo rules

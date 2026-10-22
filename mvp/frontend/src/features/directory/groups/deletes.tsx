@@ -21,12 +21,13 @@ export function usePurgeGroups() {
       toast(skipped.length ? `Nothing to delete permanently: ${skipped.join(", ")} ${skipped.length === 1 ? "is" : "are"} not a deleted group managed here.` : "Nothing to delete permanently.", { kind: "error" });
       return null;
     }
-    const ok = await confirm({ title: purgeTitle(list.length), body: purgeBody(list.length, skipped), confirmLabel: "Delete permanently", danger: true });
+    const ok = await confirm({ title: purgeTitle(list.length), body: purgeBody(list.length, skipped), confirmLabel: "Delete permanently", danger: true,
+      reason: { label: "Reason", required: true, placeholder: "Why is this being removed for good?" } });
     if (ok === null) return null;
     const failed: { name: string; message: string }[] = [];
     let done = 0;
     for (const g of list) {
-      try { await groups.purgeGroup(g.id); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
+      try { await groups.purgeGroup(g.id, ok); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
     }
     if (failed.length) toast(`${done ? `Deleted ${done} permanently. ` : ""}Could not delete ${failed.length}: ${failureSummary(failed)}`, { kind: "error" });
     else toast(done === 1 ? "Group deleted permanently" : `${done} groups deleted permanently`);
@@ -78,10 +79,11 @@ export function useDeleteTree() {
       confirmLabel: plan.needs_approval ? "Request deletion" : "Delete everything",
       danger: true,
       typeToConfirm: f.name,
+      reason: { label: "Reason", required: true, placeholder: "Why is this folder and everything in it being deleted?" },
     });
     if (ok === null) return null;
     try {
-      const res = await groups.deleteFolderRecursive(f.id);
+      const res = await groups.deleteFolderRecursive(f.id, ok);
       const out = treeOutcome(f.name, res);
       toast(out.message);
       return out.requested ? "requested" : "deleted";

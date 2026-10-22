@@ -2820,7 +2820,8 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
 - Purging and deleting a tree (a soft-deleted group still counts as held by its folder, so it blocks
   `DELETE /api/groups/folders/{id}`; `folder_not_empty` says how many of the groups are deleted). The UI lists
   deleted groups under **Show deleted** and offers Restore and **Delete permanently**.
-  - `POST /api/groups/{id}/purge` removes a deleted group's memberships, nesting and composite edges, privileges (on it and
+  - Who deleted what: a soft delete (`DELETE /api/groups/{id}`, optional body `{reason}`) stores `deleted_by_user_id`, `deleted_by_display` (the linked person's name and, for a tenant admin, "(tenant admin)"), `deleted_at`, `deleted_reason` and, for a recursive delete, `deleted_with_folder` on the group row; the group JSON carries `deleted_by`, `deleted_at`, `deleted_reason`, `deleted_with_folder` while it is deleted, and a restore clears them (the restore is audited with its actor). A purge and a recursive delete require `{reason}` in the body (`422 reason_required`); `groups.group.purged` and `groups.folder.deleted_recursive` carry the reason, the original deleter and the folder. The columns are in `0280_groups.sql` (SQLite databases made before get them at start) and `postgres/0641_group_deleted_by.sql`.
+  - `POST /api/groups/{id}/purge` `{reason}` removes a deleted group's memberships, nesting and composite edges, privileges (on it and
     held by it), rules, attribute assignments, attestation settings, aliases and levels, and its row. The audit ledger and
     the event log keep its history (`groups.group.purged`, event `group.purged`). Refused with `409 group_in_use` (and
     `groups`: the names) while another group has it as a member or composite factor, `group_referenced` while a loader's
