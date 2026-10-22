@@ -566,6 +566,9 @@ func (s *Service) SecondApprove(c *store.TenantTx, caseID string, by store.UserR
 	if err != nil {
 		return err
 	}
+	if err := refuseUnlinked(c, by); err != nil {
+		return err
+	}
 	switch {
 	case !in.Privileged:
 		return fail(CodeConflict, "the identity is not privileged; no second approver is needed")
@@ -662,6 +665,9 @@ func (s *Service) Claim(c *store.TenantTx, caseID string, by store.UserRef, now 
 	// it, and nobody runs a reset of their own identity
 	isRequester, err := requesterIs(c, hc, by.ID)
 	if err != nil {
+		return nil, err
+	}
+	if err := refuseUnlinked(c, by); err != nil {
 		return nil, err
 	}
 	switch {

@@ -251,6 +251,25 @@ func TestSponsorLeaver_TransfersOrEnds(t *testing.T) {
 	if s := e.get(a.ID); s.Status != store.SponsorActive || s.SponsorIdentityID != bob {
 		t.Errorf("a refused decision changed the sponsorship: %+v", s)
 	}
+	// the list's can_act agrees with the server's decision (#449)
+	openTask := e.tasks(store.LifecycleTaskFilter{Status: store.TaskOpen})[0]
+	for name, tc := range map[string]struct {
+		by   sponsorship.Actor
+		want bool
+	}{
+		"subject, linked approver": {actor("Bob", &bob, true), false}, "subject": {e.bob, false},
+		"unlinked approver": {actor("Unlinked", nil, true), false}, "unlinked, not an approver": {actor("Nobody", nil, false), false},
+		"linked approver": {e.admin, true}, "manager": {e.carol, true},
+	} {
+		var got bool
+		e.must(func(tx *store.TenantTx) (err error) {
+			got, err = guestlife.MayAct(tx, tc.by, openTask)
+			return err
+		})
+		if got != tc.want {
+			t.Errorf("MayAct(%s) = %v, want %v", name, got, tc.want)
+		}
+	}
 	// accepting moves the sponsorship, after a fresh policy check as the new sponsor
 	if err := e.resolve(e.carol, taskOf(a), guestlife.ActionAccept, day(1)); err != nil {
 		t.Fatal(err)
