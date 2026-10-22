@@ -295,6 +295,8 @@ func TestSourceLoosening(t *testing.T) {
 		{"a lower drop percent tightens", feed(20, true), feed(10, true), false},
 		{"empty check off loosens", feed(20, true), feed(20, false), true},
 		{"empty check on tightens", feed(20, false), feed(20, true), false},
+		{"an override looser than the category loosens", nil, ov("hold_all", 5000, 60), true},
+		{"an override with a looser burst in a longer window loosens", ov("hold_all", 5, 60), ov("hold_all", 50, 600), true},
 		{"default to 20 and on changes nothing", nil, feed(20, true), false},
 		{"default to a higher drop loosens", nil, feed(25, true), true},
 	}

@@ -3953,8 +3953,15 @@ under them (an approved held loader run is an approved override and is not count
 * **Settings.** `GET /api/admin/deletion-guard` (thresholds, window usage, hold expiry), `GET /api/admin/deletion-holds[?status=&category=]`,
   `GET /api/admin/deletion-holds/{id}`. Thresholds change through the admin change requests
   (`POST /api/admin/change-requests`, type `deletion_guard.update`, audited as `deletion_guard.policy_changed`): tightening
-  applies with one admin; loosening (a weaker mode, or a higher limit per minute of window at the tenant's current size)
-  needs a second admin and a step-up, like the other safety settings.
+  applies with one admin; loosening needs a second admin and a step-up, like the other safety settings. Loosening is judged
+  on what the guard lets through (#468): a weaker mode (`hold_all` > `hold_excess` > `off`, where a category never set counts
+  as `hold_all` for source-driven runs), a larger limit at the tenant's size or a larger one (count or percent, whatever the
+  window: 25/hour to 4200/week is loosening), or a higher limit per minute. A mixed change that loosens any field needs two.
+  Saving the displayed default as it is changes nothing and keeps the category unset, so source-driven runs still hold all.
+* **Contributors (#467).** A hold records every actor and run that added items (`reason.contributors`: user id, source, run id,
+  time, count); release or partial approval is refused (`403 same_actor`) to any of them and to the hold's creator. A later run
+  of the source that lists an item again withdraws it from the open hold (`deletion_guard.items_relisted`), and a flat-file
+  release skips accounts the latest upload lists.
 * **API answers.** A deleting route the guard held part of (delete or purge a group, delete a folder or a tree, remove a
   member, a members batch) answers **202** with its usual fields plus `{applied, held, hold_id, threshold, message}`
   ("Deleted 25 of 40: 15 held for approval (threshold 25 per hour)"). A recursive folder delete that was partly held keeps
@@ -3989,8 +3996,11 @@ under them (an approved held loader run is an approved override and is not count
   connection (below the setup steps), the group's Source tab (the loader), Admin → Contractor feeds → Edit (VMS source),
   and listed on Admin → Deletion guard. They change through the same admin change request, `deletion_guard.update`, with
   a `sources` payload (`{kind, source_id, category, mode, max_count, max_percent, window_minutes, feed_drop_percent,
-  feed_empty_check}` or `{..., remove: true}`); tightening takes one admin, loosening two (a weaker mode, a higher limit
-  per minute, a higher drop percent, the empty check off, or removing an override that was tighter than the category).
+  feed_empty_check}` or `{..., remove: true}`); tightening takes one admin, loosening two (judged as for categories, an
+  override looser than what applies now, a higher drop percent, the empty check off, or removing an override that was tighter
+  than the category). A flat-file upload whose removals are held answers `201` with `status: held|partially_applied`,
+  `applied`, `held`, `hold_id` and `message` (and `upload.removed` counts the applied removals only, #470); the folder
+  delete plan's `folders` counts the folder itself, as the delete reports it.
   `GET /api/admin/deletion-guard/sources/{kind}/{id}` (`admin.read`) returns one source's categories with the category's
   setting, the override, what applies, the last good count and window use; `GET /api/admin/deletion-guard` adds `sources`.
   Flat-file imports and a result that names no connection use the tenant's settings. A VMS feed's leavers are judged under

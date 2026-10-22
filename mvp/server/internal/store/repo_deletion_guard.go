@@ -115,6 +115,8 @@ var (
 		WHERE h.tenant_id = @tenant AND h.category = @category AND h.correlation_id = @correlation_id AND h.status = 'held'`)
 	delHoldBump = tq("deletion_holds.bump", `
 		UPDATE deletion_holds SET item_count = item_count + @n WHERE tenant_id = @tenant AND id = @id AND status = 'held'`)
+	delHoldReason = tq("deletion_holds.reason", `
+		UPDATE deletion_holds SET reason = @reason WHERE tenant_id = @tenant AND id = @id AND status = 'held'`)
 	delHoldDue = tq("deletion_holds.due", `
 		SELECT `+delHoldCols+` FROM deletion_holds h
 		WHERE h.tenant_id = @tenant AND h.status = 'held' AND h.expires_at <= @now ORDER BY h.expires_at, h.id`)
@@ -383,4 +385,10 @@ func (tx *TenantTx) AppendDeletionHoldItems(h *DeletionHold, items []DeletionHol
 	}
 	h.ItemCount += len(items)
 	return nil
+}
+
+// SetDeletionHoldReason replaces the reason JSON of an open hold (a later run extended it).
+func (tx *TenantTx) SetDeletionHoldReason(id, reason string) error {
+	_, err := tx.exec(delHoldReason, sql.Named("id", id), sql.Named("reason", reason))
+	return err
 }

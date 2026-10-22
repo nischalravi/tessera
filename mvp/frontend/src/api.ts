@@ -2494,6 +2494,8 @@ export interface FlatUpload {
   rows_rejected: number;
   added: number;
   removed: number;
+  held?: number;
+  hold_id?: string;
   changed: number;
   unchanged: number;
   tasks_confirmed: number;

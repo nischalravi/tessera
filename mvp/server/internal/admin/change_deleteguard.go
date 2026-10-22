@@ -104,7 +104,7 @@ func planDeletionGuard(e *env, v *deletionGuardPayload) (plan, error) {
 		if err != nil {
 			return plan{}, err
 		}
-		if deleteguard.Loosens(have[pp.Category], next, pop) {
+		if !deleteguard.IsNoop(have[pp.Category], next) && deleteguard.Loosens(have[pp.Category], next, pop) {
 			loosens = true
 		}
 	}
@@ -151,12 +151,16 @@ func applyDeletionGuard(e *env, ch *store.AdminChange, v *deletionGuardPayload) 
 		if err != nil {
 			return err
 		}
-		if err := deleteguard.Set(e.tx, next, &by, e.now); err != nil {
-			return err
+		// the displayed default saved as it is stays unset: a stored row would end the hold_all that
+		// source-driven runs get while the tenant has not set the category
+		if !deleteguard.IsNoop(old, next) {
+			if err := deleteguard.Set(e.tx, next, &by, e.now); err != nil {
+				return err
+			}
 		}
 		detail = append(detail, ojson.KV{Key: pp.Category, Value: ojson.Object{
 			{Key: "from", Value: describePolicy(old)}, {Key: "to", Value: describePolicy(next)},
-			{Key: "loosened", Value: deleteguard.Loosens(old, next, pop)}}})
+			{Key: "loosened", Value: !deleteguard.IsNoop(old, next) && deleteguard.Loosens(old, next, pop)}}})
 	}
 	for _, sp := range v.Sources {
 		old, err := deleteguard.ResolveFor(e.tx, deleteguard.SourceRef{Kind: sp.Kind, ID: sp.SourceID}, sp.Category, true)

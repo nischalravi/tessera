@@ -411,7 +411,11 @@ func TestLoosens(t *testing.T) {
 		{"same", func(p *deleteguard.Policy) {}, false},
 		{"lower count", func(p *deleteguard.Policy) { p.MaxCount = ten(10) }, false},
 		{"higher count", func(p *deleteguard.Policy) { p.MaxCount = ten(26) }, true},
-		{"same rate, longer window", func(p *deleteguard.Policy) { p.MaxCount = ten(50); p.WindowMinutes = 120 }, false},
+		{"same rate, longer window is a bigger batch", func(p *deleteguard.Policy) { p.MaxCount = ten(50); p.WindowMinutes = 120 }, true},
+		{"25/hour to 4200/week", func(p *deleteguard.Policy) { p.MaxCount = ten(4200); p.WindowMinutes = 7 * 24 * 60 }, true},
+		{"same count, longer window", func(p *deleteguard.Policy) { p.WindowMinutes = 120 }, false},
+		{"percent raised on a count and percent policy", func(p *deleteguard.Policy) { p.MaxCount = ten(5000); p.MaxPercent = &pct }, true},
+		{"mixed: count lower, mode weaker", func(p *deleteguard.Policy) { p.MaxCount = ten(5); p.Mode = deleteguard.ModeOff }, true},
 		{"higher rate, shorter window", func(p *deleteguard.Policy) { p.WindowMinutes = 30 }, true},
 		{"count swapped for a percent that allows more", func(p *deleteguard.Policy) { p.MaxCount = nil; p.MaxPercent = &pct }, true},
 		{"percent added to a count", func(p *deleteguard.Policy) { p.MaxPercent = &pct }, false},
@@ -446,4 +450,138 @@ func TestPolicyCheck(t *testing.T) {
 			t.Errorf("case %d accepted: %+v", i, p)
 		}
 	}
+}
+
+func TestLoosensPercentAtALargerPopulationAndTheSourceDrivenDefault(t *testing.T) {
+	two, five := 2.0, 5.0
+	cur := deleteguard.Policy{Category: "members", MaxPercent: &two, WindowMinutes: 60, Mode: deleteguard.ModeHoldExcess}
+	next := cur
+	next.MaxPercent = &five
+	if !deleteguard.Loosens(cur, next, 1000) {
+		t.Error("a higher percent loosens")
+	}
+	// the displayed default saved as it is is a no-op that stays unset; any other save of a never-set
+	// category with hold_excess weakens the hold_all its source-driven runs get
+	def := deleteguard.Defaults()[deleteguard.CatGroups]
+	same := def
+	same.Default = false
+	if !deleteguard.IsNoop(def, same) {
+		t.Error("the default saved as it is is a no-op")
+	}
+	tighter := same
+	tighter.MaxCount = ten(5)
+	if deleteguard.IsNoop(def, tighter) || !deleteguard.Loosens(def, tighter, 100) {
+		t.Error("a tighter count with hold_excess weakens the source-driven mode and needs two admins")
+	}
+	tighter.Mode = deleteguard.ModeHoldAll
+	if deleteguard.Loosens(def, tighter, 100) {
+		t.Error("a tighter count with hold_all is a tightening")
+	}
+}
+
+// Two people's runs join one source hold: the hold names both, and neither may release it (#467).
+func TestEveryContributorOfAHoldIsRefusedAtRelease(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	setPolicy(t, f, f.A, deleteguard.Policy{Category: deleteguard.CatGroups, MaxCount: ten(0), WindowMinutes: 60, Mode: deleteguard.ModeHoldAll})
+	var id string
+	for i, actor := range []string{"pat", "ivan"} {
+		in(t, f, f.A, func(tx *store.TenantTx) error {
+			d, err := deleteguard.Admit(tx, now, deleteguard.Request{Category: deleteguard.CatGroups, Items: items(3, fmt.Sprintf("u%d-", i)),
+				Actor: actor, Source: deleteguard.SourceConnector, SourceID: "sys", Correlation: "flatfile:sys", SourceDriven: true,
+				RunID: fmt.Sprintf("run-%d", i), NewCount: 10 - i, PrevCount: 20, Sanity: []string{fmt.Sprintf("feed %d", i)}})
+			if id != "" && d.HoldID != id {
+				t.Errorf("run %d opened another hold", i)
+			}
+			id = d.HoldID
+			return err
+		})
+	}
+	in(t, f, f.A, func(tx *store.TenantTx) error {
+		h, err := deleteguard.Load(tx, now, id)
+		if err != nil {
+			return err
+		}
+		cs := deleteguard.Contributors(h.DeletionHold)
+		if len(cs) != 2 || cs[0].Actor != "pat" || cs[1].Actor != "ivan" || cs[1].RunID != "run-1" || cs[1].Added != 3 {
+			t.Errorf("contributors %+v", cs)
+		}
+		if len(h.Items) != 6 || h.ItemCount != 6 {
+			t.Errorf("items %d", len(h.Items))
+		}
+		return nil
+	})
+	ap := deleteguard.Appliers{"group_delete": func(*store.TenantTx, time.Time, *store.DeletionHoldItem) (string, string, error) {
+		return deleteguard.ItemReleased, "", nil
+	}}
+	for _, who := range []string{"pat", "ivan"} {
+		var ge *deleteguard.Error
+		if _, err := release(t, f, id, who, nil, ap); !errors.As(err, &ge) || ge.Code != "same_actor" {
+			t.Errorf("%s released: %v", who, err)
+		}
+		if _, err := release(t, f, id, who, []int{0}, ap); !errors.As(err, &ge) || ge.Code != "same_actor" {
+			t.Errorf("%s partially released: %v", who, err)
+		}
+	}
+	if res, err := release(t, f, id, "carol", nil, ap); err != nil || res.Released != 6 {
+		t.Errorf("a third admin: %+v %v", res, err)
+	}
+}
+
+// A corrected feed that lists items again withdraws them from the open hold; a hold left empty is closed.
+func TestRelistWithdrawsItemsALaterFeedListsAgain(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	setPolicy(t, f, f.A, deleteguard.Policy{Category: deleteguard.CatGroups, MaxCount: ten(0), WindowMinutes: 60, Mode: deleteguard.ModeHoldAll})
+	var id string
+	in(t, f, f.A, func(tx *store.TenantTx) error {
+		d, err := deleteguard.Admit(tx, now, deleteguard.Request{Category: deleteguard.CatGroups, Items: items(4, "g"), Actor: "pat",
+			Source: deleteguard.SourceConnector, SourceID: "sys", Correlation: "c", SourceDriven: true})
+		id = d.HoldID
+		return err
+	})
+	relist := func(refs ...string) (n int) {
+		in(t, f, f.A, func(tx *store.TenantTx) (err error) {
+			n, err = deleteguard.Relist(tx, now, deleteguard.CatGroups, "c", func(it *store.DeletionHoldItem) bool {
+				for _, r := range refs {
+					if it.Ref == r {
+						return true
+					}
+				}
+				return false
+			})
+			return err
+		})
+		return n
+	}
+	if n := relist("g000", "g001"); n != 2 {
+		t.Fatalf("relisted %d", n)
+	}
+	var applied []string
+	ap := deleteguard.Appliers{"group_delete": func(_ *store.TenantTx, _ time.Time, it *store.DeletionHoldItem) (string, string, error) {
+		applied = append(applied, it.Ref)
+		return deleteguard.ItemReleased, "", nil
+	}}
+	res, err := release(t, f, id, "carol", nil, ap)
+	if err != nil || res.Released != 2 || fmt.Sprint(applied) != "[g002 g003]" {
+		t.Fatalf("release after a corrected feed: %+v %v applied %v", res, err, applied)
+	}
+	// a hold whose items are all listed again is closed
+	in(t, f, f.A, func(tx *store.TenantTx) error {
+		d, err := deleteguard.Admit(tx, now, deleteguard.Request{Category: deleteguard.CatGroups, Items: items(1, "z"), Actor: "pat",
+			Source: deleteguard.SourceConnector, SourceID: "sys", Correlation: "c", SourceDriven: true})
+		id = d.HoldID
+		return err
+	})
+	if n := relist("z000"); n != 1 {
+		t.Fatalf("relisted %d", n)
+	}
+	in(t, f, f.A, func(tx *store.TenantTx) error {
+		h, err := deleteguard.Load(tx, now, id)
+		if err != nil {
+			return err
+		}
+		if h.Status != "discarded" {
+			t.Errorf("hold %s", h.Status)
+		}
+		return nil
+	})
 }

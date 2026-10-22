@@ -111,7 +111,7 @@ func TestFlatfileAPI_MappingUploadHistoryAndTasks(t *testing.T) {
 	// a re-upload with changes: delta and history
 	rec = e.upload(e.pa, "hr-app", "accounts", "UserID,Login,Mail,EmpNo,State\nu1,alice.a,alice@t.example,,active\nu2,bob.renamed,,bob,active\nu4,dan.d,,,active\n")
 	up := upMap(ffDecode(t, rec))
-	if rec.Code != 201 || up["added"] != float64(1) || up["removed"] != float64(1) || up["changed"] != float64(1) || up["unchanged"] != float64(1) {
+	if rec.Code != 201 || up["added"] != float64(1) || up["removed"] != float64(0) || up["held"] != float64(1) || up["changed"] != float64(1) || up["unchanged"] != float64(1) {
 		t.Fatalf("re-upload: %d %s", rec.Code, rec.Body)
 	}
 	rec = e.json(e.viewer, "GET", "/api/flatfile/uploads?system=hr-app", "")
@@ -380,5 +380,87 @@ func TestFlatfileAPI_CrossTenant(t *testing.T) {
 	// B closing A's task id: not found (a UUID that is not B's)
 	if rec := do(bPA, "POST", "/api/flatfile/tasks/00000000-0000-4000-8000-00000000dead/close", "application/json", `{"reason":"cleaning up the list"}`); rec.Code != 404 {
 		t.Errorf("close unknown task: %d", rec.Code)
+	}
+}
+
+func ffAccountsN(from, to int) string {
+	var b strings.Builder
+	b.WriteString("UserID,Login,Mail,EmpNo,State\n")
+	for i := from; i <= to; i++ {
+		fmt.Fprintf(&b, "x%02d,user%02d,,,active\n", i, i)
+	}
+	return b.String()
+}
+
+// A truncated upload is held by the deletion guard: the answer and the history say so (#470), the second
+// uploader who extends the hold may not release it, and a corrected feed withdraws the held drops (#467).
+func TestFlatfileAPI_HeldRemovalsAreReportedAndEveryUploaderIsRefused(t *testing.T) {
+	e := newFFEnv(t)
+	e.setup()
+	both := func(email string) authtest.Login {
+		return signIn(t, e.f.DB, e.f.B.ID, authtest.User{Email: email, Roles: []auth.Role{auth.RoleTenantAdmin, auth.RolePolicyAdmin}}, authtest.Phr, storetest.Now)
+	}
+	first, second := both("first@b.example"), both("second@b.example")
+	if rec := e.upload(first, "hr-app", "accounts", ffAccountsN(1, 20)); rec.Code != 201 {
+		t.Fatalf("first upload: %d %s", rec.Code, rec.Body)
+	}
+	rec := e.upload(first, "hr-app", "accounts", ffAccountsN(1, 10))
+	out := ffDecode(t, rec)
+	up := upMap(out)
+	if rec.Code != 201 || out["status"] != "held" || out["applied"] != float64(0) || out["held"] != float64(10) || out["hold_id"] == "" ||
+		up["removed"] != float64(0) || up["held"] != float64(10) || up["hold_id"] != out["hold_id"] {
+		t.Fatalf("truncated upload: %d %s", rec.Code, rec.Body)
+	}
+	holdID := out["hold_id"].(string)
+	// the history says the same
+	hist := ffDecode(t, e.json(e.viewer, "GET", "/api/flatfile/uploads/"+up["id"].(string), ""))
+	if upMap(map[string]any{"upload": hist})["removed"] != float64(0) {
+		t.Errorf("history removed = %v", hist["removed"])
+	}
+	// a second admin uploads a further truncated file: his removals join the hold
+	out = ffDecode(t, e.upload(second, "hr-app", "accounts", ffAccountsN(1, 1)))
+	if out["hold_id"] != holdID || out["held"] != float64(9) {
+		t.Fatalf("second upload: %v", out)
+	}
+	approve := "/api/admin/deletion-holds/" + holdID + "/approve"
+	for name, l := range map[string]authtest.Login{"first uploader": first, "second uploader": second} {
+		if rec := e.json(l, "POST", approve, ""); rec.Code != 403 || ffDecode(t, rec)["error"] != "same_actor" {
+			t.Errorf("%s released the hold: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	// a third admin may
+	if rec := e.json(e.admin, "POST", approve, ""); rec.Code != 200 {
+		t.Fatalf("a third admin: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A corrected feed withdraws the drops an earlier truncated upload had held: releasing the old hold then
+// disables nobody.
+func TestFlatfileAPI_ACorrectedFeedWithdrawsHeldRemovals(t *testing.T) {
+	e := newFFEnv(t)
+	e.setup()
+	if rec := e.upload(e.pa, "hr-app", "accounts", ffAccountsN(1, 20)); rec.Code != 201 {
+		t.Fatalf("first upload: %d %s", rec.Code, rec.Body)
+	}
+	holdID, _ := ffDecode(t, e.upload(e.pa, "hr-app", "accounts", ffAccountsN(1, 10)))["hold_id"].(string)
+	if holdID == "" {
+		t.Fatal("the truncated upload was not held")
+	}
+	approve := "/api/admin/deletion-holds/" + holdID + "/approve"
+	// the feed is corrected: every account is listed again, so the hold has nothing left to release
+	if rec := e.upload(e.pa, "hr-app", "accounts", ffAccountsN(1, 20)); rec.Code != 201 {
+		t.Fatalf("corrected upload: %d %s", rec.Code, rec.Body)
+	}
+	if rec := e.json(e.admin, "POST", approve, ""); rec.Code != 409 {
+		t.Errorf("release after the correction: %d %s", rec.Code, rec.Body)
+	}
+	if err := e.f.DB.InTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+		a, err := tx.AccountByXID("hr-app", "x05")
+		if err == nil && a.Status != "active" {
+			t.Errorf("a re-listed account is %s", a.Status)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

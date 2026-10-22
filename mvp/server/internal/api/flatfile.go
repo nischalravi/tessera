@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -222,6 +223,15 @@ func (s *Server) uploadFlatFile(_ http.ResponseWriter, r *http.Request, p *param
 	if res.Upload.Status == store.FlatUploadRejected {
 		// 422, but the transaction commits: the rejected upload is history
 		return statusBody{http.StatusUnprocessableEntity, out}, nil
+	}
+	if up := res.Upload; up.Held > 0 {
+		// what happened: the removals the deletion guard held are not applied (as the groups routes answer)
+		out["status"] = "partially_applied"
+		if up.Removed == 0 {
+			out["status"] = "held"
+		}
+		out["applied"], out["held"], out["hold_id"] = up.Removed, up.Held, up.HoldID
+		out["message"] = fmt.Sprintf("Removed %d of %d: %d held for approval", up.Removed, up.Removed+up.Held, up.Held)
 	}
 	return statusBody{http.StatusCreated, out}, nil
 }

@@ -134,6 +134,23 @@ func vetIdentities(c *store.TenantTx, now time.Time, ref deleteguard.SourceRef, 
 		records += len(r.Identities)
 	}
 	var items []deleteguard.Item
+	active := map[string]bool{}
+	for _, r := range results {
+		for _, rec := range r.Identities {
+			if defaultStr(rec.Status, "active") == "active" {
+				active[rec.ExternalID] = true
+			}
+		}
+	}
+	if len(active) > 0 {
+		// identities the feed lists as active are not being ended: withdraw their earlier held items
+		if _, err := deleteguard.Relist(c, now, deleteguard.CatIdentities, suffix("ingest:identities", ref.ID), func(it *store.DeletionHoldItem) bool {
+			var s identitySnap
+			return it.Kind == ItemIdentityStatus && json.Unmarshal([]byte(it.Ref), &s) == nil && active[s.ExternalID]
+		}); err != nil {
+			return err
+		}
+	}
 	for _, r := range results {
 		for _, rec := range r.Identities {
 			if defaultStr(rec.Status, "active") == "active" || seen[rec.ExternalID] {
@@ -212,6 +229,27 @@ func vetAccounts(c *store.TenantTx, now time.Time, ref deleteguard.SourceRef, re
 	}
 	var items []deleteguard.Item
 	systems := map[string]bool{}
+	// accounts the feed lists as active are not being disabled: withdraw their earlier held items
+	listedActive, corrs := map[[2]string]bool{}, map[string]bool{}
+	for _, r := range results {
+		for _, rec := range r.Accounts {
+			if defaultStr(rec.Status, "active") != "disabled" {
+				listedActive[[2]string{rec.System, rec.ExternalID}] = true
+			}
+			corrs["ingest:accounts:"+rec.System] = true
+		}
+	}
+	if ref.ID != "" {
+		corrs = map[string]bool{"ingest:accounts:" + ref.ID: true}
+	}
+	for corr := range corrs {
+		if _, err := deleteguard.Relist(c, now, deleteguard.CatAccounts, corr, func(it *store.DeletionHoldItem) bool {
+			var k [2]string
+			return it.Kind == ItemAccountStatus && json.Unmarshal([]byte(it.Ref), &k) == nil && listedActive[k]
+		}); err != nil {
+			return err
+		}
+	}
 	for _, r := range results {
 		for _, rec := range r.Accounts {
 			k := [2]string{rec.System, rec.ExternalID}
