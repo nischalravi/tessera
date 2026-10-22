@@ -399,6 +399,9 @@ func (s *Server) listVmsRecords(_ http.ResponseWriter, r *http.Request, p *param
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
+	if limit < 1 || limit > 500 { // bounded before the narrowing conversion
+		return nil, badRequest("invalid_limit", "limit is between 1 and 500")
+	}
 	c := store.TxFrom(r.Context())
 	evs, err := c.IntakeEventsByChannel(store.ChannelVMS, int(limit))
 	if err != nil {

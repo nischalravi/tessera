@@ -169,7 +169,11 @@ func (f *Fake) list(w http.ResponseWriter, r *http.Request) {
 			sel = append(sel, x)
 		}
 	}
-	page, _ := strconv.Atoi(q.Get("page"))
+	page, err := strconv.Atoi(q.Get("page"))
+	if q.Get("page") != "" && (err != nil || page < 0 || page > 10000) {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 	size := f.PageSize
 	if size <= 0 {
 		size = 2

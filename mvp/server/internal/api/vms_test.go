@@ -160,8 +160,10 @@ func TestVmsAPI(t *testing.T) {
 	if reasons["review"] != "sponsor_required" || reasons["created"] != "" {
 		t.Errorf("outcomes = %v", reasons)
 	}
-	if rec := reqDo(h, admin, "GET", "/api/vms/records?limit=0", ""); rec.Code != 422 {
-		t.Errorf("limit 0: %d", rec.Code)
+	for _, l := range []string{"0", "501", "-1", "9223372036854775807", "99999999999999999999", "x"} {
+		if rec := reqDo(h, admin, "GET", "/api/vms/records?limit="+l, ""); rec.Code != 422 {
+			t.Errorf("limit %s: %d", l, rec.Code)
+		}
 	}
 	if rec := reqDo(h, adminA, "GET", "/api/vms/records", ""); rec.Code != 200 || strings.Contains(rec.Body.String(), `"fieldglass"`) {
 		t.Errorf("tenant A records: %d %s", rec.Code, rec.Body)
