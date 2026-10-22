@@ -1,6 +1,7 @@
 package deleteguard
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -199,6 +200,18 @@ func AdmitFrom(tx *store.TenantTx, now time.Time, category, source, sourceID, co
 	return AdmitWith(tx, now, Request{Category: category, Items: items, Source: source, SourceID: sourceID, Correlation: correlation})
 }
 
+type requesterKey struct{}
+
+// WithRequester names the platform user who queued the work a worker is running (a queued sync), so
+// the holds it makes record them as a contributor and they cannot release them (#487). A run nobody
+// queued (a schedule) carries none: its contributor has no actor and exempts no one.
+func WithRequester(ctx context.Context, userID string) context.Context {
+	if userID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, requesterKey{}, userID)
+}
+
 // AdmitWith is AdmitFrom for a request built by the caller (a source-driven run with feed checks).
 func AdmitWith(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
 	if ac, ok := store.AuditContextFrom(tx.Context()); ok {
@@ -209,6 +222,11 @@ func AdmitWith(tx *store.TenantTx, now time.Time, req Request) (*Decision, error
 			}
 		} else if req.SourceID == "" && ac.Actor.Display != nil {
 			req.SourceID = *ac.Actor.Display
+		}
+	}
+	if req.Actor == "" {
+		if id, ok := tx.Context().Value(requesterKey{}).(string); ok {
+			req.Actor = id
 		}
 	}
 	return Admit(tx, now, req)
@@ -278,12 +296,38 @@ func Admit(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
 	if d.Limit != nil {
 		room = max(*d.Limit-used, 0)
 	}
+	holdAll := pol.Mode == ModeHoldAll
+	if res.Overridden {
+		// A source's own threshold bounds the source; it does not lift it out of the tenant-wide
+		// budget (#485). Every deletion also counts against the category's limit, so N sources with
+		// identical overrides cannot apply N times what the category allows in one window. An override
+		// that loosens the category took two admins to set and is its own budget by design.
+		cat := Resolve(tp, nil, req.SourceDriven)
+		catPop, err := tx.DeletionPopulation(req.Category)
+		if err != nil {
+			return nil, err
+		}
+		if cat.Mode != ModeOff && !Loosens(cat.Policy, pol, catPop) {
+			catUsed, err := tx.DeletionsApplied(req.Category, now.Add(-cat.Window()))
+			if err != nil {
+				return nil, err
+			}
+			if cl := cat.Limit(catPop); cl != nil {
+				if catRoom := max(*cl-catUsed, 0); catRoom < room {
+					room, d.Limit, d.Used, d.WindowMinutes, d.Mode = catRoom, cl, catUsed, cat.WindowMinutes, cat.Mode
+					holdAll = cat.Mode == ModeHoldAll
+				} else if len(items) > catRoom && cat.Mode == ModeHoldAll {
+					holdAll = true
+				}
+			}
+		}
+	}
 	switch {
 	case len(req.Sanity) > 0:
 		d.Held = items // a broken feed: everything it would remove is held, whatever the room
 	case len(items) <= room:
 		d.Applied = items
-	case pol.Mode == ModeHoldAll:
+	case holdAll:
 		d.Held = items
 	default:
 		d.Applied, d.Held = items[:room], items[room:]
@@ -355,6 +399,46 @@ func contributorOf(tx *store.TenantTx, now time.Time, req Request, added int) Co
 	return Contributor{Actor: req.Actor, Source: orSource(req.Source), SourceID: req.SourceID, RunID: run, At: now.UTC(), Added: added}
 }
 
+// MaxContributors is how many entries a hold keeps before they are collapsed to one per actor and source.
+const MaxContributors = 100
+
+// addContributor records c once per (actor, source, source id, run): a run that extends a hold again
+// adds to its entry, so a hold's reason does not grow with the items or calls of a run (#486). Past
+// MaxContributors the run ids are dropped and entries merge per actor and source; the actors, which a
+// release is refused to, are never dropped.
+func addContributor(list []Contributor, c Contributor) []Contributor {
+	for i := range list {
+		if o := &list[i]; o.Actor == c.Actor && o.Source == c.Source && o.SourceID == c.SourceID && o.RunID == c.RunID {
+			o.Added += c.Added
+			o.At = c.At
+			return list
+		}
+	}
+	list = append(list, c)
+	if len(list) <= MaxContributors {
+		return list
+	}
+	out := list[:0:0]
+	for _, x := range list {
+		x.RunID = ""
+		merged := false
+		for i := range out {
+			if o := &out[i]; o.Actor == x.Actor && o.Source == x.Source && o.SourceID == x.SourceID {
+				o.Added += x.Added
+				if x.At.After(o.At) {
+					o.At = x.At
+				}
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
 // Contributors reads them back from a hold's reason; a hold from before they were kept has none and
 // is judged by its actor alone.
 func Contributors(h *store.DeletionHold) []Contributor {
@@ -408,7 +492,7 @@ func hold(tx *store.TenantTx, now time.Time, req Request, res Resolved, ref Sour
 		// the hold now also describes this run: who added items, and the sanity counts the approver sees
 		var rs reason
 		if json.Unmarshal([]byte(h.Reason), &rs) == nil {
-			rs.Contributors = append(rs.Contributors, contributorOf(tx, now, req, len(items)))
+			rs.Contributors = addContributor(rs.Contributors, contributorOf(tx, now, req, len(items)))
 			rs.Attempted += d.Attempted
 			rs.Applied += len(d.Applied)
 			if req.NewCount > 0 || req.PrevCount > 0 {

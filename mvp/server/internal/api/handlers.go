@@ -358,6 +358,9 @@ func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, p *param
 		if mode != nil {
 			payload.Mode = *mode
 		}
+		if pr := principal(r); pr.UserID != nil {
+			payload.RequestedBy = pr.UserID.String() // the worker's holds name who queued the run (#487)
+		}
 		raw, err := json.Marshal(payload)
 		if err != nil {
 			return nil, err

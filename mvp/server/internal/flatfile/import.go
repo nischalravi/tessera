@@ -201,19 +201,25 @@ func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
 		feed.now = len(accounts)
 		feed.sanity = deleteguard.FeedChecks(feed.prev, feed.now, "")
 	}
-	for _, r := range delta.Removed {
-		if in.Kind == KindAccounts {
-			var hid string
-			hid, err = dropAccount(c, now, in.System, r.Key, feed)
-			if hid != "" {
-				up.Held++
-				up.HoldID = hid
-			}
-		} else {
-			err = dropEntitlement(c, now, in.System, r.Key)
+	if in.Kind == KindAccounts {
+		// one admission for the whole upload: a hold of n drops costs n rows, not n rewrites of its reason (#486)
+		keys := make([]string, len(delta.Removed))
+		for i, r := range delta.Removed {
+			keys[i] = r.Key
 		}
+		hid, held, err := dropAccounts(c, now, in.System, keys, feed)
 		if err != nil {
 			return nil, err
+		}
+		if held > 0 {
+			up.Held += held
+			up.HoldID = hid
+		}
+	} else {
+		for _, r := range delta.Removed {
+			if err := dropEntitlement(c, now, in.System, r.Key); err != nil {
+				return nil, err
+			}
 		}
 	}
 	for _, r := range cascade {
@@ -373,42 +379,57 @@ func discovery(m *Mapping, accounts, ents []Record, held map[string]bool) *conne
 	return res
 }
 
-// dropAccount handles an account the file no longer lists: it is disabled,
-// and the grants an import made for it go. It is not deleted: reviews and the
-// audit trail still refer to it.
 // feedCheck is what Apply knows about the file as a feed: record counts and why it looks broken.
 type feedCheck struct {
 	prev, now int
 	sanity    []string
 }
 
-// It answers the id of the held deletion when the guard held the drop ("" when it was applied or moot).
-func dropAccount(c *store.TenantTx, now time.Time, system, xid string, feed feedCheck) (string, error) {
-	a, err := c.AccountByXID(system, xid)
-	if errors.Is(err, store.ErrNotFound) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	if a.Status == "active" {
-		// the deletion guard (internal/deleteguard): an import that drops more accounts than the
-		// threshold allows holds the rest; they stay as they are until a second admin releases them
+// dropAccounts handles the accounts the file no longer lists: each is disabled, and the grants an import
+// made for it go. It is not deleted: reviews and the audit trail still refer to it. The active ones are
+// vetted by the guard as one batch. It answers the id of the hold and how many drops it held.
+func dropAccounts(c *store.TenantTx, now time.Time, system string, xids []string, feed feedCheck) (holdID string, held int, err error) {
+	var items []deleteguard.Item
+	active := make(map[string]*store.Account, len(xids))
+	for _, xid := range xids {
+		a, err := c.AccountByXID(system, xid)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return "", 0, err
+		}
+		if a.Status != "active" {
+			if err := disableAndDropEdges(c, now, a); err != nil {
+				return "", 0, err
+			}
+			continue
+		}
 		ref, err := json.Marshal([2]string{system, xid})
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
-		d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatAccounts, Source: deleteguard.SourceConnector,
-			SourceID: system, Correlation: "flatfile:" + system, SourceDriven: true, Sanity: feed.sanity, PrevCount: feed.prev, NewCount: feed.now,
-			Items: []deleteguard.Item{{Kind: ItemDropAccount, Ref: string(ref), Label: fmt.Sprintf("account %s in %s dropped by an import", a.Username, system)}}})
-		if err != nil {
-			return "", err
-		}
-		if len(d.Held) > 0 {
-			return d.HoldID, nil
+		active[string(ref)] = a
+		items = append(items, deleteguard.Item{Kind: ItemDropAccount, Ref: string(ref),
+			Label: fmt.Sprintf("account %s in %s dropped by an import", a.Username, system)})
+	}
+	if len(items) == 0 {
+		return "", 0, nil
+	}
+	// the deletion guard (internal/deleteguard): an import that drops more accounts than the
+	// threshold allows holds the rest; they stay as they are until a second admin releases them
+	d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatAccounts, Source: deleteguard.SourceConnector,
+		SourceID: system, Correlation: "flatfile:" + system, SourceDriven: true, Sanity: feed.sanity, PrevCount: feed.prev, NewCount: feed.now,
+		Items: items})
+	if err != nil {
+		return "", 0, err
+	}
+	for _, it := range d.Applied {
+		if err := disableAndDropEdges(c, now, active[it.Ref]); err != nil {
+			return "", 0, err
 		}
 	}
-	return "", disableAndDropEdges(c, now, a)
+	return d.HoldID, len(d.Held), nil
 }
 
 // ItemDropAccount is the kind of a held drop of an account the file no longer lists.

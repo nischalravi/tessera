@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
@@ -101,4 +102,34 @@ func TestApply_TruncatedFileHoldsEveryRemoval(t *testing.T) {
 			t.Errorf("g%02d is %s after the release", i, st)
 		}
 	}
+}
+
+// A truncated feed from a large app is held in one batch: 5000 drops do not rewrite the hold's reason
+// once each (#486), and the hold names the run once.
+func TestApply_LargeTruncatedFeedIsHeldInOneBatch(t *testing.T) {
+	e := newEnv(t)
+	var v1, v2 strings.Builder
+	v1.WriteString(accountsHead)
+	v2.WriteString(accountsHead)
+	for i := 0; i < 5000; i++ {
+		fmt.Fprintf(&v1, "g%04d,login%04d,,,active\n", i, i)
+	}
+	v2.WriteString("g0000,login0000,,,active\n")
+	e.mustApplied(e.accounts(v1.String()))
+	start := time.Now()
+	e.mustApplied(e.accounts(v2.String()))
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("holding 4999 drops took %s", d)
+	}
+	e.tx(func(c *store.TenantTx) error {
+		hs, err := c.DeletionHolds("held", deleteguard.CatAccounts, 10, 0)
+		if err != nil || len(hs) != 1 || hs[0].ItemCount != 4999 {
+			t.Fatalf("holds %+v %v", hs, err)
+		}
+		cs := deleteguard.Contributors(hs[0])
+		if len(cs) != 1 || cs[0].Added != 4999 {
+			t.Errorf("contributors = %+v, want one entry for the run", cs)
+		}
+		return nil
+	})
 }

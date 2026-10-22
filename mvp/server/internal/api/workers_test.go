@@ -15,6 +15,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
+	"github.com/nischalravi/tessera/mvp/server/internal/worker"
 )
 
 // drain runs the server's queue until its work is done (a few ticks: the
@@ -126,8 +127,9 @@ func TestAsyncSyncRunsOnAWorker(t *testing.T) {
 		queued, err = c.QueueJobs(store.QueueJobFilter{Kind: jobs.ConnectorSync})
 		return err
 	})
-	if len(queued) != 1 || queued[0].Payload != `{"mode":"full"}` {
-		t.Fatalf("queued jobs: %+v", queued)
+	var pl worker.SyncPayload
+	if len(queued) != 1 || json.Unmarshal([]byte(queued[0].Payload), &pl) != nil || pl.Mode != "full" || pl.RequestedBy == "" {
+		t.Fatalf("queued jobs: %+v (payload names the user who queued it, #487)", queued)
 	}
 
 	// the queue (here the in-process one, in production a `tessera worker`) runs it

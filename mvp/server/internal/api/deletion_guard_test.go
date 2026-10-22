@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -453,5 +455,66 @@ func TestDeletionGuardAPI_LooseningUsesTheEffectiveSettings(t *testing.T) {
 	// a category change that is looser in one field and tighter in another still needs two
 	if ch := e.admin.call("POST", "/api/admin/change-requests", pol("groups", 5, 60, "hold_excess"), 201); ch["two_person"] != true {
 		t.Errorf("mixed change: %v", ch)
+	}
+}
+
+// swappableFeed is a connector whose next read the test chooses.
+type swappableFeed struct {
+	connectors.Connector
+	res atomic.Pointer[connectors.DiscoveryResult]
+}
+
+func (s *swappableFeed) System() string { return "hr" }
+func (s *swappableFeed) Discover(context.Context) (*connectors.DiscoveryResult, error) {
+	return s.res.Load(), nil
+}
+
+func hrFeed(n int, ended ...int) *connectors.DiscoveryResult {
+	r := &connectors.DiscoveryResult{}
+	for i := 0; i < n; i++ {
+		x := fmt.Sprintf("hr-%02d", i)
+		st := "active"
+		if slices.Contains(ended, i) {
+			st = "terminated"
+		}
+		r.Identities = append(r.Identities, connectors.IdentityRecord{ExternalID: x, Name: "Person " + x, Type: "human", Status: st})
+	}
+	return r
+}
+
+// A sync queued with ?async=true runs in a worker, but the hold it makes still names the admin who queued
+// it, so that admin cannot release it (#487). A scheduled run has no human and exempts nobody.
+func TestDeletionGuardAPI_QueuedSyncHoldNamesWhoQueuedIt(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	feed := &swappableFeed{}
+	srv := newIsolationServerWith(f, func(c *Config) {
+		c.Connectors = func(time.Time) ([]connectors.Connector, error) { return []connectors.Connector{feed}, nil }
+	})
+	e := &privEnv{t: t, f: f, srv: srv}
+	queuer := e.as("queuer", []auth.Role{auth.RoleTenantAdmin, auth.RolePolicyAdmin}, nil)
+	other := e.as("other", []auth.Role{auth.RoleTenantAdmin}, nil)
+
+	feed.res.Store(hrFeed(30))
+	queuer.call("POST", "/api/connectors/sync", "", 200)
+	// the feed is now short, and two people ended: the worker's run holds both
+	feed.res.Store(hrFeed(20, 0, 1))
+	queuer.call("POST", "/api/connectors/sync?async=true", "", 200)
+	drain(t, srv)
+
+	holds := queuer.call("GET", "/api/admin/deletion-holds?status=held", "", 200)["holds"].([]any)
+	if len(holds) != 1 {
+		t.Fatalf("holds = %v", holds)
+	}
+	id := holds[0].(map[string]any)["id"].(string)
+	one := queuer.call("GET", "/api/admin/deletion-holds/"+id, "", 200)
+	cs, _ := one["reason"].(map[string]any)["contributors"].([]any)
+	if len(cs) != 1 || cs[0].(map[string]any)["actor"] == "" || cs[0].(map[string]any)["actor"] == nil {
+		t.Fatalf("contributors = %v, want the user who queued the run", cs)
+	}
+	if got := queuer.call("POST", "/api/admin/deletion-holds/"+id+"/approve", "", 403); got["error"] != "same_actor" {
+		t.Errorf("the admin who queued the run released its hold: %v", got)
+	}
+	if got := other.call("POST", "/api/admin/deletion-holds/"+id+"/approve", "", 200); got["status"] != "released" {
+		t.Errorf("another admin: %v", got)
 	}
 }
