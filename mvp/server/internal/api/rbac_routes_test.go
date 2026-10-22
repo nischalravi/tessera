@@ -111,6 +111,13 @@ PUT    /api/oauth-apps/{app_id}/owner                oauthapps.manage -  # issue
 POST   /api/oauth-apps/revoke-vendor                 oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/oauth-apps/{app_id}/revoke               oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/oauth-apps/{app_id}/grants/{grant_id}/revoke oauthapps.revoke STEP_UP_POLICY  # issue #107
+GET    /api/vms/sources                              connections.read -  # issue #304
+POST   /api/vms/sources                              connections.manage -  # issue #304
+PUT    /api/vms/sources/{source_id}                  connections.manage -  # issue #304
+DELETE /api/vms/sources/{source_id}                  connections.manage -  # issue #304
+POST   /api/vms/sync                                 lifecycle.manage -  # issue #304
+POST   /api/vms/sources/{source_id}/import           lifecycle.manage -  # issue #304
+GET    /api/vms/records                              connections.read -  # issue #304
 POST   /api/admin/archive/segments/{segment_id}/verify audit.verify  -  # issue #298
 GET    /api/admin/archive/segments/{segment_id}/export audit.read    STEP_UP_ADMIN  # issue #298
 GET    /api/readiness/templates                      connections.read   -

@@ -421,6 +421,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/orgs/{org_id}/") || rt.Pattern == "/api/review-types/{review_type}" {
 			continue // TestSettingsAPI_CrossTenant (derived ids and type names, not fixture ids)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/vms/") {
+			continue // TestVmsAPI (UUIDs, not fixture ids: tenant A gets 404 on B's source)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/oauth-apps/") {
 			continue // TestOAuthAppsAPI (UUIDs, not fixture ids: tenant B gets 404 on A's app and grants)
 		}
