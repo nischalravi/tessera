@@ -15,7 +15,7 @@ func deletionGuardCovered() map[string]bool {
 	for _, k := range []string{"DeletionPolicies", "PutDeletionPolicy", "DeletionSettingsRow", "PutDeletionSettings", "LockDeletionCategory",
 		"DeletionsApplied", "RecordDeletions", "DeletionPopulation", "InsertDeletionHold", "DeletionHoldByID", "DeletionHolds",
 		"DeletionHoldsDue", "OpenDeletionHolds", "DeletionHoldItems", "SetDeletionHoldItem", "ResolveDeletionHold",
-		"OpenDeletionHoldByCorrelation", "AppendDeletionHoldItems",
+		"OpenDeletionHoldByCorrelation", "AppendDeletionHoldItems", "SetDeletionHoldReason",
 		"DeletionSourcePolicies", "DeletionSourcePoliciesOf", "DeletionSourcePolicy", "PutDeletionSourcePolicy", "DeleteDeletionSourcePolicy",
 		"DeletionSourceCount", "PutDeletionSourceCount", "DeletionsAppliedBySource", "RecordSourceDeletions"} {
 		out[k] = true // TestIsolation_DeletionGuard
@@ -113,6 +113,9 @@ func TestIsolation_DeletionGuard(t *testing.T) {
 		}
 		if err := c.SetDeletionHoldItem(hold.ID, 0, "released", ""); err != nil {
 			t.Errorf("SetDeletionHoldItem(A's) = %v", err)
+		}
+		if err := c.SetDeletionHoldReason(hold.ID, "{}"); err != nil {
+			t.Errorf("SetDeletionHoldReason(A's) = %v", err)
 		}
 		// an item cannot be added to A's hold from B
 		if err := c.AppendDeletionHoldItems(&hold, []store.DeletionHoldItem{{Kind: "group_delete", Ref: "g2"}}); err == nil {

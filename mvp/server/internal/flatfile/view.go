@@ -52,7 +52,9 @@ type UploadView struct {
 	RowsTotal      int    `json:"rows_total"`
 	RowsRejected   int    `json:"rows_rejected"`
 	Added          int    `json:"added"`
-	Removed        int    `json:"removed"`
+	Removed        int    `json:"removed"` // removals applied; the deletion guard's held ones are in Held
+	Held           int    `json:"held,omitempty"`
+	HoldID         string `json:"hold_id,omitempty"`
 	Changed        int    `json:"changed"`
 	Unchanged      int    `json:"unchanged"`
 	TasksConfirmed int    `json:"tasks_confirmed"`
@@ -64,7 +66,7 @@ type UploadView struct {
 func ViewUpload(u *store.FlatUpload) UploadView {
 	return UploadView{ID: u.ID, System: u.System, Kind: u.Kind, Source: u.Source, Filename: Neutralize(u.Filename), SHA256: u.SHA256,
 		SizeBytes: u.SizeBytes, Status: u.Status, RowsTotal: u.RowsTotal, RowsRejected: u.RowsRejected, Added: u.Added,
-		Removed: u.Removed, Changed: u.Changed, Unchanged: u.Unchanged, TasksConfirmed: u.TasksConfirmed,
+		Removed: u.Removed, Held: u.Held, HoldID: u.HoldID, Changed: u.Changed, Unchanged: u.Unchanged, TasksConfirmed: u.TasksConfirmed,
 		UploadedBy: Neutralize(u.UploadedBy), UploadedAt: timeutil.ISO(u.UploadedAt)}
 }
 

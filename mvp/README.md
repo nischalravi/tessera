@@ -2529,6 +2529,27 @@ signed with the tenant's `access_token` key from `internal/keys`; there are no r
   first when its one-hour cache has expired (`RefreshActorClient`; a failed refresh fails closed).
 - **Resource servers** (`/api/mcp/resources`) must be registered; a token is only issued for one.
   Registration shows a secret once; only its SHA-256 is stored.
+- **Issuer and audience binding, unregistered servers (issue #479, schema 0700).** A rogue MCP server steals an
+  agent's OAuth credentials by posing as the server the agent was set up for (the MCP Python SDK flaw of 29 Sep,
+  the OpenCode flaw of 22 Oct), so each registered resource is **bound** to the authorization server issuer it
+  expects its tokens from and the audience they carry. With no explicit binding the defaults apply: this tenant's
+  MCP issuer and the resource URI. Bind with `PUT /api/mcp/resources/{id} {issuer, audience}` (both together;
+  `agents.manage`, step-up) or at registration (`POST` with the same two optional fields). Both are absolute https
+  URIs (http for loopback), the issuer without a query, and the audience is unique per tenant (`409
+  audience_in_use`). Changing the binding revokes the resource's live tokens (`mcp.resource.bind`). The
+  list shows `issuer`, `audience` and `bound`; the RFC 9728 metadata names the bound issuer in
+  `authorization_servers`. Enforced: (1) **issuing** (authorization, code redemption and token exchange) is
+  refused with `invalid_target` unless the bound issuer is this tenant's authorization server, and the token's
+  `aud` is the bound audience (`mcp.policy.issuer_mismatch`); (2) **introspection and tool-call decisions**
+  answer inactive, with a reason in the decision log, for a token whose issuer differs from the bound one
+  ("token issuer does not match ...") or whose audience is not the bound audience or was issued for another
+  resource ("token is for another audience"). A resource bound to another authorization server therefore gets no
+  token from Tessera, and its old tokens stop working. **Policy: no unregistered MCP servers.** A token is issued
+  only for a registered, active resource; a request for any other (unknown or disabled) is refused with
+  `invalid_target` ("blocked by policy ...") and recorded as the audit event and decision
+  `mcp.policy.unregistered_server`, so an agent cannot use an unregistered MCP server through Tessera. The policy is
+  built in and cannot be switched off; it is not a policy document. Tessera cannot stop an agent connecting to a
+  server directly: the repo scan of `GET /api/ai-agents/mcp-findings` still lists what agents are configured with.
 - **Decisions**: every issue, exchange, denial, revocation and tool-call decision is a row in
   `mcp_decisions` and an audit event (`mcp.token.issue`, `mcp.token.exchange`, `mcp.token.deny`,
   `mcp.token.revoke`, `mcp.tool_call.decision`, `mcp.authorize.*`, `mcp.client.*`, `mcp.resource.*`)
@@ -3975,8 +3996,15 @@ under them (an approved held loader run is an approved override and is not count
 * **Settings.** `GET /api/admin/deletion-guard` (thresholds, window usage, hold expiry), `GET /api/admin/deletion-holds[?status=&category=]`,
   `GET /api/admin/deletion-holds/{id}`. Thresholds change through the admin change requests
   (`POST /api/admin/change-requests`, type `deletion_guard.update`, audited as `deletion_guard.policy_changed`): tightening
-  applies with one admin; loosening (a weaker mode, or a higher limit per minute of window at the tenant's current size)
-  needs a second admin and a step-up, like the other safety settings.
+  applies with one admin; loosening needs a second admin and a step-up, like the other safety settings. Loosening is judged
+  on what the guard lets through (#468): a weaker mode (`hold_all` > `hold_excess` > `off`, where a category never set counts
+  as `hold_all` for source-driven runs), a larger limit at the tenant's size or a larger one (count or percent, whatever the
+  window: 25/hour to 4200/week is loosening), or a higher limit per minute. A mixed change that loosens any field needs two.
+  Saving the displayed default as it is changes nothing and keeps the category unset, so source-driven runs still hold all.
+* **Contributors (#467).** A hold records every actor and run that added items (`reason.contributors`: user id, source, run id,
+  time, count); release or partial approval is refused (`403 same_actor`) to any of them and to the hold's creator. A later run
+  of the source that lists an item again withdraws it from the open hold (`deletion_guard.items_relisted`), and a flat-file
+  release skips accounts the latest upload lists.
 * **API answers.** A deleting route the guard held part of (delete or purge a group, delete a folder or a tree, remove a
   member, a members batch) answers **202** with its usual fields plus `{applied, held, hold_id, threshold, message}`
   ("Deleted 25 of 40: 15 held for approval (threshold 25 per hour)"). A recursive folder delete that was partly held keeps
@@ -4011,8 +4039,11 @@ under them (an approved held loader run is an approved override and is not count
   connection (below the setup steps), the group's Source tab (the loader), Admin → Contractor feeds → Edit (VMS source),
   and listed on Admin → Deletion guard. They change through the same admin change request, `deletion_guard.update`, with
   a `sources` payload (`{kind, source_id, category, mode, max_count, max_percent, window_minutes, feed_drop_percent,
-  feed_empty_check}` or `{..., remove: true}`); tightening takes one admin, loosening two (a weaker mode, a higher limit
-  per minute, a higher drop percent, the empty check off, or removing an override that was tighter than the category).
+  feed_empty_check}` or `{..., remove: true}`); tightening takes one admin, loosening two (judged as for categories, an
+  override looser than what applies now, a higher drop percent, the empty check off, or removing an override that was tighter
+  than the category). A flat-file upload whose removals are held answers `201` with `status: held|partially_applied`,
+  `applied`, `held`, `hold_id` and `message` (and `upload.removed` counts the applied removals only, #470); the folder
+  delete plan's `folders` counts the folder itself, as the delete reports it.
   `GET /api/admin/deletion-guard/sources/{kind}/{id}` (`admin.read`) returns one source's categories with the category's
   setting, the override, what applies, the last good count and window use; `GET /api/admin/deletion-guard` adds `sources`.
   Flat-file imports and a result that names no connection use the tenant's settings. A VMS feed's leavers are judged under

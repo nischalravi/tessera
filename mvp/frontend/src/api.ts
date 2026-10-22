@@ -2494,6 +2494,8 @@ export interface FlatUpload {
   rows_rejected: number;
   added: number;
   removed: number;
+  held?: number;
+  hold_id?: string;
   changed: number;
   unchanged: number;
   tasks_confirmed: number;
@@ -3400,6 +3402,8 @@ export interface McpClient {
 export interface McpResource {
   id: string; resource: string; name: string; status: "active" | "disabled"; created_by: string; created_at: string;
   metadata_path: string;
+  /** The authorization server this MCP server expects its tokens from and the audience they carry (issue #479). `bound` is false for the defaults. */
+  issuer: string; audience: string; bound: boolean;
   /** Shown once, when the resource is created. */
   secret?: string;
 }
@@ -3435,9 +3439,13 @@ export const mcpAuthz = {
   registerClient: (clientId: string) => api<McpClient>("/mcp/clients", { client_id: clientId }),
   updateClient: (id: string, body: { agent_identity_id: number | null; status: McpClientStatus }) =>
     api<McpClient>(`/mcp/clients/${encodeURIComponent(id)}`, body, "PUT"),
-  createResource: (resource: string, name: string) => api<McpResource>("/mcp/resources", { resource, name }),
+  createResource: (resource: string, name: string, binding?: { issuer: string; audience: string }) =>
+    api<McpResource>("/mcp/resources", { resource, name, ...(binding ?? {}) }),
   updateResource: (id: string, status: "active" | "disabled") =>
     api<McpResource>(`/mcp/resources/${encodeURIComponent(id)}`, { status }, "PUT"),
+  /** Binds the resource to an issuer and audience; its live tokens are revoked (issue #479). */
+  bindResource: (id: string, issuer: string, audience: string) =>
+    api<McpResource>(`/mcp/resources/${encodeURIComponent(id)}`, { issuer, audience }, "PUT"),
   revokeToken: (jti: string) => api<{ revoked: boolean; jti: string }>(`/mcp/tokens/${encodeURIComponent(jti)}/revoke`, {}),
   consent: (id: string) => api<McpConsent>(`/mcp/authorizations/${encodeURIComponent(id)}`),
   /** The browser is sent to `redirect_to` (the client's redirect URI with the code, or the error). */

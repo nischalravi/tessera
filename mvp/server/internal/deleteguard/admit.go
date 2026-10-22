@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -55,6 +56,9 @@ type Request struct {
 	// whatever the threshold. PrevCount and NewCount are the source's record counts before and now.
 	Sanity              []string
 	PrevCount, NewCount int
+	// RunID names the run or request that made the call (the request id when empty and there is one);
+	// a hold records it with the actor, see Contributor.
+	RunID string
 }
 
 // DefaultFeedDropPercent is how far a source's record count may fall against the last good run
@@ -325,6 +329,40 @@ type reason struct {
 	SourceKind     string `json:"source_kind,omitempty"`
 	SourceRef      string `json:"source_ref,omitempty"`
 	SourceOverride bool   `json:"source_override,omitempty"`
+	// Contributors are every actor and run that added items to the hold, the first run included.
+	// A release is refused to any of them (#467).
+	Contributors []Contributor `json:"contributors,omitempty"`
+}
+
+// Contributor is one run that added items to a hold: who (a platform user id, "" for a worker),
+// from which source and run, when, and how many items it added.
+type Contributor struct {
+	Actor    string    `json:"actor,omitempty"`
+	Source   string    `json:"source,omitempty"`
+	SourceID string    `json:"source_id,omitempty"`
+	RunID    string    `json:"run_id,omitempty"`
+	At       time.Time `json:"at"`
+	Added    int       `json:"added"`
+}
+
+func contributorOf(tx *store.TenantTx, now time.Time, req Request, added int) Contributor {
+	run := req.RunID
+	if run == "" {
+		if ac, ok := store.AuditContextFrom(tx.Context()); ok && ac.RequestID != nil {
+			run = *ac.RequestID
+		}
+	}
+	return Contributor{Actor: req.Actor, Source: orSource(req.Source), SourceID: req.SourceID, RunID: run, At: now.UTC(), Added: added}
+}
+
+// Contributors reads them back from a hold's reason; a hold from before they were kept has none and
+// is judged by its actor alone.
+func Contributors(h *store.DeletionHold) []Contributor {
+	var r reason
+	if json.Unmarshal([]byte(h.Reason), &r) != nil {
+		return nil
+	}
+	return r.Contributors
 }
 
 func hold(tx *store.TenantTx, now time.Time, req Request, res Resolved, ref SourceRef, pop int, d *Decision) error {
@@ -367,9 +405,32 @@ func hold(tx *store.TenantTx, now time.Time, req Request, res Resolved, ref Sour
 		if err := tx.AppendDeletionHoldItems(h, items); err != nil {
 			return err
 		}
+		// the hold now also describes this run: who added items, and the sanity counts the approver sees
+		var rs reason
+		if json.Unmarshal([]byte(h.Reason), &rs) == nil {
+			rs.Contributors = append(rs.Contributors, contributorOf(tx, now, req, len(items)))
+			rs.Attempted += d.Attempted
+			rs.Applied += len(d.Applied)
+			if req.NewCount > 0 || req.PrevCount > 0 {
+				rs.PreviousCount, rs.NewCount = req.PrevCount, req.NewCount
+			}
+			for _, sn := range req.Sanity {
+				if !slices.Contains(rs.Sanity, sn) {
+					rs.Sanity = append(rs.Sanity, sn)
+				}
+			}
+			raw, err := json.Marshal(rs)
+			if err != nil {
+				return err
+			}
+			h.Reason = string(raw)
+			if err := tx.SetDeletionHoldReason(h.ID, h.Reason); err != nil {
+				return err
+			}
+		}
 		d.HoldID = h.ID
 		return audit(tx, now, "deletion_guard.hold_extended", h, ojson.Object{{Key: "hold_id", Value: h.ID},
-			{Key: "category", Value: h.Category}, {Key: "added", Value: len(items)}, {Key: "items", Value: h.ItemCount},
+			{Key: "category", Value: h.Category}, {Key: "added", Value: len(items)}, {Key: "items", Value: h.ItemCount}, {Key: "actor", Value: req.Actor}, {Key: "run_id", Value: contributorOf(tx, now, req, 0).RunID},
 			{Key: "correlation_id", Value: corr}})
 	}
 	if corr == "" {
@@ -382,7 +443,8 @@ func hold(tx *store.TenantTx, now time.Time, req Request, res Resolved, ref Sour
 	raw, err := json.Marshal(reason{Category: req.Category, WindowMinutes: pol.WindowMinutes, MaxCount: pol.MaxCount,
 		MaxPercent: pol.MaxPercent, Population: pop, Limit: d.Limit, UsedBefore: d.Used, Attempted: d.Attempted,
 		Applied: len(d.Applied), Mode: pol.Mode, Sanity: req.Sanity, PreviousCount: req.PrevCount, NewCount: req.NewCount,
-		SourceDriven: req.SourceDriven, SourceKind: ref.Kind, SourceRef: ref.ID, SourceOverride: res.Overridden})
+		SourceDriven: req.SourceDriven, SourceKind: ref.Kind, SourceRef: ref.ID, SourceOverride: res.Overridden,
+		Contributors: []Contributor{contributorOf(tx, now, req, len(items))}})
 	if err != nil {
 		return err
 	}

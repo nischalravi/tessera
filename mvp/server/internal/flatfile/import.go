@@ -157,8 +157,74 @@ func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
 		isDue[t.ID] = true
 	}
 
+	up.Held = 0
+	// The graph and the removals come before the upload is recorded (the record is append-only and says
+	// how many removals the deletion guard held). The snapshot rows below need the upload.
+	// The graph. An account whose leaver task is still open stays disabled
+	// even though the file still lists it as active: Tessera has decided it
+	// goes, and the file has not caught up.
+	held := map[string]bool{}
+	for _, t := range open {
+		if t.Kind == TaskDisableAccount && !isDue[t.ID] {
+			held[t.AccountXID] = true
+		}
+	}
+	if _, err := ingest.Import(c, now, discovery(m, accounts, ents, held)); err != nil {
+		return nil, err
+	}
+	feed := feedCheck{}
+	if in.Kind == KindAccounts {
+		// accounts this file lists are not being dropped: a held drop of one (from an earlier, truncated
+		// upload) is withdrawn, so a corrected feed is not undone by releasing the old hold
+		listed := make(map[string]bool, len(accounts))
+		for _, a := range accounts {
+			listed[a.Key] = true
+		}
+		if _, err := deleteguard.Relist(c, now, deleteguard.CatAccounts, "flatfile:"+in.System, func(it *store.DeletionHoldItem) bool {
+			var k [2]string
+			return it.Kind == ItemDropAccount && json.Unmarshal([]byte(it.Ref), &k) == nil && k[0] == in.System && listed[k[1]]
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if in.Kind == KindAccounts && len(delta.Removed) > 0 {
+		// the file is the feed: an empty or much shorter one than the last good upload is not trusted to say who is gone
+		all, err := c.Accounts()
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range all {
+			if a.System == in.System && a.Status == "active" {
+				feed.prev++
+			}
+		}
+		feed.now = len(accounts)
+		feed.sanity = deleteguard.FeedChecks(feed.prev, feed.now, "")
+	}
+	for _, r := range delta.Removed {
+		if in.Kind == KindAccounts {
+			var hid string
+			hid, err = dropAccount(c, now, in.System, r.Key, feed)
+			if hid != "" {
+				up.Held++
+				up.HoldID = hid
+			}
+		} else {
+			err = dropEntitlement(c, now, in.System, r.Key)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, r := range cascade {
+		if err := dropEntitlement(c, now, in.System, r.Key); err != nil {
+			return nil, err
+		}
+	}
+
 	up.Status, up.Added, up.Removed, up.Changed, up.Unchanged = store.FlatUploadApplied, len(delta.Added), len(delta.Removed),
 		len(delta.Changed), delta.Unchanged
+	up.Removed -= up.Held // the removals the guard held did not happen
 	up.TasksConfirmed = len(due)
 	if err := c.InsertFlatUpload(up); err != nil {
 		return nil, err
@@ -194,49 +260,6 @@ func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
 				Hash: r.Hash, UploadID: up.ID}); err != nil {
 				return nil, err
 			}
-		}
-	}
-
-	// The graph. An account whose leaver task is still open stays disabled
-	// even though the file still lists it as active: Tessera has decided it
-	// goes, and the file has not caught up.
-	held := map[string]bool{}
-	for _, t := range open {
-		if t.Kind == TaskDisableAccount && !isDue[t.ID] {
-			held[t.AccountXID] = true
-		}
-	}
-	if _, err := ingest.Import(c, now, discovery(m, accounts, ents, held)); err != nil {
-		return nil, err
-	}
-	feed := feedCheck{}
-	if in.Kind == KindAccounts && len(delta.Removed) > 0 {
-		// the file is the feed: an empty or much shorter one than the last good upload is not trusted to say who is gone
-		all, err := c.Accounts()
-		if err != nil {
-			return nil, err
-		}
-		for _, a := range all {
-			if a.System == in.System && a.Status == "active" {
-				feed.prev++
-			}
-		}
-		feed.now = len(accounts)
-		feed.sanity = deleteguard.FeedChecks(feed.prev, feed.now, "")
-	}
-	for _, r := range delta.Removed {
-		if in.Kind == KindAccounts {
-			err = dropAccount(c, now, in.System, r.Key, feed)
-		} else {
-			err = dropEntitlement(c, now, in.System, r.Key)
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	for _, r := range cascade {
-		if err := dropEntitlement(c, now, in.System, r.Key); err != nil {
-			return nil, err
 		}
 	}
 
@@ -290,6 +313,7 @@ func uploadDetail(up *store.FlatUpload, errCount int) ojson.Object {
 		{Key: "source", Value: up.Source}, {Key: "filename", Value: Neutralize(up.Filename)}, {Key: "sha256", Value: up.SHA256},
 		{Key: "status", Value: up.Status}, {Key: "rows", Value: up.RowsTotal}, {Key: "rows_rejected", Value: up.RowsRejected},
 		{Key: "errors", Value: errCount}, {Key: "added", Value: up.Added}, {Key: "removed", Value: up.Removed},
+		{Key: "held", Value: up.Held}, {Key: "hold_id", Value: up.HoldID},
 		{Key: "changed", Value: up.Changed}, {Key: "unchanged", Value: up.Unchanged},
 		{Key: "tasks_confirmed", Value: up.TasksConfirmed}}
 }
@@ -358,32 +382,33 @@ type feedCheck struct {
 	sanity    []string
 }
 
-func dropAccount(c *store.TenantTx, now time.Time, system, xid string, feed feedCheck) error {
+// It answers the id of the held deletion when the guard held the drop ("" when it was applied or moot).
+func dropAccount(c *store.TenantTx, now time.Time, system, xid string, feed feedCheck) (string, error) {
 	a, err := c.AccountByXID(system, xid)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil
+		return "", nil
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if a.Status == "active" {
 		// the deletion guard (internal/deleteguard): an import that drops more accounts than the
 		// threshold allows holds the rest; they stay as they are until a second admin releases them
 		ref, err := json.Marshal([2]string{system, xid})
 		if err != nil {
-			return err
+			return "", err
 		}
 		d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatAccounts, Source: deleteguard.SourceConnector,
 			SourceID: system, Correlation: "flatfile:" + system, SourceDriven: true, Sanity: feed.sanity, PrevCount: feed.prev, NewCount: feed.now,
 			Items: []deleteguard.Item{{Kind: ItemDropAccount, Ref: string(ref), Label: fmt.Sprintf("account %s in %s dropped by an import", a.Username, system)}}})
 		if err != nil {
-			return err
+			return "", err
 		}
 		if len(d.Held) > 0 {
-			return nil
+			return d.HoldID, nil
 		}
 	}
-	return disableAndDropEdges(c, now, a)
+	return "", disableAndDropEdges(c, now, a)
 }
 
 // ItemDropAccount is the kind of a held drop of an account the file no longer lists.
@@ -395,6 +420,16 @@ func ReleaseDrop(c *store.TenantTx, now time.Time, it *store.DeletionHoldItem) (
 	var k [2]string
 	if err := json.Unmarshal([]byte(it.Ref), &k); err != nil {
 		return "", "", fmt.Errorf("flatfile: bad held drop: %w", err)
+	}
+	// the latest upload decides: an account it lists is not dropped (the feed was corrected since)
+	recs, err := c.FlatRecords(k[0], KindAccounts)
+	if err != nil {
+		return "", "", err
+	}
+	for _, r := range recs {
+		if r.Key == k[1] {
+			return deleteguard.ItemGone, "the latest upload lists the account again", nil
+		}
 	}
 	a, err := c.AccountByXID(k[0], k[1])
 	if errors.Is(err, store.ErrNotFound) {

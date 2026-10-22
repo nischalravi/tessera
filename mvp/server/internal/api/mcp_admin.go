@@ -208,12 +208,57 @@ type resourceView struct {
 	CreatedBy   string `json:"created_by"`
 	CreatedAt   string `json:"created_at"`
 	MetadataURL string `json:"metadata_path"`
-	Secret      string `json:"secret,omitempty"`
+	// Issuer and Audience are the binding (#479): the authorization server this
+	// MCP server expects its tokens from and the audience they carry. Bound is
+	// false while they are the defaults (this tenant's issuer, the resource URI).
+	Issuer   string `json:"issuer"`
+	Audience string `json:"audience"`
+	Bound    bool   `json:"bound"`
+	Secret   string `json:"secret,omitempty"`
 }
 
-func (s *Server) resourceViewOf(slug string, x *store.MCPResource) resourceView {
+func (s *Server) resourceViewOf(slug string, x *store.MCPResource, b mcpauth.Binding) resourceView {
 	return resourceView{ID: x.ID, Resource: x.Resource, Name: x.Name, Status: x.Status, CreatedBy: x.CreatedBy,
-		CreatedAt: iso(x.CreatedAt), MetadataURL: "/t/" + slug + mcpIssuerSuffix + "/.well-known/oauth-protected-resource/" + x.ID}
+		CreatedAt: iso(x.CreatedAt), MetadataURL: "/t/" + slug + mcpIssuerSuffix + "/.well-known/oauth-protected-resource/" + x.ID,
+		Issuer: b.Issuer, Audience: b.Audience, Bound: b.Explicit}
+}
+
+// bindResource validates and stores an explicit binding of a resource. The
+// audience is unique among the tenant's resources (a token for one server is
+// never accepted by another). Revoking the resource's live tokens is the
+// caller's job: their audience or issuer no longer matches.
+func (s *Server) bindResource(tx *store.TenantTx, slug string, x *store.MCPResource, issuer, audience, by string, now time.Time) (mcpauth.Binding, error) {
+	if err := mcpauth.ValidateBinding(issuer, audience); err != nil {
+		return mcpauth.Binding{}, badRequest("invalid_binding", err.Error())
+	}
+	all, err := tx.MCPResources()
+	if err != nil {
+		return mcpauth.Binding{}, err
+	}
+	bs, err := tx.MCPResourceBindings()
+	if err != nil {
+		return mcpauth.Binding{}, err
+	}
+	explicit := map[string]string{}
+	for _, b := range bs {
+		explicit[b.ResourceID] = b.Audience
+	}
+	for _, o := range all {
+		if o.ID == x.ID {
+			continue
+		}
+		aud := o.Resource
+		if a, ok := explicit[o.ID]; ok {
+			aud = a
+		}
+		if aud == audience {
+			return mcpauth.Binding{}, &readiness.Error{Status: http.StatusConflict, Code: "audience_in_use", Msg: "another MCP resource already uses that audience"}
+		}
+	}
+	if err := tx.PutMCPResourceBinding(&store.MCPResourceBinding{ResourceID: x.ID, Issuer: issuer, Audience: audience, UpdatedBy: by, UpdatedAt: now}); err != nil {
+		return mcpauth.Binding{}, err
+	}
+	return mcpauth.Binding{Issuer: issuer, Audience: audience, Explicit: true}, nil
 }
 
 // mcpSlug is the principal's tenant slug (a read-only lookup, safe to call
@@ -239,7 +284,11 @@ func (s *Server) mcpListResources(r *http.Request, _ *params) (int, any, error) 
 	}
 	out := []resourceView{}
 	for _, x := range rs {
-		out = append(out, s.resourceViewOf(slug, x))
+		b, err := mcpauth.BindingOf(store.TxFrom(r.Context()), x, s.mcpIssuer(slug))
+		if err != nil {
+			return 0, nil, err
+		}
+		out = append(out, s.resourceViewOf(slug, x, b))
 	}
 	return http.StatusOK, out, nil
 }
@@ -248,11 +297,14 @@ func (s *Server) mcpCreateResource(r *http.Request, _ *params) (int, any, error)
 	var b struct {
 		Resource string `json:"resource"`
 		Name     string `json:"name"`
+		Issuer   string `json:"issuer"`   // optional (#479): the authorization server it expects
+		Audience string `json:"audience"` // optional: the audience of its tokens
 	}
 	if err := decodeBody(r, &b, false); err != nil {
 		return 0, nil, err
 	}
 	b.Resource, b.Name = strings.TrimSpace(b.Resource), strings.TrimSpace(b.Name)
+	b.Issuer, b.Audience = strings.TrimSpace(b.Issuer), strings.TrimSpace(b.Audience)
 	if err := mcpauth.ValidateResource(b.Resource); err != nil {
 		return 0, nil, badRequest("invalid_resource", err.Error())
 	}
@@ -265,6 +317,10 @@ func (s *Server) mcpCreateResource(r *http.Request, _ *params) (int, any, error)
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return 0, nil, err
 	}
+	slug, err := s.mcpSlug(r)
+	if err != nil {
+		return 0, nil, err
+	}
 	secret := seal.RandomSecret(32)
 	now := s.clock()
 	x := &store.MCPResource{Resource: b.Resource, Name: b.Name, SecretHash: seal.SHA256Hex([]byte(secret)), CreatedBy: actor(r), CreatedAt: now}
@@ -275,30 +331,46 @@ func (s *Server) mcpCreateResource(r *http.Request, _ *params) (int, any, error)
 		{Key: "resource_id", Value: x.ID}, {Key: "name", Value: b.Name}}); err != nil {
 		return 0, nil, err
 	}
+	bind := mcpauth.Binding{Issuer: s.mcpIssuer(slug), Audience: b.Resource}
+	if b.Issuer != "" || b.Audience != "" {
+		bind, err = s.bindResource(tx, slug, x, orDefault(b.Issuer, bind.Issuer), orDefault(b.Audience, bind.Audience), actor(r), now)
+		if err != nil {
+			return 0, nil, err
+		}
+		if err := tx.Audit(now, actor(r), "mcp.resource.bind", ojson.Object{{Key: "resource", Value: b.Resource},
+			{Key: "resource_id", Value: x.ID}, {Key: "issuer", Value: bind.Issuer}, {Key: "audience", Value: bind.Audience}}); err != nil {
+			return 0, nil, err
+		}
+	}
 	// The status is the column's default; read the stored row so the response
 	// matches the list.
-	x, err := tx.MCPResource(x.ID)
+	x, err = tx.MCPResource(x.ID)
 	if err != nil {
 		return 0, nil, err
 	}
-	slug, err := s.mcpSlug(r)
-	if err != nil {
-		return 0, nil, err
-	}
-	v := s.resourceViewOf(slug, x)
+	v := s.resourceViewOf(slug, x, bind)
 	v.Secret = secret // shown once; only its hash is stored
 	return http.StatusCreated, v, nil
 }
 
 func (s *Server) mcpUpdateResource(r *http.Request, p *params) (int, any, error) {
 	var b struct {
-		Status string `json:"status"`
+		Status   string `json:"status"`
+		Issuer   string `json:"issuer"` // (#479) bind the resource: both issuer and audience, or neither
+		Audience string `json:"audience"`
 	}
 	if err := decodeBody(r, &b, false); err != nil {
 		return 0, nil, err
 	}
-	if b.Status != "active" && b.Status != "disabled" {
+	b.Issuer, b.Audience = strings.TrimSpace(b.Issuer), strings.TrimSpace(b.Audience)
+	rebind := b.Issuer != "" || b.Audience != ""
+	switch {
+	case b.Status == "" && !rebind:
+		return 0, nil, badRequest("invalid_status", "status must be active or disabled, or issuer and audience must be set")
+	case b.Status != "" && b.Status != "active" && b.Status != "disabled":
 		return 0, nil, badRequest("invalid_status", "status must be active or disabled")
+	case rebind && (b.Issuer == "" || b.Audience == ""):
+		return 0, nil, badRequest("invalid_binding", "issuer and audience are set together")
 	}
 	id := p.path["id"]
 	if !idRE.MatchString(id) {
@@ -312,25 +384,47 @@ func (s *Server) mcpUpdateResource(r *http.Request, p *params) (int, any, error)
 	if err != nil {
 		return 0, nil, err
 	}
-	if err := tx.SetMCPResourceStatus(id, b.Status); err != nil {
-		return 0, nil, err
-	}
-	var revoked int64
-	if b.Status == "disabled" {
-		if revoked, err = s.mcp.RevokeResource(tx, x.Resource, "resource disabled by an administrator"); err != nil {
-			return 0, nil, err
-		}
-	}
-	if err := tx.Audit(s.clock(), actor(r), "mcp.resource.update", ojson.Object{{Key: "resource", Value: x.Resource},
-		{Key: "status", Value: b.Status}, {Key: "tokens_revoked", Value: revoked}}); err != nil {
-		return 0, nil, err
-	}
-	x.Status = b.Status
 	slug, err := s.mcpSlug(r)
 	if err != nil {
 		return 0, nil, err
 	}
-	return http.StatusOK, s.resourceViewOf(slug, x), nil
+	now := s.clock()
+	var revoked int64
+	if b.Status != "" {
+		if err := tx.SetMCPResourceStatus(id, b.Status); err != nil {
+			return 0, nil, err
+		}
+		if b.Status == "disabled" {
+			if revoked, err = s.mcp.RevokeResource(tx, x.Resource, "resource disabled by an administrator"); err != nil {
+				return 0, nil, err
+			}
+		}
+		if err := tx.Audit(now, actor(r), "mcp.resource.update", ojson.Object{{Key: "resource", Value: x.Resource},
+			{Key: "status", Value: b.Status}, {Key: "tokens_revoked", Value: revoked}}); err != nil {
+			return 0, nil, err
+		}
+		x.Status = b.Status
+	}
+	bind, err := mcpauth.BindingOf(tx, x, s.mcpIssuer(slug))
+	if err != nil {
+		return 0, nil, err
+	}
+	if rebind {
+		if bind, err = s.bindResource(tx, slug, x, b.Issuer, b.Audience, actor(r), now); err != nil {
+			return 0, nil, err
+		}
+		// tokens issued under the old binding no longer match it
+		n, err := s.mcp.RevokeResource(tx, x.Resource, "resource binding changed by an administrator")
+		if err != nil {
+			return 0, nil, err
+		}
+		if err := tx.Audit(now, actor(r), "mcp.resource.bind", ojson.Object{{Key: "resource", Value: x.Resource},
+			{Key: "resource_id", Value: x.ID}, {Key: "issuer", Value: bind.Issuer}, {Key: "audience", Value: bind.Audience},
+			{Key: "tokens_revoked", Value: n}}); err != nil {
+			return 0, nil, err
+		}
+	}
+	return http.StatusOK, s.resourceViewOf(slug, x, bind), nil
 }
 
 type tokenView struct {
@@ -463,3 +557,10 @@ func boundedLimit(v int64, def int) int {
 
 // mcpMaxLimit is the largest page of MCP decisions one request returns.
 const mcpMaxLimit = 500
+
+func orDefault(v, def string) string {
+	if v != "" {
+		return v
+	}
+	return def
+}

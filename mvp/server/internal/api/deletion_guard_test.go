@@ -21,6 +21,15 @@ func guardPolicy(cat string, count int, mode string) string {
 	return fmt.Sprintf(`{"type":"deletion_guard.update","payload":{"policies":[{"category":%q,"max_count":%d,"window_minutes":60,"mode":%q}]}}`, cat, count, mode)
 }
 
+// setGuard saves a policy as admin and, when it needs a second admin (a hold_excess category that was never
+// set loosens what source-driven runs get, #468), has approver approve it.
+func setGuard(admin, approver grpClient, body string) {
+	ch := admin.call("POST", "/api/admin/change-requests", body, 201)
+	if ch["status"] == "pending_approval" {
+		approver.call("POST", "/api/admin/change-requests/"+ch["id"].(string)+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, ch["payload_hash"]), 200)
+	}
+}
+
 func TestDeletionGuardAPI_DefaultsThenHoldAndRelease(t *testing.T) {
 	e := newPrivEnv(t)
 	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
@@ -42,7 +51,7 @@ func TestDeletionGuardAPI_DefaultsThenHoldAndRelease(t *testing.T) {
 	}
 
 	// tightening takes one admin and applies at once
-	ch := e.admin.call("POST", "/api/admin/change-requests", guardPolicy("groups", 2, "hold_excess"), 201)
+	ch := e.admin.call("POST", "/api/admin/change-requests", guardPolicy("groups", 2, "hold_all"), 201)
 	if ch["status"] != "applied" || ch["two_person"] != false {
 		t.Fatalf("tighten = %v", ch)
 	}
@@ -133,8 +142,8 @@ func TestDeletionGuardAPI_DefaultsThenHoldAndRelease(t *testing.T) {
 
 func TestDeletionGuardAPI_MembersAndBatch(t *testing.T) {
 	e := newPrivEnv(t)
-	e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil) // two active admins: no bootstrap restriction
-	e.admin.call("POST", "/api/admin/change-requests", guardPolicy("group_members", 2, "hold_excess"), 201)
+	a2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil) // two active admins: no bootstrap restriction
+	setGuard(e.admin, a2, guardPolicy("group_members", 2, "hold_excess"))
 	app := e.admin.folder("", "app")
 	g := e.admin.group(app, "g")
 	var ids []int64
@@ -167,8 +176,8 @@ func TestDeletionGuardAPI_MembersAndBatch(t *testing.T) {
 
 func TestDeletionGuardAPI_BulkActionJoinsOneHold(t *testing.T) {
 	e := newPrivEnv(t)
-	e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
-	e.admin.call("POST", "/api/admin/change-requests", guardPolicy("groups", 1, "hold_excess"), 201)
+	a2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	setGuard(e.admin, a2, guardPolicy("groups", 1, "hold_excess"))
 	app := e.admin.folder("", "app")
 	batch := "0b1d4f2a-5c1e-4a55-9a53-6a3f4f9d2c11"
 	var holds = map[string]bool{}
@@ -358,7 +367,7 @@ func TestDeletionGuardAPI_PerSourceSettings(t *testing.T) {
 func TestDeletionGuardAPI_InboxTaskFollowsTheHold(t *testing.T) {
 	e := newPrivEnv(t)
 	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
-	e.admin.call("POST", "/api/admin/change-requests", guardPolicy("groups", 1, "hold_excess"), 201)
+	setGuard(e.admin, admin2, guardPolicy("groups", 1, "hold_excess"))
 	app := e.admin.folder("", "app")
 	var gs []string
 	for i := 0; i < 3; i++ {
@@ -403,5 +412,46 @@ func TestDeletionGuardAPI_InboxTaskFollowsTheHold(t *testing.T) {
 	admin2.call("POST", "/api/admin/deletion-holds/"+held["hold_id"].(string)+"/discard", "", 200)
 	if got := tasks(e.admin, "dismissed"); len(got) != 1 {
 		t.Errorf("dismissed tasks = %v", got)
+	}
+}
+
+// Loosening is judged on the effective rate and mode (#468): a single admin cannot scale the burst up with
+// the window, and saving the displayed default does not end the hold_all of source-driven runs.
+func TestDeletionGuardAPI_LooseningUsesTheEffectiveSettings(t *testing.T) {
+	e := newPrivEnv(t)
+	a2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	pol := func(cat string, count, window int, mode string) string {
+		return fmt.Sprintf(`{"type":"deletion_guard.update","payload":{"policies":[{"category":%q,"max_count":%d,"window_minutes":%d,"mode":%q}]}}`, cat, count, window, mode)
+	}
+	cat := func(name string) map[string]any {
+		for _, c := range e.admin.call("GET", "/api/admin/deletion-guard", "", 200)["categories"].([]any) {
+			if c.(map[string]any)["category"] == name {
+				return c.(map[string]any)
+			}
+		}
+		t.Fatalf("no category %s", name)
+		return nil
+	}
+	// the displayed default saved as it is: no change, still the unset default
+	ch := e.admin.call("POST", "/api/admin/change-requests", pol("groups", 25, 60, "hold_excess"), 201)
+	if ch["two_person"] != false || cat("groups")["default"] != true {
+		t.Errorf("explicit default: two_person %v, default %v", ch["two_person"], cat("groups")["default"])
+	}
+	// the same rate with a 168 times larger burst needs two admins
+	setGuard(e.admin, a2, pol("groups", 25, 60, "hold_all"))
+	ch = e.admin.call("POST", "/api/admin/change-requests", pol("groups", 4200, 10080, "hold_all"), 201)
+	if ch["two_person"] != true || ch["status"] != "pending_approval" {
+		t.Errorf("25/hour to 4200/week: %v", ch)
+	}
+	if cat("groups")["limit"] != float64(25) {
+		t.Errorf("the limit changed before the approval: %v", cat("groups")["limit"])
+	}
+	// a tighter setting stays a single-admin change
+	if ch := e.admin.call("POST", "/api/admin/change-requests", pol("groups", 10, 60, "hold_all"), 201); ch["two_person"] != false {
+		t.Errorf("tightening: %v", ch)
+	}
+	// a category change that is looser in one field and tighter in another still needs two
+	if ch := e.admin.call("POST", "/api/admin/change-requests", pol("groups", 5, 60, "hold_excess"), 201); ch["two_person"] != true {
+		t.Errorf("mixed change: %v", ch)
 	}
 }
