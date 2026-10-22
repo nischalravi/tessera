@@ -48,7 +48,8 @@ func TestUpgradeAdminChangeTypes(t *testing.T) {
 	}
 	_ = rows.Close()
 	old := regexp.MustCompile(`,\s*(--[^\n]*\n\s*)?`+regexp.QuoteMeta(adminChangeNewType)).ReplaceAllString(def, "")
-	if old == def {
+	old = regexp.MustCompile(`,\s*(--[^\n]*\n\s*)?`+regexp.QuoteMeta("'deletion_guard.update'")).ReplaceAllString(old, "")
+	if old == def || strings.Contains(old, "deletion_guard.update") {
 		t.Fatal("could not build the old definition")
 	}
 	for _, q := range append([]string{"PRAGMA foreign_keys = OFF", "DROP TABLE " + adminChangeTable, old}, extra...) {
@@ -133,6 +134,9 @@ func TestUpgradeAdminChangeTypes(t *testing.T) {
 	}
 	var def2 string
 	_ = d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE name = ?`, adminChangeTable).Scan(&def2)
+	if !strings.Contains(def2, "'deletion_guard.update'") {
+		t.Errorf("the upgrade did not add deletion_guard.update: %s", def2)
+	}
 	if strings.Count(def2, adminChangeNewType) != 1 {
 		t.Errorf("the second open changed the definition: %s", def2)
 	}
@@ -140,3 +144,6 @@ func TestUpgradeAdminChangeTypes(t *testing.T) {
 		t.Errorf("a second upgrade: %v", err)
 	}
 }
+
+// adminChangeNewType is the type this test removes to make an old database.
+var adminChangeNewType = adminChangeNewTypes[0][0]
