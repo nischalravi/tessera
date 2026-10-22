@@ -1,4 +1,4 @@
--- Postgres dialect of schema/0690_mcp_resource_bindings.sql (issue #479). See 0001_tenancy.sql.
+-- Postgres dialect of schema/0700_mcp_resource_bindings.sql (issue #479). See 0001_tenancy.sql.
 
 -- +goose Up
 

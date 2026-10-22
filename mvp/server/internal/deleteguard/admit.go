@@ -41,6 +41,9 @@ type Request struct {
 	Actor    string
 	Source   string
 	SourceID string
+	// SourceRef names the source whose own settings apply when it is not implied by Source and SourceID
+	// (a loader, a connection) or by ScopeSource.
+	SourceRef SourceRef
 	// Correlation groups the calls of one request, run or sync: items held under the same
 	// correlation join one hold. "" gives each call its own hold.
 	Correlation string
@@ -58,21 +61,9 @@ type Request struct {
 // before its removals are held whatever the thresholds say.
 const DefaultFeedDropPercent = 20.0
 
-// FeedChecks says why a feed looks broken: empty, shorter than the last good run by more than
-// DefaultFeedDropPercent, or reported as a partial or failed read (partial is the reason, "" if not).
+// FeedChecks is FeedChecksWith under the default feed settings (sources.go).
 func FeedChecks(prev, now int, partial string) []string {
-	var out []string
-	if partial != "" {
-		out = append(out, "the source reported a partial or failed read: "+partial)
-	}
-	if now == 0 && prev > 0 {
-		out = append(out, fmt.Sprintf("the feed is empty (the last good run had %d records)", prev))
-	} else if prev > 0 && now < prev {
-		if pct := 100 * float64(prev-now) / float64(prev); pct > DefaultFeedDropPercent {
-			out = append(out, fmt.Sprintf("the feed has %d records, %.0f%% fewer than the last good run's %d (limit %.0f%%)", now, pct, prev, DefaultFeedDropPercent))
-		}
-	}
-	return out
+	return FeedChecksWith(prev, now, partial, DefaultFeed())
 }
 
 // Decision is what Admit decided: the caller applies Applied and nothing else.
@@ -235,13 +226,17 @@ func Admit(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
 		d.Applied = items
 		return d, nil
 	}
-	pol, err := PolicyOf(tx, req.Category)
+	ref := refOf(tx, req)
+	tp, err := PolicyOf(tx, req.Category)
 	if err != nil {
 		return nil, err
 	}
-	if req.SourceDriven && pol.Default && pol.Mode == ModeHoldExcess {
-		pol.Mode = ModeHoldAll
+	ov, err := SourcePolicyOf(tx, ref, req.Category)
+	if err != nil {
+		return nil, err
 	}
+	res := Resolve(tp, ov, req.SourceDriven)
+	pol := res.Policy
 	d.Mode, d.WindowMinutes = pol.Mode, pol.WindowMinutes
 	if pol.Mode == ModeOff {
 		d.Applied = items
@@ -256,8 +251,21 @@ func Admit(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
 		if pop, err = tx.DeletionPopulation(req.Category); err != nil {
 			return nil, err
 		}
+		if res.Overridden {
+			// the percent of what the source itself reported last time, when it has reported
+			if n, ok, err := tx.DeletionSourceCount(ref.Kind, ref.ID, req.Category); err != nil {
+				return nil, err
+			} else if ok && n > 0 {
+				pop = n
+			}
+		}
 	}
-	used, err := tx.DeletionsApplied(req.Category, now.Add(-pol.Window()))
+	var used int
+	if res.Overridden {
+		used, err = tx.DeletionsAppliedBySource(ref.Kind, ref.ID, req.Category, now.Add(-pol.Window()))
+	} else {
+		used, err = tx.DeletionsApplied(req.Category, now.Add(-pol.Window()))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -279,10 +287,15 @@ func Admit(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
 	if err := tx.RecordDeletions(req.Category, len(d.Applied), req.Source, now, now.Add(-pol.Window()-MaxPrune)); err != nil {
 		return nil, err
 	}
+	if ref.Valid() {
+		if err := tx.RecordSourceDeletions(ref.Kind, ref.ID, req.Category, len(d.Applied), now, now.Add(-pol.Window()-MaxPrune)); err != nil {
+			return nil, err
+		}
+	}
 	if len(d.Held) == 0 {
 		return d, nil
 	}
-	if err := hold(tx, now, req, pol, pop, d); err != nil {
+	if err := hold(tx, now, req, res, ref, pop, d); err != nil {
 		return nil, err
 	}
 	return d, nil
@@ -307,9 +320,15 @@ type reason struct {
 	PreviousCount int      `json:"previous_count,omitempty"`
 	NewCount      int      `json:"new_count,omitempty"`
 	SourceDriven  bool     `json:"source_driven,omitempty"`
+	// SourceKind and SourceRef name the source whose settings were in force; SourceOverride says they
+	// were its own thresholds.
+	SourceKind     string `json:"source_kind,omitempty"`
+	SourceRef      string `json:"source_ref,omitempty"`
+	SourceOverride bool   `json:"source_override,omitempty"`
 }
 
-func hold(tx *store.TenantTx, now time.Time, req Request, pol Policy, pop int, d *Decision) error {
+func hold(tx *store.TenantTx, now time.Time, req Request, res Resolved, ref SourceRef, pop int, d *Decision) error {
+	pol := res.Policy
 	items := make([]store.DeletionHoldItem, len(d.Held))
 	for i, it := range d.Held {
 		items[i] = store.DeletionHoldItem{Kind: it.Kind, Ref: it.Ref, Label: it.Label}
@@ -363,7 +382,7 @@ func hold(tx *store.TenantTx, now time.Time, req Request, pol Policy, pop int, d
 	raw, err := json.Marshal(reason{Category: req.Category, WindowMinutes: pol.WindowMinutes, MaxCount: pol.MaxCount,
 		MaxPercent: pol.MaxPercent, Population: pop, Limit: d.Limit, UsedBefore: d.Used, Attempted: d.Attempted,
 		Applied: len(d.Applied), Mode: pol.Mode, Sanity: req.Sanity, PreviousCount: req.PrevCount, NewCount: req.NewCount,
-		SourceDriven: req.SourceDriven})
+		SourceDriven: req.SourceDriven, SourceKind: ref.Kind, SourceRef: ref.ID, SourceOverride: res.Overridden})
 	if err != nil {
 		return err
 	}
@@ -373,6 +392,9 @@ func hold(tx *store.TenantTx, now time.Time, req Request, pol Policy, pop int, d
 		return err
 	}
 	d.HoldID = h.ID
+	if err := openTask(tx, now, h, d); err != nil {
+		return err
+	}
 	return audit(tx, now, "deletion_guard.held", h, ojson.Object{{Key: "hold_id", Value: h.ID}, {Key: "category", Value: h.Category},
 		{Key: "mode", Value: pol.Mode}, {Key: "window_minutes", Value: pol.WindowMinutes}, {Key: "limit", Value: d.Limit},
 		{Key: "used_before", Value: d.Used}, {Key: "attempted", Value: d.Attempted}, {Key: "applied", Value: len(d.Applied)},

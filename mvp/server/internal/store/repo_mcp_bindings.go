@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// MCP resource bindings (schema/0690_mcp_resource_bindings.sql, issue #479):
+// MCP resource bindings (schema/0700_mcp_resource_bindings.sql, issue #479):
 // the authorization server issuer and the audience a registered MCP resource
 // expects its tokens to carry. internal/mcpauth decides what a binding means;
 // the store holds it.

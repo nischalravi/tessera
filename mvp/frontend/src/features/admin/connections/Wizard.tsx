@@ -9,6 +9,7 @@ import { CircleCheck, FlaskConical, Play, Power, ShieldCheck, Trash2, Wand2 } fr
 import {
   Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, readiness, useApi,
 } from "../../../api";
+import { SourceDeletionGuard } from "../SourceDeletionGuard";
 import {
   Badge, Button, Callout, AttestInsteadDialog, ChecklistPanel, EmptyState, Kpi, Loading, Page, ReasonDialog, Step, Stepper, useConfirm, useToast,
 } from "../../../components";
@@ -440,6 +441,7 @@ export function ConnectionDetail() {
             {step === "activate" && <ActivateStep conn={conn} />}
             {conn.state === "draft" && conn.next && (step === "connect" || step === "scope" || step === "mapping") && <ReadyToValidate conn={conn} onDone={() => { refresh(); setStep("validate"); }} />}
           </div>
+          {!conn.retired_at && <SourceDeletionGuard kind="connection" id={conn.id} />}
         </div>
         <div className="wizard-side">
           {cl ? (

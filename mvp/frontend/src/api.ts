@@ -4844,6 +4844,50 @@ export interface DeletionPolicy {
 export interface DeletionGuardView {
   categories: DeletionPolicy[]; hold_expiry_hours: number; open_holds: number;
   defaults: Record<DeletionCategory, { max_count: number | null; max_percent: number | null; window_minutes: number; mode: DeletionMode }>;
+  /** Every source that has its own threshold or feed checks, one row per source and category. */
+  sources: DeletionSourceRow[];
+  /** The feed sanity of a source with no settings. */
+  feed_defaults: FeedSettings;
+}
+
+export type DeletionSourceKind = "connection" | "loader" | "vms_source";
+
+/** How far a source's record count may fall against its last good run, and whether an empty feed is held. */
+export interface FeedSettings { drop_percent: number; empty_check: boolean }
+
+/** A source's own settings for one category. mode is absent when it inherits the category's thresholds. */
+export interface DeletionSourceOverride {
+  kind: DeletionSourceKind; source_id: string; category: DeletionCategory;
+  mode?: DeletionMode; max_count: number | null; max_percent: number | null; window_minutes?: number;
+  feed_drop_percent: number | null; feed_empty_check: boolean | null; version?: number; updated_at?: string;
+}
+
+export interface ResolvedPolicy {
+  category: DeletionCategory; max_count: number | null; max_percent: number | null; window_minutes: number; mode: DeletionMode;
+  feed: FeedSettings; overridden: boolean;
+}
+
+export interface DeletionSourceRow extends DeletionSourceOverride { name: string; effective: ResolvedPolicy }
+
+export interface DeletionSourceCategory {
+  category: DeletionCategory;
+  /** The category's own setting. */
+  tenant: { max_count: number | null; max_percent: number | null; window_minutes: number; mode: DeletionMode; default: boolean };
+  override: DeletionSourceOverride | null;
+  effective: ResolvedPolicy;
+  /** The record count of the source's last good run. */
+  last_count: number | null;
+  used: number; limit: number | null;
+}
+
+/** GET /api/admin/deletion-guard/sources/{kind}/{id}. */
+export interface DeletionSourceView { kind: DeletionSourceKind; source_id: string; name: string; categories: DeletionSourceCategory[]; feed_defaults: FeedSettings }
+
+/** One entry of the "sources" of a deletion_guard.update: set (mode with thresholds and/or feed settings) or remove a source's override. */
+export interface DeletionSourceInput {
+  kind: DeletionSourceKind; source_id: string; category: DeletionCategory; remove?: boolean;
+  mode?: DeletionMode; max_count?: number | null; max_percent?: number | null; window_minutes?: number;
+  feed_drop_percent?: number; feed_empty_check?: boolean;
 }
 
 export type HoldStatus = "held" | "released" | "partially_released" | "discarded" | "expired";
@@ -4855,7 +4899,9 @@ export interface DeletionHold {
   id: string; category: DeletionCategory; status: HoldStatus; mode: DeletionMode;
   reason: { window_minutes?: number; max_count?: number | null; max_percent?: number | null; limit?: number | null; used_before?: number; attempted?: number; applied?: number; population?: number;
     /** Why the feed itself looks broken (empty, much shorter than the last good run, a partial read). */
-    sanity?: string[]; previous_count?: number; new_count?: number; source_driven?: boolean };
+    sanity?: string[]; previous_count?: number; new_count?: number; source_driven?: boolean;
+    /** The source whose own settings were in force, and whether they were its own thresholds. */
+    source_kind?: string; source_ref?: string; source_override?: boolean };
   actor: string; actor_name?: string; source: string; source_id: string; correlation_id: string; item_count: number;
   created_at: string; expires_at: string; resolved_at: string | null; resolved_by: string | null; note: string | null;
   items?: DeletionHoldItem[];
@@ -4872,6 +4918,11 @@ export const deletionGuard = {
   approve: (id: string, items?: number[]) => api<HoldDecision>(`/admin/deletion-holds/${encodeURIComponent(id)}/approve`, items ? { items } : {}),
   discard: (id: string, note = "") => api<HoldDecision>(`/admin/deletion-holds/${encodeURIComponent(id)}/discard`, { note }),
   /** Thresholds change through an admin change request: tightening applies at once, loosening needs a second admin. */
-  change: (policies: DeletionPolicyInput[], holdExpiryHours?: number) =>
-    adminChanges.submit("deletion_guard.update", { ...(policies.length ? { policies } : {}), ...(holdExpiryHours !== undefined ? { hold_expiry_hours: holdExpiryHours } : {}) }),
+  change: (policies: DeletionPolicyInput[], holdExpiryHours?: number, sources: DeletionSourceInput[] = []) =>
+    adminChanges.submit("deletion_guard.update", {
+      ...(policies.length ? { policies } : {}), ...(sources.length ? { sources } : {}),
+      ...(holdExpiryHours !== undefined ? { hold_expiry_hours: holdExpiryHours } : {}),
+    }),
+  /** One source's settings per category: the category's, its override, what applies, its last good record count. */
+  sourcePath: (kind: DeletionSourceKind, id: string) => `/admin/deletion-guard/sources/${kind}/${encodeURIComponent(id)}`,
 };

@@ -151,6 +151,8 @@ var tables = []string{
 	// deletion threshold guard (schema/0670_deletion_guard.sql)
 	"deletion_guard_policies", "deletion_guard_settings", "deletion_guard_counters", "deletion_guard_ledger",
 	"deletion_holds", "deletion_hold_items",
+	// per-source settings (schema/0690_deletion_guard_sources.sql)
+	"deletion_guard_source_policies", "deletion_guard_source_state", "deletion_guard_source_ledger",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)
@@ -252,7 +254,7 @@ var tables = []string{
 	"auth_methods", "auth_method_sources", "account_auth_signals", "mfa_posture_snapshots",
 	// AI agent discovery (schema/0375_agent_discovery.sql)
 	"agent_profiles", "mcp_findings",
-	// MCP resource bindings to an issuer and audience (schema/0690_mcp_resource_bindings.sql)
+	// MCP resource bindings to an issuer and audience (schema/0700_mcp_resource_bindings.sql)
 	"mcp_resource_bindings",
 	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)
 	"identity_link_requests",
@@ -448,6 +450,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 		return err
 	}
 	if err := d.upgradeAdminChangeTypes(ctx); err != nil {
+		return err
+	}
+	if err := d.upgradeGrpInboxKinds(ctx); err != nil {
 		return err
 	}
 	files, err := fs.Glob(schemaFS, "schema/*.sql")

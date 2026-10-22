@@ -19,10 +19,10 @@
 CREATE TABLE IF NOT EXISTS grp_inbox_tasks (
   id                   TEXT PRIMARY KEY,
   tenant_id            TEXT NOT NULL REFERENCES tenants (id),
-  kind                 TEXT NOT NULL CHECK (kind IN ('deprovisioning','rule','micro_certification','attestation','attestation_overdue')),
+  kind                 TEXT NOT NULL CHECK (kind IN ('deprovisioning','rule','micro_certification','attestation','attestation_overdue','deletion_held')),
   title                TEXT NOT NULL,
   detail               TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(detail)),
-  object_type          TEXT NOT NULL CHECK (object_type IN ('folder','group')),
+  object_type          TEXT NOT NULL CHECK (object_type IN ('folder','group','deletion_hold')),
   object_id            TEXT NOT NULL,
   subject_identity_id  INTEGER REFERENCES identities (id),
   assignee_identity_id INTEGER REFERENCES identities (id),

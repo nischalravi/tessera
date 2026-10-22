@@ -72,6 +72,9 @@ func discoverGuarded(ctx context.Context, conns []connectors.Connector, full boo
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: discover: %w", cn.System(), err)
 		}
+		if res != nil && res.System == "" {
+			res.System = cn.System()
+		}
 		results = append(results, res)
 	}
 	return results, skipped, nil

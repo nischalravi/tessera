@@ -220,6 +220,11 @@ type MCPFindingRecord struct {
 
 // DiscoveryResult is a full snapshot of one system.
 type DiscoveryResult struct {
+	// System is the connector's system, set by the sync that ran it. The deletion guard resolves it to the
+	// connection (SourceID, which a caller may set instead) to apply that source's own settings and keep
+	// its last good record counts; a result with neither is judged under the tenant's settings alone.
+	System   string
+	SourceID string
 	// Partial, when set, says the read was partial or failed part way (why): the deletion guard then
 	// holds every removal this result would cause (internal/deleteguard).
 	Partial     string
