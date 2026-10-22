@@ -210,6 +210,20 @@ func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
 		return nil, err
 	}
 	feed := feedCheck{}
+	if in.Kind == KindAccounts {
+		// accounts this file lists are not being dropped: a held drop of one (from an earlier, truncated
+		// upload) is withdrawn, so a corrected feed is not undone by releasing the old hold
+		listed := make(map[string]bool, len(accounts))
+		for _, a := range accounts {
+			listed[a.Key] = true
+		}
+		if _, err := deleteguard.Relist(c, now, deleteguard.CatAccounts, "flatfile:"+in.System, func(it *store.DeletionHoldItem) bool {
+			var k [2]string
+			return it.Kind == ItemDropAccount && json.Unmarshal([]byte(it.Ref), &k) == nil && k[0] == in.System && listed[k[1]]
+		}); err != nil {
+			return nil, err
+		}
+	}
 	if in.Kind == KindAccounts && len(delta.Removed) > 0 {
 		// the file is the feed: an empty or much shorter one than the last good upload is not trusted to say who is gone
 		all, err := c.Accounts()
@@ -395,6 +409,16 @@ func ReleaseDrop(c *store.TenantTx, now time.Time, it *store.DeletionHoldItem) (
 	var k [2]string
 	if err := json.Unmarshal([]byte(it.Ref), &k); err != nil {
 		return "", "", fmt.Errorf("flatfile: bad held drop: %w", err)
+	}
+	// the latest upload decides: an account it lists is not dropped (the feed was corrected since)
+	recs, err := c.FlatRecords(k[0], KindAccounts)
+	if err != nil {
+		return "", "", err
+	}
+	for _, r := range recs {
+		if r.Key == k[1] {
+			return deleteguard.ItemGone, "the latest upload lists the account again", nil
+		}
 	}
 	a, err := c.AccountByXID(k[0], k[1])
 	if errors.Is(err, store.ErrNotFound) {
