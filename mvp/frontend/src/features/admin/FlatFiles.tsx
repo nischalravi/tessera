@@ -223,7 +223,7 @@ function UploadCard({ app, canUpload }: { app: FlatMapping; canUpload: boolean }
 function UploadSummary({ u }: { u: FlatUpload }) {
   return u.status === "applied" ? (
     <Callout tone="ok">
-      Applied: {u.added} added, {u.removed} removed, {u.changed} changed, {u.unchanged} unchanged ({u.rows_total} rows).
+      Applied: {u.added} added, {u.removed} removed{u.held ? ` (${u.held} more held for approval)` : ""}, {u.changed} changed, {u.unchanged} unchanged ({u.rows_total} rows).
     </Callout>
   ) : (
     <Callout tone="bad">Rejected: {u.rows_rejected > 0 ? `${u.rows_rejected} row(s) failed validation.` : "the file could not be read."} Nothing was imported.</Callout>
