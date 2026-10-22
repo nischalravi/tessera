@@ -45,6 +45,51 @@ func (e *Error) Error() string { return e.Msg }
 // (mapped to HTTP 404).
 var ErrUnknownItem = &Error{"unknown review item"}
 
+// ErrSelfReview refuses a decision by the item's own subject (mapped to HTTP
+// 403, code self_review): nobody certifies their own access (issue #434).
+var ErrSelfReview = &Error{"a reviewer cannot decide an item about themselves"}
+
+// refuseSelf returns ErrSelfReview when the decider is the item's subject: a
+// platform user linked to the subject's identity, or the same person as one
+// (SameActor). A decider with no platform user (the scheduler) passes.
+func refuseSelf(c *store.TenantTx, item *store.ReviewItem, by store.UserRef) error {
+	if by.ID == uuid.Nil {
+		return nil
+	}
+	users, err := c.PlatformUserIDsForIdentity(item.IdentityID)
+	if err != nil {
+		return err
+	}
+	for _, u := range users {
+		same, err := c.SameActor(by.ID.String(), u.String())
+		if err != nil {
+			return err
+		}
+		if same {
+			return ErrSelfReview
+		}
+	}
+	return nil
+}
+
+// avoidSelf keeps a subject from being their own reviewer: when the picked
+// reviewer is the subject it returns the type's fallback reviewer (the
+// escalation target), else the security lead, else nil.
+func avoidSelf(r *Resolver, subject, reviewer, lead *store.Identity) *store.Identity {
+	if reviewer == nil || reviewer.ID != subject.ID {
+		return reviewer
+	}
+	if r != nil {
+		if f := r.active(r.Settings.FallbackID); f != nil && f.ID != subject.ID {
+			return f
+		}
+	}
+	if lead != nil && lead.ID != subject.ID {
+		return lead
+	}
+	return nil
+}
+
 type deptTarget struct {
 	dept string
 	null bool
@@ -238,6 +283,7 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 			if reviewer == nil {
 				reviewer = securityLead
 			}
+			reviewer = avoidSelf(scope.Resolver, ident, reviewer, securityLead)
 			d, null := deptKey(ident.Department)
 			deptN := deptSizes[deptK{d, null}]
 			peers := targetByDept[deptTarget{d, null, ag.Dst}]
@@ -388,6 +434,9 @@ func Decide(c *store.TenantTx, now time.Time, itemID int64, decision string, by 
 		return nil, ErrUnknownItem
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := refuseSelf(c, item, by); err != nil {
 		return nil, err
 	}
 	// A decided item is final. The same decision again is idempotent (nothing

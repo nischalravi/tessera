@@ -135,7 +135,7 @@ func adminCmd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if os.Getenv("TESSERA_ENV") == "" {
 		return errors.New("set TESSERA_ENV=dev, test or prod")
 	}
-	cfg, err := config.Load(os.Getenv)
+	cfg, err := config.Load(envWithDB(*dbFlag))
 	if err != nil {
 		return err
 	}

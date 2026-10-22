@@ -546,7 +546,9 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/reviews/campaigns/{id}/population` · `GET /api/reviews/campaigns/{id}/export?format=csv|json` ·
 `POST /api/reviews/qa/{id}/decision {decision, comment?}` · `PUT /api/reviews/settings {qa_sample_pct}` (see "Review populations") ·
 `POST /api/reviews/items/{id}/decision {decision, comment?, rule_action?}` (a decision is final: repeating it is a 200 no-op, a different one is
-`409 review_item_decided` and an audited `review.decide.refused`) ·
+`409 review_item_decided` and an audited `review.decide.refused`; nobody decides an item about themselves: `403 self_review`, also from a
+second platform user linked to the same identity (`SameActor`), audited as `review.decide.refused`. A campaign never assigns an item to its
+own subject: it goes to the review type's fallback (escalation) reviewer, else the security lead, else stays unassigned) ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
@@ -3722,7 +3724,8 @@ DSN) must run `REVOKE tessera_app FROM tessera_owner;`, create the `LOGIN` passw
   superuser, has `BYPASSRLS`, owns tables in the schema, or is a member of the owner role (that includes
   `TESSERA_DB_APP` unset, which would make the owner the request login). `TESSERA_ENV=prod` additionally
   refuses a postgres `TESSERA_DB` without `TESSERA_DB_APP` (a different login, with `sslmode=require|verify-ca|verify-full`
-  on both DSNs). `TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP=true` skips the refusal in dev (for example a single-role
+  on both DSNs). Those checks run on the DSN the command opens: `--db` (which defaults to `TESSERA_DB`) replaces
+  `TESSERA_DB` before validation in `serve`, `worker`, `admin` and the audit checkpoint. `TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP=true` skips the refusal in dev (for example a single-role
   laptop database); prod refuses to start with it set. The owner should be a superuser or `BYPASSRLS`:
   the cross-tenant guards for graph node keys are `SECURITY DEFINER` functions that must see other
   tenants' rows. `tessera_app` must exist before the migrations run (they grant it its privileges).

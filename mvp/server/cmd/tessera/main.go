@@ -220,7 +220,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	// Typed configuration and the production guard rails come first: an
 	// unsafe production setting refuses to start before anything else runs.
-	cfg, err := config.Load(os.Getenv)
+	cfg, err := config.Load(envWithDB(o.db))
 	if err != nil {
 		return err
 	}
@@ -296,6 +296,19 @@ func dbPath(v string) string {
 		return "tessera.db"
 	}
 	return strings.TrimPrefix(v, "sqlite:///")
+}
+
+// envWithDB is os.Getenv with TESSERA_DB replaced by the database the command
+// will actually open (its --db flag, which defaults to TESSERA_DB). The prod
+// DSN checks in config.Load then run against the connection in use, not the
+// environment variable alone (#435).
+func envWithDB(db string) func(string) string {
+	return func(k string) string {
+		if k == "TESSERA_DB" && db != "" {
+			return db
+		}
+		return os.Getenv(k)
+	}
 }
 
 func policyFS() fs.FS {
