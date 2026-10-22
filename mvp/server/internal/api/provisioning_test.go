@@ -665,6 +665,13 @@ func TestProvisioning_VaultTargetConfig(t *testing.T) {
 	if body, _ := json.Marshal(v); strings.Contains(string(body), "k3y") {
 		t.Error("the response carries the credential")
 	}
+	v = h.target(`{"kind":"sap","base_url":"https://s4.example.com","token":"client:s3cr3t-erp","write_back":true}`, 200)
+	if v["kind"] != "sap" || v["has_credential"] != true {
+		t.Errorf("ERP target = %v", v)
+	}
+	if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, `{"kind":"oracle","base_url":"https://erp.example.com","token":"nocolon"}`); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("an ERP credential without a secret: %d", rec.Code)
+	}
 	if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, `{"kind":"beyondtrust","base_url":"https://other.example.com","write_back":true}`); rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("a moved origin without a credential: %d %s", rec.Code, rec.Body)
 	}

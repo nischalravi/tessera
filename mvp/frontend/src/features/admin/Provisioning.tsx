@@ -25,7 +25,7 @@ const INFLIGHT = new Set<ProvStatus>(["queued", "sent", "pending_verification"])
 interface OpList { items: ProvOp[]; counts: Partial<Record<ProvStatus, number>> }
 
 /** Admin → Provisioning: the changes sent to target systems and whether a re-read confirmed them (issue #103). */
-const VAULT: Record<string, string> = { cyberark: "CyberArk safes", delinea: "Delinea folders", beyondtrust: "BeyondTrust smart rules" };
+const VAULT: Record<string, string> = { cyberark: "CyberArk safes", delinea: "Delinea folders", beyondtrust: "BeyondTrust smart rules", sap: "SAP roles", oracle: "Oracle Fusion roles" };
 
 export function Provisioning() {
   const { data, error, reload } = useApi<OpList>("/provisioning/ops?limit=500");
@@ -194,6 +194,8 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
             <option value="cyberark">CyberArk safe membership</option>
             <option value="delinea">Delinea Secret Server folder membership</option>
             <option value="beyondtrust">BeyondTrust Password Safe smart-rule roles</option>
+            <option value="sap">SAP role assignment</option>
+            <option value="oracle">Oracle Fusion role assignment</option>
             <option value="fake">Dev fake target (no real system)</option>
           </select>
         </label>
@@ -211,7 +213,8 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
             </select>
           </label>
         )}
-        {kind in VAULT && <p className="small muted">Adds and removes members of a safe at a profile (list, use, read, manage), then re-reads the safe. {kind === "delinea" ? "Secret Server has no role that means use." : kind === "beyondtrust" ? "Password Safe can express list and use only." : ""} Accounts are not created or disabled here.</p>}
+        {(kind === "sap" || kind === "oracle") && <p className="small muted">Assigns and removes roles, then re-reads the user. Users are not created or disabled here.</p>}
+        {kind in VAULT && kind !== "sap" && kind !== "oracle" && <p className="small muted">Adds and removes members of a safe at a profile (list, use, read, manage), then re-reads the safe. {kind === "delinea" ? "Secret Server has no role that means use." : kind === "beyondtrust" ? "Password Safe can express list and use only." : ""} Accounts are not created or disabled here.</p>}
         {kind === "fake" && (
           <label className="field">Simulated fault
             <select className="input" value={fault} onChange={(e) => setFault(e.target.value)}>
@@ -222,7 +225,7 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
           </label>
         )}
         {kind !== "fake" && (
-          <label className="field">{kind === "okta" ? "API token" : kind in VAULT ? "Service user and secret (user:secret)" : "Bearer token"}
+          <label className="field">{kind === "okta" ? "API token" : kind in VAULT ? kind === "sap" || kind === "oracle" ? "OAuth client (client_id:client_secret)" : "Service user and secret (user:secret)" : "Bearer token"}
             <input className="input" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder={target?.has_credential ? "Stored; leave empty to keep it (same kind and host only)" : ""} />
             <span className="hint">Write-only. Sealed under the platform key and never shown again.</span>
           </label>

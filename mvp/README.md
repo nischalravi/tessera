@@ -2322,6 +2322,31 @@ integrates with the vault; it does not replace it.
   writes and writes accepted and dropped. BeyondTrust's role names and the Delinea secret-role mapping in particular
   need confirming on a real tenant.
 
+### ERP roles, t-codes and authorization objects (SAP, Oracle; issue #304)
+
+`internal/connectors/erp` reads an ERP's authorization model as fine-grained entitlements and writes role
+assignment back through provisioning.
+
+- **Read.** `TESSERA_CONNECTORS=sap` (or `oracle`) with `TESSERA_<SYSTEM>_BASE_URL`, `_CLIENT_ID`, `_CLIENT_SECRET`
+  (a `file:`/`env:` reference), optional `_API_ROOT` and `_TOKEN_PATH`. A role is a requestable group
+  (`erp_role`; privileged when it holds a critical transaction such as SU01, SM59 or SE38, or change on a critical
+  object such as S_TABU_DIS). A composite role is `member_of` each child, so holding it holds what the children
+  grant. A t-code (Oracle: function-security privilege) is a permission whose Action is the t-code (`FB60`); an
+  authorization object is a permission whose Action is `OBJECT[FIELD=v1,v2;FIELD2=v]` with fields and values sorted
+  (`F_BKPF_BUK[ACTVT=01,02;BUKRS=1000]`; Oracle data-security policies map to the object, `ACTVT` and `CONDITION`
+  only). A user is an account correlated by e-mail, `member_of` the roles it holds **now** (an expired or
+  not-yet-valid assignment holds nothing), disabled when locked or past its validity.
+- **SoD.** Those actions are what the SoD functions of #298 select: a function's selector `name_pattern` is `FB60`
+  or `F_BKPF_BUK[*ACTVT=*02*`, and a violation is found for whoever holds both halves through any role, composite
+  or not (`sod_test.go` runs the whole path through ingest, graph and detection for both systems).
+- **Write.** Target kinds `sap` and `oracle` (credential `client_id:client_secret`): `add_entitlement` and
+  `remove_entitlement` with the role id as the group, then a re-read of the user. Idempotent; accounts are not
+  created, changed or disabled; a missing user or role is a permanent error, a 5xx a retry.
+- **Contract, not verified against a real system.** SAP has no single REST API for roles: the contract is an OData
+  service the SAP team publishes over `AGR_*` and `USR*` (shapes in `sap.go`), and Oracle's is the security REST
+  service (`oracle.go`). Both are exercised by `erpfake` (paging over 230 roles and users, a refused token, 429, 5xx,
+  malformed, failing and dropped writes). Paths are settings; the first real tenant should confirm field names.
+
 ### Identity containment (kill switch)
 
 A disabled account does not end its live sessions, refresh tokens or OAuth consents. Two plan

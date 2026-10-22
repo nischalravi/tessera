@@ -12,6 +12,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -37,6 +38,9 @@ const (
 	KindSAP    = "sap"
 	KindOracle = "oracle"
 )
+
+// ERPKinds are the ERP target kinds; the kind is the system's name in internal/connectors/erp.
+var ERPKinds = []string{KindSAP, KindOracle}
 
 // PAMKinds are the vault target kinds; the kind is the vendor's name in internal/connectors/pam.
 var PAMKinds = []string{KindCyberArk, KindDelinea, KindBeyondTrust}
@@ -217,6 +221,8 @@ func (e *Engine) build(pt *store.ProvTarget, token string) (target.Connector, er
 		return &okta.Client{HTTP: e.HTTP, BaseURL: pt.BaseURL, Token: token}, nil
 	case KindCyberArk, KindDelinea, KindBeyondTrust:
 		return e.buildVault(pt, token, s)
+	case KindSAP, KindOracle:
+		return e.buildERP(pt, token, s)
 	}
 	return nil, fmt.Errorf("unknown target kind %q", pt.Kind)
 }
@@ -234,6 +240,20 @@ func (e *Engine) buildVault(pt *store.ProvTarget, token string, s Settings) (tar
 		return nil, err
 	}
 	return &pam.Target{V: v}, nil
+}
+
+// buildERP builds the target of an ERP. The credential is "client_id:client_secret".
+func (e *Engine) buildERP(pt *store.ProvTarget, token string, s Settings) (target.Connector, error) {
+	i := strings.IndexByte(token, ':')
+	if i <= 0 || i == len(token)-1 {
+		return nil, errors.New("the ERP credential is client_id:client_secret")
+	}
+	sys, err := erp.Open(erp.Config{System: pt.Kind, BaseURL: pt.BaseURL, ClientID: token[:i], ClientSecret: connsync.NewSecret(token[i+1:]),
+		APIRoot: s.APIRoot}, e.Runtime, e.HTTP, e.Clock)
+	if err != nil {
+		return nil, err
+	}
+	return &erp.Target{S: sys}, nil
 }
 
 func (e *Engine) workerCtx(ctx context.Context) context.Context {

@@ -267,7 +267,7 @@ type targetInput struct {
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	var st provision.Settings
 	switch in.Kind {
-	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust:
+	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle:
 		if s.cfg.Env == "prod" && !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://") {
 			return st, badRequest("invalid_base_url", "base_url must be https")
 		}
@@ -293,16 +293,16 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta, cyberark, delinea, beyondtrust or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, cyberark, delinea, beyondtrust, sap, oracle or fake")
 	}
-	vault := slices.Contains(provision.PAMKinds, in.Kind)
+	vault := slices.Contains(provision.PAMKinds, in.Kind) || slices.Contains(provision.ERPKinds, in.Kind) // a target with a path root and a user:secret credential
 	switch {
 	case (in.Kind == provision.KindOkta || vault) && in.Dialect != "":
 		return st, badRequest("invalid_dialect", "dialect applies to SCIM targets only")
 	case in.Kind != provision.KindOkta && !vault && !slices.Contains([]string{"", "standard", "entra"}, in.Dialect):
 		return st, badRequest("invalid_dialect", "dialect must be standard or entra")
 	case in.APIRoot != "" && !vault:
-		return st, badRequest("invalid_api_root", "api_root applies to vault targets only")
+		return st, badRequest("invalid_api_root", "api_root applies to vault and ERP targets only")
 	case in.APIRoot != "" && (!strings.HasPrefix(in.APIRoot, "/") || strings.Contains(in.APIRoot, "..") || strings.Contains(in.APIRoot, "//") || len(in.APIRoot) > 200):
 		return st, badRequest("invalid_api_root", "api_root must be an absolute path")
 	}
@@ -386,8 +386,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		credential = "kept"
 	}
 	switch {
-	case in.Token != "" && slices.Contains(provision.PAMKinds, in.Kind) && !strings.Contains(strings.Trim(in.Token, ":"), ":"):
-		return 0, nil, badRequest("invalid_credential", "a vault credential is user:secret")
+	case in.Token != "" && isUserSecretKind(in.Kind) && !strings.Contains(strings.Trim(in.Token, ":"), ":"):
+		return 0, nil, badRequest("invalid_credential", "the credential is user:secret")
 	case in.Token != "":
 		if t.CredentialEnc, err = provision.SealToken(s.provSeal, c.Tenant(), t.ID, in.Token); err != nil {
 			return 0, nil, err
@@ -408,8 +408,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 			Msg: "changing the target's kind or origin (scheme, host, port) needs a new token; the stored credential does not move with it"}
 	case in.Kind == provision.KindOkta && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
-	case slices.Contains(provision.PAMKinds, in.Kind) && len(t.CredentialEnc) == 0:
-		return 0, nil, badRequest("invalid_credential", "a vault target needs its credential as user:secret")
+	case isUserSecretKind(in.Kind) && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "a vault or ERP target needs its credential as user:secret (client_id:client_secret for an ERP)")
 	}
 	if err := c.UpsertProvTarget(t, now); err != nil {
 		return 0, nil, err
@@ -432,6 +432,11 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, viewTarget(saved, conn.Name), nil
+}
+
+// isUserSecretKind: the kinds whose credential is "user:secret" (vaults and ERPs).
+func isUserSecretKind(k string) bool {
+	return slices.Contains(provision.PAMKinds, k) || slices.Contains(provision.ERPKinds, k)
 }
 
 // targetOrigin is the scheme, host and port of a target URL, lower-cased and
