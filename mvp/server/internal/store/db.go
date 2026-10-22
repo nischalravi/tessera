@@ -208,6 +208,8 @@ var tables = []string{
 	"request_drafts",
 	// durable job queue (schema/0320_queue.sql)
 	"queue_jobs", "queue_schedules", "queue_workers", "agent_jobs",
+	// per-target limits and breaker state of the connector workers (schema/0620_connection_limits.sql)
+	"connection_limits", "worker_target_states",
 	// role mining (schema/0420_role_mining.sql)
 	"role_mining_runs", "role_mining_candidates",
 	// log retention settings and archive segments (schema/0400, 0401; issue #298)

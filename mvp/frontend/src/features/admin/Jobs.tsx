@@ -122,8 +122,11 @@ function QueueSection() {
 function WorkersTable() {
   const { data, error } = useApi<QueueWorker[]>("/queue/workers");
   const stale = (data ?? []).filter((w) => w.status === "stale").length;
+  const tripped = (data ?? []).flatMap((w) => w.targets.filter((t) => t.breaker !== "closed"));
+  const names = [...new Set(tripped.map((t) => t.connection || t.connection_id))];
   return (
     <div className="stack-sm">
+      {names.length > 0 && <Callout tone="warn">Calls to {names.join(", ")} are paused: the circuit {names.length === 1 ? "breaker is" : "breakers are"} open after repeated failures. A probe call is made when the cooldown ends, and work resumes if it succeeds.</Callout>}
       {stale > 0 && <Callout tone="warn">{stale} {stale === 1 ? "worker has" : "workers have"} stopped reporting. Its running jobs return to the queue when their leases expire and another worker takes them.</Callout>}
       <DataTable
         id="queue-workers"
@@ -137,9 +140,17 @@ function WorkersTable() {
           { id: "status", header: "Health", sort: (r) => r.status, cell: (r) => <Badge tone={r.status === "healthy" ? "ok" : "warning"}>{r.status}</Badge> },
           { id: "beat", header: "Last heartbeat", sort: (r) => r.last_heartbeat_at, cell: (r) => <span className="small nowrap" title={fmtDate(r.last_heartbeat_at)}>{r.lag_seconds < 90 ? `${r.lag_seconds} s ago` : relTime(r.last_heartbeat_at.replace("Z", ""))}</span> },
           { id: "kinds", header: "Runs", csv: (r) => r.kinds.join(" "), cell: (r) => <span className="xs">{r.kinds.map((k) => KIND[k] ?? k).join(", ") || "—"}</span>, hideNarrow: true },
+          { id: "targets", header: "Targets", csv: (r) => r.targets.map((t) => `${t.connection}:${t.breaker}`).join(" "), sort: (r) => r.targets.filter((t) => t.breaker !== "closed").length,
+            cell: (r) => {
+              const open = r.targets.filter((t) => t.breaker !== "closed");
+              if (r.targets.length === 0) return <span className="xs faint">none called</span>;
+              return open.length === 0
+                ? <Badge tone="ok">{r.targets.length} ok</Badge>
+                : <span className="xs" title={open.map((t) => `${t.connection || t.connection_id}: ${t.last_error || t.breaker}`).join("\n")}><Badge tone="warning">{open.length} paused</Badge> {open.map((t) => t.connection || t.connection_id).join(", ")}</span>;
+            }, hideNarrow: true },
           { id: "load", header: "Running", num: true, sort: (r) => r.running, cell: (r) => <span className="small tnum">{r.running} / {r.concurrency}</span>, hideNarrow: true },
         ]}
-        searchText={(r) => `${r.worker_id} ${r.kinds.join(" ")} ${r.status}`}
+        searchText={(r) => `${r.worker_id} ${r.kinds.join(" ")} ${r.status} ${r.targets.map((t) => t.connection).join(" ")}`}
         searchPlaceholder="Search workers…"
         empty="No worker has reported yet. Start the API, or run tessera worker, to see it here."
       />
