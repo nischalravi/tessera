@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -161,6 +162,30 @@ func (c *Collector) Result() *Result {
 		Message: fmt.Sprintf("Deleted %d of %d: %d held for approval (threshold %s)", applied, attempted, held, last.thresholdText())}
 }
 
+// overrides marks the transactions that apply an approved release: whatever they delete is an
+// approved override, not counted and not held (a release runs code that calls Admit again).
+var overrides sync.Map // *store.TenantTx -> struct{}
+
+// Overriding reports whether tx is applying an approved release.
+func Overriding(tx *store.TenantTx) bool { _, ok := overrides.Load(tx); return ok }
+
+// AdmitFrom is Admit for a path that has no actor of its own (an ingest, a job): the actor and
+// source are read from the transaction's audit context (a signed-in user, or a named system job).
+func AdmitFrom(tx *store.TenantTx, now time.Time, category, source, sourceID, correlation string, items ...Item) (*Decision, error) {
+	req := Request{Category: category, Items: items, Source: source, SourceID: sourceID, Correlation: correlation}
+	if ac, ok := store.AuditContextFrom(tx.Context()); ok {
+		if ac.Actor.Type == "user" && ac.Actor.ID != nil {
+			req.Actor = *ac.Actor.ID
+			if req.Source == "" || req.Source == SourceSystem {
+				req.Source = SourceUser
+			}
+		} else if req.SourceID == "" && ac.Actor.Display != nil {
+			req.SourceID = *ac.Actor.Display
+		}
+	}
+	return Admit(tx, now, req)
+}
+
 // Admit vets a batch. It must run in the transaction that makes the deletions, and the caller
 // must make exactly the Applied ones in it: the ledger rows and the hold commit with them.
 func Admit(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
@@ -171,6 +196,10 @@ func Admit(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
 	sortItems(items)
 	d := &Decision{Category: req.Category, Attempted: len(items)}
 	if len(items) == 0 {
+		return d, nil
+	}
+	if Overriding(tx) {
+		d.Applied = items
 		return d, nil
 	}
 	pol, err := PolicyOf(tx, req.Category)
@@ -254,6 +283,26 @@ func hold(tx *store.TenantTx, now time.Time, req Request, pol Policy, pop int, d
 		}
 	}
 	if h != nil {
+		// an item already held (a retried run) is not held twice
+		have, err := tx.DeletionHoldItems(h.ID)
+		if err != nil {
+			return err
+		}
+		held := make(map[[2]string]bool, len(have))
+		for _, it := range have {
+			held[[2]string{it.Kind, it.Ref}] = true
+		}
+		fresh := items[:0:0]
+		for _, it := range items {
+			if !held[[2]string{it.Kind, it.Ref}] {
+				fresh = append(fresh, it)
+			}
+		}
+		if len(fresh) == 0 {
+			d.HoldID = h.ID
+			return nil
+		}
+		items = fresh
 		if err := tx.AppendDeletionHoldItems(h, items); err != nil {
 			return err
 		}

@@ -3752,8 +3752,16 @@ under them (an approved held loader run is an approved override and is not count
   the folder and its attribute definitions until the rest is released. The UI shows the message with a link to the hold.
 * **UI.** Settings → Admin → *Deletion guard* (thresholds, window use, hold expiry) and *Held deletions* (list, side panel
   with items, approve, approve the ticked items, discard).
-* **Not done in this version.** There is no Inbox task per hold (the groups Inbox is folder/group scoped): the alert and the
-  Held deletions list are the queue. Account, provisioning and identity paths are hooked in the next change.
+* **Accounts and identities.** `accounts`: a connector sync or flat-file import that reports an active account as disabled
+  or no longer lists it (the changed ones above the threshold keep their status and are held), disable and delete
+  operations queued for a target system (held at queue time with everything needed to queue them again; add, update and
+  entitlement operations are not guarded), and a leaver's account disable in an app with no connector. `identities`: a sync
+  that reports active identities as terminated or disabled, an HRIS leaver event, and the end-date leaver of the lifecycle
+  (held, the identity keeps its accounts and grants; a release runs the whole leaver plan). A sync with held changes
+  adds `held_identities` and `held_accounts` to its `connectors.sync` audit event.
+* **Not guarded, on purpose.** The manual containment disable (`POST /api/identities/{id}/disable`): holding an
+  emergency containment would defeat it. Nor is there an Inbox task per hold (the groups Inbox is folder/group scoped): the
+  alert and the Held deletions list are the queue.
 
 ## Operational monitoring (issue #303)
 

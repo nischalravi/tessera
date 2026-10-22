@@ -1,12 +1,18 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 )
 
 // The deletion threshold guard through the API (internal/deleteguard).
@@ -189,5 +195,61 @@ func TestDeletionGuardAPI_BulkActionJoinsOneHold(t *testing.T) {
 	l := e.admin.call("GET", "/api/admin/deletion-holds?status=held", "", 200)["holds"].([]any)
 	if len(l) != 1 || l[0].(map[string]any)["item_count"] != float64(3) {
 		t.Errorf("holds = %v", l)
+	}
+}
+
+// The release of holds that sources made (a sync, an import, a leaver feed) goes through the
+// same routes: the API knows how to apply every kind of held item.
+func TestDeletionGuardAPI_ReleasesSyncHolds(t *testing.T) {
+	e := newPrivEnv(t)
+	e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	feed := func(status string) *connectors.DiscoveryResult {
+		r := &connectors.DiscoveryResult{}
+		for i := 0; i < 20; i++ {
+			x := fmt.Sprintf("api-guard-%02d", i)
+			r.Identities = append(r.Identities, connectors.IdentityRecord{ExternalID: x, Name: "P " + x, Type: "human", Status: status})
+		}
+		return r
+	}
+	sync := func(at time.Time, status string) {
+		t.Helper()
+		if err := e.f.DB.InTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
+			_, err := ingest.Discovery(c, at, []*connectors.DiscoveryResult{feed(status)}, false)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sync(storetest.Now, "active")
+	sync(storetest.Now.Add(time.Minute), "terminated")
+	holds := e.admin.call("GET", "/api/admin/deletion-holds?category=identities&status=held", "", 200)["holds"].([]any)
+	if len(holds) != 1 || holds[0].(map[string]any)["source"] != "connector" || holds[0].(map[string]any)["item_count"] != float64(15) {
+		t.Fatalf("holds = %v", holds)
+	}
+	id := holds[0].(map[string]any)["id"].(string)
+	one := e.admin.call("GET", "/api/admin/deletion-holds/"+id, "", 200)
+	if its := one["items"].([]any); len(its) != 15 || !strings.Contains(its[0].(map[string]any)["label"].(string), "set to terminated") {
+		t.Fatalf("items = %v", one["items"])
+	}
+	// release only two of them: the rest is discarded
+	res := e.admin.call("POST", "/api/admin/deletion-holds/"+id+"/approve", `{"items":[0,1]}`, 200)
+	if res["status"] != "partially_released" || res["released"] != float64(2) || res["discarded"] != float64(13) {
+		t.Fatalf("partial release = %v", res)
+	}
+	ended := 0
+	if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
+		for i := 0; i < 20; i++ {
+			if p, err := c.IdentityByExternalID(fmt.Sprintf("api-guard-%02d", i)); err != nil {
+				return err
+			} else if p.Status != "active" {
+				ended++
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if ended != 5+2 { // five let through by the default threshold, two released
+		t.Errorf("%d identities ended, want 7", ended)
 	}
 }

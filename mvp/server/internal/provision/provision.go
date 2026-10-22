@@ -41,6 +41,10 @@ const (
 	Cancelled           = "cancelled"
 )
 
+// Held is the status of the operation Enqueue returns for a disable or delete the deletion guard held:
+// it is not stored and has no id; the held deletion releases it.
+const Held = "held"
+
 // Statuses lists every status, in lifecycle order.
 var Statuses = []string{Queued, Sent, PendingVerification, Verified, Mismatch, Failed, Cancelled}
 
@@ -189,6 +193,13 @@ func Enqueue(tx *store.TenantTx, now time.Time, connectionID string, c Change) (
 		return requeueIfDone(tx, now, existing)
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
+	}
+	if held, err := guardOp(tx, now, connectionID, c); err != nil || held {
+		if err != nil {
+			return nil, err
+		}
+		// the deletion guard held it (internal/deleteguard): nothing is queued until a second admin releases it
+		return &store.ProvOp{ConnectionID: connectionID, Kind: c.Kind, TargetRef: c.ref(), Source: c.Source, IdempotencyKey: c.Key, Status: Held}, nil
 	}
 	payload, err := json.Marshal(target.Request{Account: c.Account, Group: c.Group})
 	if err != nil {

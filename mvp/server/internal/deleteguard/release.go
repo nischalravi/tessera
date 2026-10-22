@@ -138,6 +138,9 @@ func Release(tx *store.TenantTx, now time.Time, id, by string, ords []int, ap Ap
 		return nil, err
 	}
 	res := &ReleaseResult{HoldID: h.ID}
+	// what the appliers delete is an approved override: Admit lets it through and does not count it
+	overrides.Store(tx, struct{}{})
+	defer overrides.Delete(tx)
 	for _, it := range sel {
 		fn := ap[it.Kind]
 		if fn == nil {

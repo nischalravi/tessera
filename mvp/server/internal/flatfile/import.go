@@ -5,11 +5,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -343,6 +345,52 @@ func dropAccount(c *store.TenantTx, now time.Time, system, xid string) error {
 	if err != nil {
 		return err
 	}
+	if a.Status == "active" {
+		// the deletion guard (internal/deleteguard): an import that drops more accounts than the
+		// threshold allows holds the rest; they stay as they are until a second admin releases them
+		ref, err := json.Marshal([2]string{system, xid})
+		if err != nil {
+			return err
+		}
+		d, err := deleteguard.AdmitFrom(c, now, deleteguard.CatAccounts, deleteguard.SourceConnector, system, "flatfile:"+system+":"+store.RT(now),
+			deleteguard.Item{Kind: ItemDropAccount, Ref: string(ref), Label: fmt.Sprintf("account %s in %s dropped by an import", a.Username, system)})
+		if err != nil {
+			return err
+		}
+		if len(d.Held) > 0 {
+			return nil
+		}
+	}
+	return disableAndDropEdges(c, now, a)
+}
+
+// ItemDropAccount is the kind of a held drop of an account the file no longer lists.
+const ItemDropAccount = "account_drop"
+
+// ReleaseDrop applies a held drop: the account is disabled and its import grants go, if it is
+// still active.
+func ReleaseDrop(c *store.TenantTx, now time.Time, it *store.DeletionHoldItem) (outcome, note string, err error) {
+	var k [2]string
+	if err := json.Unmarshal([]byte(it.Ref), &k); err != nil {
+		return "", "", fmt.Errorf("flatfile: bad held drop: %w", err)
+	}
+	a, err := c.AccountByXID(k[0], k[1])
+	if errors.Is(err, store.ErrNotFound) {
+		return deleteguard.ItemGone, "the account no longer exists", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if a.Status != "active" {
+		return deleteguard.ItemGone, "the account is already " + a.Status, nil
+	}
+	if err := disableAndDropEdges(c, now, a); err != nil {
+		return "", "", err
+	}
+	return deleteguard.ItemReleased, "", nil
+}
+
+func disableAndDropEdges(c *store.TenantTx, now time.Time, a *store.Account) error {
 	if err := c.DisableAccount(a.ID); err != nil {
 		return err
 	}

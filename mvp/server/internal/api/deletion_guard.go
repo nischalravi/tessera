@@ -8,7 +8,11 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
+	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
+	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
+	"github.com/nischalravi/tessera/mvp/server/internal/jml"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -177,7 +181,14 @@ func (s *Server) deletionAppliers(r *http.Request) deleteguard.Appliers {
 		return env(tx, now).ReleaseGroup(it)
 	}
 	return deleteguard.Appliers{
-		model.ItemGroupDelete: group, model.ItemGroupPurge: group, model.ItemGroupTree: group,
+		// accounts and identities: provisioning, connector sync, imports, leavers
+		provision.ItemOp:          provision.ReleaseHeld,
+		ingest.ItemIdentityStatus: ingest.ReleaseIdentity,
+		ingest.ItemAccountStatus:  ingest.ReleaseAccount,
+		flatfile.ItemDropAccount:  flatfile.ReleaseDrop,
+		jml.ItemLeaver:            jml.ReleaseLeaver,
+		jml.ItemAccountDisable:    jml.ReleaseAccountDisable,
+		model.ItemGroupDelete:     group, model.ItemGroupPurge: group, model.ItemGroupTree: group,
 		model.ItemFolder: func(tx *store.TenantTx, now time.Time, it *store.DeletionHoldItem) (string, string, error) {
 			return env(tx, now).ReleaseFolder(it)
 		},
