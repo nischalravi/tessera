@@ -4090,6 +4090,11 @@ A platform user with no linked identity cannot approve either (403 `approver_unl
 rule covers access-request lines (any decision, including escalated and delegated stages), removal requests, business-role requests,
 service-account requests and sponsorship approvals; an admin links the account first (the demo users are linked in the seed). The
 security lead picked for reviews is the active "Head of Security" only.
+The same fail-closed rule (issue #446) covers the other self checks: an unlinked `sod.approve` holder cannot decide an SoD exemption
+(403 `decider_unlinked`), an unlinked lifecycle manager cannot extend a term (403 `actor_unlinked`), an unlinked operator cannot open or
+verify a help-desk reset case (403 `actor_unlinked`), and an unlinked approver cannot decide a guest-departure task (403 `actor_unlinked`).
+Nobody, an approver included, decides a guest-departure task about their own identity (403 `self_decision`). Callers with no platform
+user (services, the scheduler) are unchanged.
 When the sign-in is too old or too weak the API answers `401 step_up_required` with the RFC 9470
 challenge (`WWW-Authenticate: Bearer error="insufficient_user_authentication", acr_values=…, max_age=…`)
 and a `step_up_url`. The UI explains why and, on **Continue**, re-authenticates at the IdP

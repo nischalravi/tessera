@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
@@ -231,6 +232,10 @@ func TestExtend(t *testing.T) {
 		}
 		if _, err := lifecycle.Extend(c, alice, later, "renewed", w.al, true, w.now); code(err) != "self_extension" {
 			t.Errorf("admin alice extends herself = %v", err)
+		}
+		unlinked := lifecycle.Actor{UserID: uuid.New(), Display: "unlinked"}
+		if _, err := lifecycle.Extend(c, alice, later, "renewed", unlinked, true, w.now); code(err) != "actor_unlinked" {
+			t.Errorf("unlinked manager extends = %v", err)
 		}
 		if _, err := lifecycle.Extend(c, alice, w.now.Add(time.Hour), "x", w.carol, false, w.now); code(err) != "not_later" {
 			t.Errorf("earlier = %v", err)

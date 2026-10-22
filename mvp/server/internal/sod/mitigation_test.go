@@ -31,7 +31,7 @@ func user(t *testing.T, c *store.TenantTx, name string, identity *int64) uuid.UU
 func setup(t *testing.T, c *store.TenantTx, ids testkit.IDs, remediation ...string) world {
 	t.Helper()
 	w := writer(c)
-	alice, bob := ids["alice"], ids["bob"]
+	alice, bob, carol := ids["alice"], ids["bob"], ids["carol"]
 	fa, err := w.CreateFunction(sod.FunctionInput{Name: "Create", Selectors: pat("payments:create")})
 	must(t, err)
 	fb, err := w.CreateFunction(sod.FunctionInput{Name: "Approve", Selectors: pat("payments:approve")})
@@ -43,7 +43,7 @@ func setup(t *testing.T, c *store.TenantTx, ids testkit.IDs, remediation ...stri
 	must(t, err)
 	ctl, err := w.CreateControl(sod.ControlInput{Name: "Monthly review", OwnerID: &alice, Type: "detective", Frequency: "monthly"})
 	must(t, err)
-	return world{risk: r.ID, control: ctl.ID, alice: alice, bob: bob, req: user(t, c, "requester", nil), appr: user(t, c, "approver", nil),
+	return world{risk: r.ID, control: ctl.ID, alice: alice, bob: bob, req: user(t, c, "requester", nil), appr: user(t, c, "approver", &carol), // a decider must be linked (#446)
 		ownerUser: user(t, c, "alice", &alice)}
 }
 
@@ -402,6 +402,28 @@ func TestSubjectCannotDecideOwnExemption(t *testing.T) {
 		}
 		if ap, err := as(c, wd.appr, now).DecideMitigation(m.ID, true, "ok"); err != nil || ap.Status != store.MitigationActive {
 			t.Errorf("third party approves: %+v %v", ap, err)
+		}
+		return nil
+	})
+}
+
+// A decider whose platform user has no linked identity is refused, approve or
+// reject: "not the violation's person" cannot be shown (#446).
+func TestUnlinkedDeciderIsRefused(t *testing.T) {
+	st, ids := testkit.Tiny(t)
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		wd := setup(t, c, ids)
+		now := testkit.Now
+		m, err := as(c, wd.req, now).RequestMitigation(wd.input(now.Add(24*time.Hour)), sod.Settings{})
+		must(t, err)
+		unlinked := user(t, c, "unlinked", nil)
+		for _, approve := range []bool{true, false} {
+			if _, err := as(c, unlinked, now).DecideMitigation(m.ID, approve, "n"); code(err) != "decider_unlinked" {
+				t.Errorf("unlinked decides (approve=%v): %v", approve, err)
+			}
+		}
+		if ap, err := as(c, wd.appr, now).DecideMitigation(m.ID, true, "ok"); err != nil || ap.Status != store.MitigationActive {
+			t.Errorf("linked unrelated decider: %+v %v", ap, err)
 		}
 		return nil
 	})
