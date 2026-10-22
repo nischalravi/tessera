@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -17,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 )
 
 // FileStore keeps secrets as one file per name in a private directory
@@ -269,4 +272,50 @@ func generateIdentity(now time.Time) (certPEM, keyPEM []byte, err error) {
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kb}), nil
+}
+
+const sealKeyFile = "seal.key"
+
+// LoadOrCreateSealKey returns the agent's private sealing key from dir (the
+// identity directory), generating it on first use (mode 0600). Its public half
+// is what Tessera seals a server-held credential to (PathSealKey); the private
+// half never leaves this file.
+func LoadOrCreateSealKey(dir string) (*ecdh.PrivateKey, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := requirePrivate(dir, true); err != nil {
+		return nil, err
+	}
+	p := filepath.Join(dir, sealKeyFile)
+	if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
+		k, err := seal.GenerateAgentKey()
+		if err != nil {
+			return nil, err
+		}
+		der, err := x509.MarshalPKCS8PrivateKey(k)
+		if err != nil {
+			return nil, err
+		}
+		if err := writePrivateFile(p, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})); err != nil {
+			return nil, err
+		}
+	}
+	raw, err := readPrivateFile(p, 4<<10)
+	if err != nil {
+		return nil, err
+	}
+	blk, _ := pem.Decode(raw)
+	if blk == nil || blk.Type != "PRIVATE KEY" {
+		return nil, errors.New("agent: the sealing key file is not a PEM private key")
+	}
+	k, err := x509.ParsePKCS8PrivateKey(blk.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("agent: the sealing key file: %w", err)
+	}
+	priv, ok := k.(*ecdh.PrivateKey)
+	if !ok || priv.Curve() != ecdh.X25519() {
+		return nil, errors.New("agent: the sealing key file does not hold an X25519 key")
+	}
+	return priv, nil
 }

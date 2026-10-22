@@ -417,7 +417,8 @@ commands, no raw LDAP, no proxying). The server sends typed jobs; the agent open
 - **Server listener.** Set `TESSERA_AGENT_ADDR` with `TESSERA_AGENT_TLS_CERT` and `TESSERA_AGENT_TLS_KEY`
   (a separate mutual-TLS port serving only `/agent/v1/*`).
 - **Agent config** (JSON): `{"server_url":"https://tessera.example:8443","server_ca_file":"ca.pem",
-  "state_dir":"/var/lib/tessera-agent","allowed_targets":["ldap.corp.example:636"]}`; then
+  "state_dir":"/var/lib/tessera-agent","allowed_targets":["ldap.corp.example:636"]}`, plus
+  `allowed_push_targets` and `push_ca_file` for provisioning pushes (see below); then
   `tessera-agent run -config agent.json`.
 - API: `GET /api/agents`, `POST /api/agents` (step-up; returns the code once), `POST /api/agents/{id}/revoke`
   (step-up). Table `directory_agents`, `agent_enrolments` (schema 0250).
@@ -447,11 +448,54 @@ open inbound at the customer; the agent needs only HTTPS out to `TESSERA_AGENT_A
   every membership must name an account and a group of the same listing), then ingested with `ingest.Discovery`
   into the connection's own system, drift is reconciled, and the job is finished, in one transaction, with
   `connectors.sync` and `agent.job_done` audited (`agent.job_failed` for failures).
-- **Secrets.** The directory password is never sent to the agent for a job: it stays in the agent's local
-  credential store (the existing Directory Agent design), and a job carries only its name. Sealing a
-  server-held secret to an agent key would need a key-agreement design that does not exist yet.
-- **Not covered yet.** Provisioning pushes to a private target through an agent, and sealing a server-held secret
-  to an agent key, are the next change of #302.
+- **Secrets.** The directory password is never sent to the agent for a sync: it stays in the agent's local
+  credential store (the existing Directory Agent design), and a job carries only its name. A server-held
+  credential (the token of a private provisioning target) is different: it is sealed to the agent's key, below.
+
+##### Provisioning pushes to private targets through an agent (issue #302)
+
+A SCIM or Okta-style target in a private network, which the server cannot dial, is reached through an agent. Set
+`agent_id` on the target (`PUT /api/provisioning/targets/{connection id}` `{"kind":"scim","base_url":"https://scim.corp.example/scim/v2",
+"agent_id":"…","token":"…","write_back":true}`: an active agent of the tenant, https only, not the dev fake target;
+step-up as before; the audit event `provision.target_set` names the agent). The token is stored sealed under the
+KEK exactly as for a direct target.
+
+- **Flow.** For an operation on such a target the provisioning engine does not call the target. It queues a
+  `provision_push` job (`agent_jobs`, kind `provision_push`, `op_id` = the operation; schema 0461 and Postgres
+  migration 0622) addressed to `(tenant, agent)`, leaves the operation `sent` and audits `provision.dispatched`. The
+  agent claims it over the same mTLS pull channel, applies the change with the SCIM or Okta connector from inside its
+  network, re-reads the target (three reads, 2 s apart) and reports `{applied, verified, expected, observed}` or an
+  error to `POST /agent/v1/jobs/report`. The report finishes the operation in the **same transaction** that finishes
+  the job, with both audit events: `provision.verified` (the completion runs, findings resolve) or
+  `provision.mismatch` (a finding) plus `agent.job_done`, each naming the agent (`via_agent`). Nothing the agent
+  sends is trusted for addressing: tenant and agent come from the pinned key, and a report for a job not leased to
+  that (tenant, agent) is `404 unknown_job`.
+- **Failures.** A transient failure (`failed`, `rate_limited`) is retried, three attempts per job; when they are
+  used up, the job fails and so does the operation (`provision.failed`, with the reason, retryable by an operator
+  as any failed operation). A permanent refusal (`target_refused`), a target not on the agent's allowlist
+  (`target_not_allowed`), a missing credential or a bad request fails the operation at once. An agent that is away
+  just leaves the operation `sent`: no attempt is spent while a job is open. Revoking the agent fails the
+  operations it held, with the reason, in the revoking transaction; an operation dispatched to a revoked or
+  deleted agent fails at once. If the target shows the change but Tessera cannot apply its side of it (the
+  completion fails), the operation and the job fail in a second transaction; nothing is half done.
+- **Sealed credentials.** The agent generates an X25519 key pair (`<state_dir>/identity/seal.key`, mode 0600) and
+  registers the public half with `POST /agent/v1/seal-key` over its authenticated channel (at start, then every 6
+  hours; the same key changes nothing, a new one replaces it and is audited as `agent.seal_key_registered`;
+  table `agent_seal_keys`, schema 0621). When the server hands out a push job it opens the target's token under
+  the KEK and seals it to that key (`internal/seal` `SealToAgent`: ephemeral X25519, HKDF-SHA256, AES-256-GCM)
+  with the additional data **tenant | agent | connection | job**. Only that agent, for that job, can open it: another
+  agent, tenant, connection or job fails to. The blob is made at claim time, never stored: the job row, the
+  audit trail and the log hold no credential, in the clear or sealed. An agent that has not registered a key
+  (an older build) cannot be handed a credential: the job fails when claimed, with that reason. Upgrading a SQLite
+  database drops and recreates `agent_jobs` once (it holds only queued work: the next pass queues it again).
+- **Agent configuration.** `allowed_push_targets`: host:port entries (host name, IP or CIDR; ports **443 and 8443**
+  only; the same rules as `allowed_targets`) of the HTTPS targets the agent may push to, a separate list from the
+  LDAP one, empty by default: the agent refuses every push. `push_ca_file`: a PEM CA bundle to verify those
+  targets' certificates against (an internal CA); without it the system roots. The agent dials only through its
+  policy-checked dialer: HTTPS with a verified certificate, no plain HTTP, no redirects, no proxy, never
+  metadata or link-local space. The push list joins the allowlist hash in heartbeats only when it is not empty.
+- **Limits.** The per-target limits and circuit breakers above apply to calls the server or a worker makes; a push
+  through an agent is bounded by the job's lease (10 minutes), its three attempts and the agent's one-at-a-time loop.
 
 ### Connector workers (issue #302)
 

@@ -30,7 +30,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -203,6 +205,63 @@ func (d *Dialer) Dial(ctx context.Context, host string, port int, inspect bool) 
 	return c, nil
 }
 
+// DialTLS opens a verified TLS connection to an HTTPS target (port 443 or
+// 8443) through the same address policy as Dial: the host is resolved once,
+// refused when any address is blocked and not allowlisted, and only a checked
+// address is connected to.
+func (d *Dialer) DialTLS(ctx context.Context, host string, port int) (net.Conn, error) {
+	if port != PortHTTPS && port != PortHTTPSAlt {
+		return nil, fmt.Errorf("%w: %d", ErrPort, port)
+	}
+	host = strings.TrimSuffix(strings.TrimSpace(host), ".")
+	if host == "" || strings.ContainsAny(host, "/@ \t\r\n") {
+		return nil, ErrHost
+	}
+	raw, err := d.dialChecked(ctx, host, port)
+	if err != nil {
+		return nil, err
+	}
+	tc := tls.Client(raw, d.TLSConfig(host, false))
+	hctx, cancel := context.WithTimeout(ctx, d.o.HandshakeTimeout)
+	defer cancel()
+	if err := tc.HandshakeContext(hctx); err != nil {
+		_ = raw.Close()
+		return nil, fmt.Errorf("%w: %w", ErrHandshake, err)
+	}
+	return tc, nil
+}
+
+// HTTPClient is an HTTP client whose every connection goes through DialTLS:
+// HTTPS only, certificate chain and host name verified against the Dialer's
+// roots, no proxy, no redirects (a redirect would leave the allowlisted
+// target). It is the agent's client for private HTTPS targets.
+func (d *Dialer) HTTPClient(timeout time.Duration) *http.Client {
+	tr := &http.Transport{
+		DialTLSContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			host, ps, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, ErrHost
+			}
+			port, err := strconv.Atoi(ps)
+			if err != nil {
+				return nil, ErrPort
+			}
+			return d.DialTLS(ctx, host, port)
+		},
+		// a plain-HTTP request would use DialContext: refuse it, never dial around the policy
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, fmt.Errorf("%w: plain HTTP is not allowed", ErrNoTLS)
+		},
+		Proxy:                 nil,
+		TLSHandshakeTimeout:   d.o.HandshakeTimeout,
+		ResponseHeaderTimeout: timeout,
+		MaxIdleConns:          4,
+		IdleConnTimeout:       30 * time.Second,
+	}
+	return &http.Client{Transport: tr, Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
 // TLSConfig is the client TLS config: TLS 1.2 or later, verification on
 // unless inspect is set.
 func (d *Dialer) TLSConfig(host string, inspect bool) *tls.Config {
@@ -364,6 +423,26 @@ const (
 // are 389 or 636. Wildcards and broad CIDRs (shorter than /16 for IPv4, /64
 // for IPv6) are refused.
 func ParseAllow(s string) ([]AllowEntry, error) {
+	return ParseAllowPorts(s, PortStartTLS, PortLDAPS)
+}
+
+// Ports of an HTTPS target an agent may push to (issue #302); the same set
+// safehttp allows by default.
+const (
+	PortHTTPS    = 443
+	PortHTTPSAlt = 8443
+)
+
+// ParseAllowHTTPS parses the agent's allowed_push_targets: the syntax of
+// ParseAllow with the ports 443 and 8443, for the HTTPS provisioning targets
+// (SCIM, Okta-style APIs) in the agent's network. It is a separate list from
+// the LDAP one so that allowing a directory never allows a web service.
+func ParseAllowHTTPS(s string) ([]AllowEntry, error) {
+	return ParseAllowPorts(s, PortHTTPS, PortHTTPSAlt)
+}
+
+// ParseAllowPorts is ParseAllow with the ports an entry may name.
+func ParseAllowPorts(s string, ports ...int) ([]AllowEntry, error) {
 	var out []AllowEntry
 	for _, raw := range strings.Split(s, ",") {
 		raw = strings.TrimSpace(raw)
@@ -379,8 +458,8 @@ func ParseAllow(s string) ([]AllowEntry, error) {
 		}
 		hostPart, portPart := raw[:i], raw[i+1:]
 		port, err := strconv.Atoi(portPart)
-		if err != nil || (port != PortStartTLS && port != PortLDAPS) {
-			return nil, fmt.Errorf("%q: port must be 389 or 636", raw)
+		if err != nil || !slices.Contains(ports, port) {
+			return nil, fmt.Errorf("%q: port must be %s", raw, portList(ports))
 		}
 		hostPart = strings.TrimSuffix(strings.TrimPrefix(hostPart, "["), "]")
 		e := AllowEntry{Port: port}
@@ -411,6 +490,14 @@ func ParseAllow(s string) ([]AllowEntry, error) {
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+func portList(ports []int) string {
+	var l []string
+	for _, p := range ports {
+		l = append(l, strconv.Itoa(p))
+	}
+	return strings.Join(l, " or ")
 }
 
 func validHostName(h string) bool {

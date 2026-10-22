@@ -23,6 +23,10 @@ func workersDump(t *testing.T, f *storetest.Fixture, tn storetest.Tenant) string
 		if err != nil {
 			return err
 		}
+		ags, err := c.DirectoryAgents()
+		if err != nil {
+			return err
+		}
 		ls, err := c.AllConnectionLimits()
 		if err != nil {
 			return err
@@ -31,7 +35,13 @@ func workersDump(t *testing.T, f *storetest.Fixture, tn storetest.Tenant) string
 		if err != nil {
 			return err
 		}
-		out, err = json.Marshal(map[string]any{"workers": ws, "agent_jobs": js, "limits": ls, "targets": ts})
+		var keys []*store.AgentSealKey
+		for _, a := range ags {
+			if k, err := c.AgentSealKey(a.ID); err == nil {
+				keys = append(keys, k)
+			}
+		}
+		out, err = json.Marshal(map[string]any{"workers": ws, "agent_jobs": js, "limits": ls, "targets": ts, "seal_keys": keys})
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -47,6 +57,12 @@ func workersCovered() map[string]bool {
 	for _, k := range []string{"EnqueueAgentJob", "AgentJob", "AgentJobs", "HasOpenAgentJob", "ClaimAgentJobs", "CompleteAgentJob",
 		"FailAgentJob", "CancelAgentJobs", "PruneAgentJobs", "HasDueAgentJobs"} {
 		out[k] = true // TestIsolation_AgentJobs
+	}
+	for _, k := range []string{"HasOpenAgentJobForOp", "CancelAgentJobsForOp"} {
+		out[k] = true // TestIsolation_AgentPushJobs
+	}
+	for _, k := range []string{"AgentSealKey", "PutAgentSealKey", "DeleteAgentSealKey"} {
+		out[k] = true // TestIsolation_AgentSealKeys
 	}
 	for _, k := range []string{"ConnectionLimits", "AllConnectionLimits", "PutConnectionLimits", "DeleteConnectionLimits"} {
 		out[k] = true // TestIsolation_ConnectionLimits
@@ -381,4 +397,165 @@ func TestIsolation_WorkerTargetStates(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func seedAgentOp(t *testing.T, f *storetest.Fixture, tn storetest.Tenant, opID, agentID string) {
+	t.Helper()
+	now := storetest.Now
+	if err := f.DB.InTenant(t.Context(), tn.ID, func(c *store.TenantTx) error {
+		if err := c.InsertDirectoryAgent(&store.DirectoryAgent{ID: agentID, Name: "agent-" + agentID[:6], CreatedBy: "t", CreatedAt: now}); err != nil {
+			return err
+		}
+		return c.InsertProvOp(&store.ProvOp{ID: opID, ConnectionID: tn.Refs["connection:ad"], Kind: "disable_account", TargetRef: "x",
+			Payload: "{}", Source: "test", IdempotencyKey: "k-" + opID, RequestedBy: "t"}, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A provision_push job names a provisioning operation of its own tenant: B
+// cannot see, count or cancel A's, a job cannot name another tenant's
+// operation, and an operation's open jobs are found and cancelled by id only.
+func TestIsolation_AgentPushJobs(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	now := storetest.Now
+	aAgent, bAgent := store.NewID(), store.NewID()
+	seedAgentOp(t, f, f.A, "op-a", aAgent)
+	seedAgentOp(t, f, f.B, "op-b", bAgent)
+	aConn, bConn := f.A.Refs["connection:ad"], f.B.Refs["connection:ad"]
+	opA, key := "op-a", "push:op-a:1"
+	j := &store.AgentJob{AgentID: aAgent, ConnectionID: aConn, Kind: store.AgentJobProvisionPush, OpID: &opA, Payload: `{}`, IdempotencyKey: &key}
+	inA(t, f, func(c *store.TenantTx) error {
+		if created, err := c.EnqueueAgentJob(j, now); err != nil || !created {
+			t.Fatalf("enqueue = %v, %v", created, err)
+		}
+		if open, err := c.HasOpenAgentJobForOp(opA); err != nil || !open {
+			t.Errorf("HasOpenAgentJobForOp = %v, %v", open, err)
+		}
+		got, err := c.AgentJob(j.ID)
+		if err != nil || got.OpID == nil || *got.OpID != opA || got.Kind != store.AgentJobProvisionPush {
+			t.Errorf("AgentJob = %+v, %v", got, err)
+		}
+		return nil
+	})
+	before := workersDump(t, f, f.A)
+	inB(t, f, func(c *store.TenantTx) error {
+		if open, err := c.HasOpenAgentJobForOp(opA); err != nil || open {
+			t.Errorf("HasOpenAgentJobForOp(A's op) from B = %v, %v", open, err)
+		}
+		if n, err := c.CancelAgentJobsForOp(opA, "x", now); err != nil || n != 0 {
+			t.Errorf("CancelAgentJobsForOp(A's op) from B = %d, %v", n, err)
+		}
+		return nil
+	})
+	if got := workersDump(t, f, f.A); got != before {
+		t.Errorf("tenant A changed:\nbefore %s\nafter  %s", before, got)
+	}
+	// B's job may not name A's operation (the schema refuses it)
+	opAForB := "op-a"
+	if err := f.DB.InTenant(t.Context(), f.B.ID, func(c *store.TenantTx) error {
+		_, err := c.EnqueueAgentJob(&store.AgentJob{AgentID: bAgent, ConnectionID: bConn, Kind: store.AgentJobProvisionPush, OpID: &opAForB,
+			Payload: `{}`}, now)
+		return err
+	}); err == nil {
+		t.Error("a job of B naming A's operation was accepted")
+	}
+	// an unknown kind, a push without its operation and a sync with one are refused
+	for name, bad := range map[string]*store.AgentJob{
+		"an unknown kind":     {AgentID: aAgent, ConnectionID: aConn, Kind: "shell", Payload: `{}`},
+		"a push with no op":   {AgentID: aAgent, ConnectionID: aConn, Kind: store.AgentJobProvisionPush, Payload: `{}`},
+		"a sync naming an op": {AgentID: aAgent, ConnectionID: aConn, Kind: store.AgentJobSync, OpID: &opA, Payload: `{}`},
+	} {
+		if err := f.DB.InTenant(t.Context(), f.A.ID, func(c *store.TenantTx) error {
+			_, err := c.EnqueueAgentJob(bad, now)
+			return err
+		}); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	inA(t, f, func(c *store.TenantTx) error {
+		if n, err := c.CancelAgentJobsForOp(opA, "the operation was cancelled", now); err != nil || n != 1 {
+			t.Errorf("CancelAgentJobsForOp = %d, %v", n, err)
+		}
+		if open, err := c.HasOpenAgentJobForOp(opA); err != nil || open {
+			t.Errorf("a cancelled job is still open: %v, %v", open, err)
+		}
+		if got, err := c.AgentJob(j.ID); err != nil || got.Status != store.AgentJobCancelled || got.LastError != "the operation was cancelled" {
+			t.Errorf("cancelled job = %+v, %v", got, err)
+		}
+		return nil
+	})
+}
+
+// An agent's sealing key is per tenant and per agent: B reads, replaces and
+// deletes none of A's, a key cannot be registered for another tenant's agent,
+// and registering again replaces the key in place.
+func TestIsolation_AgentSealKeys(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	now := storetest.Now
+	aAgent, bAgent := store.NewID(), store.NewID()
+	seedAgentOp(t, f, f.A, "op-a", aAgent)
+	seedAgentOp(t, f, f.B, "op-b", bAgent)
+	key := func(b byte) *store.AgentSealKey {
+		return &store.AgentSealKey{AgentID: aAgent, PublicKey: bytesOf(b, 32), KeyID: "k" + string(rune('0'+b))}
+	}
+	inA(t, f, func(c *store.TenantTx) error { return c.PutAgentSealKey(key(1), now) })
+	before := workersDump(t, f, f.A)
+	inB(t, f, func(c *store.TenantTx) error {
+		if _, err := c.AgentSealKey(aAgent); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("AgentSealKey(A's agent) from B = %v", err)
+		}
+		if err := c.DeleteAgentSealKey(aAgent); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("DeleteAgentSealKey(A's agent) from B = %v", err)
+		}
+		// registering a key for A's agent from B is refused by the schema, and replaces nothing
+		if err := c.PutAgentSealKey(&store.AgentSealKey{AgentID: aAgent, PublicKey: bytesOf(9, 32), KeyID: "evil"}, now); err == nil {
+			t.Error("B registered a key for A's agent")
+		}
+		return nil
+	})
+	inB(t, f, func(c *store.TenantTx) error {
+		return c.PutAgentSealKey(&store.AgentSealKey{AgentID: bAgent, PublicKey: bytesOf(2, 32), KeyID: "kb"}, now)
+	})
+	if got := workersDump(t, f, f.A); got != before {
+		t.Errorf("tenant A changed:\nbefore %s\nafter  %s", before, got)
+	}
+	inA(t, f, func(c *store.TenantTx) error {
+		k, err := c.AgentSealKey(aAgent)
+		if err != nil || k.KeyID != "k1" || len(k.PublicKey) != 32 || k.PublicKey[0] != 1 || !k.RegisteredAt.Equal(now) {
+			t.Fatalf("AgentSealKey = %+v, %v", k, err)
+		}
+		// replace in place
+		if err := c.PutAgentSealKey(key(3), now.Add(time.Minute)); err != nil {
+			return err
+		}
+		k, err = c.AgentSealKey(aAgent)
+		if err != nil || k.KeyID != "k3" || k.PublicKey[0] != 3 || !k.RegisteredAt.Equal(now.Add(time.Minute)) {
+			t.Errorf("after replace: %+v, %v", k, err)
+		}
+		// the CHECK refuses a key of the wrong length
+		return nil
+	})
+	if err := f.DB.InTenant(t.Context(), f.A.ID, func(c *store.TenantTx) error {
+		return c.PutAgentSealKey(&store.AgentSealKey{AgentID: aAgent, PublicKey: bytesOf(1, 31), KeyID: "short"}, now)
+	}); err == nil {
+		t.Error("a 31-byte key was accepted")
+	}
+	inA(t, f, func(c *store.TenantTx) error {
+		if err := c.DeleteAgentSealKey(aAgent); err != nil {
+			t.Error(err)
+		}
+		if _, err := c.AgentSealKey(aAgent); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("after delete: %v", err)
+		}
+		return nil
+	})
+}
+
+func bytesOf(b byte, n int) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = b
+	}
+	return out
 }

@@ -20,14 +20,25 @@
 -- idempotency_key is unique per tenant, so enqueueing the same work twice
 -- makes one row.
 --
+-- kind 'provision_push' (issue #302) is a provisioning operation for a target
+-- the server cannot reach: op_id names the provisioning_ops row it carries out,
+-- and the agent's report finishes that operation in the same transaction. The
+-- target's credential is not in payload: it is sealed to the agent's key when
+-- the job is claimed (0621_agent_seal_keys.sql). A database created before
+-- this kind existed has the table dropped and recreated by upgradeAgentJobs
+-- (CREATE TABLE IF NOT EXISTS cannot widen a CHECK); its rows are queued work
+-- that the next sync schedule or provisioning pass queues again. Postgres does
+-- this in migration 0622.
+--
 -- Tenant-owned like 0001_tenancy.sql: the guard triggers at the end refuse an
--- agent or connection of another tenant.
+-- agent, connection or operation of another tenant.
 CREATE TABLE IF NOT EXISTS agent_jobs (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
   agent_id TEXT NOT NULL REFERENCES directory_agents (id),
   connection_id TEXT NOT NULL REFERENCES connections (id),
-  kind TEXT NOT NULL CHECK (kind IN ('sync')),
+  kind TEXT NOT NULL CHECK (kind IN ('sync','provision_push')),
+  op_id TEXT REFERENCES provisioning_ops (id),
   payload TEXT NOT NULL,
   idempotency_key TEXT,
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','leased','done','failed','cancelled')),
@@ -43,13 +54,16 @@ CREATE TABLE IF NOT EXISTS agent_jobs (
 );
 CREATE INDEX IF NOT EXISTS ix_agent_jobs_claim ON agent_jobs (tenant_id, agent_id, status, lease_expires_at);
 CREATE INDEX IF NOT EXISTS ix_agent_jobs_connection ON agent_jobs (tenant_id, connection_id, status);
+CREATE INDEX IF NOT EXISTS ix_agent_jobs_op ON agent_jobs (tenant_id, op_id, status);
 
 CREATE TRIGGER IF NOT EXISTS tg_agent_jobs_xtenant_ins BEFORE INSERT ON agent_jobs
 WHEN (EXISTS (SELECT 1 FROM directory_agents p WHERE p.id = NEW.agent_id AND p.tenant_id <> NEW.tenant_id))
 	OR (EXISTS (SELECT 1 FROM connections p WHERE p.id = NEW.connection_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.op_id IS NOT NULL AND EXISTS (SELECT 1 FROM provisioning_ops p WHERE p.id = NEW.op_id AND p.tenant_id <> NEW.tenant_id))
 BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: agent_jobs'); END;
 
-CREATE TRIGGER IF NOT EXISTS tg_agent_jobs_xtenant_upd BEFORE UPDATE OF tenant_id, agent_id, connection_id ON agent_jobs
+CREATE TRIGGER IF NOT EXISTS tg_agent_jobs_xtenant_upd BEFORE UPDATE OF tenant_id, agent_id, connection_id, op_id ON agent_jobs
 WHEN (EXISTS (SELECT 1 FROM directory_agents p WHERE p.id = NEW.agent_id AND p.tenant_id <> NEW.tenant_id))
 	OR (EXISTS (SELECT 1 FROM connections p WHERE p.id = NEW.connection_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.op_id IS NOT NULL AND EXISTS (SELECT 1 FROM provisioning_ops p WHERE p.id = NEW.op_id AND p.tenant_id <> NEW.tenant_id))
 BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: agent_jobs'); END;

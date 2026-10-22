@@ -7,6 +7,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -24,6 +25,34 @@ type PKI struct {
 	CAPEM    []byte
 	CertFile string
 	KeyFile  string
+
+	ca    *x509.Certificate
+	caKey *ecdsa.PrivateKey
+}
+
+// Roots is the CA as a pool (what a client verifies a certificate Issue made against).
+func (p *PKI) Roots() *x509.CertPool {
+	pool := x509.NewCertPool()
+	pool.AddCert(p.ca)
+	return pool
+}
+
+// Issue returns a server certificate for host (a DNS name), signed by the CA:
+// the certificate of a private HTTPS target in a test.
+func (p *PKI) Issue(tb testing.TB, host string) tls.Certificate {
+	tb.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tpl := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: host},
+		DNSNames: []string{host}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, p.ca, &key.PublicKey, p.caKey)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
 // NewPKI creates a CA and a server certificate in a temporary directory.
@@ -56,7 +85,7 @@ func NewPKI(tb testing.TB) *PKI {
 	must(err)
 	dir := tb.TempDir()
 	p := &PKI{CAPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
-		CertFile: filepath.Join(dir, "server.crt"), KeyFile: filepath.Join(dir, "server.key")}
+		CertFile: filepath.Join(dir, "server.crt"), KeyFile: filepath.Join(dir, "server.key"), ca: ca, caKey: caKey}
 	must(os.WriteFile(p.CertFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
 	must(os.WriteFile(p.KeyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kb}), 0o600))
 	return p
