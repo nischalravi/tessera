@@ -2255,6 +2255,44 @@ inside a tenant transaction, so each change and its audit event commit together.
   the default `demo` spec or `TESSERA_CONNECTORS`), so the seeded demo tenant is unchanged.
   Not yet stored: date of birth and phone (sealed by the PR that first needs them).
 
+### Contractors from a VMS (Fieldglass, Beeline, CSV; issue #304)
+
+`internal/connectors/vms` reads contractor assignments from a vendor-management system; `internal/intake/vms.go`
+maps each record onto the contractor lifecycle of issue #159; `internal/vms` runs a tenant's feeds. Schema `0600`
+(`vms_sources`). A record becomes an intake event of channel `vms` (`intake_events`), so the SIS and HRIS history
+and the review queue are shared.
+
+- **Rules.** Every contractor needs a **sponsor**: an active employee named by employee id or e-mail. A record with
+  no sponsor, an unknown or ambiguous one, or one who cannot sponsor is **held in review and creates nobody**
+  (reasons: `sponsor_required|sponsor_not_found|sponsor_ambiguous|sponsor_not_eligible|sponsor_is_self`). A
+  record needs an **end date** (else rejected, `end_required`); one past `lifecycle.MaxTermDays` is clamped
+  (`end_clamped`, the next sync moves it on). The end date is the lifecycle's end date, so the existing sweep
+  warns the sponsor (14, 7, 1 days) and on the day contains the person and runs the leaver plan. A record whose
+  status is ended (completed, terminated, cancelled) ends the term at once. A record whose e-mail belongs to
+  another person is held (`email_matches_another_person`); a returning contractor whose term ended is held
+  (`term_already_ended`). A record older than the one applied last changes nothing. Replays are no-ops (the
+  event id is a digest of the facts).
+- **Feeds.** `fieldglass` and `beeline` over their REST APIs (OAuth client credentials, paged, with a watermark
+  per source; a failed sync keeps the watermark); `csv` uploaded (`POST /api/vms/sources/{id}/import`, the file as
+  `text/csv`, at most 1 MiB through the API) or fetched over HTTPS (`base_url` + `settings.csv_path`). CSV columns:
+  `worker_id, name|first_name+last_name, email, supplier, role, sponsor_email, sponsor_employee_id, status,
+  start_date, end_date, updated_at`; `settings.mapping` renames them, `settings.date_format` is a Go layout.
+  Every call goes through `internal/safehttp`; a paging link must stay on the configured host; the credential
+  (`client_id:client_secret`, or a bearer token for a fetched CSV) is sealed under the KEK, bound to its row,
+  write-only, and a change of base URL needs a new one.
+- **API.** `GET|POST /api/vms/sources`, `PUT|DELETE /api/vms/sources/{id}` (connections.read|manage),
+  `POST /api/vms/sync {source_id?}` and `POST /api/vms/sources/{id}/import` (`lifecycle.manage`, because they
+  create and end people), `GET /api/vms/records`. Queue job `vms_sync` runs hourly per tenant (a tenant with
+  nothing to read leaves no run). Audit events: `vms.source_created|updated|removed`, `vms.sync`,
+  `intake.vms.<outcome>`, `lifecycle.set`.
+- **UI.** Settings > Admin > Contractor feeds.
+- **Not verified against a real tenant.** No Fieldglass or Beeline tenant was available. The response shapes are
+  documented in `fieldglass.go` and `beeline.go` and exercised by the in-process fake
+  (`internal/connectors/vms/vmsfake`: paging, 401, 429 with Retry-After, 5xx, malformed JSON, an off-host next
+  link, a looping page, a wrong token type); the endpoint paths are settings. The first real tenant should
+  confirm the field names and the OAuth token path. **SFTP** drops are not read: there is no SFTP client in
+  the module's dependencies, so a drop is uploaded as CSV for now.
+
 ### Identity containment (kill switch)
 
 A disabled account does not end its live sessions, refresh tokens or OAuth consents. Two plan

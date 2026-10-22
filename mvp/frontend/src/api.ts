@@ -3752,6 +3752,64 @@ export const siemApi = {
   test: (id: string) => api<{ ok: boolean; error?: string }>(`/siem/sinks/${encodeURIComponent(id)}/test`, {}),
 };
 
+// ---- Contractor (VMS) feeds (issue #304)
+
+export type VmsVendor = "fieldglass" | "beeline" | "csv";
+export interface VmsSettings {
+  workers_path?: string; token_path?: string; page_size?: number;
+  mapping?: Record<string, string>; date_format?: string; csv_path?: string;
+}
+export interface VmsSource {
+  id: string; vendor: VmsVendor; name: string; base_url: string; settings: VmsSettings; has_credential: boolean;
+  status: "active" | "paused"; last_sync_at: string | null; last_result: "ok" | "failed" | null; last_error: string | null;
+  last_counts: Record<string, number>; cursor: string | null; created_by: string; created_at: string; updated_at: string;
+}
+export interface VmsSourceInput {
+  vendor?: VmsVendor; name: string; base_url?: string; settings?: VmsSettings; credential?: string; status?: "active" | "paused";
+}
+export interface VmsRecord {
+  id: string; source: string; status: string; record_state: string; outcome: string; reason?: string;
+  identity_id: number | null; person: string | null; effective_at: string | null; created_at: string;
+}
+export interface VmsReport {
+  source_id: string; name: string; vendor: VmsVendor; status: "ok" | "failed" | "skipped"; records: number;
+  applied: Record<string, number>; failed: number; error?: string;
+}
+export const vmsApi = {
+  sourcesPath: "/vms/sources",
+  recordsPath: "/vms/records?limit=100",
+  create: (body: VmsSourceInput) => apiNoResume<VmsSource>("/vms/sources", body),
+  update: (id: string, body: VmsSourceInput) => apiNoResume<VmsSource>(`/vms/sources/${encodeURIComponent(id)}`, body, "PUT"),
+  remove: (id: string) => api(`/vms/sources/${encodeURIComponent(id)}`, undefined, "DELETE"),
+  sync: (sourceId?: string) => api<{ reports: VmsReport[] }>("/vms/sync", sourceId ? { source_id: sourceId } : {}),
+  importCsv: (id: string, file: File) =>
+    api<VmsReport>(`/vms/sources/${encodeURIComponent(id)}/import`, undefined, "POST", { data: file, contentType: "text/csv" }),
+};
+
+/** What became of a contractor record, as a badge. */
+export const VMS_OUTCOME: Record<string, { tone: "ok" | "info" | "warning" | "critical" | "outline"; label: string }> = {
+  created: { tone: "ok", label: "Created" }, started: { tone: "ok", label: "Updated" }, ended: { tone: "info", label: "Ended" },
+  unchanged: { tone: "outline", label: "No change" }, review: { tone: "warning", label: "Held for review" },
+  rejected: { tone: "critical", label: "Rejected" }, duplicate: { tone: "outline", label: "Seen before" },
+};
+
+/** Why a record was held or rejected, in words. */
+export const VMS_REASON: Record<string, string> = {
+  sponsor_required: "The record names no sponsor.",
+  sponsor_not_found: "The sponsor is not a person in the directory.",
+  sponsor_ambiguous: "Two people share the sponsor's address.",
+  sponsor_not_eligible: "The sponsor cannot sponsor (not an active employee).",
+  sponsor_is_self: "A contractor cannot sponsor themselves.",
+  end_required: "The record has no end date.",
+  end_clamped: "The end date was past the longest term; it was set to the longest term.",
+  email_matches_another_person: "The e-mail address belongs to another person.",
+  term_already_ended: "This contractor's term already ended; a returning contractor needs a person to decide.",
+  identity_not_active: "The person is no longer active.",
+  not_a_contractor: "The person this record matched is not a contractor.",
+  stale_record: "An older version of a record already applied.",
+  invalid_record: "The record is malformed.",
+};
+
 /** Health → badge tone and label. */
 export const SIEM_HEALTH: Record<SiemSink["health"]["status"], { tone: "ok" | "info" | "warning" | "critical" | "outline"; label: string }> = {
   healthy: { tone: "ok", label: "Healthy" },

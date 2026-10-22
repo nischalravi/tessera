@@ -232,6 +232,8 @@ var tables = []string{
 	"match_results", "identity_merge_requests", "matching_settings", "claim_links",
 	// SIS and HRIS intake (schema/0374_intake.sql)
 	"org_sponsors", "intake_events", "identity_conversions",
+	// contractor (VMS) feeds (schema/0600_vms_sources.sql)
+	"vms_sources",
 	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
 	// pending four-eyes OAuth app revokes (schema/0470_oauth_revoke_requests.sql)
