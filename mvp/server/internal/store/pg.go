@@ -7,11 +7,10 @@ import (
 	"fmt"
 	"io/fs"
 	"net/url"
-	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
@@ -19,18 +18,17 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
-// Postgres support (Phase 0 PR14, design §14.3).
+// Postgres support (Phase 0 PR14, design §14.3; #430).
 //
-// DSN: postgres://user:pass@host:5432/db?sslmode=require[&app_role=tessera_app]
-//
-// The DSN's role runs the goose migrations and rls.sql (it must own the
-// tables; in production that is tessera_owner, and it must be a superuser or
-// have BYPASSRLS so the node-key guard in 0001_tenancy.sql can see other
-// tenants' rows). When app_role is given, every connection used for requests
-// then runs SET ROLE to it: NOSUPERUSER, NOBYPASSRLS and not the table owner,
-// so row-level security binds it. Without app_role one role does both jobs
-// (development); FORCE ROW LEVEL SECURITY still applies to a non-superuser
-// owner.
+// Two logins, two DSNs. The owner DSN (TESSERA_DB) runs the goose migrations
+// and rls.sql; its role owns the tables and must be a superuser or have
+// BYPASSRLS so the node-key guard in 0001_tenancy.sql can see other tenants'
+// rows. The request pool connects directly as the application login
+// (TESSERA_DB_APP, usually tessera_app: LOGIN NOSUPERUSER NOBYPASSRLS, owns
+// nothing, not a member of the owner), so row-level security binds it. There
+// is no SET ROLE: a role change is reversible, so SQL running as the app
+// could have returned to the owner. CheckAppRole refuses a request pool whose
+// session_user could do that.
 
 // pgSetTenant and pgSetLookup are the only statements that set the session
 // variables row-level security reads. They are constants, take one parameter
@@ -42,41 +40,46 @@ const (
 	pgLockTenant = `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
 )
 
-// roleName is what an app_role may look like.
-var roleName = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
-
 // pgGooseTable is goose's bookkeeping table (listed in GlobalTables).
 const pgGooseTable = "schema_migrations"
 
-// parsePGDSN splits the app_role option off a DSN (pgx would send an unknown
-// parameter to the server as a setting) and parses the rest.
-func parsePGDSN(dsn string) (*pgx.ConnConfig, string, error) {
+// parsePGDSN parses a Postgres DSN. The retired app_role option is refused: it
+// made request connections owner logins that ran SET ROLE (#430).
+func parsePGDSN(dsn string) (*pgx.ConnConfig, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return nil, "", errors.New("store: invalid postgres DSN")
+		return nil, errors.New("store: invalid postgres DSN")
 	}
-	// ParseQuery, not u.Query(): the latter silently drops a malformed pair,
-	// which for app_role would mean running without it.
+	// ParseQuery, not u.Query(): the latter silently drops a malformed pair.
 	q, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
-		return nil, "", errors.New("store: invalid postgres DSN query")
+		return nil, errors.New("store: invalid postgres DSN query")
 	}
-	role := q.Get("app_role")
-	q.Del("app_role")
-	u.RawQuery = q.Encode()
-	if role != "" && !roleName.MatchString(role) {
-		return nil, "", fmt.Errorf("store: invalid app_role %q", role)
+	if q.Has("app_role") {
+		return nil, errors.New("store: the app_role DSN option is no longer supported (SET ROLE can be reversed); give the application its own login through TESSERA_DB_APP")
 	}
 	cfg, err := pgx.ParseConfig(u.String())
 	if err != nil {
 		// pgx errors can echo the DSN; do not leak a password.
-		return nil, "", errors.New("store: invalid postgres DSN")
+		return nil, errors.New("store: invalid postgres DSN")
 	}
-	return cfg, role, nil
+	return cfg, nil
 }
 
-func openPostgres(ctx context.Context, dsn string, fresh bool) (*DB, error) {
-	cfg, role, err := parsePGDSN(dsn)
+// AppOptions asks Open for a request pool of its own and checks it. Without
+// it (Open, OpenFresh) a Postgres store serves from the owner pool unchecked:
+// that is for operator commands, never for serving requests.
+type AppOptions struct {
+	// DSN is the application login's DSN (TESSERA_DB_APP). Empty makes the
+	// owner pool the request pool, which CheckAppRole then refuses.
+	DSN string
+	// AllowPrivileged skips the CheckAppRole refusal (TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP,
+	// dev only; config refuses it in prod).
+	AllowPrivileged bool
+}
+
+func openPostgres(ctx context.Context, dsn string, fresh bool, app *AppOptions) (*DB, error) {
+	cfg, err := parsePGDSN(dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -87,22 +90,76 @@ func openPostgres(ctx context.Context, dsn string, fresh bool) (*DB, error) {
 		_ = owner.Close()
 		return nil, err
 	}
-	if role != "" {
-		app := cfg.Copy()
-		app.AfterConnect = func(ctx context.Context, c *pgconn.PgConn) error {
-			_, err := c.Exec(ctx, "SET ROLE "+pgx.Identifier{role}.Sanitize()).ReadAll()
-			return err
+	if app == nil {
+		return d, nil
+	}
+	if app.DSN != "" {
+		acfg, err := parsePGDSN(app.DSN)
+		if err != nil {
+			_ = owner.Close()
+			return nil, fmt.Errorf("TESSERA_DB_APP: %w", err)
 		}
-		pool := stdlib.OpenDB(*app)
+		pool := stdlib.OpenDB(*acfg)
 		pool.SetMaxOpenConns(16)
 		if err := pool.PingContext(ctx); err != nil {
 			_ = pool.Close()
 			_ = owner.Close()
-			return nil, fmt.Errorf("store: connect as app_role %s: %w", role, err)
+			return nil, errors.New("store: connect with TESSERA_DB_APP failed")
 		}
 		d.sql = pool
 	}
+	if err := d.CheckAppRole(ctx, app.AllowPrivileged); err != nil {
+		_ = d.Close()
+		return nil, err
+	}
 	return d, nil
+}
+
+// pgAppRoleFlags reads what the request pool's session_user is: a superuser
+// (or a member of one), BYPASSRLS (or a member of such a role), an owner of a
+// table in the schema, or a member of the role that owns the tenants table
+// (which includes being that role).
+const pgAppRoleFlags = `SELECT
+	session_user::text,
+	EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolsuper AND pg_has_role(session_user, r.oid, 'MEMBER')),
+	EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolbypassrls AND pg_has_role(session_user, r.oid, 'MEMBER')),
+	EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p') AND pg_get_userbyid(c.relowner) = session_user),
+	EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() AND c.relname = 'tenants' AND pg_has_role(session_user, c.relowner, 'MEMBER'))`
+
+// ErrAppRolePrivileged is returned when the request pool's login could undo
+// row-level security.
+var ErrAppRolePrivileged = errors.New("store: the request pool's database login is privileged")
+
+// CheckAppRole refuses (unless allowPrivileged) a request pool whose
+// session_user is a superuser, has BYPASSRLS, owns the schema's tables or is a
+// member of the owner role: from any of those, SQL running as the application
+// could step around row-level security and the audit guards (#430). SQLite has
+// one login and passes.
+func (d *DB) CheckAppRole(ctx context.Context, allowPrivileged bool) error {
+	if d.d != dialectPostgres {
+		return nil
+	}
+	var user string
+	var super, bypass, owns, member bool
+	if err := d.sql.QueryRowContext(ctx, pgAppRoleFlags).Scan(&user, &super, &bypass, &owns, &member); err != nil {
+		return fmt.Errorf("store: check the request pool's role: %w", err)
+	}
+	var bad []string
+	for _, c := range []struct {
+		on   bool
+		what string
+	}{{super, "is a superuser"}, {bypass, "has BYPASSRLS"}, {owns, "owns tables in the schema"}, {member, "is a member of the schema owner role"}} {
+		if c.on {
+			bad = append(bad, c.what)
+		}
+	}
+	if len(bad) == 0 || allowPrivileged {
+		return nil
+	}
+	return fmt.Errorf("%w: %q %s; connect requests as a LOGIN NOSUPERUSER NOBYPASSRLS role that owns nothing (TESSERA_DB_APP)",
+		ErrAppRolePrivileged, user, strings.Join(bad, ", "))
 }
 
 // migratePG applies the goose migrations and rls.sql as the owner role, then

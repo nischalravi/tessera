@@ -578,3 +578,36 @@ func TestHelpdeskFourEyes(t *testing.T) {
 		t.Errorf("executor calls: %v", e.fake.Calls())
 	}
 }
+
+// A requester with two sign-in users linked to one identity cannot use the
+// second as the independent verifier, second approver or executor (#431).
+func TestHelpdeskRequesterLinkedUserIsNotIndependent(t *testing.T) {
+	e := newHelpdeskEnv(t, nil)
+	bob := e.f.A.IDs["bob"]
+	req := e.signin("bob1@a.example", &bob)
+	req2 := e.signin("bob2@a.example", &bob) // the same person's second sign-in
+	v := e.start(req, e.alice, "mfa")
+	refused := func(name string, code int, body, want string) {
+		t.Helper()
+		if code != http.StatusForbidden || !strings.Contains(body, `"`+want+`"`) {
+			t.Errorf("%s: %d %s, want 403 %s", name, code, body, want)
+		}
+	}
+	code, body := e.verify(req2, v.ID, callbackBody)
+	refused("linked-user call-back", code, body, helpdesk.ReasonRequesterVerify)
+	code, body = e.verify(req2, v.ID, `{"method":"manager_approval"}`)
+	if code != http.StatusForbidden {
+		t.Errorf("linked-user manager approval: %d %s", code, body)
+	}
+	code, body = e.do(req2, "POST", "/api/helpdesk/cases/"+v.ID+"/execute", "")
+	refused("linked-user execute", code, body, helpdesk.ReasonRequesterExecute)
+	if got := e.view(v.ID); got.Policy.Satisfied || len(got.Verifications) != 0 {
+		t.Fatalf("a refused verification was recorded: %+v", got)
+	}
+	if code, body = e.verify(e.other, v.ID, callbackBody); code != 200 {
+		t.Fatalf("an unrelated operator's call-back: %d %s", code, body)
+	}
+	if !e.view(v.ID).Policy.Satisfied {
+		t.Fatal("an unrelated operator's call-back does not satisfy the policy")
+	}
+}

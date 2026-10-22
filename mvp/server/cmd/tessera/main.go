@@ -15,9 +15,13 @@
 //
 // Environment:
 //
-//	TESSERA_DB            database path (or sqlite:///path), or a postgres:// DSN
-//	                      (postgres://owner@host/db?sslmode=require&app_role=tessera_app);
+//	TESSERA_DB            database path (or sqlite:///path), or the owner postgres:// DSN
+//	                      (postgres://tessera_owner@host/db?sslmode=require): migrations and operator commands;
 //	                      default ./tessera.db
+//	TESSERA_DB_APP        postgres only: the application login's DSN (tessera_app: LOGIN NOSUPERUSER NOBYPASSRLS,
+//	                      owns nothing); serve and worker connect requests as it. Required with TESSERA_ENV=prod;
+//	                      serve refuses an owner, superuser, BYPASSRLS or owner-member login (#430)
+//	TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP  dev only: serve even if TESSERA_DB_APP is unset or privileged (refused in prod)
 //	TESSERA_AUDIT_ANCHOR  file:///path.jsonl (dev) or s3://bucket/prefix (S3 Object Lock; prod)
 //	TESSERA_POLICY_DIR    read policies from this directory instead of the built-in copies
 //	TESSERA_CONNECTORS    connector spec, e.g. "demo" (default) or "demo-workday,okta,entra"
@@ -432,7 +436,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	loader *policy.Loader, logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	st, err := store.Open(ctx, o.db)
+	st, err := store.OpenApp(ctx, o.db, store.AppOptions{DSN: cfg.DBApp, AllowPrivileged: cfg.DBAllowPrivilegedApp})
 	if err != nil {
 		return err
 	}

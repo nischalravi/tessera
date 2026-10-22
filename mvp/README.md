@@ -3689,28 +3689,43 @@ curl -s http://127.0.0.1:8000/readyz
 ## Postgres
 
 SQLite stays the default and is unchanged. Set `TESSERA_DB` (or `-db`) to a Postgres DSN to use Postgres
-(design `docs/design/phase-0-platform-security.md` §14.3, §19 PR14):
+(design `docs/design/phase-0-platform-security.md` §14.3, §19 PR14). Postgres takes **two logins and two
+DSNs** (#430):
 
 ```bash
-export TESSERA_DB='postgres://tessera_owner:…@db.example.com:5432/tessera?sslmode=verify-full&app_role=tessera_app'
+# the owner: runs migrations and rls.sql, and operator commands (admin, audit, backup, seed)
+export TESSERA_DB='postgres://tessera_owner:…@db.example.com:5432/tessera?sslmode=verify-full'
+# the application: every request connection of `serve` and `worker` logs in as this role directly
+export TESSERA_DB_APP='postgres://tessera_app:…@db.example.com:5432/tessera?sslmode=verify-full'
 ```
 
 Two roles, created once by a DBA before the first start:
 
 ```sql
 CREATE ROLE tessera_owner LOGIN PASSWORD '…' BYPASSRLS;   -- (or SUPERUSER) it owns the tables and runs the migrations
-CREATE ROLE tessera_app NOLOGIN NOSUPERUSER NOBYPASSRLS;   -- never owns a table, never bypasses row-level security
-GRANT tessera_app TO tessera_owner;                        -- lets the owner's connections SET ROLE tessera_app
+CREATE ROLE tessera_app LOGIN PASSWORD '…' NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB;  -- owns nothing, bypasses nothing
 CREATE DATABASE tessera OWNER tessera_owner;
 REVOKE TEMPORARY ON DATABASE tessera FROM PUBLIC, tessera_app;   -- no session-local tables (#424)
 ```
 
-* The DSN's role runs the goose migrations (`internal/store/schema/postgres/*.sql`, embedded, applied
-  on every start under an advisory lock) and `rls.sql`. With `app_role` every connection that serves
-  requests then runs `SET ROLE tessera_app`. `TESSERA_ENV=prod` refuses a DSN without `app_role` or
-  without `sslmode=require|verify-ca|verify-full`. The owner should be a superuser or `BYPASSRLS`:
+Do **not** `GRANT tessera_app TO tessera_owner` (or the reverse, or add `tessera_app` to any role that owns
+tables or has `BYPASSRLS`): the application must not be able to become the owner by `SET ROLE` or
+`RESET ROLE`. An older deployment that ran `SET ROLE tessera_app` from the owner login (`app_role` in the
+DSN) must run `REVOKE tessera_app FROM tessera_owner;`, create the `LOGIN` password for `tessera_app`
+(`ALTER ROLE tessera_app LOGIN PASSWORD '…';`), set `TESSERA_DB_APP`, and drop `app_role` from `TESSERA_DB`
+(the DSN option is refused).
+
+* `TESSERA_DB`'s role runs the goose migrations (`internal/store/schema/postgres/*.sql`, embedded, applied
+  on every start under an advisory lock) and `rls.sql`; `tessera admin gen-rls` and the operator commands
+  use it too. The request pool (`serve`, `worker`) connects as `TESSERA_DB_APP` with no `SET ROLE`.
+  **Startup check:** `serve` and `worker` refuse to start when the request pool's `session_user` is a
+  superuser, has `BYPASSRLS`, owns tables in the schema, or is a member of the owner role (that includes
+  `TESSERA_DB_APP` unset, which would make the owner the request login). `TESSERA_ENV=prod` additionally
+  refuses a postgres `TESSERA_DB` without `TESSERA_DB_APP` (a different login, with `sslmode=require|verify-ca|verify-full`
+  on both DSNs). `TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP=true` skips the refusal in dev (for example a single-role
+  laptop database); prod refuses to start with it set. The owner should be a superuser or `BYPASSRLS`:
   the cross-tenant guards for graph node keys are `SECURITY DEFINER` functions that must see other
-  tenants' rows. The role must exist before the migrations run (they grant it its privileges).
+  tenants' rows. `tessera_app` must exist before the migrations run (they grant it its privileges).
 * **Row-level security.** Every tenant table has `ENABLE` and `FORCE ROW LEVEL SECURITY` and a
   `tenant_isolation` policy on `tenant_id = NULLIF(current_setting('app.tenant_id', true), '')`.
   `DB.InTenant`/`ReadTenant` run `set_config('app.tenant_id', …, true)` (transaction-local, so a pooled
@@ -3743,11 +3758,11 @@ REVOKE TEMPORARY ON DATABASE tessera FROM PUBLIC, tessera_app;   -- no session-l
   you pass `--reseed`.
 
 Run the Postgres tests against any throwaway server (not production: every test creates and drops its
-own database, and the first run creates the `tessera_app` role):
+own database, and the first run creates the `tessera_app` login with a fixed test password):
 
 ```bash
 export TESSERA_TEST_PG_URL='postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
-cd server && go test ./...                      # the whole suite on Postgres, as tessera_app
+cd server && go test ./...                      # the whole suite on Postgres; requests log in as tessera_app (the URL's role migrates)
 TESSERA_REQUIRE_PG_TESTS=1 go test ./internal/store/   # fail instead of skipping when it is unset
 ```
 
@@ -4865,7 +4880,7 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a `TESSERA_AUDIT_ANCHOR` that
   is not `s3://bucket/prefix` (missing and `file://` included), a frozen clock (`TESSERA_NOW`), a
   `TESSERA_TRUSTED_PROXIES` prefix broader than /8 (IPv4) or /32 (IPv6), or a `postgres://`
-  `TESSERA_DB` without `sslmode=require` (or stricter) and `app_role`, and lists every problem
+  `TESSERA_DB` without `sslmode=require` (or stricter) or without a separate `TESSERA_DB_APP` login, and lists every problem
   at once (never echoing the DSN). A /0 proxy prefix is refused in every environment. `TESSERA_COOKIE_SECURE=false` is
   accepted only with `TESSERA_ENV=dev`, a `localhost`/`127.0.0.1` public URL and a loopback
   `-addr`. `serve` and `seed` both need an explicit `TESSERA_ENV` (`run.sh` exports `dev`).

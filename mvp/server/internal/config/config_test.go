@@ -358,10 +358,12 @@ func TestArchiveSettings(t *testing.T) {
 
 // TestPostgresDSN: a postgres:// TESSERA_DB works in dev (dev files go in the
 // working directory, not in a directory named after the URL), and production
-// refuses a DSN without TLS or without the app_role that makes row-level
-// security apply, without echoing the DSN (it holds the password).
+// refuses a DSN without TLS, a missing or owner-equal TESSERA_DB_APP (the
+// application must log in as its own role, #430) and the retired app_role
+// option, without echoing a DSN (it holds the password).
 func TestPostgresDSN(t *testing.T) {
-	dsn := "postgres://owner:s3cret-pw@db.example.com:5432/tessera?sslmode=require&app_role=tessera_app"
+	dsn := "postgres://tessera_owner:s3cret-pw@db.example.com:5432/tessera?sslmode=require"
+	appDSN := "postgres://tessera_app:s3cret-app@db.example.com:5432/tessera?sslmode=require"
 	if _, err := config.Load(env(map[string]string{"TESSERA_DB": dsn})); err != nil {
 		t.Fatalf("dev with a postgres DSN: %v", err)
 	}
@@ -372,21 +374,39 @@ func TestPostgresDSN(t *testing.T) {
 	if got, want := config.DevAnchorURL(dsn), "file://"+filepath.ToSlash(filepath.Join(wd, "var", "audit-anchors.jsonl")); got != want {
 		t.Errorf("dev anchor %q, want %q", got, want)
 	}
-	if _, err := config.Load(env(with(safeProd(), "TESSERA_DB", dsn))); err != nil {
-		t.Errorf("prod with a safe DSN: %v", err)
+	prod := with(with(safeProd(), "TESSERA_DB", dsn), "TESSERA_DB_APP", appDSN)
+	c, err := config.Load(env(prod))
+	if err != nil {
+		t.Errorf("prod with a safe DSN pair: %v", err)
+	} else if c.DBApp != appDSN {
+		t.Errorf("DBApp %q", c.DBApp)
 	}
-	for name, tc := range map[string]struct{ dsn, want string }{
-		"no sslmode":      {"postgres://o:s3cret-pw@db/tessera?app_role=tessera_app", "sslmode must be require"},
-		"sslmode disable": {"postgres://o:s3cret-pw@db/tessera?sslmode=disable&app_role=tessera_app", "sslmode must be require"},
-		"sslmode prefer":  {"postgres://o:s3cret-pw@db/tessera?sslmode=prefer&app_role=tessera_app", "sslmode must be require"},
-		"no app_role":     {"postgres://o:s3cret-pw@db/tessera?sslmode=verify-full", "app_role"},
+	for name, tc := range map[string]struct{ key, dsn, want string }{
+		"no sslmode":         {"TESSERA_DB", "postgres://o:s3cret-pw@db/tessera", "sslmode must be require"},
+		"sslmode disable":    {"TESSERA_DB", "postgres://o:s3cret-pw@db/tessera?sslmode=disable", "sslmode must be require"},
+		"sslmode prefer":     {"TESSERA_DB", "postgres://o:s3cret-pw@db/tessera?sslmode=prefer", "sslmode must be require"},
+		"app_role retired":   {"TESSERA_DB", dsn + "&app_role=tessera_app", "TESSERA_DB_APP"},
+		"no app DSN":         {"TESSERA_DB_APP", "", "is required"},
+		"app DSN not pg":     {"TESSERA_DB_APP", "/var/lib/app.db", "not a valid postgres"},
+		"app DSN no TLS":     {"TESSERA_DB_APP", "postgres://tessera_app:s3cret-app@db/tessera?sslmode=disable", "sslmode must be require"},
+		"app DSN is owner":   {"TESSERA_DB_APP", "postgres://tessera_owner:s3cret-pw@db.example.com/tessera?sslmode=require", "different login"},
+		"app DSN no user":    {"TESSERA_DB_APP", "postgres://db.example.com/tessera?sslmode=require", "name the application login"},
+		"app DSN app_role":   {"TESSERA_DB_APP", appDSN + "&app_role=x", "app_role is not supported"},
+		"privileged allowed": {"TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP", "true", "TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP must not be set"},
 	} {
-		_, err := config.Load(env(with(safeProd(), "TESSERA_DB", tc.dsn)))
-		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "TESSERA_DB") {
+		_, err := config.Load(env(with(prod, tc.key, tc.dsn)))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v", name, err)
-		} else if strings.Contains(err.Error(), "s3cret-pw") {
-			t.Errorf("%s: the error echoes the DSN password: %v", name, err)
+		} else if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("%s: the error echoes a DSN password: %v", name, err)
 		}
+	}
+	// SQLite in prod needs no app DSN.
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_DB", "/var/lib/tessera/t.db"))); err != nil {
+		t.Errorf("prod with SQLite: %v", err)
+	}
+	if c, err := config.Load(env(map[string]string{"TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP": "true"})); err != nil || !c.DBAllowPrivilegedApp {
+		t.Errorf("dev override: %v", err)
 	}
 }
 

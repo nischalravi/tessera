@@ -154,6 +154,24 @@ func subjectUsers(c *store.TenantTx, identityID int64) ([]uuid.UUID, error) {
 	return c.PlatformUserIDsForIdentity(identityID)
 }
 
+// requesterUsers lists the other platform users linked to the same identity as
+// the requester (none when the requester is not linked or is not a platform
+// user), so a verification from the requester's second sign-in is still the
+// requester's (#431).
+func requesterUsers(c *store.TenantTx, hc *store.HelpdeskCase) ([]uuid.UUID, error) {
+	if hc.RequestedByUserID == nil || *hc.RequestedByUserID == uuid.Nil {
+		return nil, nil
+	}
+	u, err := c.PlatformUser(*hc.RequestedByUserID)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && u.IdentityID == nil) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c.PlatformUserIDsForIdentity(*u.IdentityID)
+}
+
 // Start opens a reset case for an identity. The requester may not be the
 // subject: nobody opens a reset for their own account.
 func (s *Service) Start(c *store.TenantTx, in StartInput, by store.UserRef, now time.Time) (*store.HelpdeskCase, error) {
@@ -270,8 +288,12 @@ func policyInput(k *Checker, hc *store.HelpdeskCase) (Input, []*store.HelpdeskVe
 	if err != nil {
 		return Input{}, nil, err
 	}
+	reqUsers, err := requesterUsers(c, hc)
+	if err != nil {
+		return Input{}, nil, err
+	}
 	in := Input{Privileged: priv || hc.Privileged, RequestedBy: hc.RequestedByUserID, SecondApprover: hc.SecondApproverUserID,
-		SubjectUsers: subj}
+		SubjectUsers: subj, RequesterUsers: reqUsers}
 	for _, v := range vs {
 		in.Verifications = append(in.Verifications, Verification{Method: v.Method, Outcome: v.Outcome,
 			PhishingResistant: v.PhishingResistant, By: v.VerifiedByUserID})

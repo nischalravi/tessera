@@ -285,7 +285,7 @@ var legacyTables = []string{"audit_log", "connection_secrets", "containment_cred
 // writers; read-only tenant transactions (ReadTenant) run concurrently (WAL).
 type DB struct {
 	sql   *sql.DB // the application pool
-	owner *sql.DB // Postgres: the migration role's pool (equal to sql when there is no app role)
+	owner *sql.DB // Postgres: the migration role's pool (equal to sql when there is no separate request pool)
 	d     dialect
 	mu    sync.Mutex
 	stmts stmtCache // prepared statements (SQLite only; see stmtFor)
@@ -307,17 +307,35 @@ func (d *DB) writeLock() func() {
 // Open opens (creating if needed) the database at path and applies the schema.
 // A database created before tenancy is refused with ErrLegacySchema. A
 // postgres:// DSN opens Postgres instead of a SQLite file.
-func Open(ctx context.Context, path string) (*DB, error) { return open(ctx, path, false) }
+func Open(ctx context.Context, path string) (*DB, error) { return open(ctx, path, false, nil) }
+
+// OpenApp is Open for a process that serves requests. On Postgres the request
+// pool is the application login in app.DSN, and the open fails when its
+// session_user could undo row-level security (see CheckAppRole). On SQLite it
+// is Open.
+func OpenApp(ctx context.Context, path string, app AppOptions) (*DB, error) {
+	return open(ctx, path, false, &app)
+}
 
 // OpenFresh opens the database at path and drops every table before applying
 // the schema, so seeding always starts empty. It works on a database left from
 // an older schema (including one that predates tenancy) without deleting any
 // file, so a mistyped path can never destroy something that is not ours.
-func OpenFresh(ctx context.Context, path string) (*DB, error) { return open(ctx, path, true) }
+func OpenFresh(ctx context.Context, path string) (*DB, error) { return open(ctx, path, true, nil) }
 
-func open(ctx context.Context, path string, fresh bool) (*DB, error) {
+func open(ctx context.Context, path string, fresh bool, app *AppOptions) (*DB, error) {
 	if IsPostgresDSN(path) {
-		return openPostgres(ctx, path, fresh)
+		if dsn := testAppDSN(path); dsn != "" { // test binaries only
+			switch {
+			case app == nil:
+				app = &AppOptions{DSN: dsn}
+			case app.DSN == "":
+				c := *app
+				c.DSN = dsn
+				app = &c
+			}
+		}
+		return openPostgres(ctx, path, fresh, app)
 	}
 	q := url.Values{}
 	q.Add("_pragma", "busy_timeout(10000)")
