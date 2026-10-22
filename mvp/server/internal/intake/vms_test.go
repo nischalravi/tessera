@@ -1,6 +1,7 @@
 package intake_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -284,4 +285,40 @@ func TestVMS_EndDateDrivesTheLeaverPlan(t *testing.T) {
 	if res := r.vms(again, now); res.Outcome != intake.OutcomeReview || res.Reason != "identity_not_active" && res.Reason != "term_already_ended" {
 		t.Errorf("returning contractor = %+v", res)
 	}
+}
+
+// A VMS feed that ends many contractors at once (a bad export) is a source-driven run, but it arrives
+// record by record: the default threshold (5 here) lets that many through and holds the rest as one
+// hold for a second admin; the held contractors keep their access.
+func TestVMS_MassEndedFeedIsHeldPastTheThreshold(t *testing.T) {
+	r := newRig(t)
+	r.employee("emp-100", "dana.s@corp.example")
+	var ids []int64
+	for i := 0; i < 8; i++ {
+		w := fmt.Sprintf("W-%d", i)
+		ids = append(ids, r.vms(vmsRec("a"+w, w, "dana.s@corp.example", day(40)), now).IdentityID)
+	}
+	for i := 0; i < 8; i++ {
+		w := fmt.Sprintf("W-%d", i)
+		end := vmsRec("e"+w, w, "dana.s@corp.example", day(40))
+		end.Status, end.UpdatedAt = connectors.VmsEnded, day(0)
+		r.vms(end, now)
+	}
+	r.do(func(c *store.TenantTx) {
+		ended := 0
+		for _, id := range ids {
+			if i, err := c.Identity(id); err != nil {
+				t.Fatal(err)
+			} else if i.Status != "active" {
+				ended++
+			}
+		}
+		if ended != 5 {
+			t.Errorf("%d contractors ended, want the 5 the threshold allows", ended)
+		}
+		hs, err := c.DeletionHolds("held", "identities", 10, 0)
+		if err != nil || len(hs) != 1 || hs[0].ItemCount != 3 || hs[0].Mode != "hold_all" {
+			t.Errorf("holds %+v %v", hs, err)
+		}
+	})
 }

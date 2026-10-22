@@ -23,9 +23,12 @@ const (
 
 // guardLeaver vets ending an active identity; held says it was held and must be left as it is.
 func guardLeaver(c *store.TenantTx, now time.Time, ident *store.Identity) (held bool, err error) {
-	// leavers of one hour join one hold, so a bad feed that ends hundreds is one decision
-	d, err := deleteguard.AdmitFrom(c, now, deleteguard.CatIdentities, deleteguard.SourceLifecycle, "leaver", "leaver:"+now.UTC().Format("2006-01-02T15"),
-		deleteguard.Item{Kind: ItemLeaver, Ref: strconv.FormatInt(ident.ID, 10), Label: fmt.Sprintf("%s (%s) ends as a leaver", ident.Name, ident.ExternalID)})
+	// leavers come from feeds (HRIS events, VMS assignments, end dates): a source-driven run, so past
+	// the threshold the default is to hold them all. They join one open hold, so a bad feed that ends
+	// hundreds is one decision and the next run does not open another.
+	d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatIdentities, Source: deleteguard.SourceLifecycle,
+		SourceID: "leaver", Correlation: "leavers", SourceDriven: true,
+		Items: []deleteguard.Item{{Kind: ItemLeaver, Ref: strconv.FormatInt(ident.ID, 10), Label: fmt.Sprintf("%s (%s) ends as a leaver", ident.Name, ident.ExternalID)}}})
 	if err != nil {
 		return false, err
 	}
@@ -37,8 +40,9 @@ func guardAccountDisable(c *store.TenantTx, now time.Time, accountID int64) (hel
 	if err != nil || a == nil || a.Status != "active" {
 		return false, err
 	}
-	d, err := deleteguard.AdmitFrom(c, now, deleteguard.CatAccounts, deleteguard.SourceLifecycle, "leaver", "leaver-accounts:"+now.UTC().Format("2006-01-02T15"),
-		deleteguard.Item{Kind: ItemAccountDisable, Ref: strconv.FormatInt(accountID, 10), Label: fmt.Sprintf("account %s in %s (leaver)", a.Username, a.System)})
+	d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatAccounts, Source: deleteguard.SourceLifecycle,
+		SourceID: "leaver", Correlation: "leaver-accounts", SourceDriven: true,
+		Items: []deleteguard.Item{{Kind: ItemAccountDisable, Ref: strconv.FormatInt(accountID, 10), Label: fmt.Sprintf("account %s in %s (leaver)", a.Username, a.System)}}})
 	if err != nil {
 		return false, err
 	}
