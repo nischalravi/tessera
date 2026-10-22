@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Download, FileUp, GitBranch, Plus, Trash2 } from "lucide-react";
 import { BatchAdd, GrpDirectMember, GrpEffectiveMember, GrpGroup, GrpList, GrpMembers, MemberFilter, groups } from "../../../api";
 import { Button, Callout, CommandBar, Drawer, EmptyState, FilterChips, Loading, useToast } from "../../../components";
@@ -8,6 +9,7 @@ import { IdentityPicker, fmtWhen } from "./common";
 import { errText, useLoad } from "./hooks";
 import { addChanges, datesProblem, idempotencyKey, parseMemberRows, removeChanges, toInstant } from "./model";
 import { TraceDrawer } from "./TraceDrawer";
+import { isHeld } from "../../admin/deletionGuardModel";
 
 const PAGE = 50;
 type Enabled = "all" | "true" | "false";
@@ -18,6 +20,7 @@ const memberRef = (m: GrpDirectMember) => (m.type === "identity" ? String(m.iden
 /** The Members tab: direct, indirect and effective members, with search, paging, add/remove (with a preview), CSV import and export. */
 export function MembersTab({ g, canWrite }: { g: GrpGroup; canWrite: boolean }) {
   const toast = useToast();
+  const nav = useNavigate();
   const [filter, setFilter] = useState<MemberFilter>("direct");
   const [enabled, setEnabled] = useState<Enabled>("all");
   const [q, setQ] = useState("");
@@ -157,8 +160,12 @@ export function MembersTab({ g, canWrite }: { g: GrpGroup; canWrite: boolean }) 
           confirmLabel="Remove" danger
           onClose={() => setRemoving(null)}
           onConfirm={async () => {
-            await groups.batch(g.id, { remove: removing }, idempotencyKey());
-            toast(`Removed ${removing.length} ${removing.length === 1 ? "member" : "members"}`);
+            const res = await groups.batch(g.id, { remove: removing }, idempotencyKey());
+            if (isHeld(res)) {
+              // the deletion guard held some removals: the rest is applied, the held ones wait for a second admin
+              toast(`Removed ${removing.length - res.held} of ${removing.length}: ${res.held} held for approval (threshold ${res.threshold})`, { kind: "info",
+                action: { label: "Open held deletion", run: () => nav(`/admin/held-deletions?selected=${encodeURIComponent(res.hold_id)}`) } });
+            } else toast(`Removed ${removing.length} ${removing.length === 1 ? "member" : "members"}`);
             setPicked(new Set());
             reload();
           }}

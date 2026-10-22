@@ -264,7 +264,10 @@ func (s *Service) Run(ctx context.Context, tenant tenancy.ID, loaderID, kind str
 				}
 			}
 		default:
-			res, err := ApplyPlan(a.env(tx, now, s.Engine), cur, plan)
+			env := a.env(tx, now, s.Engine)
+			// the deletion guard (internal/deleteguard) sees the loader and counts this run as one batch
+			env.CauseRef, env.Correlation = cur.ID, "loader:"+cur.ID+":"+now.UTC().Format(time.RFC3339Nano)
+			res, err := ApplyPlan(env, cur, plan)
 			if err != nil {
 				var me *model.Error
 				if errors.As(err, &me) {
@@ -538,7 +541,10 @@ func (s *Service) decide(ctx context.Context, tenant tenancy.ID, loaderID, runID
 			if err := json.Unmarshal([]byte(*run.Plan), &plan); err != nil {
 				return err
 			}
-			res, err := ApplyPlan(a.env(tx, now, s.Engine), l, &plan)
+			env := a.env(tx, now, s.Engine)
+			// an approved held run is an approved override: the deletion guard neither counts nor holds it
+			env.CauseRef, env.Override = l.ID, true
+			res, err := ApplyPlan(env, l, &plan)
 			if err != nil {
 				return err
 			}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
@@ -324,13 +325,18 @@ func (s *Server) removeGrpMember(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	var out model.Outcome
+	col := &deleteguard.Collector{}
 	err = s.grpWrite(r, func(e model.Env) error {
 		var err error
+		e.Held = col
 		out, err = e.RemoveMember(store.GroupID(id), p.path["member"])
 		return err
 	})
 	if err != nil {
 		return 0, nil, err
+	}
+	if res := col.Result(); res != nil {
+		return http.StatusAccepted, heldBody(res, map[string]any{"effective": "held"}), nil
 	}
 	state, op := answerOutcome(out)
 	status := http.StatusOK

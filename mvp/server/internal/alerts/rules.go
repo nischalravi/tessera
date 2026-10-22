@@ -137,6 +137,19 @@ var Rules = []*Rule{
 		},
 	},
 	{
+		ID: "deletion_held", Name: "Deletions held for approval", Kind: "event", Severity: "high", Threshold: 1, Window: time.Hour,
+		Description: "The deletion threshold guard held deletions that passed a category's threshold; a second admin must release or discard them.",
+		Match: func(e *store.AuditEvent) (Hit, bool) {
+			if e.Action != "deletion_guard.held" {
+				return Hit{}, false
+			}
+			d := detailOf(e)
+			key := orStr(str(d, "hold_id"), "hold")
+			return Hit{Key: key, Title: fmt.Sprintf("Deletions held: %s of %s (%s)", orStr(str(d, "held"), "some"),
+				orStr(str(d, "category"), "a category"), orStr(str(d, "source"), "a request"))}, true
+		},
+	},
+	{
 		ID: "provisioning_failed", Name: "Provisioning or sync job failed", Kind: "event", Severity: "high", Threshold: 1,
 		Window:      time.Hour,
 		Description: "A connector sync, connection job, lifecycle (JML) run or admin change failed.",

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
@@ -232,7 +234,8 @@ func grpBodyID(field, v string) error {
 func (s *Server) grpEnv(r *http.Request, c *store.TenantTx, now time.Time) model.Env {
 	pr := principal(r)
 	env := model.Env{Tx: c, Now: now, Engine: s.cfg.GroupsEngine, ByIdentity: pr.IdentityID,
-		TenantAdmin: pr.ActiveRoles.Has(auth.RoleTenantAdmin), Guard: s.cfg.GroupsRules.Guard()}
+		TenantAdmin: pr.ActiveRoles.Has(auth.RoleTenantAdmin), Guard: s.cfg.GroupsRules.Guard(),
+		Correlation: deletionCorrelation(r)}
 	if pr.UserID != nil {
 		u := pr.UserID.String()
 		env.By = &u
@@ -683,12 +686,16 @@ func (s *Server) deleteGrpGroup(r *http.Request, p *params) (int, any, error) {
 	if _, err := s.grpGroupFor(r, s.grpChecker(r), id, privs.Admin); err != nil {
 		return 0, nil, err
 	}
+	col := &deleteguard.Collector{}
 	reason, err := deleteReason(r, false)
 	if err != nil {
 		return 0, nil, err
 	}
-	if err := s.grpWrite(r, func(e model.Env) error { e.Reason = reason; return e.DeleteGroup(store.GroupID(id)) }); err != nil {
+	if err := s.grpWrite(r, func(e model.Env) error { e.Held = col; e.Reason = reason; return e.DeleteGroup(store.GroupID(id)) }); err != nil {
 		return 0, nil, err
+	}
+	if res := col.Result(); res != nil {
+		return http.StatusAccepted, heldBody(res, map[string]any{"id": id, "deleted": false}), nil
 	}
 	return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
 }
@@ -701,12 +708,16 @@ func (s *Server) purgeGrpGroup(r *http.Request, p *params) (int, any, error) {
 	if _, err := s.grpGroupFor(r, s.grpChecker(r), id, privs.Admin); err != nil {
 		return 0, nil, err
 	}
+	col := &deleteguard.Collector{}
 	reason, err := deleteReason(r, true)
 	if err != nil {
 		return 0, nil, err
 	}
-	if err := s.grpWrite(r, func(e model.Env) error { e.Reason = reason; return e.PurgeGroup(store.GroupID(id)) }); err != nil {
+	if err := s.grpWrite(r, func(e model.Env) error { e.Held = col; e.Reason = reason; return e.PurgeGroup(store.GroupID(id)) }); err != nil {
 		return 0, nil, err
+	}
+	if res := col.Result(); res != nil {
+		return http.StatusAccepted, heldBody(res, map[string]any{"id": id, "purged": false}), nil
 	}
 	return http.StatusOK, map[string]any{"id": id, "purged": true}, nil
 }
@@ -802,4 +813,16 @@ func (s *Server) copyGrpGroup(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusCreated, viewGroup(out), nil
+}
+
+// deletionCorrelation joins what the deletion guard holds during one request, or during a bulk
+// action of the UI that sends the same X-Deletion-Batch (a UUID) with each call, into one held
+// deletion. It is scoped to the signed-in user so another admin cannot add to this one's hold.
+func deletionCorrelation(r *http.Request) string {
+	if b := r.Header.Get("X-Deletion-Batch"); idRE.MatchString(b) {
+		if pr, ok := auth.PrincipalFrom(r.Context()); ok && pr.UserID != nil {
+			return "batch:" + pr.UserID.String() + ":" + b
+		}
+	}
+	return audit.RequestID(r.Context())
 }

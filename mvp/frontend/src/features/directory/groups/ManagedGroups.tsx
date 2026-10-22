@@ -6,7 +6,7 @@ import { useSession } from "../../../app/auth";
 import { Badge, Button, Callout, Column, Crumb, DataTable, Loading, Page, SidePanel, Tabs, useConfirm, useSelected, useToast } from "../../../components";
 import { GroupBadges, RecomputeBanner, fmtWhen } from "./common";
 import { NewApplicationDrawer, NewFolderDrawer, NewGroupDrawer } from "./forms";
-import { failureOf, useDeleteTree, usePurgeGroups } from "./deletes";
+import { failureOf, newBatch, useDeleteTree, useHeldNotice, usePurgeGroups } from "./deletes";
 import { errText, useLoad } from "./hooks";
 import { childFolders, deleteBody, deleteTitle, failureSummary, folderLabel, folderTrail, indexFolders, isNotEmpty, planDeleted, planDelete } from "./model";
 import { ViewToggle } from "./ViewToggle";
@@ -35,6 +35,7 @@ export function ManagedGroups() {
   // folders a delete left in place because they still hold something: offered "delete everything in it"
   const [notEmpty, setNotEmpty] = useState<GrpFolder[]>([]);
   const purge = usePurgeGroups();
+  const heldNotice = useHeldNotice();
   const deleteTree = useDeleteTree();
 
   const folders = useLoad(() => groups.listFolders({ limit: LIMIT }), "folders");
@@ -81,18 +82,20 @@ export function ManagedGroups() {
     if (ok === null) return;
     const failed: { name: string; message: string }[] = [];
     const stuck: GrpFolder[] = [];
+    const answers: unknown[] = [];
+    const batch = newBatch(); // what the deletion guard holds from these calls is one held deletion
     let done = 0;
     for (const g of plan.groups) {
-      try { await groups.deleteGroup(g.id, ok || undefined); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
+      try { answers.push(await groups.deleteGroup(g.id, ok || undefined, batch)); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
     }
     for (const f of plan.folders) {
-      try { await groups.deleteFolder(f.id); done++; } catch (e) {
+      try { answers.push(await groups.deleteFolder(f.id, batch)); done++; } catch (e) {
         failed.push(failureOf(f.name, e));
         if (e instanceof ApiError && isNotEmpty(e.code)) stuck.push(f);
       }
     }
     if (failed.length) toast(`${done ? `Deleted ${done}. ` : ""}Could not delete ${failed.length}: ${failureSummary(failed)}`, { kind: "error" });
-    else toast(done === 1 ? "Deleted" : `Deleted ${done} items`);
+    else if (!heldNotice(answers, done)) toast(done === 1 ? "Deleted" : `Deleted ${done} items`);
     setNotEmpty(stuck);
     setSelected(null);
     folders.reload();

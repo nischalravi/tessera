@@ -1,6 +1,8 @@
 import { useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { ApiError, GrpFolder, GrpGroup, groups } from "../../../api";
 import { useConfirm, useToast } from "../../../components";
+import { bulkHeldNotice, isHeld } from "../../admin/deletionGuardModel";
 import { errText } from "./hooks";
 import { blockerLines, failureSummary, plainReason, purgeBody, purgeTitle, treeOutcome, treeSummary } from "./model";
 
@@ -10,12 +12,31 @@ export function failureOf(name: string, e: unknown): { name: string; message: st
 }
 
 /**
+ * Says so when the deletion guard held part of a bulk action (Admin → Deletion guard): "Deleted 25 of 40: 15 held
+ * for approval (threshold 25 per hour)", with a link to the held deletion. Returns true when it did.
+ */
+export function useHeldNotice() {
+  const toast = useToast();
+  const nav = useNavigate();
+  return useCallback((answers: unknown[], attempted: number): boolean => {
+    const n = bulkHeldNotice(answers, attempted);
+    if (!n) return false;
+    toast(n.text, { kind: "info", action: { label: "Open held deletion", run: () => nav(`/admin/held-deletions?selected=${encodeURIComponent(n.holdId)}`) } });
+    return true;
+  }, [toast, nav]);
+}
+
+/** One id for the calls of a bulk action, so what the guard holds from them is one held deletion. */
+export const newBatch = () => crypto.randomUUID();
+
+/**
  * Permanently delete groups that are already deleted: one confirm, then each in turn. Resolves to null when the
  * person cancelled, else how many went and which could not (and why), already shown in a toast.
  */
 export function usePurgeGroups() {
   const confirm = useConfirm();
   const toast = useToast();
+  const notify = useHeldNotice();
   return useCallback(async (list: GrpGroup[], skipped: string[] = []): Promise<{ done: number; failed: { name: string; message: string }[] } | null> => {
     if (list.length === 0) {
       toast(skipped.length ? `Nothing to delete permanently: ${skipped.join(", ")} ${skipped.length === 1 ? "is" : "are"} not a deleted group managed here.` : "Nothing to delete permanently.", { kind: "error" });
@@ -25,14 +46,17 @@ export function usePurgeGroups() {
       reason: { label: "Reason", required: true, placeholder: "Why is this being removed for good?" } });
     if (ok === null) return null;
     const failed: { name: string; message: string }[] = [];
+    const answers: unknown[] = [];
+    const batch = newBatch();
     let done = 0;
     for (const g of list) {
-      try { await groups.purgeGroup(g.id, ok); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
+      try { answers.push(await groups.purgeGroup(g.id, ok, batch)); done++; } catch (e) { failed.push(failureOf(g.name, e)); }
     }
-    if (failed.length) toast(`${done ? `Deleted ${done} permanently. ` : ""}Could not delete ${failed.length}: ${failureSummary(failed)}`, { kind: "error" });
-    else toast(done === 1 ? "Group deleted permanently" : `${done} groups deleted permanently`);
-    return { done, failed };
-  }, [confirm, toast]);
+    const held = answers.filter(isHeld).length;
+    if (failed.length) toast(`${done ? `Deleted ${done - held} permanently. ` : ""}Could not delete ${failed.length}: ${failureSummary(failed)}`, { kind: "error" });
+    else if (!notify(answers, list.length)) toast(done === 1 ? "Group deleted permanently" : `${done} groups deleted permanently`);
+    return { done: done - held, failed };
+  }, [confirm, toast, notify]);
 }
 
 /**
@@ -44,6 +68,7 @@ export function usePurgeGroups() {
 export function useDeleteTree() {
   const confirm = useConfirm();
   const toast = useToast();
+  const nav = useNavigate();
   return useCallback(async (f: GrpFolder): Promise<"deleted" | "requested" | null> => {
     let plan;
     try {
@@ -84,6 +109,11 @@ export function useDeleteTree() {
     if (ok === null) return null;
     try {
       const res = await groups.deleteFolderRecursive(f.id, ok);
+      if ("hold_id" in res) {
+        // the deletion guard stopped part of it: the groups it let through are gone, the rest waits for a second admin
+        toast(`${res.message}. ${f.name} stays until the rest is released.`, { kind: "info", action: { label: "Open held deletion", run: () => nav(`/admin/held-deletions?selected=${encodeURIComponent(res.hold_id)}`) } });
+        return "requested";
+      }
       const out = treeOutcome(f.name, res);
       toast(out.message);
       return out.requested ? "requested" : "deleted";

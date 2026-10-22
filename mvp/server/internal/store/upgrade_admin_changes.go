@@ -6,12 +6,13 @@ import (
 	"strings"
 )
 
-const (
-	adminChangeTable = "admin_change_requests"
-	// the type the old CHECK lacks and the one it is placed after
-	adminChangeNewType   = "'groups.folder.delete_recursive'"
-	adminChangeAnchorTyp = "'groups.loader.save'"
-)
+const adminChangeTable = "admin_change_requests"
+
+// adminChangeNewTypes are the types an old CHECK may lack, each with the one it is placed after, in order.
+var adminChangeNewTypes = [][2]string{
+	{"'groups.folder.delete_recursive'", "'groups.loader.save'"},
+	{"'deletion_guard.update'", "'groups.folder.delete_recursive'"},
+}
 
 // upgradeAdminChangeTypes widens the type CHECK of admin_change_requests in a SQLite database created before
 // groups.folder.delete_recursive existed (CREATE TABLE IF NOT EXISTS cannot change a CHECK). The table is rebuilt
@@ -19,14 +20,20 @@ const (
 // table dropped, new one renamed, and the table's own indexes and triggers recreated. Foreign keys are off for
 // the rebuild (and checked before it commits), so the tables that point at it keep their rows. It does nothing
 // when the table is missing or already admits the type, so running it on every open is safe. Postgres changes
-// the CHECK in migration 0640.
+// the CHECK in migrations 0640 and 0671.
 func (d *DB) upgradeAdminChangeTypes(ctx context.Context) error {
 	var def string
 	err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, adminChangeTable).Scan(&def)
 	if err != nil {
 		return nil // no such table yet: the schema files create it with the wider CHECK
 	}
-	if strings.Contains(def, adminChangeNewType) || !strings.Contains(def, adminChangeAnchorTyp) {
+	wider, changed := def, false
+	for _, t := range adminChangeNewTypes {
+		if !strings.Contains(wider, t[0]) && strings.Contains(wider, t[1]) {
+			wider, changed = strings.Replace(wider, t[1], t[1]+",\n    "+t[0], 1), true
+		}
+	}
+	if !changed {
 		return nil
 	}
 	conn, err := d.sql.Conn(ctx)
@@ -68,7 +75,6 @@ func (d *DB) upgradeAdminChangeTypes(ctx context.Context) error {
 	}
 
 	tmp := adminChangeTable + "_upgrade"
-	wider := strings.Replace(def, adminChangeAnchorTyp, adminChangeAnchorTyp+",\n    "+adminChangeNewType, 1)
 	wider = strings.Replace(wider, adminChangeTable, tmp, 1) // the name after CREATE TABLE [IF NOT EXISTS]
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {

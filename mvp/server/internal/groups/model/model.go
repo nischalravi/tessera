@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/attrs"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
@@ -59,6 +60,14 @@ type Env struct {
 	// deprovisioning rule would refuse (GR-14). The API sets it only after it
 	// checked the caller holds admin on the group; it is audited.
 	VetoOverride string
+	// Held collects what the deletion guard held during the operation (nil: not collected; the
+	// hold is made and audited all the same). Correlation joins the holds of one request or run
+	// into one; Source and SourceID name a caller that is not a user (a loader, a rule). Override
+	// is a release of a hold a second admin approved: the guard does not count or vet it.
+	Held        *deleteguard.Collector
+	Correlation string
+	SourceID    string
+	Override    bool
 	// ByDisplay is the acting person's name as it is kept with what they delete; Reason is why (optional for a
 	// delete, required by the API for a purge and a recursive delete).
 	ByDisplay string
@@ -1155,6 +1164,9 @@ func (e Env) DeleteFolder(id store.FolderID) error {
 		ce.Extra = map[string]any{"folders": folders, "groups": groups, "deleted_groups": deleted, "attr_defs": defs}
 		return ce
 	}
+	if held, err := e.guard(deleteguard.CatFolders, folderItem(f)); held || err != nil {
+		return err
+	}
 	return e.removeFolder(f)
 }
 
@@ -1209,6 +1221,14 @@ func (e Env) deleteGroup(id store.GroupID, withFolder string) error {
 	if err := writable(f); err != nil {
 		return err
 	}
+	if held, err := e.guard(deleteguard.CatGroups, groupItem("group_delete", g)); held || err != nil {
+		return err
+	}
+	return e.softDelete(g, withFolder)
+}
+
+// softDelete is DeleteGroup past its checks and the deletion guard.
+func (e Env) softDelete(g *store.NativeGroup, withFolder string) error {
 	g.Status = store.GroupDeleted
 	if err := e.Tx.UpdateGrpGroup(g); err != nil {
 		return wrap(err)

@@ -12,6 +12,7 @@ import { usePurgeGroups } from "./deletes";
 import { LoaderTab } from "./LoaderTab";
 import { errText, useLoad } from "./hooks";
 import { MembersTab } from "./MembersTab";
+import { isHeld } from "../../admin/deletionGuardModel";
 import { deletedLine, folderLabel, folderTrail, indexFolders } from "./model";
 import { PrivilegesTab } from "./PrivilegesTab";
 
@@ -55,8 +56,9 @@ export function GroupPage() {
       reason: { label: "Reason (optional)", placeholder: "Why is it being deleted?" } });
     if (ok === null) return;
     try {
-      await groups.deleteGroup(g.id, ok || undefined);
-      toast("Group deleted");
+      const res = await groups.deleteGroup(g.id, ok || undefined);
+      if (isHeld(res)) toast(`${res.message}. The group stays until a second admin releases it.`, { kind: "info", action: { label: "Open held deletion", run: () => nav(`/admin/held-deletions?selected=${encodeURIComponent(res.hold_id)}`) } });
+      else toast("Group deleted");
     } catch (e) {
       toast(errText(e), { kind: "error" });
     }

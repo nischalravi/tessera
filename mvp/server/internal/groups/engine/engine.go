@@ -120,6 +120,9 @@ type Seed struct {
 type Outcome struct {
 	Queued bool
 	Op     int64
+	// Held is set by the groups model, never the engine: the deletion guard held the removal
+	// (internal/deleteguard) and nothing changed.
+	Held bool
 }
 
 // CycleError is returned when an edge would make the dependency graph cyclic:

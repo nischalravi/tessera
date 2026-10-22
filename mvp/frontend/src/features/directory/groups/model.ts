@@ -3,7 +3,7 @@
  * the folder tree, dates, the change preview text, the history diff, the application template.
  * Types come from `src/api.ts`; nothing here decides access (the server does, per request).
  */
-import type { BatchAdd, GrpDeletePlan, GrpFolder, GrpGroup, GrpPrivGrant, GrpTreeDeleted, GrpTreePending, PitMember, SimChange, SimulationResult } from "../../../api";
+import type { BatchAdd, GrpDeletePlan, GrpFolder, GrpGroup, GrpPrivGrant, GrpTreeDeleted, GrpTreeHeld, GrpTreePending, PitMember, SimChange, SimulationResult } from "../../../api";
 
 // ------------------------------------------------------------ names
 
@@ -440,7 +440,8 @@ export function blockerLines(blockers: { reason: string }[], max = 5): string[] 
 }
 
 /** What to tell the person after a folder tree delete: done, or a request waiting for a second admin. */
-export function treeOutcome(name: string, res: GrpTreeDeleted | GrpTreePending): { requested: boolean; message: string } {
+export function treeOutcome(name: string, res: GrpTreeDeleted | GrpTreePending | GrpTreeHeld): { requested: boolean; message: string } {
+  if ("hold_id" in res) return { requested: true, message: res.message };
   if ("status" in res) {
     return { requested: true, message: `Nothing is deleted yet. A request to delete ${name} and everything in it was created: a second admin must approve it under Admin → Change requests${res.reason ? ` (${res.reason})` : ""}.` };
   }

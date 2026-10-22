@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -221,8 +222,16 @@ func (s *Server) queueLifecycleSweep(ctx context.Context, j queue.Job) (any, err
 // queueAdminSweep applies the admin changes whose cooling-off ended and
 // expires the ones nobody approved in 72 hours (design §15.2).
 func (s *Server) queueAdminSweep(ctx context.Context, j queue.Job) (any, error) {
-	_, err := s.admin.SweepTenant(audit.WithSystemActor(ctx, "admin.sweeper"), j.Tenant)
-	return nil, err
+	ctx = audit.WithSystemActor(ctx, "admin.sweeper")
+	if _, err := s.admin.SweepTenant(ctx, j.Tenant); err != nil {
+		return nil, err
+	}
+	// held deletions that waited past their expiry are discarded (internal/deleteguard)
+	now := s.clock()
+	return nil, s.store.InTenant(ctx, j.Tenant, func(tx *store.TenantTx) error {
+		_, err := deleteguard.ExpireDue(tx, now)
+		return err
+	})
 }
 
 // queueContainmentRetries re-runs the containment retry tasks that are due.

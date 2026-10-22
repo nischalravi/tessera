@@ -164,9 +164,9 @@ export interface RawBody {
  * upload is not: its body cannot be replayed from storage).
  */
 /** idempotencyKey is sent as the Idempotency-Key header: a retried write replays its first answer (the groups API). */
-export function api<T = any>(path: string, body?: unknown, method?: string, raw?: RawBody, idempotencyKey?: string): Promise<T> {
+export function api<T = any>(path: string, body?: unknown, method?: string, raw?: RawBody, idempotencyKey?: string, extraHeaders?: Record<string, string>): Promise<T> {
   const m = method ?? (body !== undefined || raw ? "POST" : "GET");
-  return send<T>(path, body, m, raw ? clearPendingAction : () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }), raw, idempotencyKey);
+  return send<T>(path, body, m, raw ? clearPendingAction : () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }), raw, idempotencyKey, extraHeaders);
 }
 
 /**
@@ -177,8 +177,8 @@ export function apiNoResume<T = any>(path: string, body: unknown, method = "POST
   return send<T>(path, body, method, clearPendingAction);
 }
 
-async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void, raw?: RawBody, idempotencyKey?: string): Promise<T> {
-  const headers: Record<string, string> = {};
+async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void, raw?: RawBody, idempotencyKey?: string, extraHeaders?: Record<string, string>): Promise<T> {
+  const headers: Record<string, string> = { ...extraHeaders };
   if (idempotencyKey) headers["idempotency-key"] = idempotencyKey;
   if (raw) headers["content-type"] = raw.contentType;
   else if (body !== undefined) headers["content-type"] = "application/json";
@@ -4117,7 +4117,7 @@ export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rej
 export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
   | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
-  | "groups.loader.save" | "retention.update";
+  | "groups.loader.save" | "retention.update" | "deletion_guard.update";
 
 export interface AdminPersonRef { id: string; display_name: string }
 
@@ -4523,6 +4523,12 @@ export interface GrpDeletePlan {
   blockers: GrpDeleteBlocker[]; blocker_count: number;
 }
 export interface GrpTreeDeleted { id: string; deleted: true; recursive: true; folders: number; groups: number; attr_defs: number; memberships: number }
+/** A tree delete the deletion guard stopped part of: 202, the groups it let through are gone, the rest wait for a second admin. */
+export interface GrpTreeHeld extends HeldAnswer { id: string; deleted: false; recursive: true; folders: number; groups: number; attr_defs: number; memberships: number }
+/** The answer of a delete or purge: 200, or (when the deletion guard held it) 202 with HeldAnswer. */
+export type GrpDeleteAnswer = { id: string; deleted?: boolean; purged?: boolean } & Partial<HeldAnswer>
+/** X-Deletion-Batch joins the holds of one bulk action into a single held deletion. */
+const batchHeader = (batch?: string) => (batch ? { "x-deletion-batch": batch } : undefined);
 export interface GrpTreePending { status: "pending_approval"; change_request_id: string; type: string; folder_id: string; expires_at: string | null; reason?: string; detail: string }
 export interface GrpList<T> { items: T[]; limit: number; offset: number }
 export interface GrpDirectMember {
@@ -4580,14 +4586,14 @@ export const groups = {
   createFolder: (b: { parent?: string; extension: string; display_extension?: string; description?: string; data_owner?: string }) => api<GrpFolder>("/groups/folders", b),
   updateFolder: (id: string, b: { extension?: string; display_extension?: string; description?: string; data_owner?: string; version?: number }) =>
     api<GrpFolder>(`/groups/folders/${gid(id)}`, b, "PATCH"),
-  deleteFolder: (id: string) => api<{ id: string; deleted: boolean }>(`/groups/folders/${gid(id)}`, undefined, "DELETE"),
+  deleteFolder: (id: string, batch?: string) => api<GrpDeleteAnswer>(`/groups/folders/${gid(id)}`, undefined, "DELETE", undefined, undefined, batchHeader(batch)),
   /** What deleting the folder and everything in it would remove, and what blocks it. */
   folderDeletePlan: (id: string) => api<GrpDeletePlan>(`/groups/folders/${gid(id)}/delete-plan`),
   /**
    * Delete the folder and its whole tree. Needs a fresh phishing-resistant sign-in (the client resumes the call after
    * the step-up). A large or populated tree answers 202 with a change request that a second admin approves.
    */
-  deleteFolderRecursive: (id: string, reason: string) => api<GrpTreeDeleted | GrpTreePending>(`/groups/folders/${gid(id)}${qs({ recursive: true })}`, { reason }, "DELETE"),
+  deleteFolderRecursive: (id: string, reason: string) => api<GrpTreeDeleted | GrpTreePending | GrpTreeHeld>(`/groups/folders/${gid(id)}${qs({ recursive: true })}`, { reason }, "DELETE"),
   // groups
   listGroups: (o: { folder?: string; scope?: "one" | "sub"; q?: string; type?: string; deleted?: boolean; limit?: number; offset?: number } = {}) =>
     api<GrpList<GrpGroup>>(`/groups/native${qs({ limit: 500, ...o })}`),
@@ -4595,17 +4601,17 @@ export const groups = {
   createGroup: (b: { folder: string; extension: string; display_extension?: string; description?: string; type?: string; data_owner?: string; member_description?: string; requestable?: boolean; definition?: string; composite_op?: string; factors?: string[] }) =>
     api<GrpGroup>("/groups", b),
   updateGroup: (id: string, b: Record<string, unknown>) => api<GrpGroup>(`/groups/${gid(id)}`, b, "PATCH"),
-  deleteGroup: (id: string, reason?: string) => api<{ id: string; deleted: boolean }>(`/groups/${gid(id)}`, reason ? { reason } : undefined, "DELETE"),
+  deleteGroup: (id: string, reason?: string, batch?: string) => api<GrpDeleteAnswer>(`/groups/${gid(id)}`, reason ? { reason } : undefined, "DELETE", undefined, undefined, batchHeader(batch)),
   restoreGroup: (id: string) => api<GrpGroup>(`/groups/${gid(id)}/restore`, {}),
   /** Permanently delete a group that is already deleted. 409 group_in_use names the groups that still use it. */
-  purgeGroup: (id: string, reason: string) => api<{ id: string; purged: boolean }>(`/groups/${gid(id)}/purge`, { reason }),
+  purgeGroup: (id: string, reason: string, batch?: string) => api<GrpDeleteAnswer>(`/groups/${gid(id)}/purge`, { reason }, undefined, undefined, undefined, batchHeader(batch)),
   // members
   members: <T = GrpDirectMember | GrpEffectiveMember>(id: string, o: { filter?: MemberFilter; q?: string; sort?: string; enabled?: boolean; page?: number; limit?: number } = {}) =>
     api<GrpMembers<T>>(`/groups/${gid(id)}/members${qs(o)}`),
   addMember: (id: string, b: BatchAdd, key?: string) => api<MemberAnswer>(`/groups/${gid(id)}/members`, b, "POST", undefined, key),
-  removeMember: (id: string, member: string) => api<MemberAnswer>(`/groups/${gid(id)}/members/${gid(member)}`, undefined, "DELETE"),
+  removeMember: (id: string, member: string, batch?: string) => api<MemberAnswer & Partial<HeldAnswer>>(`/groups/${gid(id)}/members/${gid(member)}`, undefined, "DELETE", undefined, undefined, batchHeader(batch)),
   trace: (id: string, identity: number) => api<MemberTrace>(`/groups/${gid(id)}/members/${identity}?trace=true`),
-  batch: (id: string, b: BatchBody, key?: string) => api<BatchResult>(`/groups/${gid(id)}/members:batch`, b, "POST", undefined, key),
+  batch: (id: string, b: BatchBody, key?: string) => api<BatchResult & Partial<HeldAnswer>>(`/groups/${gid(id)}/members:batch`, b, "POST", undefined, key),
   simulate: (changes: SimChange[]) => api<SimulationResult>("/groups:simulate", { changes }),
   setComposite: (id: string, b: { op: string; factors: string[] }) => api<GrpGroup>(`/groups/${gid(id)}/composite`, b, "PUT"),
   convertToComposite: (id: string, b: { op: string; factors: string[]; discard_members?: boolean }) => api<GrpGroup>(`/groups/${gid(id)}/convert-to-composite`, b),
@@ -4804,4 +4810,60 @@ export const oauthApps = {
   revokeGrant: (id: string, grantId: string, reason: string) =>
     api<OAuthRevokeResult>(`/oauth-apps/${encodeURIComponent(id)}/grants/${encodeURIComponent(grantId)}/revoke`, { reason }),
   revokeVendor: (vendor: string, reason: string) => api<OAuthRevokeResult>("/oauth-apps/revoke-vendor", { vendor, reason }),
+};
+
+// ------------------------------------------------------------ deletion threshold guard (internal/deleteguard)
+
+export type DeletionCategory = "groups" | "folders" | "group_members" | "accounts" | "identities";
+export type DeletionMode = "hold_excess" | "hold_all" | "off";
+
+/** The answer (202) of a deleting route the guard held part of. */
+export interface HeldAnswer {
+  status: "partially_applied" | "held";
+  applied: number; held: number; hold_id: string;
+  /** The limit in force, "25 per hour". */
+  threshold: string;
+  /** "Deleted 25 of 40: 15 held for approval (threshold 25 per hour)". */
+  message: string;
+}
+
+/** A category's threshold and how much of its window is used. */
+export interface DeletionPolicy {
+  category: DeletionCategory; max_count: number | null; max_percent: number | null; window_minutes: number; mode: DeletionMode;
+  default: boolean; version: number; updated_at?: string;
+  used: number; population: number; limit: number | null; remaining: number | null;
+}
+
+/** GET /api/admin/deletion-guard. */
+export interface DeletionGuardView {
+  categories: DeletionPolicy[]; hold_expiry_hours: number; open_holds: number;
+  defaults: Record<DeletionCategory, { max_count: number | null; max_percent: number | null; window_minutes: number; mode: DeletionMode }>;
+}
+
+export type HoldStatus = "held" | "released" | "partially_released" | "discarded" | "expired";
+export type HoldItemStatus = "held" | "released" | "discarded" | "gone" | "failed";
+
+export interface DeletionHoldItem { ord: number; kind: string; ref: string; label: string; status: HoldItemStatus; note: string | null }
+
+export interface DeletionHold {
+  id: string; category: DeletionCategory; status: HoldStatus; mode: DeletionMode;
+  reason: { window_minutes?: number; max_count?: number | null; max_percent?: number | null; limit?: number | null; used_before?: number; attempted?: number; applied?: number; population?: number };
+  actor: string; actor_name?: string; source: string; source_id: string; correlation_id: string; item_count: number;
+  created_at: string; expires_at: string; resolved_at: string | null; resolved_by: string | null; note: string | null;
+  items?: DeletionHoldItem[];
+}
+
+export interface HoldDecision { hold_id: string; status: HoldStatus; released: number; gone: number; failed: number; discarded: number }
+
+export interface DeletionPolicyInput { category: DeletionCategory; max_count: number | null; max_percent: number | null; window_minutes: number; mode: DeletionMode }
+
+export const deletionGuard = {
+  holds: (status = "", category = "") => api<{ holds: DeletionHold[] }>(`/admin/deletion-holds${qs({ status, category, limit: 500 })}`),
+  hold: (id: string) => api<DeletionHold>(`/admin/deletion-holds/${encodeURIComponent(id)}`),
+  /** Release the held items (all, or only the listed positions and discard the rest). A different admin than the actor; a step-up. */
+  approve: (id: string, items?: number[]) => api<HoldDecision>(`/admin/deletion-holds/${encodeURIComponent(id)}/approve`, items ? { items } : {}),
+  discard: (id: string, note = "") => api<HoldDecision>(`/admin/deletion-holds/${encodeURIComponent(id)}/discard`, { note }),
+  /** Thresholds change through an admin change request: tightening applies at once, loosening needs a second admin. */
+  change: (policies: DeletionPolicyInput[], holdExpiryHours?: number) =>
+    adminChanges.submit("deletion_guard.update", { ...(policies.length ? { policies } : {}), ...(holdExpiryHours !== undefined ? { hold_expiry_hours: holdExpiryHours } : {}) }),
 };

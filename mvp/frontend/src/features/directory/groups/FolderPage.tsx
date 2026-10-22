@@ -9,6 +9,7 @@ import { FolderLink, GroupBadges, GroupLink, fmtWhen } from "./common";
 import { NewApplicationDrawer, NewFolderDrawer, NewGroupDrawer } from "./forms";
 import { useDeleteTree } from "./deletes";
 import { errText, useLoad } from "./hooks";
+import { isHeld } from "../../admin/deletionGuardModel";
 import { childFolders, folderLabel, folderTrail, indexFolders, isNotEmpty, plainReason } from "./model";
 import { PrivilegesTab } from "./PrivilegesTab";
 
@@ -51,7 +52,11 @@ export function FolderPage() {
     const ok = await confirm({ title: `Delete ${f.name}?`, body: "Only an empty folder can be deleted.", confirmLabel: "Delete", danger: true });
     if (ok === null) return;
     try {
-      await groups.deleteFolder(f.id);
+      const res = await groups.deleteFolder(f.id);
+      if (isHeld(res)) {
+        toast(`${res.message}. The folder stays until a second admin releases it.`, { kind: "info", action: { label: "Open held deletion", run: () => nav(`/admin/held-deletions?selected=${encodeURIComponent(res.hold_id)}`) } });
+        return;
+      }
       toast("Folder deleted");
       nav("/directory/groups");
     } catch (e) {
