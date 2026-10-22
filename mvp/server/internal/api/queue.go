@@ -320,6 +320,7 @@ func (s *Server) registerQueueRoutes() {
 	s.handle(http.MethodGet, "/api/queue/schedules", read, need(auth.PermJobsRead), s.listQueueSchedules)
 	s.handle(http.MethodGet, "/api/queue/workers", read, need(auth.PermJobsRead), s.listQueueWorkers)
 	s.handle(http.MethodPost, "/api/queue/jobs/{job_id}/retry", write, needStepUp(auth.PermJobsManage, auth.StepUpPolicy), s.retryQueueJob)
+	s.registerConnectionLimitRoutes()
 }
 
 type queueJobView struct {
@@ -426,6 +427,23 @@ type queueWorkerView struct {
 	StartedAt       string   `json:"started_at"`
 	LastHeartbeatAt string   `json:"last_heartbeat_at"`
 	LagSeconds      int      `json:"lag_seconds"` // since the last heartbeat
+	// Targets is the worker's view of the connections it called: the circuit
+	// breaker state and the calls in flight (issue #302). Empty until it calls one.
+	Targets []queueTargetView `json:"targets"`
+}
+
+// queueTargetView is one connection as one worker sees it.
+type queueTargetView struct {
+	ConnectionID        string  `json:"connection_id"`
+	Connection          string  `json:"connection"`
+	Breaker             string  `json:"breaker"` // closed | open | half_open
+	ConsecutiveFailures int     `json:"consecutive_failures"`
+	OpenUntil           *string `json:"open_until"`
+	LastError           string  `json:"last_error"`
+	InFlight            int     `json:"in_flight"`
+	Calls               int64   `json:"calls"`
+	Failures            int64   `json:"failures"`
+	Rejected            int64   `json:"rejected"`
 }
 
 // workerLabel is the tenant-visible name of a worker: a stable opaque id for
@@ -454,6 +472,21 @@ func (s *Server) listQueueWorkers(_ http.ResponseWriter, r *http.Request, _ *par
 	if err != nil {
 		return nil, err
 	}
+	states, err := c.WorkerTargetStates()
+	if err != nil {
+		return nil, err
+	}
+	names, err := connNames(c)
+	if err != nil {
+		return nil, err
+	}
+	targets := map[string][]queueTargetView{}
+	for _, t := range states {
+		targets[t.WorkerID] = append(targets[t.WorkerID], queueTargetView{ConnectionID: t.ConnectionID,
+			Connection: names[t.ConnectionID].name, Breaker: t.State, ConsecutiveFailures: t.ConsecutiveFailures,
+			OpenUntil: isoPtr(t.OpenUntil), LastError: t.LastError, InFlight: t.InFlight, Calls: t.Calls,
+			Failures: t.Failures, Rejected: t.Rejected})
+	}
 	now := s.clock()
 	out := make([]queueWorkerView, 0, len(ws))
 	for _, w := range ws {
@@ -474,7 +507,7 @@ func (s *Server) listQueueWorkers(_ http.ResponseWriter, r *http.Request, _ *par
 		out = append(out, queueWorkerView{WorkerID: workerLabel(c.Tenant(), w.WorkerID), Mode: w.Mode, Status: st,
 			Kinds: kinds, Concurrency: w.Concurrency, Running: w.Running,
 			StartedAt: w.StartedAt.UTC().Format(time.RFC3339), LastHeartbeatAt: w.LastHeartbeatAt.UTC().Format(time.RFC3339),
-			LagSeconds: lag})
+			LagSeconds: lag, Targets: append([]queueTargetView{}, targets[w.WorkerID]...)})
 	}
 	return out, nil
 }

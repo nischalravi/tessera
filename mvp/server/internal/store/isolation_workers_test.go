@@ -23,7 +23,15 @@ func workersDump(t *testing.T, f *storetest.Fixture, tn storetest.Tenant) string
 		if err != nil {
 			return err
 		}
-		out, err = json.Marshal(map[string]any{"workers": ws, "agent_jobs": js})
+		ls, err := c.AllConnectionLimits()
+		if err != nil {
+			return err
+		}
+		ts, err := c.WorkerTargetStates()
+		if err != nil {
+			return err
+		}
+		out, err = json.Marshal(map[string]any{"workers": ws, "agent_jobs": js, "limits": ls, "targets": ts})
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -39,6 +47,12 @@ func workersCovered() map[string]bool {
 	for _, k := range []string{"EnqueueAgentJob", "AgentJob", "AgentJobs", "HasOpenAgentJob", "ClaimAgentJobs", "CompleteAgentJob",
 		"FailAgentJob", "CancelAgentJobs", "PruneAgentJobs", "HasDueAgentJobs"} {
 		out[k] = true // TestIsolation_AgentJobs
+	}
+	for _, k := range []string{"ConnectionLimits", "AllConnectionLimits", "PutConnectionLimits", "DeleteConnectionLimits"} {
+		out[k] = true // TestIsolation_ConnectionLimits
+	}
+	for _, k := range []string{"ReplaceWorkerTargetStates", "WorkerTargetStates", "ClearWorkerTargetStates", "PruneWorkerTargetStates"} {
+		out[k] = true // TestIsolation_WorkerTargetStates
 	}
 	return out
 }
@@ -245,6 +259,125 @@ func TestAgentJobs_LeaseCycle(t *testing.T) {
 		j, err := c.AgentJob(id)
 		if err != nil || j.Status != store.AgentJobFailed || j.FinishedAt == nil {
 			t.Errorf("job = %+v, %v", j, err)
+		}
+		return nil
+	})
+}
+
+// Connection limits are per tenant: B cannot read, replace or delete A's, a
+// limit cannot name another tenant's connection, and B's limits for its own
+// connection are its own row.
+func TestIsolation_ConnectionLimits(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	now := storetest.Now
+	aConn, bConn := f.A.Refs["connection:ad"], f.B.Refs["connection:ad"]
+	inA(t, f, func(c *store.TenantTx) error {
+		return c.PutConnectionLimits(&store.ConnectionLimits{ConnectionID: aConn, MaxConcurrency: 2, RatePerMin: 30,
+			BreakerThreshold: 3, BreakerCooldownSecs: 60, UpdatedBy: "a"}, now)
+	})
+	before := workersDump(t, f, f.A)
+	inB(t, f, func(c *store.TenantTx) error {
+		if _, err := c.ConnectionLimits(aConn); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("ConnectionLimits(A's) = %v", err)
+		}
+		if ls, err := c.AllConnectionLimits(); err != nil || len(ls) != 0 {
+			t.Errorf("AllConnectionLimits = %v, %v", ls, err)
+		}
+		if err := c.DeleteConnectionLimits(aConn); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("DeleteConnectionLimits(A's) = %v", err)
+		}
+		// a row of B's naming A's connection is refused by the schema
+		if err := c.PutConnectionLimits(&store.ConnectionLimits{ConnectionID: aConn, UpdatedBy: "b"}, now); err == nil {
+			t.Error("B limited A's connection")
+		}
+		return nil
+	})
+	inB(t, f, func(c *store.TenantTx) error {
+		return c.PutConnectionLimits(&store.ConnectionLimits{ConnectionID: bConn, MaxConcurrency: 9, UpdatedBy: "b"}, now)
+	})
+	if got := workersDump(t, f, f.A); got != before {
+		t.Errorf("tenant A changed:\nbefore %s\nafter  %s", before, got)
+	}
+	// replacing keeps one row; the CHECKs refuse an out-of-range value
+	inA(t, f, func(c *store.TenantTx) error {
+		if err := c.PutConnectionLimits(&store.ConnectionLimits{ConnectionID: aConn, MaxConcurrency: 4, UpdatedBy: "a"}, now.Add(time.Minute)); err != nil {
+			return err
+		}
+		l, err := c.ConnectionLimits(aConn)
+		if err != nil || l.MaxConcurrency != 4 || l.RatePerMin != 0 {
+			t.Errorf("after replace: %+v, %v", l, err)
+		}
+		if ls, err := c.AllConnectionLimits(); err != nil || len(ls) != 1 {
+			t.Errorf("AllConnectionLimits = %v, %v", ls, err)
+		}
+		return nil
+	})
+	if err := f.DB.InTenant(t.Context(), f.A.ID, func(c *store.TenantTx) error {
+		return c.PutConnectionLimits(&store.ConnectionLimits{ConnectionID: aConn, MaxConcurrency: 65, UpdatedBy: "a"}, now)
+	}); err == nil {
+		t.Error("max_concurrency 65 was accepted")
+	}
+	inA(t, f, func(c *store.TenantTx) error {
+		if err := c.DeleteConnectionLimits(aConn); err != nil {
+			t.Error(err)
+		}
+		return nil
+	})
+}
+
+// Worker target states are per tenant: B sees, replaces, clears and prunes none
+// of A's, a state cannot name another tenant's connection, and a worker's beat
+// replaces its own rows only.
+func TestIsolation_WorkerTargetStates(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	now := storetest.Now
+	aConn, bConn := f.A.Refs["connection:ad"], f.B.Refs["connection:ad"]
+	until := now.Add(time.Minute)
+	open := store.WorkerTargetState{ConnectionID: aConn, State: store.BreakerOpen, ConsecutiveFailures: 5, OpenUntil: &until,
+		LastError: "boom", Calls: 9, Failures: 5, Rejected: 2}
+	inA(t, f, func(c *store.TenantTx) error {
+		if err := c.ReplaceWorkerTargetStates("w1", []store.WorkerTargetState{open}, now); err != nil {
+			return err
+		}
+		return c.ReplaceWorkerTargetStates("w2", []store.WorkerTargetState{{ConnectionID: aConn, State: store.BreakerClosed}}, now)
+	})
+	before := workersDump(t, f, f.A)
+	inB(t, f, func(c *store.TenantTx) error {
+		if ts, err := c.WorkerTargetStates(); err != nil || len(ts) != 0 {
+			t.Errorf("WorkerTargetStates = %v, %v", ts, err)
+		}
+		if err := c.ClearWorkerTargetStates("w1"); err != nil {
+			t.Error(err)
+		}
+		if n, err := c.PruneWorkerTargetStates(now.Add(time.Hour)); err != nil || n != 0 {
+			t.Errorf("PruneWorkerTargetStates = %d, %v", n, err)
+		}
+		if err := c.ReplaceWorkerTargetStates("w1", []store.WorkerTargetState{{ConnectionID: aConn, State: store.BreakerClosed}}, now); err == nil {
+			t.Error("B published a state for A's connection")
+		}
+		return nil
+	})
+	inB(t, f, func(c *store.TenantTx) error {
+		return c.ReplaceWorkerTargetStates("w1", []store.WorkerTargetState{{ConnectionID: bConn, State: store.BreakerClosed}}, now)
+	})
+	if got := workersDump(t, f, f.A); got != before {
+		t.Errorf("tenant A changed:\nbefore %s\nafter  %s", before, got)
+	}
+	inA(t, f, func(c *store.TenantTx) error {
+		ts, err := c.WorkerTargetStates()
+		if err != nil || len(ts) != 2 || ts[0].WorkerID != "w1" || ts[0].State != store.BreakerOpen || ts[0].OpenUntil == nil ||
+			!ts[0].OpenUntil.Equal(until) || ts[0].LastError != "boom" || ts[0].Rejected != 2 {
+			t.Errorf("WorkerTargetStates = %+v, %v", ts, err)
+		}
+		// a beat replaces the worker's rows, leaving the other worker's alone
+		if err := c.ReplaceWorkerTargetStates("w1", nil, now.Add(time.Minute)); err != nil {
+			return err
+		}
+		if ts, err := c.WorkerTargetStates(); err != nil || len(ts) != 1 || ts[0].WorkerID != "w2" {
+			t.Errorf("after replace: %+v, %v", ts, err)
+		}
+		if n, err := c.PruneWorkerTargetStates(now.Add(time.Hour)); err != nil || n != 1 {
+			t.Errorf("PruneWorkerTargetStates = %d, %v", n, err)
 		}
 		return nil
 	})
