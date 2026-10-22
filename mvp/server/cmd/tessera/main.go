@@ -610,7 +610,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
-		RateLimits: rateLimits(cfg),
+		RateLimits:  rateLimits(cfg),
 		Containment: containmentSvc,
 		SSF: &ssf.Service{HTTP: outbound, Sealer: sealer, Clock: clock, Containment: containmentSvc,
 			Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback},
