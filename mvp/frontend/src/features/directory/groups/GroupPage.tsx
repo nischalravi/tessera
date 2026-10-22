@@ -9,18 +9,19 @@ import { DefinitionTab } from "./DefinitionTab";
 import { GroupBadges, GroupLink, RecomputeBanner, fmtWhen } from "./common";
 import { HistoryTab } from "./HistoryTab";
 import { usePurgeGroups } from "./deletes";
+import { LoaderTab } from "./LoaderTab";
 import { errText, useLoad } from "./hooks";
 import { MembersTab } from "./MembersTab";
 import { deletedLine, folderLabel, folderTrail, indexFolders } from "./model";
 import { PrivilegesTab } from "./PrivilegesTab";
 
-type TabId = "members" | "definition" | "privileges" | "usage" | "history" | "attributes";
+type TabId = "members" | "source" | "definition" | "privileges" | "usage" | "history" | "attributes";
 const TABS: { id: TabId; label: string }[] = [
-  { id: "members", label: "Members" }, { id: "definition", label: "Definition" }, { id: "privileges", label: "Privileges" },
+  { id: "members", label: "Members" }, { id: "source", label: "Source" }, { id: "definition", label: "Definition" }, { id: "privileges", label: "Privileges" },
   { id: "usage", label: "Usage" }, { id: "history", label: "History" }, { id: "attributes", label: "Attributes" },
 ];
 
-/** A managed group: members, definition, privileges, usage, history and attributes (design §10.13). */
+/** A managed group: members, membership source, definition, privileges, usage, history and attributes (design §10.13). */
 export function GroupPage() {
   const { id = "" } = useParams();
   const toast = useToast();
@@ -103,6 +104,7 @@ export function GroupPage() {
             <MembersTab g={g} canWrite={canWrite} />
           </>
         )}
+        {tab === "source" && <LoaderTab g={g} />}
         {tab === "definition" && <DefinitionTab g={g} canWrite={canWrite} />}
         {tab === "privileges" && <PrivilegesTab kind="group" id={g.id} name={g.name} canWrite={can("groups.write") && !deleted} />}
         {tab === "usage" && <Usage g={g} />}

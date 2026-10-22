@@ -176,3 +176,17 @@ func (c *Client) SendResult(ctx context.Context, r Result) error {
 	_, err := c.post(ctx, PathResult, r, &out, MaxRequestBytes)
 	return err
 }
+
+// RegisterSealKey tells Tessera the public half of the agent's sealing key, so
+// that it can seal a server-held credential to this agent. Registering the same
+// key again changes nothing. It returns the key's id.
+func (c *Client) RegisterSealKey(ctx context.Context, pub []byte) (string, error) {
+	var out struct {
+		OK    bool   `json:"ok"`
+		KeyID string `json:"key_id"`
+	}
+	if _, err := c.post(ctx, PathSealKey, SealKeyRequest{ProtocolVersion: ProtocolVersion, PublicKey: pub}, &out, MaxRequestBytes); err != nil {
+		return "", err
+	}
+	return out.KeyID, nil
+}

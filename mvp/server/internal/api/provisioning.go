@@ -78,6 +78,7 @@ type targetView struct {
 	Dialect        string  `json:"dialect,omitempty"`
 	Fault          string  `json:"fault,omitempty"`
 	OnDeprovision  string  `json:"on_deprovision,omitempty"` // "delete": accounts are deleted after the grace period (issue #74)
+	AgentID        string  `json:"agent_id,omitempty"`       // the Directory Agent that reaches this target (issue #302)
 	WriteBack      bool    `json:"write_back"`
 	HasCredential  bool    `json:"has_credential"`
 	CredentialVer  *string `json:"credential_version"`
@@ -88,7 +89,7 @@ func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, Fault: st.Fault, OnDeprovision: st.OnDeprovision, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -250,6 +251,13 @@ type targetInput struct {
 	// OnDeprovision is "disable" (the default: leave a deprovisioned guest's
 	// account disabled) or "delete" it once the grace period has passed.
 	OnDeprovision string `json:"on_deprovision"`
+	// AgentID, for a SCIM or Okta target in a private network, is the active
+	// Directory Agent of the tenant that reaches it. Tessera then does not call
+	// the target: it queues each operation for that agent, which pulls it over
+	// its mutual-TLS channel and pushes from inside the network (issue #302).
+	// The base URL must then be https, and its host:port must be on the agent's
+	// own allowed_push_targets.
+	AgentID string `json:"agent_id"`
 }
 
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
@@ -293,6 +301,17 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	if in.Kind == provision.KindOkta {
 		st.Dialect = ""
 	}
+	if in.AgentID != "" {
+		switch {
+		case in.Kind == provision.KindFake:
+			return st, badRequest("invalid_agent", "the dev fake target cannot be reached through an agent")
+		case !idRE.MatchString(in.AgentID):
+			return st, badRequest("invalid_agent", "agent_id is not a Directory Agent id")
+		case !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://"):
+			return st, badRequest("invalid_base_url", "a target reached through an agent must use https")
+		}
+		st.AgentID = in.AgentID
+	}
 	switch in.OnDeprovision {
 	case "", "disable":
 	case "delete":
@@ -325,6 +344,14 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, notFoundErr("connection")
 	} else if err != nil {
 		return 0, nil, err
+	}
+	if in.AgentID != "" {
+		a, err := c.DirectoryAgent(in.AgentID)
+		if errors.Is(err, store.ErrNotFound) || (err == nil && a.Status != store.AgentActive) {
+			return 0, nil, badRequest("invalid_agent", "agent_id must be an active Directory Agent of this tenant")
+		} else if err != nil {
+			return 0, nil, err
+		}
 	}
 	t := &store.ProvTarget{ID: store.NewID(), ConnectionID: id, Kind: in.Kind, BaseURL: in.BaseURL, WriteBack: in.WriteBack,
 		CreatedBy: actor(r)}
@@ -377,6 +404,9 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	detail := ojson.Object{{Key: "connection_id", Value: id},
 		{Key: "kind", Value: in.Kind}, {Key: "write_back", Value: in.WriteBack}, {Key: "dialect", Value: st.Dialect},
 		{Key: "origin", Value: targetOrigin(t.BaseURL)}, {Key: "credential", Value: credential}}
+	if in.AgentID != "" {
+		detail = append(detail, ojson.KV{Key: "agent_id", Value: in.AgentID})
+	}
 	if moved {
 		detail = append(detail, ojson.KV{Key: "previous_kind", Value: old.Kind},
 			ojson.KV{Key: "previous_origin", Value: targetOrigin(old.BaseURL)})

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -51,6 +52,18 @@ type Executor struct {
 	// NewSyncer builds the directory reader of pulled sync jobs (nil: the
 	// agent answers them "unsupported").
 	NewSyncer SyncerFactory
+	// AllowPush is the local allowlist of HTTPS provisioning targets
+	// (allowed_push_targets of the agent's own configuration file; ports 443
+	// and 8443). Empty means no push target at all.
+	AllowPush []safedial.AllowEntry
+	// PushRoots are the CAs push targets are verified against (push_ca_file;
+	// nil: the system roots).
+	PushRoots *x509.CertPool
+	// SealKey is the agent's private sealing key: credentials sealed to it open
+	// here only. Nil: the agent cannot take a sealed credential.
+	SealKey *ecdh.PrivateKey
+	// PushVerifyWait is the pause between re-reads of a push (2 s).
+	PushVerifyWait time.Duration
 	// Resolver replaces DNS (tests); nil means the system resolver.
 	Resolver safehttp.Resolver
 	// TestDial is safedial.Options.TestDial, for tests only.
@@ -143,6 +156,21 @@ type Syncer interface {
 
 // SyncerFactory builds the Syncer for a pulled job, like ProberFactory.
 type SyncerFactory func(ProberSpec) (Syncer, error)
+
+// pushDialer is the dialer of provisioning pushes: the agent-local policy, the
+// push allowlist and the push CAs.
+func (e *Executor) pushDialer() (*safedial.Dialer, error) {
+	return safedial.New(safedial.Options{Env: config.Prod, AgentLocal: true, Allow: e.AllowPush, RootCAs: e.PushRoots,
+		Resolver: e.Resolver, TestDial: e.TestDial})
+}
+
+// ExecutePulled runs one pulled job of any kind.
+func (e *Executor) ExecutePulled(ctx context.Context, j PulledJob) PullResult {
+	if j.Kind == KindPush {
+		return e.ExecutePush(ctx, j)
+	}
+	return e.ExecuteSync(ctx, j)
+}
 
 // ExecuteSync runs one pulled sync job and returns the report to send. Like
 // Execute it checks the typed arguments, then the local allowlist, before

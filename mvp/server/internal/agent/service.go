@@ -44,6 +44,9 @@ type Service struct {
 	Clock timeutil.Clock
 	// Recorder ingests a pulled sync (see pull.go); without it a report is refused.
 	Recorder SyncRecorder
+	// Push finishes provision_push jobs (see push.go); without it such a job
+	// fails when it is claimed.
+	Push PushHooks
 	// PullPoll is how often a long-poll looks for work (2 s).
 	PullPoll time.Duration
 }
@@ -228,10 +231,36 @@ func (s *Service) Revoke(c *store.TenantTx, id, actor string, now time.Time) err
 		Detail: ojson.Object{{Key: "agent_id", Value: id}}}); err != nil {
 		return err
 	}
-	// pulled jobs are cancelled in the same transaction, so a revoked agent's
-	// work is never handed to anything else
+	// the operations of its open provisioning pushes fail now, with the reason (they would
+	// otherwise wait until they go stale), in the same transaction; pulled jobs are cancelled
+	// there too, so a revoked agent's work is never handed to anything else
+	var pushes []*store.AgentJob
+	if s.Push != nil {
+		for _, status := range []string{store.AgentJobQueued, store.AgentJobLeased} {
+			open, err := c.AgentJobs(store.AgentJobFilter{AgentID: id, Status: status})
+			if err != nil {
+				return err
+			}
+			for _, j := range open {
+				if j.Kind == KindPush {
+					pushes = append(pushes, j)
+				}
+			}
+		}
+	}
 	if _, err := c.CancelAgentJobs(id, now); err != nil {
 		return err
+	}
+	if len(pushes) > 0 {
+		a, err := c.DirectoryAgent(id)
+		if err != nil {
+			return err
+		}
+		for _, j := range pushes {
+			if err := s.Push.Failed(c, now, a, j, "the agent that reaches this target was revoked", true); err != nil {
+				return err
+			}
+		}
 	}
 	if s.Hub != nil {
 		s.Hub.Revoke(c.Tenant(), id)

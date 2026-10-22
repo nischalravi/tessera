@@ -5,6 +5,7 @@
  *   reviews      undecided items in open review campaigns (API)
  *   tasks        pending joiner / mover / leaver events (API)
  *   connection   degraded connections, for their owners and admins (deployment readiness)
+ *   loader       group loader runs a failsafe is holding (GET /groups/loader-tasks: those you administer)
  *   guest        sponsorship approvals, registration requests, identity-match reviews and guest lifecycle
  *                tasks (guest accounts design §9.4). Each endpoint already routes to the caller, so the
  *                list is the caller's; the permission gates only avoid asking for what would be refused.
@@ -12,13 +13,13 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ApprovalItem, Campaign, ConnectionHealthRow, DeploymentHealth, GuestLifecycleItem, HrisEvent, IdentityMatchList, JitRequest,
-  ReadinessTask, RegistrationRequest, RemovalRequest, ReviewItem, Sponsorship, api, removalsPath, useApi,
+  LoaderTask, ReadinessTask, RegistrationRequest, RemovalRequest, ReviewItem, Sponsorship, api, removalsPath, useApi,
 } from "../../api";
 import { GuestInboxItem, guestInboxItems } from "./guestItems";
 import { Persona, usePersona } from "../../app/persona";
 import { useSession } from "../../app/auth";
 
-export type InboxKind = "approval" | "review" | "task" | "connection" | "guest";
+export type InboxKind = "approval" | "review" | "task" | "connection" | "guest" | "loader";
 
 export type { GuestInboxItem } from "./guestItems";
 
@@ -29,7 +30,8 @@ export type InboxItem =
   | { kind: "review"; key: string; at: string; item: ReviewItem; campaign: Campaign }
   | { kind: "task"; key: string; at: string; event: HrisEvent }
   | { kind: "connection"; key: string; at: string; conn: ConnectionHealthRow; task?: ReadinessTask }
-  | { kind: "guest"; key: string; at: string; guest: GuestInboxItem };
+  | { kind: "guest"; key: string; at: string; guest: GuestInboxItem }
+  | { kind: "loader"; key: string; at: string; task: LoaderTask };
 
 /** Full detail for each open campaign; refetches when any write happens. */
 export function useOpenCampaigns() {
@@ -64,6 +66,8 @@ function assigned(i: InboxItem, persona: Persona, meId: number | undefined): boo
       return false; // admins see every item above; owners get theirs with RBAC (DR-10)
     case "guest":
       return true; // the API routed each of them to the signed-in person
+    case "loader":
+      return true; // the API lists only the runs of folders you administer
   }
 }
 
@@ -82,6 +86,7 @@ export function useInbox(scope: "mine" | "all" = "mine") {
   const { data: gApprovals } = useApi<Sponsorship[]>(can("sponsorships.approve") ? "/sponsorships/approvals" : null);
   const { data: gRegs } = useApi<{ registrations: RegistrationRequest[] }>(can("guests.sponsor") ? "/guest-registrations" : null);
   const { data: gMatches } = useApi<IdentityMatchList>(can("identity_matches.review") ? "/identity-matches?status=review" : null);
+  const { data: loaderTasks } = useApi<{ items: LoaderTask[] }>(can("groups.read") ? "/groups/loader-tasks" : null);
   const { data: gTasks } = useApi<{ tasks: GuestLifecycleItem[] }>(can("guests.sponsor") ? "/guest-lifecycle/tasks" : null);
 
   const all = useMemo<InboxItem[] | null>(() => {
@@ -96,9 +101,10 @@ export function useInbox(scope: "mine" | "all" = "mine") {
       const task = health!.tasks.find((t) => t.connection_id === c.id); // the server's task carries the reason and the owner
       out.push({ kind: "connection", key: `conn-${c.id}`, at: task?.since ?? c.last_validated ?? health!.generated_at, conn: c, task });
     });
+    (loaderTasks?.items ?? []).forEach((t) => out.push({ kind: "loader", key: `loader-${t.run_id}`, at: t.held_at, task: t }));
     out.push(...guestInboxItems({ sponsorships: gApprovals, registrations: gRegs?.registrations, matches: gMatches?.items, tasks: gTasks?.tasks }));
     return out;
-  }, [jit, hris, campaigns, approvals, removalReqs, health, gApprovals, gRegs, gMatches, gTasks]);
+  }, [jit, hris, campaigns, approvals, removalReqs, health, gApprovals, gRegs, gMatches, gTasks, loaderTasks]);
 
   const items = useMemo(() => (all ? (scope === "all" ? all : all.filter((i) => assigned(i, persona, me?.id))) : null), [all, scope, persona, me]);
   return { items, all, error: jitErr ?? hrisErr ?? apprErr ?? removalErr };
