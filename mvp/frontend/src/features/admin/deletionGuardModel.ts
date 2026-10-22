@@ -2,7 +2,9 @@
 // deletion_guard.update payload, and the notice shown after a delete the guard held part of. Pure functions,
 // so `npm test` covers them. The server decides everything (limits, who may release); these only keep
 // the form honest and the messages plain.
-import type { DeletionCategory, DeletionHold, DeletionMode, DeletionPolicy, DeletionPolicyInput, HeldAnswer, HoldStatus } from "../../api";
+import type {
+  DeletionCategory, DeletionHold, DeletionMode, DeletionPolicy, DeletionPolicyInput, DeletionSourceCategory, DeletionSourceInput, DeletionSourceKind, HeldAnswer, HoldStatus,
+} from "../../api";
 
 export const CATEGORY_LABEL: Record<DeletionCategory, string> = {
   groups: "Groups",
@@ -140,4 +142,89 @@ export function holdTitle(h: Pick<DeletionHold, "category" | "item_count" | "sou
   const what = `${h.item_count} ${CATEGORY_LABEL[h.category].toLowerCase()}`;
   const from = SOURCE_LABEL[h.source] ?? h.source;
   return h.source_id ? `${what} from ${from.toLowerCase()} ${h.source_id}` : `${what} from ${from.toLowerCase()}`;
+}
+
+// ------------------------------------------------------------ per-source settings
+
+export const SOURCE_KIND_LABEL: Record<DeletionSourceKind, string> = { connection: "Connection", loader: "Group loader", vms_source: "Contractor feed" };
+
+/** The settings page of a source, for the link in the Admin → Deletion guard list. */
+export function sourceLink(kind: DeletionSourceKind, id: string): string {
+  if (kind === "connection") return `/admin/connections/${encodeURIComponent(id)}`;
+  if (kind === "vms_source") return "/admin/contractor-feeds";
+  return "/directory/groups/loaders";
+}
+
+/** "inherit" keeps the category's thresholds; the feed checks are set apart from the threshold. */
+export interface SourceEdit {
+  mode: DeletionMode | "inherit";
+  max_count: string; max_percent: string; window_minutes: string;
+  /** "" is the default (20). */
+  feed_drop: string;
+  empty_check: boolean;
+}
+
+export function sourceEditOf(c: DeletionSourceCategory): SourceEdit {
+  const o = c.override;
+  return {
+    mode: o?.mode ?? "inherit",
+    max_count: o?.max_count == null ? "" : String(o.max_count),
+    max_percent: o?.max_percent == null ? "" : String(o.max_percent),
+    window_minutes: String(o?.window_minutes ?? c.tenant.window_minutes),
+    feed_drop: o?.feed_drop_percent == null ? "" : String(o.feed_drop_percent),
+    empty_check: o?.feed_empty_check ?? true,
+  };
+}
+
+/** What is wrong with an edit, or null. */
+export function checkSourceEdit(e: SourceEdit): string | null {
+  const drop = e.feed_drop.trim();
+  if (drop !== "" && (!/^\d{1,3}(\.\d{1,2})?$/.test(drop) || Number(drop) > 100)) return "The feed drop limit is 0 to 100 percent.";
+  if (e.mode === "inherit") return null;
+  return checkEdit({ max_count: e.max_count, max_percent: e.max_percent, window_minutes: e.window_minutes, mode: e.mode });
+}
+
+/**
+ * The payload entry of an edit: a removal when the edit sets nothing but the source has an override, the override
+ * when it differs from the stored one, null when nothing changed or the edit is not valid.
+ */
+export function sourceInputOf(kind: DeletionSourceKind, id: string, c: DeletionSourceCategory, e: SourceEdit): DeletionSourceInput | null {
+  if (checkSourceEdit(e)) return null;
+  const base = { kind, source_id: id, category: c.category };
+  const noFeed = e.feed_drop.trim() === "" && e.empty_check;
+  if (e.mode === "inherit" && noFeed) return c.override ? { ...base, remove: true } : null;
+  const out: DeletionSourceInput = { ...base };
+  if (e.mode !== "inherit") {
+    const off = e.mode === "off";
+    out.mode = e.mode;
+    out.window_minutes = Number(e.window_minutes);
+    if (!off || e.max_count.trim() !== "") out.max_count = e.max_count.trim() === "" ? null : Number(e.max_count);
+    if (!off || e.max_percent.trim() !== "") out.max_percent = e.max_percent.trim() === "" ? null : Number(e.max_percent);
+  }
+  if (e.feed_drop.trim() !== "") out.feed_drop_percent = Number(e.feed_drop);
+  if (!e.empty_check) out.feed_empty_check = false;
+  const o = sourceEditOf(c);
+  const same = c.override && o.mode === e.mode && o.max_count === e.max_count.trim() && o.max_percent === e.max_percent.trim() &&
+    (e.mode === "inherit" || o.window_minutes === e.window_minutes.trim()) && o.feed_drop === e.feed_drop.trim() && o.empty_check === e.empty_check;
+  return same ? null : out;
+}
+
+/**
+ * Whether the change probably weakens the source's safety: a weaker mode or a higher limit per minute than what
+ * applies now, a higher feed drop limit, or the empty feed check turned off. The server decides; this warns
+ * that a second admin will be asked.
+ */
+export function sourceLooksLooser(c: DeletionSourceCategory, i: DeletionSourceInput, defaultDrop = 20): boolean {
+  const cur = c.effective;
+  const nextDrop = i.remove ? defaultDrop : i.feed_drop_percent ?? defaultDrop;
+  const nextEmpty = i.remove ? true : i.feed_empty_check ?? true;
+  if (nextDrop > cur.feed.drop_percent || (cur.feed.empty_check && !nextEmpty)) return true;
+  const next = i.remove || !i.mode ? { ...c.tenant, mode: c.tenant.default && c.tenant.mode === "hold_excess" ? ("hold_all" as DeletionMode) : c.tenant.mode } : null;
+  const mode = next ? next.mode : i.mode!;
+  if (MODE_RANK[mode] > MODE_RANK[cur.mode]) return true;
+  if (mode === "off") return false;
+  const rate = (n: number | null | undefined, w: number) => (n == null ? Infinity : n / w);
+  const w = next ? next.window_minutes : i.window_minutes ?? cur.window_minutes;
+  const nc = next ? next.max_count : i.max_count, np = next ? next.max_percent : i.max_percent;
+  return rate(nc, w) > rate(cur.max_count, cur.window_minutes) || rate(np, w) > rate(cur.max_percent, cur.window_minutes);
 }
