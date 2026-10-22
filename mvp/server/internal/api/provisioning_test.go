@@ -638,3 +638,30 @@ func TestTargetOrigin(t *testing.T) {
 		}
 	}
 }
+
+// A vault target (issue #304) takes its credential as user:secret, sealed and write-only, and a move to
+// another origin needs a new one.
+func TestProvisioning_VaultTargetConfig(t *testing.T) {
+	h := newProvHarness(t, fake.Options{})
+	for name, body := range map[string]string{
+		"no credential": `{"kind":"cyberark","base_url":"https://pvwa.example.com"}`,
+		"bare token":    `{"kind":"delinea","base_url":"https://ss.example.com","token":"abc"}`,
+		"dialect":       `{"kind":"cyberark","base_url":"https://pvwa.example.com","token":"u:p","dialect":"entra"}`,
+		"bad root":      `{"kind":"cyberark","base_url":"https://pvwa.example.com","token":"u:p","api_root":"/a/../b"}`,
+		"root on scim":  `{"kind":"scim","base_url":"https://x.example.com","api_root":"/a"}`,
+	} {
+		if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, body); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status %d: %s", name, rec.Code, rec.Body)
+		}
+	}
+	v := h.target(`{"kind":"beyondtrust","base_url":"https://bt.example.com","token":"svc:k3y-value","api_root":"/BeyondTrust/api/public/v3","write_back":true}`, 200)
+	if v["kind"] != "beyondtrust" || v["has_credential"] != true || v["api_root"] != "/BeyondTrust/api/public/v3" {
+		t.Errorf("target = %v", v)
+	}
+	if body, _ := json.Marshal(v); strings.Contains(string(body), "k3y") {
+		t.Error("the response carries the credential")
+	}
+	if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, `{"kind":"beyondtrust","base_url":"https://other.example.com","write_back":true}`); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("a moved origin without a credential: %d %s", rec.Code, rec.Body)
+	}
+}

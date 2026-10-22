@@ -3987,12 +3987,12 @@ export interface ProvFinding {
 export interface ProvOpDetail extends ProvOp { payload: { account?: Record<string, unknown>; group?: Record<string, unknown> }; findings: ProvFinding[] }
 
 export interface ProvTarget {
-  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake"; base_url: string;
+  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust"; base_url: string; api_root?: string;
   dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
 /** token is write-only: omit it to keep the stored credential. A change of kind or origin (scheme, host, port) needs a new token (422 credential_required). */
-export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean; on_deprovision?: "disable" | "delete" }
+export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; api_root?: string; dialect?: string; fault?: string; token?: string; write_back: boolean; on_deprovision?: "disable" | "delete" }
 
 export const provisioning = {
   targets: () => api<ProvTarget[]>("/provisioning/targets"),

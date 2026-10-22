@@ -28,6 +28,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
@@ -36,6 +37,9 @@ import (
 // a recorded AgentCore snapshot (TESSERA_AGENTCORE_SNAPSHOT) and refuses prod,
 // as no live AgentCore client exists. Entra and Okta discover agents when
 // TESSERA_ENTRA_DISCOVER_AGENTS / TESSERA_OKTA_DISCOVER_AGENTS is true.
+//
+// Privileged-access vaults (issue #304): "cyberark", "delinea" and "beyondtrust" read safes, their
+// members and vaulted accounts (TESSERA_CYBERARK_*, TESSERA_DELINEA_*, TESSERA_BEYONDTRUST_*).
 //
 // Register adds the okta, entra, google, workday, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
@@ -54,6 +58,11 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	}
 	connectors.Factories["github-scan"] = func(now time.Time) (connectors.Connector, error) {
 		return githubscan.FromEnv(os.Getenv, now, rt, hc)
+	}
+	for _, vendor := range pam.Vendors {
+		connectors.Factories[vendor] = func(now time.Time) (connectors.Connector, error) {
+			return pam.FromEnv(vendor, os.Getenv, rt, hc, func() time.Time { return now })
+		}
 	}
 	connectors.Factories["aws-agentcore"] = func(now time.Time) (connectors.Connector, error) {
 		return agentcore.FromEnv(os.Getenv, now)

@@ -416,7 +416,8 @@ func New(cfg Config) *Server {
 	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
 		PolicyVersion: s.policyVersion}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
-		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
+		Runtime: connsync.Runtime{Env: cfg.Env, AllowLoopback: cfg.Env == config.Dev},
+		Clock:   func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
 	if cfg.RPID != "" && cfg.PublicOrigin != "" {

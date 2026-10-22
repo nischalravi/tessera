@@ -429,6 +429,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	if err := d.upgradeLoginTxnPurpose(ctx); err != nil {
 		return err
 	}
+	if err := d.upgradeProvTargetKinds(ctx); err != nil {
+		return err
+	}
 	if err := d.upgradeUserIDColumns(ctx); err != nil {
 		return err
 	}
@@ -472,6 +475,40 @@ func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
 		return fmt.Errorf("store: upgrade login_transactions: %w", err)
 	}
 	return nil
+}
+
+// upgradeProvTargetKinds lets a SQLite database created before the vault and ERP target
+// kinds (issue #304) take them. CREATE TABLE IF NOT EXISTS cannot change a CHECK, and the
+// table holds sealed credentials that must survive, so it is rebuilt: the new table is
+// made from the old definition with the wider list, the rows are copied, the old table
+// (with its index and triggers, which the schema run recreates) is dropped, and the new
+// one takes its name. Postgres does this in migration 0601.
+func (d *DB) upgradeProvTargetKinds(ctx context.Context) error {
+	const old = "CHECK (kind IN ('scim','okta','fake'))"
+	const wider = "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle'))"
+	var ddl string
+	err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'provisioning_targets'`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !strings.Contains(ddl, old)) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	newDDL := strings.Replace(strings.Replace(ddl, old, wider, 1), "provisioning_targets", "provisioning_targets__new", 1)
+	for _, q := range []string{newDDL,
+		"INSERT INTO provisioning_targets__new SELECT * FROM provisioning_targets",
+		"DROP TABLE provisioning_targets",
+		"ALTER TABLE provisioning_targets__new RENAME TO provisioning_targets"} {
+		if _, err := tx.ExecContext(ctx, q); err != nil { // #nosec G202 -- fixed statements and the table's own stored definition
+			return fmt.Errorf("store: upgrade provisioning_targets: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // upgradeUserIDColumns adds the platform-user-id columns of issue #425 to a SQLite database created

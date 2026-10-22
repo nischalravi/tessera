@@ -25,6 +25,8 @@ const INFLIGHT = new Set<ProvStatus>(["queued", "sent", "pending_verification"])
 interface OpList { items: ProvOp[]; counts: Partial<Record<ProvStatus, number>> }
 
 /** Admin → Provisioning: the changes sent to target systems and whether a re-read confirmed them (issue #103). */
+const VAULT: Record<string, string> = { cyberark: "CyberArk safes", delinea: "Delinea folders", beyondtrust: "BeyondTrust smart rules" };
+
 export function Provisioning() {
   const { data, error, reload } = useApi<OpList>("/provisioning/ops?limit=500");
   const [open, setOpen] = useState<string | null>(null);
@@ -125,7 +127,7 @@ function Targets() {
               {data.map((t) => (
                 <tr key={t.connection_id}>
                   <td className="small"><b>{t.connection_name}</b> <span className="faint">· {t.system}</span></td>
-                  <td className="small">{t.kind === "scim" ? `SCIM 2.0${t.dialect === "entra" ? " (Entra)" : ""}` : t.kind === "okta" ? "Okta API" : "Dev fake"}{t.fault ? <span className="faint"> · {t.fault.replace("_", " ")}</span> : null}</td>
+                  <td className="small">{t.kind === "scim" ? `SCIM 2.0${t.dialect === "entra" ? " (Entra)" : ""}` : t.kind === "okta" ? "Okta API" : VAULT[t.kind] ?? "Dev fake"}{t.fault ? <span className="faint"> · {t.fault.replace("_", " ")}</span> : null}</td>
                   <td className="small"><code className="xs">{t.base_url}</code></td>
                   <td><Badge tone={t.write_back ? "ok" : "neutral"}>{t.write_back ? "On" : "Off"}</Badge></td>
                   <td><Button size="sm" onClick={() => setEdit(t)}>Edit</Button></td>
@@ -189,12 +191,15 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
           <select className="input" value={kind} onChange={(e) => setKind(e.target.value as ProvTarget["kind"])}>
             <option value="scim">SCIM 2.0 service</option>
             <option value="okta">Okta API</option>
+            <option value="cyberark">CyberArk safe membership</option>
+            <option value="delinea">Delinea Secret Server folder membership</option>
+            <option value="beyondtrust">BeyondTrust Password Safe smart-rule roles</option>
             <option value="fake">Dev fake target (no real system)</option>
           </select>
         </label>
         {kind !== "fake" && (
           <label className="field">Base URL
-            <input className="input" required value={url} onChange={(e) => setUrl(e.target.value)} placeholder={kind === "okta" ? "https://example.okta.com" : "https://example.com/scim/v2"} />
+            <input className="input" required value={url} onChange={(e) => setUrl(e.target.value)} placeholder={kind === "okta" ? "https://example.okta.com" : kind in VAULT ? "https://vault.example.com" : "https://example.com/scim/v2"} />
             <span className="hint">https only. Requests go through Tessera's outbound guard, which refuses private and internal addresses.</span>
           </label>
         )}
@@ -206,6 +211,7 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
             </select>
           </label>
         )}
+        {kind in VAULT && <p className="small muted">Adds and removes members of a safe at a profile (list, use, read, manage), then re-reads the safe. {kind === "delinea" ? "Secret Server has no role that means use." : kind === "beyondtrust" ? "Password Safe can express list and use only." : ""} Accounts are not created or disabled here.</p>}
         {kind === "fake" && (
           <label className="field">Simulated fault
             <select className="input" value={fault} onChange={(e) => setFault(e.target.value)}>
@@ -216,7 +222,7 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
           </label>
         )}
         {kind !== "fake" && (
-          <label className="field">{kind === "okta" ? "API token" : "Bearer token"}
+          <label className="field">{kind === "okta" ? "API token" : kind in VAULT ? "Service user and secret (user:secret)" : "Bearer token"}
             <input className="input" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder={target?.has_credential ? "Stored; leave empty to keep it (same kind and host only)" : ""} />
             <span className="hint">Write-only. Sealed under the platform key and never shown again.</span>
           </label>
