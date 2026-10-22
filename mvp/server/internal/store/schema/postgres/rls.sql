@@ -2102,3 +2102,24 @@ DROP POLICY IF EXISTS tenant_isolation ON vms_sources;
 CREATE POLICY tenant_isolation ON vms_sources
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE connection_limits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connection_limits FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON connection_limits;
+CREATE POLICY tenant_isolation ON connection_limits
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE worker_target_states ENABLE ROW LEVEL SECURITY;
+ALTER TABLE worker_target_states FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON worker_target_states;
+CREATE POLICY tenant_isolation ON worker_target_states
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE agent_seal_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_seal_keys FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON agent_seal_keys;
+CREATE POLICY tenant_isolation ON agent_seal_keys
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

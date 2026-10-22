@@ -417,7 +417,8 @@ commands, no raw LDAP, no proxying). The server sends typed jobs; the agent open
 - **Server listener.** Set `TESSERA_AGENT_ADDR` with `TESSERA_AGENT_TLS_CERT` and `TESSERA_AGENT_TLS_KEY`
   (a separate mutual-TLS port serving only `/agent/v1/*`).
 - **Agent config** (JSON): `{"server_url":"https://tessera.example:8443","server_ca_file":"ca.pem",
-  "state_dir":"/var/lib/tessera-agent","allowed_targets":["ldap.corp.example:636"]}`; then
+  "state_dir":"/var/lib/tessera-agent","allowed_targets":["ldap.corp.example:636"]}`, plus
+  `allowed_push_targets` and `push_ca_file` for provisioning pushes (see below); then
   `tessera-agent run -config agent.json`.
 - API: `GET /api/agents`, `POST /api/agents` (step-up; returns the code once), `POST /api/agents/{id}/revoke`
   (step-up). Table `directory_agents`, `agent_enrolments` (schema 0250).
@@ -447,11 +448,54 @@ open inbound at the customer; the agent needs only HTTPS out to `TESSERA_AGENT_A
   every membership must name an account and a group of the same listing), then ingested with `ingest.Discovery`
   into the connection's own system, drift is reconciled, and the job is finished, in one transaction, with
   `connectors.sync` and `agent.job_done` audited (`agent.job_failed` for failures).
-- **Secrets.** The directory password is never sent to the agent for a job: it stays in the agent's local
-  credential store (the existing Directory Agent design), and a job carries only its name. Sealing a
-  server-held secret to an agent key would need a key-agreement design that does not exist yet.
-- **Not covered.** Provisioning pushes to a private target and per-target rate limits or circuit breakers do
-  not go through agents yet (see "Connector workers").
+- **Secrets.** The directory password is never sent to the agent for a sync: it stays in the agent's local
+  credential store (the existing Directory Agent design), and a job carries only its name. A server-held
+  credential (the token of a private provisioning target) is different: it is sealed to the agent's key, below.
+
+##### Provisioning pushes to private targets through an agent (issue #302)
+
+A SCIM or Okta-style target in a private network, which the server cannot dial, is reached through an agent. Set
+`agent_id` on the target (`PUT /api/provisioning/targets/{connection id}` `{"kind":"scim","base_url":"https://scim.corp.example/scim/v2",
+"agent_id":"…","token":"…","write_back":true}`: an active agent of the tenant, https only, not the dev fake target;
+step-up as before; the audit event `provision.target_set` names the agent). The token is stored sealed under the
+KEK exactly as for a direct target.
+
+- **Flow.** For an operation on such a target the provisioning engine does not call the target. It queues a
+  `provision_push` job (`agent_jobs`, kind `provision_push`, `op_id` = the operation; schema 0461 and Postgres
+  migration 0622) addressed to `(tenant, agent)`, leaves the operation `sent` and audits `provision.dispatched`. The
+  agent claims it over the same mTLS pull channel, applies the change with the SCIM or Okta connector from inside its
+  network, re-reads the target (three reads, 2 s apart) and reports `{applied, verified, expected, observed}` or an
+  error to `POST /agent/v1/jobs/report`. The report finishes the operation in the **same transaction** that finishes
+  the job, with both audit events: `provision.verified` (the completion runs, findings resolve) or
+  `provision.mismatch` (a finding) plus `agent.job_done`, each naming the agent (`via_agent`). Nothing the agent
+  sends is trusted for addressing: tenant and agent come from the pinned key, and a report for a job not leased to
+  that (tenant, agent) is `404 unknown_job`.
+- **Failures.** A transient failure (`failed`, `rate_limited`) is retried, three attempts per job; when they are
+  used up, the job fails and so does the operation (`provision.failed`, with the reason, retryable by an operator
+  as any failed operation). A permanent refusal (`target_refused`), a target not on the agent's allowlist
+  (`target_not_allowed`), a missing credential or a bad request fails the operation at once. An agent that is away
+  just leaves the operation `sent`: no attempt is spent while a job is open. Revoking the agent fails the
+  operations it held, with the reason, in the revoking transaction; an operation dispatched to a revoked or
+  deleted agent fails at once. If the target shows the change but Tessera cannot apply its side of it (the
+  completion fails), the operation and the job fail in a second transaction; nothing is half done.
+- **Sealed credentials.** The agent generates an X25519 key pair (`<state_dir>/identity/seal.key`, mode 0600) and
+  registers the public half with `POST /agent/v1/seal-key` over its authenticated channel (at start, then every 6
+  hours; the same key changes nothing, a new one replaces it and is audited as `agent.seal_key_registered`;
+  table `agent_seal_keys`, schema 0621). When the server hands out a push job it opens the target's token under
+  the KEK and seals it to that key (`internal/seal` `SealToAgent`: ephemeral X25519, HKDF-SHA256, AES-256-GCM)
+  with the additional data **tenant | agent | connection | job**. Only that agent, for that job, can open it: another
+  agent, tenant, connection or job fails to. The blob is made at claim time, never stored: the job row, the
+  audit trail and the log hold no credential, in the clear or sealed. An agent that has not registered a key
+  (an older build) cannot be handed a credential: the job fails when claimed, with that reason. Upgrading a SQLite
+  database drops and recreates `agent_jobs` once (it holds only queued work: the next pass queues it again).
+- **Agent configuration.** `allowed_push_targets`: host:port entries (host name, IP or CIDR; ports **443 and 8443**
+  only; the same rules as `allowed_targets`) of the HTTPS targets the agent may push to, a separate list from the
+  LDAP one, empty by default: the agent refuses every push. `push_ca_file`: a PEM CA bundle to verify those
+  targets' certificates against (an internal CA); without it the system roots. The agent dials only through its
+  policy-checked dialer: HTTPS with a verified certificate, no plain HTTP, no redirects, no proxy, never
+  metadata or link-local space. The push list joins the allowlist hash in heartbeats only when it is not empty.
+- **Limits.** The per-target limits and circuit breakers above apply to calls the server or a worker makes; a push
+  through an agent is bounded by the job's lease (10 minutes), its three attempts and the agent's one-at-a-time loop.
 
 ### Connector workers (issue #302)
 
@@ -497,6 +541,33 @@ worker you did not intend, though a duplicate is harmless: claims and operation 
   (`worker-<10 hex>`, also the `lease_owner` of its jobs). Host name, PID and build are not in the API (there is
   no platform-level operator role to show them to) and are not stored per tenant: each process logs them once
   at start (`worker started`) for the platform operator (#403).
+- **Per-target limits and circuit breakers.** Every call a worker (or the API process) makes to a customer's
+  system, a connector's read or a provisioning write and its re-read, goes through one guard per target (a
+  connection of a tenant). It enforces, per **worker process**: a concurrency limit (calls in flight), a
+  rate limit (token bucket, calls per minute with a burst) and a circuit breaker (after N failed calls in a row
+  the breaker opens and calls are refused without being made for the cooldown, then one probe call decides).
+  A call cancelled by shutdown, or refused by the target as a bad request (a permanent error), is not a failure.
+  A provisioning operation whose call is refused is put back with the attempt given back (it waits, it does not
+  fail); a sync skips a connector whose breaker is open, reads the others and audits `connectors.sync_skipped`.
+  N workers allow N times the limits; the guard keeps no cross-process counter (that would cost a database write
+  per call). Defaults come from the worker's flags, `-target-concurrency` (4), `-target-rate` (0 = none),
+  `-target-breaker-failures` (5, 0 = no breaker) and `-target-breaker-cooldown` (30 s); a connection overrides
+  any of them (0 = the default) with `PUT /api/queue/limits` `{"connection_id":…,"max_concurrency":…,
+  "rate_per_min":…,"burst":…,"breaker_threshold":…,"breaker_cooldown_seconds":…}` (`connections.manage`, step-up,
+  audited `connection.limits_set`; `GET /api/queue/limits[?connection_id=]`, `DELETE /api/queue/limits?connection_id=`,
+  `connection.limits_cleared`; table `connection_limits`, schema 0620). Workers re-read them every 30 s.
+  **Breaker state is part of worker health:** each beat publishes the worker's targets (`worker_target_states`,
+  schema 0620), and `GET /api/queue/workers` lists them per worker (`targets`: connection, `breaker` closed /
+  open / half_open, consecutive failures, `open_until`, last error, in flight, calls, failures, rejected). Admin
+  → Jobs shows a Targets column and a banner while a breaker is open.
+- **Metrics.** `tessera worker -metrics-addr 127.0.0.1:9465` (or `TESSERA_WORKER_METRICS_ADDR`; off when unset)
+  serves Prometheus text on `/metrics` and nothing else: `tessera_worker_jobs_total{kind,result}`,
+  `tessera_worker_job_duration_seconds{kind}`, `tessera_worker_jobs_running`, `tessera_worker_concurrency`,
+  `tessera_worker_target_calls_total{outcome}` (ok, error, breaker_rejected, rate_limited),
+  `tessera_worker_targets{state}`, followed by the shared process, database and connector metrics. No label names a
+  tenant, connection or worker. The address must be an IP literal on a loopback, private or link-local network;
+  a wildcard, public address or host name is refused (at start and by `config.Load`, in every environment)
+  unless `TESSERA_WORKER_METRICS_ALLOW_PUBLIC=true` says that a network policy limits the scraper.
 - **High availability.** Run N workers (2 or more, on different hosts) against **Postgres**: a job is leased by
   `FOR UPDATE SKIP LOCKED`, so each runs on one worker at a time, a worker that disappears costs one lease
   period of delay, and schedules fire once per window however many workers poll. Size `-lease` above the
@@ -4036,10 +4107,24 @@ server decides access on each request (the UI only hides what cannot work).
 | Screen | Route | What it has |
 |---|---|---|
 | Folder browser | `/directory/groups[?folder=<id>]` | breadcrumb, folders then groups with type badges and member counts, only what the caller may view; filter chips (type, definition, group or role, status), search, *Include subfolders*, CSV export; a row opens the side panel (overview, first members) with *Open group page* / *Open folder page*; commands *New group*, *New folder*, *New application* |
-| Group page | `/directory/groups/<id>[?tab=]` | header (path, type badges, owner, status, a *Recalculating…* banner while `recompute_state` is pending); tabs **Members** (direct / indirect / effective / composite, search, enabled filter, paging, add and remove, CSV import and export, a *Trace* drawer with every path), **Definition** (composite operator and factors as a set expression; edit or convert), **Privileges** (direct rows, grant, revoke, and the explanation of every path), **Usage** (what a composite is built from), **History** (members on a date, compare two dates, anyone in a period), **Attributes** (object types with lint findings, attribute assignments) |
+| Group page | `/directory/groups/<id>[?tab=]` | header (path, type badges, owner, status, a *Recalculating…* banner while `recompute_state` is pending); tabs **Members** (direct / indirect / effective / composite, search, enabled filter, paging, add and remove, CSV import and export, a *Trace* drawer with every path), **Definition** (composite operator and factors as a set expression; edit or convert), **Privileges** (direct rows, grant, revoke, and the explanation of every path), **Usage** (what a composite is built from), **History** (members on a date, compare two dates, anyone in a period), **Attributes** (object types with lint findings, attribute assignments), and **Source** (the membership source that fills the group: see below) |
+| Loaders | `/directory/groups/loaders[?selected=<id>]` | every membership source the caller may view with its state (On, Off, Held, Last run failed), kind, folder, last run, how long ago it loaded and its schedule; filter chips, search, CSV export; a row opens the loader in the side panel; *Add a source* opens the wizard; a banner counts held runs |
 | Folder page | `/directory/groups/folders/<id>[?tab=]` | contents, privileges with inheritance scope (`groups`, `folders`, `attr_defs`; one level or all), object types and attributes, details |
 | Change preview | a drawer | every member add or remove, CSV import and composite save calls `POST /api/groups:simulate` first and shows "+1,204 / −13 identities in 4 groups" with the groups changed; nothing is written until *Apply*. Batches carry an `Idempotency-Key` |
 | New application | a drawer | the Deployment Guide layout in one step (app, security and service folders; admin, reference, allow, allow-manual, deny groups; policy group `allow − deny`) as separate changes, safe to run again |
+
+**Membership sources (group loaders, GR-10).** Screens: `LoaderTab.tsx` (the group page's **Source** tab),
+`LoaderPanel.tsx` (state, schedule, *Run now*, *Preview*, *Turn on/off*, held runs to approve or reject with their
+failsafe trips, impact and plan, unresolved people, run history), `LoaderWizard.tsx` (*Add a source*: kind,
+source fields per type, how people are matched, name template and what to do when the source stops returning a
+group, schedule and failsafe limits, review), `LoadersPage.tsx` and `LoaderRuns.tsx`. The client is `groupLoaders`
+in `src/api.ts` (one typed function per route of `/api/groups/loaders` and `/api/groups/loader-tasks`); the pure
+logic (form to `LoaderSpec`, the checks that mirror the server's, words for runs) is `loaderModel.ts`, tested by
+`tests/group-loaders.test.ts`. A loader makes and owns its own groups, so a group edited by hand has no source and
+the tab offers *Add a source* in its folder. A group a loader fills carries `loader_id` in its API answer. A source
+that is not a SQL query is saved turned off and previewed at once, so the plan is seen before anything changes;
+a SQL source answers `202` and waits for a second administrator (*Admin, Change requests*), so it can be previewed
+once approved. Held runs also appear in the Inbox (filter chip *Loaders*) and link to the loader.
 
 **Inbox.** One queue for JIT and catalog approvals, access-review items, joiner/mover/leaver
 tasks and delegations, with keys: `j`/`k` move, `a` approve or keep, `d` deny, `r` revoke,
@@ -4162,6 +4247,10 @@ The same fail-closed rule (issue #446) covers the other self checks: an unlinked
 verify a help-desk reset case (403 `actor_unlinked`), and an unlinked approver cannot decide a guest-departure task (403 `actor_unlinked`).
 Nobody, an approver included, decides a guest-departure task about their own identity (403 `self_decision`). Callers with no platform
 user (services, the scheduler) are unchanged.
+Issue #449 closes the remaining ones: an unlinked operator cannot second-approve or execute a help-desk reset (403 `actor_unlinked`), and an
+unlinked admin cannot disable or enable an identity (403 `actor_unlinked`, audited as `identity.disable.refused` / `identity.enable.refused`).
+The four-eyes rule on enable (the admin who disabled an identity cannot enable it) now also holds when no user is linked to that identity.
+The guest-departure list's `can_act` is false for an unlinked approver, matching the refusal.
 When the sign-in is too old or too weak the API answers `401 step_up_required` with the RFC 9470
 challenge (`WWW-Authenticate: Bearer error="insufficient_user_authentication", acr_values=…, max_age=…`)
 and a `step_up_url`. The UI explains why and, on **Continue**, re-authenticates at the IdP

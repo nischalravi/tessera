@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -34,9 +36,15 @@ type workerOptions struct {
 	poll        time.Duration
 	lease       time.Duration
 	grace       time.Duration
+	metricsAddr string
+	// the defaults of the per-target limits (a connection's own limits override them)
+	targetConcurrency int
+	targetRate        int
+	breakerFailures   int
+	breakerCooldown   time.Duration
 }
 
-const workerUsage = "usage: tessera worker [-db PATH|DSN] [-kinds connector_sync,provision_push] [-concurrency N] [-id NAME]"
+const workerUsage = "usage: tessera worker [-db PATH|DSN] [-kinds connector_sync,provision_push] [-concurrency N] [-id NAME] [-metrics-addr HOST:PORT] [-target-concurrency N] [-target-rate PER_MIN]"
 
 // workerCmd is `tessera worker` (issue #302): the queue workers of the chosen
 // kinds and nothing else. No HTTP API, no listener, no sweepers. It shares the
@@ -56,6 +64,11 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 	fset.DurationVar(&o.poll, "poll", 2*time.Second, "how often the queue is polled")
 	fset.DurationVar(&o.lease, "lease", 60*time.Second, "lease of a claimed job; a heartbeat renews it every third of this")
 	fset.DurationVar(&o.grace, "shutdown-grace", 30*time.Second, "how long running jobs may finish after SIGTERM before they are cancelled and released")
+	fset.StringVar(&o.metricsAddr, "metrics-addr", "", "serve Prometheus /metrics on this host:port (default TESSERA_WORKER_METRICS_ADDR; off when empty); a loopback or private IP literal unless TESSERA_WORKER_METRICS_ALLOW_PUBLIC=true")
+	fset.IntVar(&o.targetConcurrency, "target-concurrency", worker.DefaultLimits.MaxConcurrency, "calls in flight at once to one connection's system, per worker (0 = no limit; a connection's own limit overrides it)")
+	fset.IntVar(&o.targetRate, "target-rate", 0, "calls per minute to one connection's system, per worker (0 = no limit)")
+	fset.IntVar(&o.breakerFailures, "target-breaker-failures", worker.DefaultLimits.BreakerThreshold, "consecutive failed calls that open a target's circuit breaker (0 = no breaker)")
+	fset.DurationVar(&o.breakerCooldown, "target-breaker-cooldown", worker.DefaultLimits.BreakerCooldown, "how long an open circuit breaker refuses calls before one probe is let through")
 	if err := fset.Parse(args); err != nil {
 		return err
 	}
@@ -73,6 +86,9 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 		return errors.New("-concurrency must be 1 to 64")
 	case o.poll < 100*time.Millisecond || o.lease < 5*time.Second || o.grace < 0:
 		return errors.New("-poll must be at least 100ms, -lease at least 5s and -shutdown-grace not negative")
+	case o.targetConcurrency < 0 || o.targetConcurrency > 64 || o.targetRate < 0 || o.targetRate > 60000 ||
+		o.breakerFailures < 0 || o.breakerFailures > 100 || o.breakerCooldown < time.Second || o.breakerCooldown > time.Hour:
+		return errors.New("-target-concurrency must be 0 to 64, -target-rate 0 to 60000, -target-breaker-failures 0 to 100 and -target-breaker-cooldown 1s to 1h")
 	}
 	if os.Getenv("TESSERA_ENV") == "" {
 		return errors.New("set TESSERA_ENV=dev (run.sh does), TESSERA_ENV=test or TESSERA_ENV=prod")
@@ -81,6 +97,11 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 	cfg, err := config.Load(envWithDB(o.db))
 	if err != nil {
 		return err
+	}
+	if o.metricsAddr == "" {
+		o.metricsAddr = cfg.WorkerMetricsAddr
+	} else if o.metricsAddr, err = config.CheckWorkerMetricsAddr(o.metricsAddr, cfg.WorkerMetricsAllowPublic); err != nil {
+		return fmt.Errorf("-metrics-addr: %w", err)
 	}
 	clock := cfg.Clock()
 	sealer, err := cfg.Sealer(config.DevKEKPath(o.db))
@@ -101,18 +122,62 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	all.Register(outbound, connsync.RuntimeFromConfig(cfg))
-	deps := &worker.Deps{DB: st, Clock: clock, Log: logger.With("component", "worker"), SyncSchedule: cfg.ConnectorSyncSchedule,
+	guard := &worker.Guard{DB: st, Clock: clock, Defaults: &worker.Limits{MaxConcurrency: o.targetConcurrency,
+		RatePerMin: o.targetRate, BreakerThreshold: o.breakerFailures, BreakerCooldown: o.breakerCooldown}}
+	deps := &worker.Deps{DB: st, Clock: clock, Log: logger.With("component", "worker"), SyncSchedule: cfg.ConnectorSyncSchedule, Guard: guard,
 		Connectors: func(now time.Time) ([]connectors.Connector, error) { return connectors.Load("", now) },
-		Provision: &provision.Engine{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock,
+		Provision: &provision.Engine{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Guard: guard,
 			Log: logger.With("component", "provisioning")}}
 	q := &queue.Queue{DB: st, Clock: clock, Owner: o.id, Concurrency: o.concurrency, Poll: o.poll, Lease: o.lease,
 		ShutdownGrace: o.grace, Log: logger.With("component", "queue")}
-	if err := deps.Register(q, kinds, nil); err != nil {
+	metrics := worker.NewMetrics(q, guard)
+	if err := deps.Register(q, kinds, metrics.Wrap); err != nil {
 		return err
 	}
-	beater := &worker.Beater{DB: st, Queue: q, Mode: store.WorkerModeWorker, Version: agent.Version, Clock: clock, Log: logger}
+	beater := &worker.Beater{DB: st, Queue: q, Mode: store.WorkerModeWorker, Version: agent.Version, Clock: clock, Log: logger, Guard: guard}
+	if o.metricsAddr != "" {
+		ms, err := newWorkerMetricsServer(o.metricsAddr, metrics.Handler(), logger)
+		if err != nil {
+			return err
+		}
+		go ms.serve(logger)
+		defer ms.close()
+	}
 	logger.Info("tessera worker started", "id", q.WorkerID(), "kinds", kinds, "concurrency", o.concurrency)
 	worker.Serve(ctx, q, beater)
 	logger.Info("tessera worker stopped", "id", q.WorkerID())
 	return nil
+}
+
+// workerMetricsServer is the worker's /metrics listener (-metrics-addr). It
+// serves /metrics and nothing else; the address was checked by
+// config.CheckWorkerMetricsAddr.
+type workerMetricsServer struct {
+	srv *http.Server
+	ln  net.Listener
+}
+
+func newWorkerMetricsServer(addr string, h http.Handler, logger *slog.Logger) (*workerMetricsServer, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("worker metrics listener: %w", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", h)
+	return &workerMetricsServer{ln: ln, srv: &http.Server{Handler: mux, ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout: readTimeout, WriteTimeout: 30 * time.Second, IdleTimeout: idleTimeout, MaxHeaderBytes: 16 << 10,
+		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn)}}, nil
+}
+
+func (m *workerMetricsServer) serve(logger *slog.Logger) {
+	logger.Info("tessera worker metrics listening", "addr", m.ln.Addr().String())
+	if err := m.srv.Serve(m.ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Error("worker metrics listener stopped", "err", err)
+	}
+}
+
+func (m *workerMetricsServer) close() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = m.srv.Shutdown(ctx)
 }

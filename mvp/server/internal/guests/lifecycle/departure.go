@@ -134,6 +134,9 @@ func mayAct(tx *store.TenantTx, by Actor, t *store.LifecycleTask, ss *store.Spon
 	if by.IdentityID != nil && *by.IdentityID == t.SubjectIdentityID {
 		return false, nil // nobody, an approver included, decides a task about themselves (#446)
 	}
+	if by.Approver && by.UserID != uuid.Nil && by.IdentityID == nil {
+		return false, nil // an unlinked approver is refused with actor_unlinked (#449)
+	}
 	if by.Approver {
 		return true, nil
 	}

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -20,9 +21,15 @@ const (
 	AgentJobCancelled = "cancelled"
 )
 
-// AgentJobSync is the only kind so far: read a connection's directory in the
-// agent's network and return what it holds.
-const AgentJobSync = "sync"
+// Agent job kinds.
+const (
+	// AgentJobSync reads a connection's directory in the agent's network and
+	// returns what it holds.
+	AgentJobSync = "sync"
+	// AgentJobProvisionPush carries out one provisioning operation (OpID) against a
+	// target in the agent's network and returns the outcome (issue #302).
+	AgentJobProvisionPush = "provision_push"
+)
 
 // AgentJob is one unit of work for one agent about one connection.
 type AgentJob struct {
@@ -30,7 +37,8 @@ type AgentJob struct {
 	AgentID        string
 	ConnectionID   string
 	Kind           string
-	Payload        string // JSON, no secret
+	OpID           *string // the provisioning operation of a provision_push job
+	Payload        string  // JSON, no secret
 	IdempotencyKey *string
 	Status         string
 	Attempts       int
@@ -49,7 +57,7 @@ type AgentJobFilter struct {
 	Limit                         int
 }
 
-const agentJobCols = `j.id, j.agent_id, j.connection_id, j.kind, j.payload, j.idempotency_key, j.status, j.attempts,
+const agentJobCols = `j.id, j.agent_id, j.connection_id, j.kind, j.op_id, j.payload, j.idempotency_key, j.status, j.attempts,
 	j.max_attempts, j.lease_expires_at, j.last_error, j.result_summary, j.created_at, j.updated_at, j.finished_at`
 
 // agentJobDue: waiting work, or leased work whose lease expired (the agent
@@ -58,9 +66,9 @@ const agentJobDue = `(status = 'queued' OR (status = 'leased' AND lease_expires_
 
 var (
 	agentJobInsert = tq("agent_jobs.insert", `
-		INSERT OR IGNORE INTO agent_jobs (id, tenant_id, agent_id, connection_id, kind, payload, idempotency_key, status,
+		INSERT OR IGNORE INTO agent_jobs (id, tenant_id, agent_id, connection_id, kind, op_id, payload, idempotency_key, status,
 			attempts, max_attempts, last_error, created_at, updated_at)
-		VALUES (@id, @tenant, @agent_id, @connection_id, @kind, @payload, @idempotency_key, 'queued', 0, @max_attempts,
+		VALUES (@id, @tenant, @agent_id, @connection_id, @kind, @op_id, @payload, @idempotency_key, 'queued', 0, @max_attempts,
 			'', @now, @now)`)
 	agentJobGet = tq("agent_jobs.get", `
 		SELECT `+agentJobCols+` FROM agent_jobs j WHERE j.tenant_id = @tenant AND j.id = @id`)
@@ -98,19 +106,26 @@ var (
 		SELECT count(*) FROM agent_jobs j
 		WHERE j.tenant_id = @tenant AND j.connection_id = @connection_id AND j.kind = @kind
 			AND j.status IN ('queued','leased')`)
+	agentJobOpenForOp = tq("agent_jobs.open_for_op", `
+		SELECT count(*) FROM agent_jobs j
+		WHERE j.tenant_id = @tenant AND j.op_id = @op_id AND j.status IN ('queued','leased')`)
+	agentJobCancelForOp = tq("agent_jobs.cancel_for_op", `
+		UPDATE agent_jobs SET status = 'cancelled', lease_expires_at = NULL, last_error = @reason, finished_at = @now,
+			updated_at = @now
+		WHERE tenant_id = @tenant AND op_id = @op_id AND status IN ('queued','leased')`)
 	agentJobPrune = tq("agent_jobs.prune", `
 		DELETE FROM agent_jobs WHERE tenant_id = @tenant AND status IN ('done','failed','cancelled') AND finished_at < @before`)
 )
 
 func scanAgentJob(s scanner) (*AgentJob, error) {
 	var j AgentJob
-	var key, lease, summary, fin sql.NullString
+	var key, lease, summary, fin, op sql.NullString
 	var created, updated string
-	if err := s.Scan(&j.ID, &j.AgentID, &j.ConnectionID, &j.Kind, &j.Payload, &key, &j.Status, &j.Attempts,
+	if err := s.Scan(&j.ID, &j.AgentID, &j.ConnectionID, &j.Kind, &op, &j.Payload, &key, &j.Status, &j.Attempts,
 		&j.MaxAttempts, &lease, &j.LastError, &summary, &created, &updated, &fin); err != nil {
 		return nil, err
 	}
-	j.IdempotencyKey, j.ResultSummary = strp(key), strp(summary)
+	j.IdempotencyKey, j.ResultSummary, j.OpID = strp(key), strp(summary), strp(op)
 	var err error
 	if j.LeaseExpiresAt, err = rtp(lease); err != nil {
 		return nil, err
@@ -130,6 +145,13 @@ func scanAgentJob(s scanner) (*AgentJob, error) {
 // makes this a no-op and created is false. The agent and the connection must
 // be this tenant's (the schema refuses others).
 func (tx *TenantTx) EnqueueAgentJob(j *AgentJob, now time.Time) (created bool, err error) {
+	// checked here as well as by the schema: INSERT OR IGNORE swallows a CHECK violation on SQLite
+	switch {
+	case j.Kind != AgentJobSync && j.Kind != AgentJobProvisionPush:
+		return false, fmt.Errorf("store: unknown agent job kind %q", j.Kind)
+	case (j.Kind == AgentJobProvisionPush) != (j.OpID != nil):
+		return false, errors.New("store: a provision_push agent job names its operation, a sync job does not")
+	}
 	if j.ID == "" {
 		j.ID = NewID()
 	}
@@ -137,7 +159,8 @@ func (tx *TenantTx) EnqueueAgentJob(j *AgentJob, now time.Time) (created bool, e
 		j.MaxAttempts = 3
 	}
 	res, err := tx.exec(agentJobInsert, sql.Named("id", j.ID), sql.Named("agent_id", j.AgentID),
-		sql.Named("connection_id", j.ConnectionID), sql.Named("kind", j.Kind), sql.Named("payload", j.Payload),
+		sql.Named("connection_id", j.ConnectionID), sql.Named("kind", j.Kind), sql.Named("op_id", SP(j.OpID)),
+		sql.Named("payload", j.Payload),
 		sql.Named("idempotency_key", SP(j.IdempotencyKey)), sql.Named("max_attempts", j.MaxAttempts),
 		sql.Named("now", RT(now)))
 	if err != nil {
@@ -167,6 +190,24 @@ func (tx *TenantTx) HasOpenAgentJob(connectionID, kind string) (bool, error) {
 	var n int
 	err := tx.queryRow(agentJobOpen, sql.Named("connection_id", connectionID), sql.Named("kind", kind)).Scan(&n)
 	return n > 0, err
+}
+
+// HasOpenAgentJobForOp reports whether a provisioning operation already has a
+// queued or leased agent job, so a pass of the engine never queues a second one.
+func (tx *TenantTx) HasOpenAgentJobForOp(opID string) (bool, error) {
+	var n int
+	err := tx.queryRow(agentJobOpenForOp, sql.Named("op_id", opID)).Scan(&n)
+	return n > 0, err
+}
+
+// CancelAgentJobsForOp cancels a provisioning operation's open agent jobs (the
+// operation was cancelled or ended another way). It returns how many.
+func (tx *TenantTx) CancelAgentJobsForOp(opID, reason string, now time.Time) (int64, error) {
+	res, err := tx.exec(agentJobCancelForOp, sql.Named("op_id", opID), sql.Named("reason", reason), sql.Named("now", RT(now)))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // HasDueAgentJobs reports whether ClaimAgentJobs would find work (a cheap

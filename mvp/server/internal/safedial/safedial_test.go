@@ -9,8 +9,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"io"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"sync"
@@ -401,5 +404,110 @@ func TestParseAllow(t *testing.T) {
 		} else if strings.Contains(err.Error(), "password") {
 			t.Errorf("error leaks input: %v", err)
 		}
+	}
+}
+
+func TestParseAllowHTTPS(t *testing.T) {
+	got, err := ParseAllowHTTPS("scim.corp.example:443, 10.1.2.0/24:8443")
+	if err != nil || len(got) != 2 || got[0].Host != "scim.corp.example" || got[0].Port != 443 || got[1].Port != 8443 {
+		t.Fatalf("ParseAllowHTTPS = %+v, %v", got, err)
+	}
+	for _, bad := range []string{"scim.corp.example:636", "scim.corp.example:389", "scim.corp.example:80", "scim.corp.example",
+		"*.corp.example:443", "10.0.0.0/8:443", "scim.corp.example:0"} {
+		if _, err := ParseAllowHTTPS(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	// the LDAP list does not admit a web port, so allowing a directory never allows a web service
+	if _, err := ParseAllow("scim.corp.example:443"); err == nil {
+		t.Error("ParseAllow accepted port 443")
+	}
+}
+
+// The agent's HTTP client reaches only listed private HTTPS targets, verifies
+// their certificate, never speaks plain HTTP and never follows a redirect.
+func TestSafedial_HTTPClient(t *testing.T) {
+	cert, roots := serverCert(t, "scim.corp.example", time.Now().Add(90*24*time.Hour))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ok", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("hello")) })
+	mux.HandleFunc("/redir", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://other.corp.example/ok", http.StatusFound)
+	})
+	srv := httptest.NewUnstartedServer(mux)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	defer srv.Close()
+	res := &fakeResolver{addrs: map[string][]netip.Addr{
+		"scim.corp.example":  {netip.MustParseAddr("10.1.2.3")},
+		"other.corp.example": {netip.MustParseAddr("10.1.2.4")},
+		"meta.corp.example":  {netip.MustParseAddr("169.254.169.254")},
+	}}
+	allow, err := ParseAllowHTTPS("scim.corp.example:443,other.corp.example:443,meta.corp.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dialed []string
+	d, err := New(Options{Env: config.Prod, AgentLocal: true, Allow: allow, RootCAs: roots, Resolver: res,
+		TestDial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialed = append(dialed, addr)
+			return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := d.HTTPClient(5 * time.Second)
+	get := func(u string) (*http.Response, error) {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, u, nil)
+		return c.Do(req)
+	}
+	resp, err := get("https://scim.corp.example/ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 || string(body) != "hello" || len(dialed) != 1 || dialed[0] != "10.1.2.3:443" {
+		t.Errorf("GET /ok = %d %q, dialed %v", resp.StatusCode, body, dialed)
+	}
+	// a redirect is returned, not followed
+	if resp, err := get("https://scim.corp.example/redir"); err != nil || resp.StatusCode != http.StatusFound {
+		t.Errorf("redirect: %v %v", resp, err)
+	} else {
+		_ = resp.Body.Close()
+	}
+	// never-allowed space stays refused even when it is listed
+	if _, err := get("https://meta.corp.example/ok"); !errors.Is(err, ErrBlockedAddress) {
+		t.Errorf("link-local target: %v", err)
+	}
+	// a host that is not listed (private, unlisted), a port that is not an HTTPS port, plain HTTP
+	if _, err := get("https://unlisted.corp.example/ok"); err == nil {
+		t.Error("an unresolvable host was dialed")
+	}
+	res.mu.Lock()
+	res.addrs["unlisted.corp.example"] = []netip.Addr{netip.MustParseAddr("10.9.9.9")}
+	res.mu.Unlock()
+	if _, err := get("https://unlisted.corp.example/ok"); !errors.Is(err, ErrBlockedAddress) {
+		t.Errorf("unlisted private host: %v", err)
+	}
+	if _, err := get("https://scim.corp.example:8080/ok"); !errors.Is(err, ErrPort) {
+		t.Errorf("port 8080: %v", err)
+	}
+	if _, err := get("http://scim.corp.example/ok"); !errors.Is(err, ErrNoTLS) {
+		t.Errorf("plain HTTP: %v", err)
+	}
+	// a certificate for another name is refused
+	res.mu.Lock()
+	res.addrs["scim.corp.example"] = []netip.Addr{netip.MustParseAddr("10.1.2.3")}
+	res.addrs["wrongname.corp.example"] = []netip.Addr{netip.MustParseAddr("10.1.2.3")}
+	res.mu.Unlock()
+	allow2, _ := ParseAllowHTTPS("wrongname.corp.example:443")
+	d2, _ := New(Options{Env: config.Prod, AgentLocal: true, Allow: allow2, RootCAs: roots, Resolver: res,
+		TestDial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+		}})
+	c2 := d2.HTTPClient(5 * time.Second)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://wrongname.corp.example/ok", nil)
+	if _, err := c2.Do(req); err == nil || !errors.Is(err, ErrHandshake) {
+		t.Errorf("a certificate for another host name: %v", err)
 	}
 }
