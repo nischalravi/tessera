@@ -111,6 +111,9 @@ func (p SourcePolicy) Check() error {
 }
 
 // Feed is the feed sanity the override sets (the defaults where it sets none).
+// FeedSettings is the feed sanity the override sets (the defaults where it sets none).
+func (p SourcePolicy) FeedSettings() Feed { return p.feed() }
+
 func (p *SourcePolicy) feed() Feed {
 	f := DefaultFeed()
 	if p != nil {
@@ -123,6 +126,9 @@ func (p *SourcePolicy) feed() Feed {
 	}
 	return f
 }
+
+// SourcePolicyFromRow converts a stored override.
+func SourcePolicyFromRow(r *store.DeletionSourcePolicy) *SourcePolicy { return fromSourceRow(r) }
 
 func fromSourceRow(r *store.DeletionSourcePolicy) *SourcePolicy {
 	if r == nil {

@@ -151,6 +151,8 @@ var tables = []string{
 	// deletion threshold guard (schema/0670_deletion_guard.sql)
 	"deletion_guard_policies", "deletion_guard_settings", "deletion_guard_counters", "deletion_guard_ledger",
 	"deletion_holds", "deletion_hold_items",
+	// per-source settings (schema/0690_deletion_guard_sources.sql)
+	"deletion_guard_source_policies", "deletion_guard_source_state", "deletion_guard_source_ledger",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)
