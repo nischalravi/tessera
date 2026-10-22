@@ -10,23 +10,32 @@ export interface LoaderTypeInfo {
   id: LoaderType;
   label: string;
   blurb: string;
-  /** Runs a query a person wrote: creating or changing it needs a second admin (GRP-6311). */
+  /** Runs a query a person wrote (incremental feeds apply). */
   sql?: boolean;
+  /** Creating or changing it needs a second admin (GRP-6311): SQL, SCIM and LDAP. */
+  approval?: boolean;
   needsConnection?: boolean;
 }
 
 /** The loader types that can be configured today (the others are designed but refused by the server). */
 export const LOADER_TYPES: LoaderTypeInfo[] = [
-  { id: "sql_simple", label: "SQL query: one group", sql: true, blurb: "A query on a database file returns the people; they all become members of one group." },
-  { id: "sql_group_list", label: "SQL query: many groups", sql: true, blurb: "A query returns group name and person pairs; one group is kept per name." },
+  { id: "sql_simple", label: "SQL query: one group", sql: true, approval: true, blurb: "A query on a database file returns the people; they all become members of one group." },
+  { id: "sql_group_list", label: "SQL query: many groups", sql: true, approval: true, blurb: "A query returns group name and person pairs; one group is kept per name." },
   { id: "csv", label: "CSV file or URL", blurb: "A file under the loader data directory, or an https URL, with a header row." },
   { id: "connector_groups", label: "A connected system's groups", needsConnection: true, blurb: "Every group a connection has becomes a native group here." },
   { id: "attribute", label: "Identity attribute rule", blurb: "One group per value of an identity attribute, such as department." },
   { id: "recent_memberships", label: "Recent members of a group", blurb: "People who were in a group in the last N days, optionally with its current members." },
+  { id: "scim", approval: true, label: "SCIM provider's groups", blurb: "The groups and members of another system's SCIM 2.0 service, read on a schedule." },
+  { id: "ldap_simple", approval: true, label: "LDAP search: one group", blurb: "People an LDAP or Active Directory search returns become the members of one group." },
+  { id: "ldap_group_list", approval: true, label: "LDAP groups", blurb: "Group entries of an LDAP or Active Directory directory, with their members." },
 ];
+/** Kinds that hold a credential the server seals (a token, a client secret, a bind password or a connection string). */
+export const needsSecret = (f: Pick<LoaderForm, "type" | "sqlEngine">) =>
+  f.type === "scim" || f.type === "ldap_simple" || f.type === "ldap_group_list" || ((f.type === "sql_simple" || f.type === "sql_group_list") && f.sqlEngine === "postgres");
 export const typeInfo = (t: string) => LOADER_TYPES.find((x) => x.id === t);
 export const typeLabel = (t: string) => typeInfo(t)?.label ?? t;
 export const isSqlType = (t: string) => !!typeInfo(t)?.sql;
+export const needsApproval = (t: string) => !!typeInfo(t)?.approval;
 
 /** Where the people named by a source are matched. The server matches exactly; nothing is guessed. */
 export const SUBJECT_SOURCES: { id: string; label: string; hint: string }[] = [
@@ -52,10 +61,16 @@ export interface LoaderForm {
   name: string;
   targetFolder: string;
   // sql
-  database: string; query: string; group: string; groupsQuery: string; incrementalQuery: string; incrementalSecs: string;
+  sqlEngine: "file" | "postgres"; dsn: string; caPem: string; database: string; query: string; group: string; groupsQuery: string; incrementalQuery: string; incrementalSecs: string;
   // csv
   csvFrom: "path" | "url"; csvPath: string; csvUrl: string; csvSecret: string; csvGroupBy: "one" | "column"; groupColumn: string; displayColumn: string;
   subjectColumn: string; subjectSource: string; accountSystem: string; sourceColumn: string; delimiter: string;
+  // scim
+  scimUrl: string; scimAuth: "bearer" | "client_credentials"; scimTokenUrl: string; scimClientId: string; scimScope: string; scimSecret: string;
+  scimSubject: "userName" | "email" | "externalId" | "id"; scimSubjectSource: string; scimGroupFilter: string; scimUserFilter: string; scimOnlyActive: boolean;
+  // ldap
+  ldapUrl: string; ldapBindDn: string; ldapSecret: string; ldapBaseDn: string; ldapFilter: string; ldapScope: "sub" | "one"; ldapSubjectAttr: string;
+  ldapGroupNameAttr: string; ldapMemberAttr: string; ldapMemberRdn: string;
   // connector_groups
   connectionId: string; namePrefix: string;
   // attribute
@@ -70,9 +85,13 @@ export interface LoaderForm {
 export function emptyForm(targetFolder = ""): LoaderForm {
   return {
     type: null, name: "", targetFolder,
-    database: "", query: "", group: "", groupsQuery: "", incrementalQuery: "", incrementalSecs: "",
+    sqlEngine: "file", dsn: "", caPem: "", database: "", query: "", group: "", groupsQuery: "", incrementalQuery: "", incrementalSecs: "",
     csvFrom: "path", csvPath: "", csvUrl: "", csvSecret: "", csvGroupBy: "one", groupColumn: "", displayColumn: "",
     subjectColumn: "", subjectSource: "identity", accountSystem: "", sourceColumn: "", delimiter: "",
+    scimUrl: "", scimAuth: "bearer", scimTokenUrl: "", scimClientId: "", scimScope: "", scimSecret: "", scimSubject: "userName", scimSubjectSource: "",
+    scimGroupFilter: "", scimUserFilter: "", scimOnlyActive: true,
+    ldapUrl: "", ldapBindDn: "", ldapSecret: "", ldapBaseDn: "", ldapFilter: "(objectClass=person)", ldapScope: "sub", ldapSubjectAttr: "uid",
+    ldapGroupNameAttr: "", ldapMemberAttr: "", ldapMemberRdn: "",
     connectionId: "", namePrefix: "",
     attribute: "department", prefix: "", onlyActive: true,
     sourceGroup: "", days: "30", includeCurrent: false,
@@ -90,7 +109,10 @@ export function buildConfig(f: LoaderForm): Record<string, unknown> {
   switch (f.type) {
     case "sql_simple":
     case "sql_group_list":
-      c.database = trim(f.database);
+      if (f.sqlEngine === "postgres") {
+        c.engine = "postgres";
+        opt(c, "ca_pem", trim(f.caPem));
+      } else c.database = trim(f.database);
       c.query = trim(f.query);
       if (f.type === "sql_simple") c.group = trim(f.group);
       else opt(c, "groups_query", trim(f.groupsQuery));
@@ -117,6 +139,40 @@ export function buildConfig(f: LoaderForm): Record<string, unknown> {
       c.attribute = f.attribute;
       opt(c, "prefix", trim(f.prefix));
       if (!f.onlyActive) c.only_active = false;
+      break;
+    case "scim":
+      c.base_url = trim(f.scimUrl);
+      if (f.scimAuth === "client_credentials") {
+        c.auth = "client_credentials";
+        c.token_url = trim(f.scimTokenUrl);
+        c.client_id = trim(f.scimClientId);
+        opt(c, "scope", trim(f.scimScope));
+      }
+      c.subject_attr = f.scimSubject;
+      opt(c, "subject_source", trim(f.scimSubjectSource));
+      opt(c, "group_filter", trim(f.scimGroupFilter));
+      opt(c, "user_filter", trim(f.scimUserFilter));
+      opt(c, "name_prefix", trim(f.namePrefix));
+      if (!f.scimOnlyActive) c.only_active = false;
+      break;
+    case "ldap_simple":
+    case "ldap_group_list":
+      c.url = trim(f.ldapUrl);
+      c.bind_dn = trim(f.ldapBindDn);
+      opt(c, "ca_pem", trim(f.caPem));
+      c.base_dn = trim(f.ldapBaseDn);
+      if (f.ldapScope === "one") c.scope = "one";
+      c.filter = trim(f.ldapFilter);
+      if (f.type === "ldap_simple") {
+        c.subject_attr = trim(f.ldapSubjectAttr);
+        c.group = trim(f.group);
+      } else {
+        opt(c, "group_name_attr", trim(f.ldapGroupNameAttr));
+        opt(c, "member_attr", trim(f.ldapMemberAttr));
+        opt(c, "member_rdn", trim(f.ldapMemberRdn));
+      }
+      opt(c, "subject_source", trim(f.scimSubjectSource));
+      opt(c, "name_prefix", trim(f.namePrefix));
       break;
     case "recent_memberships":
       c.source_group = trim(f.sourceGroup);
@@ -154,6 +210,9 @@ export function buildSpec(f: LoaderForm): LoaderSpec {
   spec.failsafe = buildFailsafe(f.failsafe);
   spec.status = f.startEnabled ? "enabled" : "disabled";
   if (f.type === "csv" && f.csvFrom === "url" && f.csvSecret) spec.secret = f.csvSecret;
+  if (f.type === "scim" && f.scimSecret) spec.secret = f.scimSecret;
+  if ((f.type === "ldap_simple" || f.type === "ldap_group_list") && f.ldapSecret) spec.secret = f.ldapSecret;
+  if (needsSecret(f) && (f.type === "sql_simple" || f.type === "sql_group_list") && f.dsn) spec.secret = f.dsn;
   return spec;
 }
 
@@ -161,6 +220,7 @@ export function buildSpec(f: LoaderForm): LoaderSpec {
 
 const columnRE = /^[A-Za-z0-9_ .-]{1,64}$/;
 const fileRE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(\/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$/;
+const ldapAttr = /^[A-Za-z][A-Za-z0-9-]{0,62}$/;
 const sourceRE = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 /** The first keyword must be SELECT or WITH, with one statement and no comments (the server's first line of defence; it also runs the query read-only). */
@@ -188,7 +248,8 @@ export function stepProblems(step: "type" | "source" | "people" | "schedule", f:
       switch (f.type) {
         case "sql_simple":
         case "sql_group_list":
-          add(!fileRE.test(f.database) || f.database.includes("..") ? "The database is a file name under the loader data directory." : null);
+          if (f.sqlEngine === "postgres") add(!/^postgres(ql)?:\/\/[^/\s]+@[^/\s]+\/\S+/i.test(f.dsn) ? "The connection string is a postgres://user:password@host/database URL." : null);
+          else add(!fileRE.test(f.database) || f.database.includes("..") ? "The database is a file name under the loader data directory." : null);
           add(sqlProblem(f.query));
           if (f.type === "sql_simple") add(extensionProblem(f.group.trim()) && `Group: ${extensionProblem(f.group.trim())}`);
           if (f.groupsQuery.trim()) add(sqlProblem(f.groupsQuery) && `Groups query: ${sqlProblem(f.groupsQuery)}`);
@@ -205,6 +266,26 @@ export function stepProblems(step: "type" | "source" | "people" | "schedule", f:
           if (f.csvGroupBy === "one") add(extensionProblem(f.group.trim()) && `Group: ${extensionProblem(f.group.trim())}`);
           else add(!columnRE.test(f.groupColumn) && "Name the column of the groups.");
           add(!columnRE.test(f.subjectColumn) && "Name the column of the people.");
+          break;
+        case "scim":
+          add(!/^https?:\/\/[^/@\s]+/i.test(f.scimUrl) ? "The service URL starts with https:// and has no credentials in it." : null);
+          add(!f.scimSecret && "Enter the bearer token or client secret.");
+          if (f.scimAuth === "client_credentials") {
+            add(!/^https?:\/\/[^/@\s]+/i.test(f.scimTokenUrl) && "Enter the token URL.");
+            add(!f.scimClientId.trim() && "Enter the client id.");
+          }
+          break;
+        case "ldap_simple":
+        case "ldap_group_list":
+          add(!/^ldaps?:\/\/[^/@\s:]+(:(389|636))?\/?$/i.test(f.ldapUrl) ? "The URL is ldaps://host (port 636) or ldap://host (port 389, StartTLS)." : null);
+          add(!f.ldapBindDn.includes("=") && "Enter the DN of the read-only account to bind as.");
+          add(!f.ldapSecret && "Enter the bind password.");
+          add(!f.ldapBaseDn.includes("=") && "Enter the base DN to search under.");
+          add(!/^\(.*\)$/.test(f.ldapFilter.trim()) && "The filter is in parentheses, such as (objectClass=person).");
+          if (f.type === "ldap_simple") {
+            add(!ldapAttr.test(f.ldapSubjectAttr) && "Name the attribute that identifies each person.");
+            add(extensionProblem(f.group.trim()) && `Group: ${extensionProblem(f.group.trim())}`);
+          }
           break;
         case "connector_groups":
           add(!f.connectionId && "Choose the connection.");

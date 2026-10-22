@@ -9,6 +9,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
@@ -100,7 +101,7 @@ type loaderView struct {
 func viewLoader(tx *store.TenantTx, l *store.GrpLoader, now time.Time, full bool) (loaderView, error) {
 	v := loaderView{ID: l.ID, Name: l.Name, Type: l.Type, ConnectionID: l.ConnectionID, TargetFolderID: string(l.TargetFolder),
 		NameTemplate: l.NameTemplate, OnMissingGroup: l.OnMissingGroup, Schedule: l.Schedule, IncrementalSecs: l.IncrementalSecs,
-		Status: l.Status, HasSecret: len(l.SecretEnc) > 0, RequiresApproval: loaders.IsSQL(l.Type), LastFullAt: rtPtr(l.LastFullAt),
+		Status: l.Status, HasSecret: len(l.SecretEnc) > 0, RequiresApproval: loaders.NeedsSecondApprover(l.Type), LastFullAt: rtPtr(l.LastFullAt),
 		LastIncrementalAt: rtPtr(l.LastIncrAt), CreatedBy: l.CreatedBy, CreatedAt: store.RT(l.CreatedAt),
 		UpdatedAt: store.RT(l.UpdatedAt), Version: l.Version}
 	if l.AndGroup != nil {
@@ -467,22 +468,22 @@ func (s *Server) createGrpLoader(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	ctx := r.Context()
-	if loaders.IsSQL(in.Type) {
-		if in.Secret != "" {
-			return 0, nil, badRequest("secret_not_used", "only a csv loader with a url takes a secret")
-		}
+	if loaders.NeedsSecondApprover(in.Type) {
 		// validate and authorize now; the second approver applies it
 		err := p.scope.Read(ctx, func(c *store.TenantTx) error {
 			if err := s.requireFolder(r, c, in.TargetFolder); err != nil {
 				return err
 			}
-			_, err := loaders.Validate(c, in.Spec, nil)
-			return grpErr(err)
+			l, err := loaders.Validate(c, in.Spec, nil)
+			if err != nil {
+				return grpErr(err)
+			}
+			return s.checkLoaderSecret(l, in.Secret, true)
 		})
 		if err != nil {
 			return 0, nil, err
 		}
-		ch, err := s.submitLoaderChange(ctx, r, "", nil, in.Spec)
+		ch, err := s.submitLoaderChange(ctx, r, "", nil, in.Spec, in.Secret)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -527,9 +528,26 @@ func (s *Server) requireFolder(r *http.Request, c *store.TenantTx, folder string
 	return grpErr(ck.Require(privs.FolderObject(f.ID), privs.StemAdmin))
 }
 
+// checkLoaderSecret refuses a credential the loader does not take, a missing one a
+// new loader needs and a connection string that is not acceptable here (the
+// second administrator should never approve what cannot run). The credential is
+// not stored by this call.
+func (s *Server) checkLoaderSecret(l *store.GrpLoader, secret string, create bool) error {
+	use := loaders.SecretPolicy(l.Type, json.RawMessage(l.Config))
+	switch {
+	case secret == "" && create && use == loaders.SecretRequired:
+		return badRequest("secret_required", "a "+l.Type+" loader needs its credential (secret)")
+	case secret == "":
+		return nil
+	case use == loaders.SecretNone:
+		return badRequest("secret_not_used", "a "+l.Type+" loader with this config takes no secret")
+	}
+	return grpErr(loaders.CheckSecret(l.Type, json.RawMessage(l.Config), secret, s.cfg.Env == config.Prod))
+}
+
 func (s *Server) loaderSaveEnv(r *http.Request, c *store.TenantTx, now time.Time) loaders.SaveEnv {
 	pr := principal(r)
-	e := loaders.SaveEnv{Tx: c, Now: now, Sealer: s.cfg.Sealer}
+	e := loaders.SaveEnv{Tx: c, Now: now, Sealer: s.cfg.Sealer, Prod: s.cfg.Env == config.Prod}
 	if pr.UserID != nil {
 		u := pr.UserID.String()
 		e.By = &u
@@ -538,7 +556,7 @@ func (s *Server) loaderSaveEnv(r *http.Request, c *store.TenantTx, now time.Time
 }
 
 // submitLoaderChange files the groups.loader.save request of a SQL loader.
-func (s *Server) submitLoaderChange(ctx context.Context, r *http.Request, loaderID string, version *int64, spec loaders.Spec) (*store.AdminChange, error) {
+func (s *Server) submitLoaderChange(ctx context.Context, r *http.Request, loaderID string, version *int64, spec loaders.Spec, secret string) (*store.AdminChange, error) {
 	body := map[string]any{"spec": spec}
 	if loaderID != "" {
 		body["loader_id"] = loaderID
@@ -550,7 +568,7 @@ func (s *Server) submitLoaderChange(ctx context.Context, r *http.Request, loader
 	if err != nil {
 		return nil, err
 	}
-	return s.admin.SubmitChecked(ctx, principal(r), admin.SubmitInput{Type: admin.TypeGroupLoaderSave, Payload: payload})
+	return s.admin.SubmitChecked(ctx, principal(r), admin.SubmitInput{Type: admin.TypeGroupLoaderSave, Payload: payload, ClientSecret: secret})
 }
 
 // loaderPatch changes the fields that are present. incremental_secs 0 clears
@@ -652,9 +670,13 @@ func (s *Server) patchGrpLoader(r *http.Request, p *params) (int, any, error) {
 			return 0, nil, err
 		}
 	}
-	if loaders.IsSQL(old.Type) && !in.disableOnly() {
+	if loaders.NeedsSecondApprover(old.Type) && !in.disableOnly() {
+		secret := ""
 		if in.Secret != nil {
-			return 0, nil, badRequest("secret_not_used", "only a csv loader with a url takes a secret")
+			secret = *in.Secret
+			if secret == "" {
+				return 0, nil, badRequest("secret_required", "a credential cannot be cleared by a change that needs approval: send the new one")
+			}
 		}
 		err := p.scope.Read(ctx, func(c *store.TenantTx) error {
 			cur, err := c.GrpLoader(id)
@@ -665,8 +687,14 @@ func (s *Server) patchGrpLoader(r *http.Request, p *params) (int, any, error) {
 				return &readiness.Error{Status: http.StatusConflict, Code: "version_conflict",
 					Msg: "the loader changed since it was read; reload it and retry"}
 			}
-			_, err = loaders.Validate(c, spec, cur)
-			return grpErr(err)
+			l, err := loaders.Validate(c, spec, cur)
+			if err != nil {
+				return grpErr(err)
+			}
+			if secret == "" && loaders.SecretPolicy(l.Type, json.RawMessage(l.Config)) == loaders.SecretRequired && len(cur.SecretEnc) == 0 {
+				return badRequest("secret_required", "a "+l.Type+" loader needs its credential (secret)")
+			}
+			return s.checkLoaderSecret(l, secret, false)
 		})
 		if err != nil {
 			return 0, nil, err
@@ -676,7 +704,7 @@ func (s *Server) patchGrpLoader(r *http.Request, p *params) (int, any, error) {
 			v := old.Version
 			version = &v
 		}
-		ch, err := s.submitLoaderChange(ctx, r, id, version, spec)
+		ch, err := s.submitLoaderChange(ctx, r, id, version, spec, secret)
 		if err != nil {
 			return 0, nil, err
 		}
