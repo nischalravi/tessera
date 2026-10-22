@@ -102,9 +102,11 @@ func removalDetail(q *store.RemovalRequest, reason, outcome *string) ojson.Objec
 // asked or the one it is for, and either the beneficiary's manager, a
 // delegate of the manager, or a holder of requests.decide.
 func CanDecideRemoval(tx *store.TenantTx, q *store.RemovalRequest, by Actor, now time.Time) (bool, error) {
-	if q.Status != store.RequestPending || q.RequestedBy == by.id() ||
-		(by.IdentityID != nil && *by.IdentityID == q.BeneficiaryID) {
+	if q.Status != store.RequestPending || (by.IdentityID != nil && *by.IdentityID == q.BeneficiaryID) {
 		return false, nil
+	}
+	if own, err := tx.SameActor(q.RequestedBy, by.id()); err != nil || own {
+		return false, err
 	}
 	if by.Decider {
 		return true, nil
@@ -125,7 +127,12 @@ func CanDecideRemoval(tx *store.TenantTx, q *store.RemovalRequest, by Actor, now
 		return false, err
 	}
 	for _, d := range dels {
-		if d.FromUser == q.RequestedBy || !slices.Contains(managers, d.FromUser) {
+		if !slices.Contains(managers, d.FromUser) {
+			continue
+		}
+		if own, err := tx.SameActor(d.FromUser, q.RequestedBy); err != nil {
+			return false, err
+		} else if own {
 			continue // a delegation never covers the delegator's own requests
 		}
 		fid, err := uuid.Parse(d.FromUser)

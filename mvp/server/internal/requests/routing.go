@@ -317,7 +317,10 @@ type Subject struct {
 // the assignee, their delegates, or members of a workflow group stage; deciders when the
 // stage is a decider stage or past due.
 func AuthorizeStages(tx *store.TenantTx, sub Subject, stages []*store.RequestStage, by Actor, now time.Time) (*Authority, error) {
-	if sub.RequestedBy == by.id() {
+	// People, not user ids: two users linked to one identity are one actor (#415, #402).
+	if same, err := tx.SameActor(sub.RequestedBy, by.id()); err != nil {
+		return nil, err
+	} else if same {
 		return nil, refuse(403, "self_approval", "you cannot decide a request you made")
 	}
 	plan, err := workflow.PlanFor(tx, sub.Kind, sub.ID)
@@ -326,8 +329,19 @@ func AuthorizeStages(tx *store.TenantTx, sub Subject, stages []*store.RequestSta
 	}
 	var waiting *store.RequestStage
 	for _, s := range stages {
-		if s.Status == store.StageApproved && (eq(s.DecidedBy, by.id()) || eq(s.OnBehalfOf, by.id())) {
-			return nil, refuse(403, "already_decided_a_stage", "you approved an earlier stage; another person decides this one")
+		if s.Status == store.StageApproved {
+			for _, prev := range []*string{s.DecidedBy, s.OnBehalfOf} {
+				if prev == nil {
+					continue
+				}
+				same, err := tx.SameActor(*prev, by.id())
+				if err != nil {
+					return nil, err
+				}
+				if same {
+					return nil, refuse(403, "already_decided_a_stage", "you approved an earlier stage; another person decides this one")
+				}
+			}
 		}
 		if s.Status == store.StageWaiting && waiting == nil {
 			waiting = s
@@ -368,7 +382,12 @@ func AuthorizeStages(tx *store.TenantTx, sub Subject, stages []*store.RequestSta
 			return nil, err
 		}
 		for _, d := range dels {
-			if d.FromUser == sub.RequestedBy || !slices.Contains(assignees, d.FromUser) {
+			if !slices.Contains(assignees, d.FromUser) {
+				continue
+			}
+			if own, err := tx.SameActor(d.FromUser, sub.RequestedBy); err != nil {
+				return nil, err
+			} else if own {
 				continue // a delegation never covers the delegator's own requests
 			}
 			from := d.FromUser
@@ -388,8 +407,6 @@ func AuthorizeStages(tx *store.TenantTx, sub Subject, stages []*store.RequestSta
 	}
 	return nil, refuse(403, "not_an_approver", "you are not an approver of the current stage")
 }
-
-func eq(p *string, v string) bool { return p != nil && *p == v }
 
 // approveStage records an approval of the waiting stage and starts the next
 // one; it reports whether the line has more stages to go.

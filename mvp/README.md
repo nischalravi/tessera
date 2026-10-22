@@ -1601,7 +1601,7 @@ unchanged. Audit action `sod.view.update`.
 `service_account`. Each has `reviewer_source` (`owner`, `owner_or_backup`, `fixed` + `reviewer_id`), a
 `fallback_reviewer_id` for grants whose owner cannot be reached (no owner on record, or not active), and
 `on_incomplete` for items undecided at the due date: `revoke` (what every review did before), `escalate` (to the
-fallback for `escalation_days`, then revoke) or `keep` (leave the access, close the review incomplete; the
+fallback for `escalation_days`, then revoke; `escalation_days` (1 to 30) is required only for `escalate`) or `keep` (leave the access, close the review incomplete; the
 `review.close` event records `kept`). Owners come from the ownership model (#167): the application's owner by
 the grant's system, the entitlement's by group or resource id, the machine identity's owner, the role's owner
 for memberships (a `role_owner` schedule with no roles picked reviews every active role), an organization's
@@ -1638,7 +1638,7 @@ tree stays derived from the HR data. On an organization's page: assigned owners 
 replace the derived owners while one is active, and `organization_owner` reviews go to them), a default approval
 workflow (stages and escalation, used for a request line whose catalog item has no approval policy of its own,
 for beneficiaries in the organization; a workflow from the designer, when one applies, routes first and this default is only the fallback) and request settings overrides that only tighten the tenant's
-(always require a justification, a longer minimum, a shorter default or maximum duration). On the list: the
+(always require a justification, a longer minimum, a shorter default or maximum duration). A `max_hours` above the tenant's own is refused `422 override_cannot_loosen`, like a waived justification. On the list: the
 hierarchy source, which limits the tree to people ingested from one source (`system`). Only `hr_department` is
 available as the source kind. Audit actions `org.settings.update`, `org.hierarchy_source.update`. Needs `catalog.manage`.
 
@@ -2282,6 +2282,18 @@ schema 0361 for apps, grants and sync state and 0470 for pending four-eyes revok
   delete that really deletes, and switches for refusing, ignoring a delete and failing reads); the reader,
   sync, revoke and four-eyes tests run them through a real safehttp client. The Salesforce `OauthToken`
   query is checked against the fake only, not a live org.
+- **Dev fakes in `./run.sh` (issue #417).** `./run.sh` sets `TESSERA_DEV_OAUTH_FAKE_URL`
+  (`http://127.0.0.1:<API_PORT+2000>`; `OAUTH_FAKE_PORT` changes the port, `OAUTH_FAKE=0` turns it off) and
+  `tessera serve` serves the four fakes there (`/google`, `/entra`, `/salesforce`, `/github`), preloaded with
+  a few apps and grants, among them a high-risk app held by several users (Salesloft Drift with
+  `mail.google.com` and Salesforce modify-all, Gainsight with a Graph directory write role). The seed gives
+  larkspur a connection and credential per provider pointed at them (so they also show under Admin →
+  Connections). Sign in as Pat or Ivan, open Protection → OAuth apps and press **Sync now** (or
+  `POST /api/oauth-apps/sync`): apps and grants appear, and sync, a single grant revoke (with step-up) and the
+  two-admin bulk revoke (`202 pending_second_admin`) work locally. The fakes keep state in memory, so a
+  restart restores the grants. Config refuses the setting with `TESSERA_ENV=prod`, it must be a plain
+  `http://<loopback IP>:<port>` origin, and an architecture test keeps `oauthfake` out of every package but
+  `cmd/tessera`. `./run.sh test` clears it like the fake target.
 - **Not built yet.** The apps are not yet rows of the Machine identities inventory (`/api/nhi`); a policy
   type for the flags (alerts and review campaigns) is not wired.
 
@@ -3614,17 +3626,23 @@ transaction, so a crash at any point loses nothing and the next run resumes:
    transaction's tenant). A record that changed since it was archived is
    not deleted with the stale copy; it is archived again later.
 
-**What the database boundary is, and is not (`schema/0510_archive_segment_guards.sql`, #401).** The application role
-writes `archive_segments`, so the delete guards cannot treat `status = 'verified'` as proof by itself. The schema
-closes the shortcuts: a segment can only be inserted `written` (never verified or purged), items are added to a
-segment only while it is `written` (so a verified segment never gains records), a segment of a per-record class
-cannot become verified with no items, and an audit segment cannot become verified unless the audit events at both
-ends of its range exist with its `first_hash` and `last_hash`. The audit chain, which the role cannot rewrite, is
-the independent record. A forged segment therefore unlocks no delete. What no trigger can do is prove the blob
-exists in the archive store: a caller with SQL as the application role can still catalogue a real range, verify it
-and delete it without ever storing a blob. That needs SQL access as `tessera_app` (an injection bug, not an API
-session); `audit verify` reports the lost range, and the write-once store above is what keeps honest copies safe.
-On Postgres, run the migration owner and the application as different roles (the default setup).
+**What the database boundary is, and is not (`schema/0510_archive_segment_guards.sql`, `0520_archive_verify_proof.sql`, #401).**
+The application role writes `archive_segments`, so the delete guards cannot treat `status = 'verified'` as proof by
+itself. The schema closes the shortcuts: a segment can only be inserted `written` (never verified or purged), items are
+added to a segment only while it is `written` (so a verified segment never gains records), and the `written` to
+`verified` transition recomputes what the row claims in the same statement: a per-record segment must hold exactly
+`item_count` items, and an audit segment's range must be complete (one event per seq, `item_count` of them), carry its
+`first_hash` and `last_hash` at the ends, and link event to event. The audit chain, which the role cannot rewrite, is
+the independent record. On Postgres the transition is also a privilege boundary: only `tessera_archive_mark_verified`
+(SECURITY DEFINER, owned by the migration role) can verify, and the trigger refuses `UPDATE ... SET status = 'verified'`
+from any other role, so `tessera_app` cannot verify a forged segment with plain SQL (SQLite has one role, so there the
+checks raise the cost of a forgery but are not a boundary). A forged segment therefore unlocks no delete. What no
+database check can do is prove the blob exists in the archive store: a caller with SQL as the application role can
+still insert a segment for a real range, give it the matching items, have the function verify it and delete the range
+without ever storing a blob. That needs SQL access as `tessera_app` (an injection bug, not an API session);
+`audit verify` reports the lost range, and the write-once store above is what keeps honest copies safe. A proof the
+role's SQL cannot reach (a MAC under a key kept outside the database) is the remaining step. On Postgres, run the
+migration owner and the application as different roles (the default setup).
 
 **The audit chain stays verifiable.** An audit segment records its seq range, the `prev_hash` before it and its first
 and last hash. The purge appends an `audit.archived` event to the chain naming the segment, range and hashes ("archived

@@ -273,7 +273,19 @@ func TestReviewTypesAPI(t *testing.T) {
 	put(admin, "application_owner", strings.Replace(body(0, ""), `"revoke"`, `"escalate"`, 1), 422) // needs a fallback
 	put(admin, "application_owner", strings.Replace(body(0, ""), `"revoke"`, `"ignore"`, 1), 422)   // unknown outcome
 	put(admin, "application_owner", body(0, `,"fallback_reviewer_id":999999`), 422)                 // unknown person
-	put(admin, "application_owner", strings.Replace(body(0, ""), `"escalation_days":7`, `"escalation_days":0`, 1), 422)
+	put(admin, "application_owner", strings.Replace(body(0, ""), `"escalation_days":7`, `"escalation_days":31`, 1), 422)
+	// escalation_days matters only when an incomplete review escalates
+	noDays := func(ver int, outcome string) string {
+		return fmt.Sprintf(`{"version":%d,"enabled":true,"reviewer_source":"owner","on_incomplete":%q}`, ver, outcome)
+	}
+	fb := fmt.Sprintf(`,"fallback_reviewer_id":%d}`, carol)
+	put(admin, "application_owner", strings.TrimSuffix(noDays(0, "escalate"), "}")+fb, 422)                        // escalate: days required
+	put(admin, "application_owner", strings.TrimSuffix(noDays(0, "escalate"), "}")+`,"escalation_days":0`+fb, 422) // and in range
+	for i, outcome := range []string{"keep", "revoke"} {
+		if got := put(admin, "user_manager", noDays(i, outcome), 200); got["on_incomplete"] != outcome {
+			t.Errorf("%s without escalation_days: %v", outcome, got)
+		}
+	}
 	put(admin, "application_owner", body(2, ""), 409)
 	got := put(admin, "application_owner", strings.Replace(body(0, fmt.Sprintf(`,"fallback_reviewer_id":%d`, carol)), `"revoke"`, `"escalate"`, 1), 200)
 	if got["on_incomplete"] != "escalate" || got["fallback_reviewer_person"] == nil || got["version"].(float64) != 1 {
@@ -362,6 +374,12 @@ func TestOrgSettingsAPI(t *testing.T) {
 	if got["version"].(float64) != 1 || len(got["owners"].([]any)) != 1 {
 		t.Errorf("saved: %v", got)
 	}
+	// an override only tightens: a maximum above the tenant's own is refused like a waived justification
+	e.call(admin, "PUT", "/api/request-settings", `{"version":0,"justification_required":true,"justification_min_length":1,"attachments_allowed":false,"history_visibility":"readers","for_others":"permission","max_hours":24}`, 200)
+	put(admin, `{"version":1,"owner_ids":[],"policies":{"max_hours":25}}`, 422)
+	put(admin, `{"version":1,"owner_ids":[],"policies":{"max_hours":24}}`, 200)
+	put(admin, `{"version":2,"owner_ids":[],"policies":{"max_hours":8}}`, 200)
+	put(admin, fmt.Sprintf(`{"version":3,"owner_ids":[%d],"policies":{"default_stages":["manager","decider"],"justification_min_length":40,"max_hours":8}}`, carol), 200)
 	if d := e.call(alice, "GET", "/api/orgs/"+org, "", 200); d["owners_source"] != "assigned" || d["owners"].([]any)[0].(map[string]any)["id"].(float64) != float64(carol) {
 		t.Errorf("assigned owner not shown: %v %v", d["owners_source"], d["owners"])
 	}
@@ -383,7 +401,7 @@ func TestOrgSettingsAPI(t *testing.T) {
 	}
 
 	// clearing returns to the tenant's own settings
-	put(admin, `{"version":1,"owner_ids":[],"policies":{}}`, 200)
+	put(admin, `{"version":4,"owner_ids":[],"policies":{}}`, 200)
 	submit(`"justification":"for the Atlas project","duration_hours":12`, 409) // past the justification and duration checks: only the open duplicate refuses it
 	if d := e.call(alice, "GET", "/api/orgs/"+org, "", 200); d["owners_source"] != "derived" {
 		t.Errorf("after clearing: %v", d["owners_source"])
