@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/ecdh"
 	"errors"
 	"log/slog"
 	"sync"
@@ -16,6 +17,11 @@ type Runner struct {
 	Exec      *Executor
 	Telemetry Telemetry
 	Log       *slog.Logger
+
+	// SealKey is the agent's private sealing key; its public half is registered
+	// with Tessera so that a server-held credential can be sealed to this agent
+	// (push.go). Nil: the agent registers none and cannot take a sealed credential.
+	SealKey *ecdh.PrivateKey
 
 	HeartbeatEvery time.Duration // default 30 s
 	MaxParallel    int           // default 2
@@ -53,12 +59,23 @@ func (r *Runner) Run(ctx context.Context) error {
 		defer wg.Done()
 		t := time.NewTicker(r.HeartbeatEvery)
 		defer t.Stop()
+		var keyAt time.Time
 		for {
 			if err := r.Client.Heartbeat(ctx, r.Telemetry); err != nil && ctx.Err() == nil {
 				if refused(err) {
 					return
 				}
 				r.Log.Warn("heartbeat failed", "err", err)
+			} else if err == nil && r.SealKey != nil && time.Since(keyAt) > sealKeyRefresh {
+				// idempotent: the same key changes nothing on the server, and a restored database
+				// that lost it gets it back within the refresh period
+				if _, err := r.Client.RegisterSealKey(ctx, r.SealKey.PublicKey().Bytes()); err != nil {
+					if ctx.Err() == nil && !refused(err) {
+						r.Log.Warn("registering the sealing key failed", "err", err)
+					}
+				} else {
+					keyAt = time.Now()
+				}
 			}
 			select {
 			case <-ctx.Done():
@@ -68,13 +85,13 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 	}()
 
-	if r.Exec.NewSyncer != nil {
-		wg.Add(1)
-		go func() { // pulled syncs, one at a time
-			defer wg.Done()
-			r.pullLoop(ctx, refused)
-		}()
-	}
+	// pulled jobs (syncs, provisioning pushes), one at a time. An agent that cannot run a kind
+	// answers it "unsupported" or "target_not_allowed" at once rather than let its lease run out.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r.pullLoop(ctx, refused)
+	}()
 
 	sem := make(chan struct{}, r.MaxParallel)
 	backoff := time.Second
@@ -123,7 +140,10 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 }
 
-// pullLoop long-polls PathClaim, runs each pulled sync and reports it. It is
+// sealKeyRefresh is how often the agent registers its sealing key again.
+const sealKeyRefresh = 6 * time.Hour
+
+// pullLoop long-polls PathClaim, runs each pulled job and reports it. It is
 // outbound only, like the probe poll, and runs one sync at a time (a sync reads
 // a whole directory).
 func (r *Runner) pullLoop(ctx context.Context, refused func(error) bool) {
@@ -150,7 +170,7 @@ func (r *Runner) pullLoop(ctx context.Context, refused func(error) bool) {
 		if j == nil {
 			continue
 		}
-		res := r.Exec.ExecuteSync(ctx, *j)
+		res := r.Exec.ExecutePulled(ctx, *j)
 		if err := r.Client.Report(ctx, res); err != nil && ctx.Err() == nil {
 			if !refused(err) {
 				// the lease expires and the job is claimed again

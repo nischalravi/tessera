@@ -104,6 +104,11 @@ POST   /api/audit/verify                             audit.verify    -
 GET    /api/audit/export                             audit.read      -
 GET    /api/admin/retention                          admin.read      -  # issue #298
 GET    /api/admin/archive/segments                   audit.read      -  # issue #298
+GET    /api/admin/deletion-guard                     admin.read      -  # deletion threshold guard
+GET    /api/admin/deletion-holds                     admin.read      -  # deletion threshold guard
+GET    /api/admin/deletion-holds/{id}                admin.read      -  # deletion threshold guard
+POST   /api/admin/deletion-holds/{id}/approve        admin.change.approve STEP_UP_ADMIN  # deletion threshold guard
+POST   /api/admin/deletion-holds/{id}/discard        admin.change.approve STEP_UP_ADMIN  # deletion threshold guard
 GET    /api/oauth-apps                               graph.read      -  # issue #107
 GET    /api/oauth-apps/{app_id}                      graph.read      -  # issue #107
 POST   /api/oauth-apps/sync                          oauthapps.manage -  # issue #107
@@ -111,6 +116,13 @@ PUT    /api/oauth-apps/{app_id}/owner                oauthapps.manage -  # issue
 POST   /api/oauth-apps/revoke-vendor                 oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/oauth-apps/{app_id}/revoke               oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/oauth-apps/{app_id}/grants/{grant_id}/revoke oauthapps.revoke STEP_UP_POLICY  # issue #107
+GET    /api/vms/sources                              connections.read -  # issue #304
+POST   /api/vms/sources                              connections.manage -  # issue #304
+PUT    /api/vms/sources/{source_id}                  connections.manage -  # issue #304
+DELETE /api/vms/sources/{source_id}                  connections.manage -  # issue #304
+POST   /api/vms/sync                                 lifecycle.manage -  # issue #304
+POST   /api/vms/sources/{source_id}/import           lifecycle.manage -  # issue #304
+GET    /api/vms/records                              connections.read -  # issue #304
 POST   /api/admin/archive/segments/{segment_id}/verify audit.verify  -  # issue #298
 GET    /api/admin/archive/segments/{segment_id}/export audit.read    STEP_UP_ADMIN  # issue #298
 GET    /api/readiness/templates                      connections.read   -
@@ -495,6 +507,7 @@ POST   /api/groups/folders                           groups.write    -  # issue 
 GET    /api/groups/folders/{id}                      groups.read     -  # issue #44, #47: stem_view
 PATCH  /api/groups/folders/{id}                      groups.write    -  # issue #44, #47: stem_admin
 DELETE /api/groups/folders/{id}                      groups.write    -  # issue #44, #47: stem_admin
+GET    /api/groups/folders/{id}/delete-plan          groups.read     -  # what a recursive delete removes: stem_admin
 POST   /api/groups/folders/{id}/move                 groups.write    -  # issue #44, #47: stem_admin, create on the destination
 POST   /api/groups/folders/{id}/copy                 groups.write    -  # issue #44, #47: stem_admin, create on the destination
 GET    /api/groups/native                            groups.read     -  # issue #44, #47: the groups the caller may view
@@ -505,6 +518,7 @@ DELETE /api/groups/{id}                              groups.write    -  # issue 
 POST   /api/groups/{id}/move                         groups.write    -  # issue #44, #47: admin, create on the destination
 POST   /api/groups/{id}/copy                         groups.write    -  # issue #44, #47: read, create on the destination
 POST   /api/groups/{id}/restore                      groups.write    -  # issue #44, #47: admin
+POST   /api/groups/{id}/purge                        groups.write    -  # a deleted group, for good: admin
 GET    /api/groups/{id}/members                      groups.read     -  # issue #45, #47: read
 POST   /api/groups/{id}/members                      groups.write    -  # issue #45, #47: update, or optin for oneself
 GET    /api/groups/{id}/members/{member}             groups.read     -  # issue #45, #47: read

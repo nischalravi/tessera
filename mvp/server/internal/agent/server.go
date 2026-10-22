@@ -48,6 +48,7 @@ func (s *Service) Handler(pollWait time.Duration) http.Handler {
 		s.handleClaim(w, r, p, pollWait)
 	}))
 	mux.HandleFunc("POST "+PathReport, s.authed(s.handleReport))
+	mux.HandleFunc("POST "+PathSealKey, s.authed(s.handleSealKey))
 	return noStore(mux)
 }
 
@@ -241,5 +242,24 @@ func (s *Service) handleReport(w http.ResponseWriter, r *http.Request, p *Princi
 		writeErr(w, http.StatusInternalServerError, "internal")
 	default:
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+func (s *Service) handleSealKey(w http.ResponseWriter, r *http.Request, p *Principal) {
+	var req SealKeyRequest
+	if !decode(w, r, MaxRequestBytes, &req) {
+		return
+	}
+	switch id, err := s.RegisterSealKey(r.Context(), p, req); {
+	case errors.Is(err, ErrProtocol):
+		writeErr(w, http.StatusUpgradeRequired, "unsupported_protocol")
+	case errors.Is(err, ErrUnauthorized):
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+	case errors.Is(err, ErrBadInput):
+		writeErr(w, http.StatusBadRequest, "invalid_body")
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "internal")
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key_id": id})
 	}
 }

@@ -88,6 +88,8 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"any CORS origin in prod", []string{"TESSERA_CORS_ORIGINS", "https://other.example.com"}, "TESSERA_CORS_ORIGINS must be empty"},
 		{"same-origin CORS origin in prod", []string{"TESSERA_CORS_ORIGINS", "https://tessera.example.com"}, "TESSERA_CORS_ORIGINS must be empty"},
 		{"frozen clock", []string{"TESSERA_NOW", "2026-01-01T00:00:00Z"}, "TESSERA_NOW must not be set"},
+		{"auth burst over the prod cap", []string{"TESSERA_AUTH_RATE_BURST", "5000"}, "TESSERA_AUTH_RATE_BURST must be at most 300"},
+		{"anonymous burst over the prod cap", []string{"TESSERA_ANON_RATE_BURST", "5000"}, "TESSERA_ANON_RATE_BURST must be at most 2000"},
 		{"trusted proxies 0.0.0.0/0", []string{"TESSERA_TRUSTED_PROXIES", "0.0.0.0/0"}, "trusts every address"},
 		{"trusted proxies ::/0", []string{"TESSERA_TRUSTED_PROXIES", "10.0.0.0/8,::/0"}, "trusts every address"},
 		{"trusted proxies broader than /8", []string{"TESSERA_TRUSTED_PROXIES", "10.0.0.0/7"}, "broader than /8"},

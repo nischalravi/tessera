@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -31,6 +32,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/condaccess"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
@@ -69,6 +71,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/internal/transport"
+	"github.com/nischalravi/tessera/mvp/server/internal/vms"
 	"github.com/nischalravi/tessera/mvp/server/internal/worker"
 )
 
@@ -242,6 +245,13 @@ type Config struct {
 	// file sources of group loaders, with a subdirectory <tenant id>/ per tenant
 	// (a loader reads only its own tenant's). Empty: file sources are off.
 	LoaderDataDir string
+	// LoaderHTTP is the larger-body, longer-timeout guarded client of loader sources that read an
+	// HTTP API (SCIM, a CSV URL); nil uses OutboundHTTP. LoaderPGDial is the address-checked dialer
+	// of Postgres sources and LoaderDirectory the opener of LDAP connections (loaders.NewDirectoryOpener);
+	// nil turns those sources off.
+	LoaderHTTP      *http.Client
+	LoaderPGDial    func(ctx context.Context, network, addr string) (net.Conn, error)
+	LoaderDirectory loaders.DirectoryOpener
 	// Provisioning is the group provisioning service (issue #54): the same one
 	// the background runner uses. Nil: a service with no outbound clients, which
 	// can still hold provisioners but cannot reach a target.
@@ -306,6 +316,7 @@ type Server struct {
 	containment *containment.Service
 	// oauthapps is the third-party OAuth app inventory (issue #107); never nil.
 	oauthapps *oauthapps.Service
+	vms       *vms.Service
 	// mcp is the MCP authorization server (issue #115); never nil.
 	mcp *mcpauth.Service
 	// ssf is the Shared Signals receiver (issue #114); never nil.
@@ -410,12 +421,15 @@ func New(cfg Config) *Server {
 		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal, archive: cfg.Archive,
 		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.oauthapps = &oauthapps.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
+	s.vms = &vms.Service{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound, Keyer: cfg.Identifiers,
+		RT: connsync.Runtime{Env: cfg.Env, AllowLoopback: cfg.Env == config.Dev}, Clock: func() time.Time { return s.clock() }}
 	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
 		PolicyVersion: s.policyVersion}
 	// every in-process call to a customer's system runs under the per-connection limits and breaker
 	s.guard = &worker.Guard{DB: cfg.Store, Clock: func() time.Time { return s.clock() }}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
-		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning"), Guard: s.guard}
+		Runtime: connsync.Runtime{Env: cfg.Env, AllowLoopback: cfg.Env == config.Dev},
+		Clock:   func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning"), Guard: s.guard}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
 	if cfg.RPID != "" && cfg.PublicOrigin != "" {
@@ -448,8 +462,13 @@ func New(cfg Config) *Server {
 	}
 	s.guestLife = guestlife.New(s.guests)
 	s.guestLife.Secrets, s.guestLife.BaseURL, s.guestLife.TenantName = cfg.Secrets, cfg.PublicURL, s.tenantName
+	loaderHTTP := cfg.LoaderHTTP
+	if loaderHTTP == nil {
+		loaderHTTP = cfg.OutboundHTTP
+	}
 	s.loaders = &loaders.Service{DB: cfg.Store, Engine: cfg.GroupsEngine, Clock: func() time.Time { return s.clock() },
-		Sealer: cfg.Sealer, HTTP: cfg.OutboundHTTP, DataDir: cfg.LoaderDataDir, Log: cfg.Logger}
+		Sealer: cfg.Sealer, HTTP: loaderHTTP, DataDir: cfg.LoaderDataDir, Prod: cfg.Env == config.Prod, PGDial: cfg.LoaderPGDial,
+		Directory: cfg.LoaderDirectory, Log: cfg.Logger}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -483,10 +502,12 @@ func New(cfg Config) *Server {
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerArchiveRoutes()
+	s.registerDeletionGuardRoutes()
 	s.registerOAuthAppsRoutes()
 	s.registerSiemRoutes()
 	s.registerCertificateRoutes()
 	s.registerBrandingRoutes()
+	s.registerVmsRoutes()
 	s.registerIdentityRulesRoutes()
 	s.registerAlertRoutes()
 	s.registerOwnershipRoutes()

@@ -89,13 +89,18 @@ func ingestResults(tx *store.TenantTx, now time.Time, results []*connectors.Disc
 	if err != nil {
 		return nil, err
 	}
-	if err := tx.Audit(now, actor, "connectors.sync", stats.Object()); err != nil {
+	out := stats.Object()
+	if stats.HeldIdentities+stats.HeldAccounts > 0 {
+		// the deletion guard held status changes the sources reported (Admin → Held deletions)
+		out = append(out, ojson.KV{Key: "held_identities", Value: stats.HeldIdentities}, ojson.KV{Key: "held_accounts", Value: stats.HeldAccounts})
+	}
+	if err := tx.Audit(now, actor, "connectors.sync", out); err != nil {
 		return nil, err
 	}
 	if _, err := reconcile.RunDrift(tx, now, actor); err != nil {
 		return nil, err
 	}
-	return stats.Object(), nil
+	return out, nil
 }
 
 // syncTenant is RunSync for a worker. The sources are read with no transaction

@@ -47,7 +47,10 @@ export const RAIL: RailGroup[] = [
       { id: "machine", label: "Machine identities & agents", icon: Bot, path: "/directory/machine", keywords: "nhi service accounts api keys ai agents bots secrets" },
       {
         id: "groups", label: "Groups", icon: UsersRound, path: "/directory/groups", also: ["/directory/entitlements"], keywords: "okta groups teams",
-        pages: [{ path: "/directory/entitlements", label: "Entitlements", keywords: "groups permissions aws roles snowflake okta" }],
+        pages: [
+          { path: "/directory/entitlements", label: "Entitlements", keywords: "groups permissions aws roles snowflake okta" },
+          { path: "/directory/groups/loaders", label: "Group loaders", keywords: "membership sources loader sync sql csv scim ldap provisioning automatic members grouper schedule failsafe held" },
+        ],
       },
       {
         id: "rotation", label: "Secret rotation", icon: RotateCw, path: "/rotation/secrets", also: ["/rotation"], keywords: "credentials vault rotate keys tokens api keys aws iam secrets manager hashicorp github deploy key vendor compromised breach",
@@ -127,6 +130,8 @@ export const RAIL: RailGroup[] = [
         id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/shared-signals", "/admin/flat-files", "/admin/conditional-access"], keywords: "settings configuration audit jobs",
         pages: [{ path: "/admin/guests", label: "Guests and external identities", keywords: "guest settings matching lifecycle terms sponsor codes populations recovery cases sponsor policy" },
           { path: "/admin/retention", label: "Retention", keywords: "log retention audit events campaigns requests job runs outbox keep online days minimum floor archive two admins" },
+          { path: "/admin/deletion-guard", label: "Deletion guard", keywords: "deletion threshold window safety net mass delete hold excess limit count percent groups folders members accounts identities loader connector mistake two admins" },
+          { path: "/admin/held-deletions", label: "Held deletions", keywords: "held deletions approve release discard partial threshold second admin expire alert" },
           { path: "/admin/archive", label: "Archive", keywords: "archive segments sealed verify export restore read-only retention audit hash chain" },
           { path: "/admin/event-sinks", label: "Group event sinks", keywords: "streaming sqs sns rabbitmq kafka cloudevents queue topic dead letter outbox" },
           { path: "/admin/step-up", label: "Step-up per action", keywords: "step-up assurance phishing-resistant fresh sign-in sensitive actions floor max age acr multi-factor" },

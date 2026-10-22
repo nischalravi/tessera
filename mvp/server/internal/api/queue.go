@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -88,6 +89,7 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.CertificateExpiry, queue.Kind{Handler: s.queueCertificateExpiry, Actor: "certificate.sweeper"})
 	q.Register(jobs.ArchiveSweep, queue.Kind{Handler: s.queueArchive, Actor: archive.Actor})
 	q.Register(jobs.OAuthSync, queue.Kind{Handler: s.queueOAuthSync, Actor: oauthSyncActor})
+	q.Register(jobs.VmsSync, queue.Kind{Handler: s.queueVmsSync, Actor: vmsSyncActor})
 	// The worker kinds (issue #302): run here unless a `tessera worker` is
 	// meant to. provision_push is not registered here: the process keeps the
 	// provisioning loop (RunProvisioning), which the serve wiring skips when
@@ -106,6 +108,7 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Schedule(jobs.CertificateExpiry, jobs.CertificateExpiry, certificateExpirySchedule, maxSweepAttempts)
 	q.Schedule(jobs.ArchiveSweep, jobs.ArchiveSweep, "@every "+archiveEvery.String(), maxArchiveAttempts)
 	q.Schedule(jobs.OAuthSync, jobs.OAuthSync, "@every "+oauthSyncEvery.String(), maxOAuthSyncAttempts)
+	q.Schedule(jobs.VmsSync, jobs.VmsSync, "@every "+vmsSyncEvery.String(), maxVmsSyncAttempts)
 	return q
 }
 
@@ -219,8 +222,16 @@ func (s *Server) queueLifecycleSweep(ctx context.Context, j queue.Job) (any, err
 // queueAdminSweep applies the admin changes whose cooling-off ended and
 // expires the ones nobody approved in 72 hours (design §15.2).
 func (s *Server) queueAdminSweep(ctx context.Context, j queue.Job) (any, error) {
-	_, err := s.admin.SweepTenant(audit.WithSystemActor(ctx, "admin.sweeper"), j.Tenant)
-	return nil, err
+	ctx = audit.WithSystemActor(ctx, "admin.sweeper")
+	if _, err := s.admin.SweepTenant(ctx, j.Tenant); err != nil {
+		return nil, err
+	}
+	// held deletions that waited past their expiry are discarded (internal/deleteguard)
+	now := s.clock()
+	return nil, s.store.InTenant(ctx, j.Tenant, func(tx *store.TenantTx) error {
+		_, err := deleteguard.ExpireDue(tx, now)
+		return err
+	})
 }
 
 // queueContainmentRetries re-runs the containment retry tasks that are due.

@@ -830,6 +830,12 @@ func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identit
 		id, _ := stepInt(st, "account_id")
 		var routed bool
 		if routed, err = routeDisable(c, now, id, stepKey(base, idx, "disable_account")); err == nil && !routed {
+			// no connector to route to: the account is disabled here, through the deletion guard (a routed
+			// disable is vetted when it is queued, internal/provision)
+			var held bool
+			if held, err = guardAccountDisable(c, now, id); err != nil || held {
+				return err
+			}
 			if err = c.DisableAccount(id); err == nil {
 				// an app with no connector cannot be disabled from here: a manual task (issue #105)
 				err = flatfile.AccountDisabled(c, now, by, id, "leaver")
@@ -1096,14 +1102,26 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		if err != nil {
 			return nil, err
 		}
-		for i, st := range steps {
-			if err := applyStep(c, now, by.Display, ident, st, eventBase(ev.ID), i, &o); err != nil {
+		// the deletion guard (internal/deleteguard): a feed that ends more people than the identities
+		// threshold allows has the rest held; the identity stays as it is until a second admin releases it
+		heldLeaver := false
+		if ev.Type == "leaver" && ident.Status == "active" {
+			if heldLeaver, err = guardLeaver(c, now, ident); err != nil {
 				return nil, err
+			}
+		}
+		if !heldLeaver {
+			for i, st := range steps {
+				if err := applyStep(c, now, by.Display, ident, st, eventBase(ev.ID), i, &o); err != nil {
+					return nil, err
+				}
 			}
 		}
 		switch ev.Type {
 		case "leaver":
-			err = c.TerminateIdentity(ident.ID, now)
+			if !heldLeaver {
+				err = c.TerminateIdentity(ident.ID, now)
+			}
 		case "mover":
 			dept, title := ident.Department, ident.Title
 			if v, ok := ev.Payload.Get("to_department"); ok {
@@ -1212,6 +1230,14 @@ func ExecuteLeaver(c *store.TenantTx, now time.Time, identityID int64) (Plan, er
 	ident, err := c.Identity(identityID)
 	if err != nil {
 		return nil, err
+	}
+	if ident.Status == "active" {
+		if held, err := guardLeaver(c, now, ident); err != nil {
+			return nil, err
+		} else if held {
+			// held by the deletion guard: nothing is applied and the identity stays active until released
+			return Plan{{Key: "held", Value: true}}, nil
+		}
 	}
 	steps, _ := getAny(plan, "steps").([]Step)
 	for i, st := range steps {

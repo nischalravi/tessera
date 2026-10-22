@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"time"
 
@@ -28,8 +29,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
-// Loader types (design §9.1). The types after TypeRecent are designed but not
-// built yet: they need a dependency (LDAP, SSH) that was not added with GR-10,
+// Loader types (design §9.1). ldap_attribute, sftp_csv and hris_sis_feed are
+// designed but not built yet (they need an SSH library or the HR connectors)
 // and are refused with ErrTypeUnavailable.
 const (
 	TypeSQLSimple       = "sql_simple"
@@ -38,20 +39,36 @@ const (
 	TypeConnectorGroups = "connector_groups"
 	TypeAttribute       = "attribute"
 	TypeRecent          = "recent_memberships"
+	TypeSCIM            = "scim"
+	TypeLDAPSimple      = "ldap_simple"
+	TypeLDAPGroupList   = "ldap_group_list"
 )
 
 // unavailableTypes are the designed types that are not built.
-var unavailableTypes = map[string]bool{"ldap_simple": true, "ldap_group_list": true, "ldap_attribute": true,
-	"sftp_csv": true, "hris_sis_feed": true}
+var unavailableTypes = map[string]bool{"ldap_attribute": true, "sftp_csv": true, "hris_sis_feed": true}
 
 // Types lists the loader types that can be configured.
 func Types() []string {
-	return []string{TypeSQLSimple, TypeSQLGroupList, TypeCSV, TypeConnectorGroups, TypeAttribute, TypeRecent}
+	return []string{TypeSQLSimple, TypeSQLGroupList, TypeCSV, TypeConnectorGroups, TypeAttribute, TypeRecent, TypeSCIM, TypeLDAPSimple, TypeLDAPGroupList}
 }
 
-// IsSQL reports whether a loader of the type runs a query a person wrote: its
-// creation and every change need a second approver (GRP-6311).
+// IsSQL reports whether a loader of the type runs a query a person wrote, on a
+// database file or on a Postgres server: its creation and every change need a
+// second approver (GRP-6311).
 func IsSQL(typ string) bool { return typ == TypeSQLSimple || typ == TypeSQLGroupList }
+
+// NeedsSecondApprover reports whether creating a loader of the type, and every
+// change of its definition or credential, needs a second administrator
+// (GRP-6311): a loader that runs a query a person wrote (SQL, on a file or a
+// Postgres server) or that reads a directory or a provider with a credential
+// (SCIM, LDAP). Turning it off, running it and previewing it do not.
+func NeedsSecondApprover(typ string) bool {
+	switch typ {
+	case TypeSQLSimple, TypeSQLGroupList, TypeSCIM, TypeLDAPSimple, TypeLDAPGroupList:
+		return true
+	}
+	return false
+}
 
 // SubjectRef names a person in a source: Source is "identity" (an identity's
 // external id, also the empty source), "email", "tessera_id", the system of a
@@ -81,13 +98,22 @@ type GroupChange struct {
 // Env is what a source may use: the database for the sources that read
 // Tessera's own data (they open their own read-only transactions: no
 // transaction is open while a source runs), the clock, the directory the SQL
-// and CSV files must be under and the SSRF-guarded HTTP client.
+// and CSV files must be under, the SSRF-guarded HTTP client, the guarded
+// dialer of Postgres sources and the opener of directory connections.
 type Env struct {
 	DB      *store.DB
 	Tenant  tenancy.ID
 	Now     time.Time
 	DataDir string
 	HTTP    *http.Client
+	// Prod: production refuses weaker settings (a Postgres source that is not
+	// sslmode=verify-full).
+	Prod bool
+	// PGDial is the address-checked dialer of Postgres sources; nil turns them
+	// off. Directory opens LDAP connections through safedial; nil turns LDAP
+	// sources off.
+	PGDial    func(ctx context.Context, network, addr string) (net.Conn, error)
+	Directory DirectoryOpener
 }
 
 // SourceStats are what a source reports about what it read.
@@ -139,6 +165,10 @@ func SourceFor(typ string) (GroupSource, error) {
 		return attributeSource{}, nil
 	case TypeRecent:
 		return recentSource{}, nil
+	case TypeSCIM:
+		return scimSource{}, nil
+	case TypeLDAPSimple, TypeLDAPGroupList:
+		return ldapSource{}, nil
 	}
 	if unavailableTypes[typ] {
 		return nil, ErrTypeUnavailable

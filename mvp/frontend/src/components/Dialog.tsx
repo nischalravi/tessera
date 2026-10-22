@@ -12,6 +12,8 @@ export interface ConfirmOptions {
   reason?: { label: string; required?: boolean; placeholder?: string; /** the API's minimum, so confirm waits for it */ minLength?: number };
   /** Ask the user to pick one option (radio group); the first is preselected. */
   choice?: { label: string; options: { value: string; label: string; hint?: string }[] };
+  /** Ask the user to type this phrase (an object's name) before confirm enables, for what cannot be undone. */
+  typeToConfirm?: string;
 }
 
 /** Resolves to the entered reason ("" when none was asked) on confirm, or null on cancel. */
@@ -29,8 +31,9 @@ function ConfirmDialog({ o, done }: { o: ConfirmOptions; done: (v: { reason: str
   const id = useId();
   const [reason, setReason] = useState("");
   const [choice, setChoice] = useState(o.choice?.options[0]?.value ?? "");
+  const [typed, setTyped] = useState("");
   useModal(ref, () => done(null));
-  const blocked = !!o.reason?.required && reason.trim().length < (o.reason.minLength ?? 1);
+  const blocked = (!!o.reason?.required && reason.trim().length < (o.reason.minLength ?? 1)) || (!!o.typeToConfirm && typed.trim() !== o.typeToConfirm);
   return (
     <div className="dialog-wrap">
       <div className="overlay" onClick={() => done(null)} aria-hidden />
@@ -55,6 +58,12 @@ function ConfirmDialog({ o, done }: { o: ConfirmOptions; done: (v: { reason: str
                 ))}
               </fieldset>
             )}
+            {o.typeToConfirm && (
+              <label className="field mt">
+                <span>Type <strong className="sys">{o.typeToConfirm}</strong> to confirm</span>
+                <input className="input" data-autofocus value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" autoCapitalize="off" spellCheck={false} />
+              </label>
+            )}
             {o.reason && (
               <label className="field mt">
                 {o.reason.label}
@@ -65,7 +74,7 @@ function ConfirmDialog({ o, done }: { o: ConfirmOptions; done: (v: { reason: str
           </div>
           <div className="dlg-f">
             <Button onClick={() => done(null)}>Cancel</Button>
-            <Button type="submit" variant={o.danger ? "danger-solid" : "primary"} disabled={blocked} data-autofocus={o.reason ? undefined : true}>
+            <Button type="submit" variant={o.danger ? "danger-solid" : "primary"} disabled={blocked} data-autofocus={o.reason || o.typeToConfirm ? undefined : true}>
               {o.confirmLabel ?? "Confirm"}
             </Button>
           </div>

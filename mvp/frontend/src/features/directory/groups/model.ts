@@ -3,7 +3,7 @@
  * the folder tree, dates, the change preview text, the history diff, the application template.
  * Types come from `src/api.ts`; nothing here decides access (the server does, per request).
  */
-import type { GrpFolder, GrpGroup, GrpPrivGrant, PitMember, SimChange, SimulationResult, BatchAdd } from "../../../api";
+import type { BatchAdd, GrpDeletePlan, GrpFolder, GrpGroup, GrpPrivGrant, GrpTreeDeleted, GrpTreeHeld, GrpTreePending, PitMember, SimChange, SimulationResult } from "../../../api";
 
 // ------------------------------------------------------------ names
 
@@ -384,7 +384,7 @@ export function deleteBody(p: Pick<DeletePlan, "groups" | "folders" | "skipped">
   const rules = [
     p.folders.length ? "Only an empty folder can be deleted; a folder that still holds something is left in place." : "",
     p.groups.length ? "A deleted group stops counting its members and can be restored afterwards." : "",
-    p.skipped.length ? `${plural(p.skipped.length, "item")} managed elsewhere will be skipped.` : "",
+    p.skipped.length ? `${plural(p.skipped.length, "item")} already deleted or managed elsewhere will be skipped.` : "",
   ];
   return rules.filter(Boolean).join(" ");
 }
@@ -392,4 +392,99 @@ export function deleteBody(p: Pick<DeletePlan, "groups" | "folders" | "skipped">
 /** One toast line for the failures, e.g. "TEST: folder is not empty; G: not found". */
 export function failureSummary(failed: { name: string; message: string }[]): string {
   return failed.map((f) => `${f.name}: ${f.message}`).join("; ");
+}
+
+// ------------------------------------------------------------ restoring, purging and deleting a tree
+
+type PickedRow = { kind: "folder"; f: GrpFolder } | { kind: "group"; g: GrpGroup };
+
+/** Deleted groups the UI manages (the only ones that can be restored or purged); everything else is left alone. */
+export function planDeleted(picked: PickedRow[]): { groups: GrpGroup[]; skipped: string[] } {
+  const plan = { groups: [] as GrpGroup[], skipped: [] as string[] };
+  for (const r of picked) {
+    if (r.kind === "group" && r.g.status === "deleted" && r.g.managed_by === "ui") plan.groups.push(r.g);
+    else plan.skipped.push(r.kind === "folder" ? r.f.name : r.g.name);
+  }
+  return plan;
+}
+
+/** "Delete 2 groups permanently?" */
+export const purgeTitle = (n: number) => `Delete ${plural(n, "group")} permanently?`;
+
+/** What a purge does and cannot undo, for the confirm dialog. */
+export function purgeBody(n: number, skipped: string[]): string {
+  const rules = [
+    `${n === 1 ? "The group and its" : "The groups and their"} memberships, privileges, rules and attributes are removed for good and cannot be restored. The audit history stays.`,
+    "A group that another group still uses as a member or factor is left in place.",
+    skipped.length ? `${plural(skipped.length, "item")} that ${skipped.length === 1 ? "is" : "are"} not deleted, or managed elsewhere, will be skipped.` : "",
+  ];
+  return rules.filter(Boolean).join(" ");
+}
+
+/** The plain-words list of what a folder delete removes, for the confirm dialog. */
+export function treeSummary(p: GrpDeletePlan): string[] {
+  const lines = [
+    p.folders ? `${plural(p.folders, "subfolder")} below it` : "",
+    p.groups ? `${plural(p.groups, "group")}${p.deleted_groups ? ` (${p.deleted_groups} already deleted)` : ""}` : "",
+    p.attr_defs ? plural(p.attr_defs, "attribute definition") : "",
+    p.memberships ? `${plural(p.memberships, "membership")} in ${plural(p.groups_with_members, "group")}, which stop${p.memberships === 1 ? "s" : ""} giving access` : "",
+  ];
+  return lines.filter(Boolean);
+}
+
+/** The blockers as short lines, capped, for the dialog and the toast. */
+export function blockerLines(blockers: { reason: string }[], max = 5): string[] {
+  const lines = blockers.slice(0, max).map((b) => b.reason);
+  if (blockers.length > max) lines.push(`and ${blockers.length - max} more`);
+  return lines;
+}
+
+/** What to tell the person after a folder tree delete: done, or a request waiting for a second admin. */
+export function treeOutcome(name: string, res: GrpTreeDeleted | GrpTreePending | GrpTreeHeld): { requested: boolean; message: string } {
+  if ("hold_id" in res) return { requested: true, message: res.message };
+  if ("status" in res) {
+    return { requested: true, message: `Nothing is deleted yet. A request to delete ${name} and everything in it was created: a second admin must approve it under Admin → Change requests${res.reason ? ` (${res.reason})` : ""}.` };
+  }
+  const bits = [plural(res.folders, "folder"), plural(res.groups, "group")];
+  if (res.attr_defs) bits.push(plural(res.attr_defs, "attribute definition"));
+  return { requested: false, message: `Deleted ${name} and everything in it: ${bits.join(", ")}.` };
+}
+
+/** True when a folder delete failed because the folder still holds something (so deleting its tree can be offered). */
+export const isNotEmpty = (code: string | null | undefined) => code === "folder_not_empty";
+
+/**
+ * A failure in plain words, naming what blocked and why. `code` and `body` are the API's error code and JSON
+ * body (ApiError.code, ApiError.body); `message` is the fallback.
+ */
+export function plainReason(code: string | null | undefined, message: string, body?: any): string {
+  const n = (k: string): number => (typeof body?.[k] === "number" ? body[k] : 0);
+  switch (code) {
+    case "folder_not_empty": {
+      const parts = [n("folders") && plural(n("folders"), "subfolder"), n("groups") && `${plural(n("groups"), "group")}${n("deleted_groups") ? ` (${n("deleted_groups")} deleted)` : ""}`,
+        n("attr_defs") && plural(n("attr_defs"), "attribute definition")].filter(Boolean);
+      return `it still holds ${parts.join(", ") || "something"}${n("deleted_groups") ? "; restore or purge the deleted groups, or delete the folder with everything in it" : "; delete the folder with everything in it to remove them too"}`;
+    }
+    case "group_in_use": {
+      const names: string[] = Array.isArray(body?.groups) ? body.groups : [];
+      return `${names.length ? names.join(", ") : "another group"} still ${names.length === 1 ? "uses" : "use"} it as a member or factor; remove it there first`;
+    }
+    case "recursive_delete_blocked":
+      return blockerLines(Array.isArray(body?.blockers) ? body.blockers : [], 3).join("; ") || message;
+    case "privilege_required":
+      return `you do not hold ${body?.privilege ? `the ${body.privilege} privilege` : "the privilege"} on it`;
+    case "not_deleted":
+      return "it is not deleted yet";
+    default:
+      return message;
+  }
+}
+
+/** "Deleted by Alice (tenant admin) on 22 Oct 2026, 14:10: reason: …, with folder X" for a deleted group; "" when it is not. */
+export function deletedLine(g: Pick<GrpGroup, "status" | "deleted_by" | "deleted_at" | "deleted_reason" | "deleted_with_folder">, when: (iso: string) => string): string {
+  if (g.status !== "deleted") return "";
+  const parts = [`Deleted${g.deleted_by ? ` by ${g.deleted_by}` : ""}${g.deleted_at ? ` on ${when(g.deleted_at)}` : ""}`];
+  if (g.deleted_reason) parts.push(`reason: ${g.deleted_reason}`);
+  if (g.deleted_with_folder) parts.push(`deleted with folder ${g.deleted_with_folder}`);
+  return parts.join(" — ");
 }

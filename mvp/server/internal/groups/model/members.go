@@ -2,10 +2,12 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/attrs"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
@@ -256,6 +258,16 @@ func (e Env) RemoveMember(id store.GroupID, member string) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
+	if held, err := e.guard(deleteguard.CatMembers, deleteguard.Item{Kind: ItemMember, Ref: memberRef(g.ID, typ, key),
+		Label: fmt.Sprintf("%s %s from %s", typ, key, g.Name)}); err != nil || held {
+		return Outcome{Held: held}, err
+	}
+	return e.removeRow(g, m, typ, key)
+}
+
+// removeRow removes a found direct membership and recomputes what it changes.
+func (e Env) removeRow(g *store.NativeGroup, m *store.DirectMembership, typ store.MemberType, key string) (Outcome, error) {
+	list := m.ListID
 	// the membership's attribute assignments end with it
 	if _, err := attrs.RemoveAllOf(e.Attrs(), attrs.Owner{Type: store.AttrOwnerMembership, ID: m.ID}); err != nil {
 		return Outcome{}, err
@@ -267,6 +279,7 @@ func (e Env) RemoveMember(id store.GroupID, member string) (Outcome, error) {
 		return Outcome{}, err
 	}
 	var out Outcome
+	var err error
 	if typ == store.MemberGroup {
 		if err := e.eng().RemoveEdge(e.Tx, store.GrpDep{Parent: g.ID, Child: *m.MemberGroup, Kind: store.DepNest, List: list}); err != nil {
 			return Outcome{}, e.engineErr(err)

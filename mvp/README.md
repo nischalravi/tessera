@@ -417,7 +417,8 @@ commands, no raw LDAP, no proxying). The server sends typed jobs; the agent open
 - **Server listener.** Set `TESSERA_AGENT_ADDR` with `TESSERA_AGENT_TLS_CERT` and `TESSERA_AGENT_TLS_KEY`
   (a separate mutual-TLS port serving only `/agent/v1/*`).
 - **Agent config** (JSON): `{"server_url":"https://tessera.example:8443","server_ca_file":"ca.pem",
-  "state_dir":"/var/lib/tessera-agent","allowed_targets":["ldap.corp.example:636"]}`; then
+  "state_dir":"/var/lib/tessera-agent","allowed_targets":["ldap.corp.example:636"]}`, plus
+  `allowed_push_targets` and `push_ca_file` for provisioning pushes (see below); then
   `tessera-agent run -config agent.json`.
 - API: `GET /api/agents`, `POST /api/agents` (step-up; returns the code once), `POST /api/agents/{id}/revoke`
   (step-up). Table `directory_agents`, `agent_enrolments` (schema 0250).
@@ -447,11 +448,54 @@ open inbound at the customer; the agent needs only HTTPS out to `TESSERA_AGENT_A
   every membership must name an account and a group of the same listing), then ingested with `ingest.Discovery`
   into the connection's own system, drift is reconciled, and the job is finished, in one transaction, with
   `connectors.sync` and `agent.job_done` audited (`agent.job_failed` for failures).
-- **Secrets.** The directory password is never sent to the agent for a job: it stays in the agent's local
-  credential store (the existing Directory Agent design), and a job carries only its name. Sealing a
-  server-held secret to an agent key would need a key-agreement design that does not exist yet.
-- **Not covered yet.** Provisioning pushes to a private target through an agent, and sealing a server-held secret
-  to an agent key, are the next change of #302.
+- **Secrets.** The directory password is never sent to the agent for a sync: it stays in the agent's local
+  credential store (the existing Directory Agent design), and a job carries only its name. A server-held
+  credential (the token of a private provisioning target) is different: it is sealed to the agent's key, below.
+
+##### Provisioning pushes to private targets through an agent (issue #302)
+
+A SCIM or Okta-style target in a private network, which the server cannot dial, is reached through an agent. Set
+`agent_id` on the target (`PUT /api/provisioning/targets/{connection id}` `{"kind":"scim","base_url":"https://scim.corp.example/scim/v2",
+"agent_id":"…","token":"…","write_back":true}`: an active agent of the tenant, https only, not the dev fake target;
+step-up as before; the audit event `provision.target_set` names the agent). The token is stored sealed under the
+KEK exactly as for a direct target.
+
+- **Flow.** For an operation on such a target the provisioning engine does not call the target. It queues a
+  `provision_push` job (`agent_jobs`, kind `provision_push`, `op_id` = the operation; schema 0461 and Postgres
+  migration 0622) addressed to `(tenant, agent)`, leaves the operation `sent` and audits `provision.dispatched`. The
+  agent claims it over the same mTLS pull channel, applies the change with the SCIM or Okta connector from inside its
+  network, re-reads the target (three reads, 2 s apart) and reports `{applied, verified, expected, observed}` or an
+  error to `POST /agent/v1/jobs/report`. The report finishes the operation in the **same transaction** that finishes
+  the job, with both audit events: `provision.verified` (the completion runs, findings resolve) or
+  `provision.mismatch` (a finding) plus `agent.job_done`, each naming the agent (`via_agent`). Nothing the agent
+  sends is trusted for addressing: tenant and agent come from the pinned key, and a report for a job not leased to
+  that (tenant, agent) is `404 unknown_job`.
+- **Failures.** A transient failure (`failed`, `rate_limited`) is retried, three attempts per job; when they are
+  used up, the job fails and so does the operation (`provision.failed`, with the reason, retryable by an operator
+  as any failed operation). A permanent refusal (`target_refused`), a target not on the agent's allowlist
+  (`target_not_allowed`), a missing credential or a bad request fails the operation at once. An agent that is away
+  just leaves the operation `sent`: no attempt is spent while a job is open. Revoking the agent fails the
+  operations it held, with the reason, in the revoking transaction; an operation dispatched to a revoked or
+  deleted agent fails at once. If the target shows the change but Tessera cannot apply its side of it (the
+  completion fails), the operation and the job fail in a second transaction; nothing is half done.
+- **Sealed credentials.** The agent generates an X25519 key pair (`<state_dir>/identity/seal.key`, mode 0600) and
+  registers the public half with `POST /agent/v1/seal-key` over its authenticated channel (at start, then every 6
+  hours; the same key changes nothing, a new one replaces it and is audited as `agent.seal_key_registered`;
+  table `agent_seal_keys`, schema 0621). When the server hands out a push job it opens the target's token under
+  the KEK and seals it to that key (`internal/seal` `SealToAgent`: ephemeral X25519, HKDF-SHA256, AES-256-GCM)
+  with the additional data **tenant | agent | connection | job**. Only that agent, for that job, can open it: another
+  agent, tenant, connection or job fails to. The blob is made at claim time, never stored: the job row, the
+  audit trail and the log hold no credential, in the clear or sealed. An agent that has not registered a key
+  (an older build) cannot be handed a credential: the job fails when claimed, with that reason. Upgrading a SQLite
+  database drops and recreates `agent_jobs` once (it holds only queued work: the next pass queues it again).
+- **Agent configuration.** `allowed_push_targets`: host:port entries (host name, IP or CIDR; ports **443 and 8443**
+  only; the same rules as `allowed_targets`) of the HTTPS targets the agent may push to, a separate list from the
+  LDAP one, empty by default: the agent refuses every push. `push_ca_file`: a PEM CA bundle to verify those
+  targets' certificates against (an internal CA); without it the system roots. The agent dials only through its
+  policy-checked dialer: HTTPS with a verified certificate, no plain HTTP, no redirects, no proxy, never
+  metadata or link-local space. The push list joins the allowlist hash in heartbeats only when it is not empty.
+- **Limits.** The per-target limits and circuit breakers above apply to calls the server or a worker makes; a push
+  through an agent is bounded by the job's lease (10 minutes), its three attempts and the agent's one-at-a-time loop.
 
 ### Connector workers (issue #302)
 
@@ -2211,6 +2255,98 @@ inside a tenant transaction, so each change and its audit event commit together.
   the default `demo` spec or `TESSERA_CONNECTORS`), so the seeded demo tenant is unchanged.
   Not yet stored: date of birth and phone (sealed by the PR that first needs them).
 
+### Contractors from a VMS (Fieldglass, Beeline, CSV; issue #304)
+
+`internal/connectors/vms` reads contractor assignments from a vendor-management system; `internal/intake/vms.go`
+maps each record onto the contractor lifecycle of issue #159; `internal/vms` runs a tenant's feeds. Schema `0600`
+(`vms_sources`). A record becomes an intake event of channel `vms` (`intake_events`), so the SIS and HRIS history
+and the review queue are shared.
+
+- **Rules.** Every contractor needs a **sponsor**: an active employee named by employee id or e-mail. A record with
+  no sponsor, an unknown or ambiguous one, or one who cannot sponsor is **held in review and creates nobody**
+  (reasons: `sponsor_required|sponsor_not_found|sponsor_ambiguous|sponsor_not_eligible|sponsor_is_self`). A
+  record needs an **end date** (else rejected, `end_required`); one past `lifecycle.MaxTermDays` is clamped
+  (`end_clamped`, the next sync moves it on). The end date is the lifecycle's end date, so the existing sweep
+  warns the sponsor (14, 7, 1 days) and on the day contains the person and runs the leaver plan. A record whose
+  status is ended (completed, terminated, cancelled) ends the term at once. A record whose e-mail belongs to
+  another person is held (`email_matches_another_person`); a returning contractor whose term ended is held
+  (`term_already_ended`). A record older than the one applied last changes nothing. Replays are no-ops (the
+  event id is a digest of the facts).
+- **Feeds.** `fieldglass` and `beeline` over their REST APIs (OAuth client credentials, paged, with a watermark
+  per source; a failed sync keeps the watermark); `csv` uploaded (`POST /api/vms/sources/{id}/import`, the file as
+  `text/csv`, at most 1 MiB through the API) or fetched over HTTPS (`base_url` + `settings.csv_path`). CSV columns:
+  `worker_id, name|first_name+last_name, email, supplier, role, sponsor_email, sponsor_employee_id, status,
+  start_date, end_date, updated_at`; `settings.mapping` renames them, `settings.date_format` is a Go layout.
+  Every call goes through `internal/safehttp`; a paging link must stay on the configured host; the credential
+  (`client_id:client_secret`, or a bearer token for a fetched CSV) is sealed under the KEK, bound to its row,
+  write-only, and a change of base URL needs a new one.
+- **API.** `GET|POST /api/vms/sources`, `PUT|DELETE /api/vms/sources/{id}` (connections.read|manage),
+  `POST /api/vms/sync {source_id?}` and `POST /api/vms/sources/{id}/import` (`lifecycle.manage`, because they
+  create and end people), `GET /api/vms/records`. Queue job `vms_sync` runs hourly per tenant (a tenant with
+  nothing to read leaves no run). Audit events: `vms.source_created|updated|removed`, `vms.sync`,
+  `intake.vms.<outcome>`, `lifecycle.set`.
+- **UI.** Settings > Admin > Contractor feeds.
+- **Not verified against a real tenant.** No Fieldglass or Beeline tenant was available. The response shapes are
+  documented in `fieldglass.go` and `beeline.go` and exercised by the in-process fake
+  (`internal/connectors/vms/vmsfake`: paging, 401, 429 with Retry-After, 5xx, malformed JSON, an off-host next
+  link, a looping page, a wrong token type); the endpoint paths are settings. The first real tenant should
+  confirm the field names and the OAuth token path. **SFTP** drops are not read: there is no SFTP client in
+  the module's dependencies, so a drop is uploaded as CSV for now.
+
+### Privileged-access vaults (CyberArk, Delinea, BeyondTrust; issue #304)
+
+`internal/connectors/pam` reads a vault into the graph and writes safe membership back through provisioning. Tessera
+integrates with the vault; it does not replace it.
+
+- **Read.** `TESSERA_CONNECTORS=cyberark` (or `delinea`, `beyondtrust`) with `TESSERA_<VENDOR>_BASE_URL`, `_USER`,
+  `_SECRET` (a `file:`/`env:` reference) and optionally `_API_ROOT`. A safe (CyberArk safe, Delinea folder,
+  BeyondTrust smart rule) is a `vault_safe` resource with one permission per safe permission (privileged where it
+  reveals or changes secrets). Four **profiles** per safe are requestable groups (`vault_safe_access`, id
+  `<safe id>/<profile>`): `list`, `use`, `read` (privileged), `manage` (privileged), each including the one before.
+  A member (user, group or role) is an account `member_of` the highest profile it holds and `direct_grant`ed any
+  permission beyond it, so nothing a member can do is hidden by the profile. A vaulted account is an account of kind
+  `vaulted` with a `password` secret and its last rotation. Delinea and BeyondTrust report roles; the reader maps
+  them to the same permission names (Delinea List/View/Edit/Owner; BeyondTrust Read Only/Requestor/Approver).
+- **Write.** Target kinds `cyberark`, `delinea`, `beyondtrust` (Admin > Provisioning; credential `user:secret`, sealed,
+  write-only; optional `api_root`). The engine adds or removes a member at a profile (`add_entitlement`,
+  `remove_entitlement`, group id `<safe id>/<profile>`, `account.attrs.member_type` user|group|role), and counts it done
+  only after a re-read of the safe agrees. So requests, reviews, JIT and the leaver plan all reach the vault the way
+  they reach any target. Idempotent: it reads first. Adding at or below the profile held is already true; removing a
+  profile below the held one is refused (permanent). Accounts are never created or disabled in a vault. Delinea cannot
+  express `use` and BeyondTrust only `list` and `use`: those are permanent errors, not guesses.
+- **Schema.** `provisioning_targets.kind` now allows the vault and ERP kinds. A SQLite database is upgraded in
+  place on open (the table is rebuilt, rows and sealed credentials kept); Postgres has migration `0601`.
+- **Not verified against real vaults.** The shapes are documented in each vendor file and exercised by
+  `pamfake`, which keeps each vendor's own state (CyberArk flags, Delinea roles, BeyondTrust role ids) so the
+  contract tests prove the translation, and injects a refused login, throttling, 5xx, malformed answers, failing
+  writes and writes accepted and dropped. BeyondTrust's role names and the Delinea secret-role mapping in particular
+  need confirming on a real tenant.
+
+### ERP roles, t-codes and authorization objects (SAP, Oracle; issue #304)
+
+`internal/connectors/erp` reads an ERP's authorization model as fine-grained entitlements and writes role
+assignment back through provisioning.
+
+- **Read.** `TESSERA_CONNECTORS=sap` (or `oracle`) with `TESSERA_<SYSTEM>_BASE_URL`, `_CLIENT_ID`, `_CLIENT_SECRET`
+  (a `file:`/`env:` reference), optional `_API_ROOT` and `_TOKEN_PATH`. A role is a requestable group
+  (`erp_role`; privileged when it holds a critical transaction such as SU01, SM59 or SE38, or change on a critical
+  object such as S_TABU_DIS). A composite role is `member_of` each child, so holding it holds what the children
+  grant. A t-code (Oracle: function-security privilege) is a permission whose Action is the t-code (`FB60`); an
+  authorization object is a permission whose Action is `OBJECT[FIELD=v1,v2;FIELD2=v]` with fields and values sorted
+  (`F_BKPF_BUK[ACTVT=01,02;BUKRS=1000]`; Oracle data-security policies map to the object, `ACTVT` and `CONDITION`
+  only). A user is an account correlated by e-mail, `member_of` the roles it holds **now** (an expired or
+  not-yet-valid assignment holds nothing), disabled when locked or past its validity.
+- **SoD.** Those actions are what the SoD functions of #298 select: a function's selector `name_pattern` is `FB60`
+  or `F_BKPF_BUK[*ACTVT=*02*`, and a violation is found for whoever holds both halves through any role, composite
+  or not (`sod_test.go` runs the whole path through ingest, graph and detection for both systems).
+- **Write.** Target kinds `sap` and `oracle` (credential `client_id:client_secret`): `add_entitlement` and
+  `remove_entitlement` with the role id as the group, then a re-read of the user. Idempotent; accounts are not
+  created, changed or disabled; a missing user or role is a permanent error, a 5xx a retry.
+- **Contract, not verified against a real system.** SAP has no single REST API for roles: the contract is an OData
+  service the SAP team publishes over `AGR_*` and `USR*` (shapes in `sap.go`), and Oracle's is the security REST
+  service (`oracle.go`). Both are exercised by `erpfake` (paging over 230 roles and users, a refused token, 429, 5xx,
+  malformed, failing and dropped writes). Paths are settings; the first real tenant should confirm field names.
+
 ### Identity containment (kill switch)
 
 A disabled account does not end its live sessions, refresh tokens or OAuth consents. Two plan
@@ -2841,13 +2977,37 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
   | `POST /api/groups` `{folder, extension, type, requestable, ...}` | create a basic group (`201`) |
   | `GET\|PATCH\|DELETE /api/groups/{id}` | read, edit or rename (`status` active or disabled), soft delete |
   | `POST /api/groups/{id}/move` `{folder}`, `.../copy` `{folder, extension}`, `.../restore` | move, copy, restore |
+  | `POST /api/groups/{id}/purge` | permanently delete a group that is already deleted (`admin` on it) |
+  | `DELETE /api/groups/folders/{id}?recursive=true`, `GET /api/groups/folders/{id}/delete-plan` | delete a folder and everything in it; the plan says what goes and what blocks it |
+
+- Purging and deleting a tree (a soft-deleted group still counts as held by its folder, so it blocks
+  `DELETE /api/groups/folders/{id}`; `folder_not_empty` says how many of the groups are deleted). The UI lists
+  deleted groups under **Show deleted** and offers Restore and **Delete permanently**.
+  - Who deleted what: a soft delete (`DELETE /api/groups/{id}`, optional body `{reason}`) stores `deleted_by_user_id`, `deleted_by_display` (the linked person's name and, for a tenant admin, "(tenant admin)"), `deleted_at`, `deleted_reason` and, for a recursive delete, `deleted_with_folder` on the group row; the group JSON carries `deleted_by`, `deleted_at`, `deleted_reason`, `deleted_with_folder` while it is deleted, and a restore clears them (the restore is audited with its actor). A purge and a recursive delete require `{reason}` in the body (`422 reason_required`); `groups.group.purged` and `groups.folder.deleted_recursive` carry the reason, the original deleter and the folder. The columns are in `0280_groups.sql` (SQLite databases made before get them at start) and `postgres/0641_group_deleted_by.sql`.
+  - `POST /api/groups/{id}/purge` `{reason}` removes a deleted group's memberships, nesting and composite edges, privileges (on it and
+    held by it), rules, attribute assignments, attestation settings, aliases and levels, and its row. The audit ledger and
+    the event log keep its history (`groups.group.purged`, event `group.purged`). Refused with `409 group_in_use` (and
+    `groups`: the names) while another group has it as a member or composite factor, `group_referenced` while a loader's
+    `and_group`, an attestation campaign or item, a reviewer setting or a provisioning sync names it, `not_deleted`,
+    `policy_managed`, `folder_mirrored`, `recompute_pending`.
+  - `?recursive=true` deletes the folder, its subfolders deepest first, its groups (soft-deleted, then purged, a group
+    before the groups it nests) and its attribute definitions in one transaction. It needs `stem_admin` on every folder
+    of the tree (`stem_admin` on the top covers the rest) and a fresh `STEP_UP_POLICY` sign-in. It is refused with
+    `409 recursive_delete_blocked` and `blockers: [{kind, id, name, code, reason}]` unless every item is UI-managed
+    (`managed_by` ui), no folder is a loader's target, no group is policy-managed, used by a group outside the tree or named by loader, attestation or
+    provisioning configuration, and nothing outside the tree has an assignment of a definition of it. A tree of more
+    than 50 groups, or one where any group has direct members, does not apply at once: the answer is `202` with an
+    admin change request (`groups.folder.delete_recursive`, the SQL loader's two-person workflow, GRP-6311) that a
+    second admin approves under `POST /api/admin/change-requests/{id}/approve`; the approver's apply refuses
+    `folder_changed` if the tree grew since. Audit `groups.folder.deleted_recursive` with the counts.
+  - An existing SQLite database is upgraded on open: `admin_change_requests` is rebuilt in one transaction with the wider type `CHECK` (rows, indexes and triggers kept, foreign keys checked; a no-op once done), `TestUpgradeAdminChangeTypes`. Postgres gets `postgres/0640_group_folder_delete.sql`.
 
 - Errors: `404 not_found`; `409` `{error, detail}` with `name_taken`, `name_reserved_by_alias`,
   `root_folder`, `move_into_self`, `copy_into_self`, `folder_not_empty` (with `folders` and `groups`
   counts), `folder_mirrored`, `group_deleted`, `not_deleted`, `version_conflict`; `422` with
   `invalid_name`, `invalid_type`, `invalid_status`, `invalid_scope`, and so on.
 - Audit events `groups.folder.{created,updated,renamed,moved,copied,deleted}` and
-  `groups.group.{created,updated,renamed,moved,copied,deleted,restored}`, written in the change's
+  `groups.group.{created,updated,renamed,moved,copied,deleted,restored,purged}`, `groups.folder.deleted_recursive`, written in the change's
   transaction with the acting user; `GET /api/audit?target_type=group&target_id=` filters by object.
 
 #### Membership engine (GR-2, issue #45)
@@ -3330,8 +3490,54 @@ taken is a failed run (`loader_name_taken`).
 | `attribute` | one group per value of an identity attribute (`department`, `title`, `type`, `status`, `source`) |
 | `recent_memberships` | people who were effective members of a group in the last N days and are not now (`include_current` adds the current ones), read from the point-in-time history |
 
-`ldap_*`, `sftp_csv` and `hris_sis_feed` are designed but not built: they need an LDAP and an SSH
-library, which GR-10 did not add (`422 loader_type_unavailable`).
+| `scim` | the groups of an external SCIM 2.0 provider, with their members (see "Setting up a source" below) |
+| `ldap_simple` | the entries an LDAP or AD search returns, all members of one group |
+| `ldap_group_list` | group entries of an LDAP or AD directory, with their members |
+
+`sql_simple` and `sql_group_list` also run on a **Postgres server** (`"engine":"postgres"`). `ldap_attribute`,
+`sftp_csv` and `hris_sis_feed` are designed but not built (`422 loader_type_unavailable`). MySQL and SQL Server
+are not supported: they need drivers this work did not add (follow-up).
+
+**Credential.** A loader's `secret` (write-only, sealed with `internal/seal` bound to the tenant and the loader,
+never returned, in no audit event, run or error) is: a CSV URL's bearer token (optional), a SCIM bearer token
+or client secret, an LDAP bind password, or a Postgres connection string. Those last three are required. For a
+SQL loader the secret travels sealed with the `groups.loader.save` change request (never in its payload, which the
+second approver reads) and is stored on the loader when it is approved; a change that sends no secret keeps it.
+
+**Setting up a source** (Directory, Groups, a group's *Source* tab, or *Add a source*; or the API):
+
+- *SCIM.* `config`: `base_url` (the `.../scim/v2` root, https), `subject_attr` (`userName`, `email`, `externalId` or
+  `id`: how a member is named; the Users are read to turn a member's SCIM id into it), optional `subject_source`
+  (default `email` for email, `identity` otherwise; a system name matches its accounts), `group_filter` and
+  `user_filter` (SCIM filters the provider evaluates), `page_size` (default 100; paging by `startIndex` and `count`),
+  `group_name` (`displayName` or `externalId`), `name_prefix`, `only_active` (default true). Auth is a bearer token
+  (`secret`), or `"auth":"client_credentials"` with `token_url`, `client_id`, `scope` and the client secret as
+  `secret`. Group names are made valid (`Engineering Team` becomes `Engineering_Team`); members that are groups are
+  not followed; a member the provider does not list as a user (and no `user_filter`) is listed as unresolved.
+  All traffic goes through `internal/safehttp` (https, public addresses; the dev loopback exception applies).
+- *LDAP and AD.* `config`: `url` (`ldaps://host` on 636, or `ldap://host` on 389 with StartTLS; no other port, no plain
+  LDAP), `bind_dn` (a read-only account; the bind password is the `secret`), `base_dn`, `filter`, `scope` (`sub` or
+  `one`), `ca_pem` for a private CA, `page_size` (RFC 2696 paging). `ldap_simple`: `subject_attr` and `group`.
+  `ldap_group_list`: `group_name_attr` (cn), `member_attr` (member; `memberUid` for POSIX groups) and `member_rdn`
+  (when members are DNs, the RDN whose value names the person, such as `uid`; empty: the value is used as it is).
+  AD's ranged member lists (1,500 at a time) are followed. The reader is `internal/connectors/ldap` (`Reader`,
+  which has no write operation) over `internal/safedial`, so a private address is refused in production (the dev
+  allowlist `TESSERA_SAFEDIAL_ALLOW` is refused there by the configuration) and a bind password is sent only on a
+  connection already protected by TLS 1.2 or later. Like SQL loaders, LDAP and SCIM loaders need a second admin (see below).
+- *SQL on Postgres.* `config`: `"engine":"postgres"` (no `database`), `query`, optional `groups_query`,
+  `incremental_query` (`@cursor` becomes a numeric parameter), `ca_pem`; the `secret` is
+  `postgres://user:password@host:5432/db`. Only `sslmode` and `connect_timeout` are accepted as options (so no
+  `sslrootcert` or `passfile` can make the server read its own files), and production refuses any `sslmode` but
+  `verify-full` (the default) when the string is saved and when it runs. The session is read-only
+  (`default_transaction_read_only`, a `READ ONLY` transaction), has a 120 s statement timeout, and more than
+  1,000,000 rows is an error. The connection goes through the address-checked dialer (ports 5432, 5433, 6432).
+  Use a read-only database login. Creating or changing it needs a second admin, like a file source.
+
+Tests: `internal/groups/loaders` (`TestSCIM_*` against an in-process SCIM server, `TestLDAP*` against an in-memory
+directory, `TestSQLPostgres_*`), `internal/connectors/ldap` (`TestReader_*` against the fake LDAP server: paging,
+LDAPS and StartTLS, no bind without TLS, bind refused), `internal/store` (`TestCheckPGDSN`, `TestRunExtQueryPG`),
+`internal/api` (`TestLoadersAPI_Postgres*`, `TestLoadersAPI_ScimAndLDAPSources`). The Postgres tests run only with
+`TESSERA_TEST_PG_URL` set.
 
 - **Data directory.** SQL and CSV files live in `TESSERA_LOADER_DATA_DIR` (absolute; unset turns file
   sources off; refused if it contains the database), **one subdirectory per tenant**:
@@ -3369,7 +3575,7 @@ library, which GR-10 did not add (`422 loader_type_unavailable`).
   (state, next run, last run, lag) is part of the loader's answer: there is no `/api/admin/jobs` yet.
 - **Who may configure.** Create and change need the platform permission `groups.loader.admin`
   (`tenant_admin`, `policy_admin`), a fresh phishing-resistant step-up (`STEP_UP_POLICY`) and `stem_admin`
-  on the target folder. A **SQL loader** is not saved by that request: it answers `202` with a
+  on the target folder. A **SQL, SCIM or LDAP loader** (`loaders.NeedsSecondApprover`) is not saved by that request, nor is any change of its definition or credential: it answers `202` with a
   `groups.loader.save` admin change request (internal/admin) that another admin approves (so a tenant
   needs two active admins); turning a loader off needs no approval. Run and preview need
   `groups.loader.admin` and `stem_admin`; reading needs `stem_view` (the definition, the runs' detail and
@@ -3710,6 +3916,72 @@ after the same checks, the read-only restore; nothing is written back online). E
 
 Not archived yet: the legacy `access_requests` table, and anything else outside the five classes.
 
+## Deletion threshold guard
+
+A safety net so a mistake (a bad admin action, a bad source feed, a misconfigured connector or loader) cannot delete
+everything (`internal/deleteguard`). Every deletion path of a guarded category asks the guard first. The guard counts the
+deletions already applied in the category's sliding window (a per-tenant ledger), lets through only what fits under the
+threshold, **holds the rest**, audits and alerts, and a second admin releases or discards the held remainder.
+
+| Category | What counts | Default (on for every tenant) |
+|---|---|---|
+| `groups` | group soft delete and purge (a folder-tree delete counts each group once) | 25 per hour |
+| `folders` | folders removed (single, or the folders of a tree) | 10 per hour |
+| `group_members` | direct memberships removed by any path: the UI, bulk and batch, loaders, rules, reviews | 500 or 10% per hour |
+| `accounts` | connector-sync account removals and disables, provisioning remove/disable ops | 200 or 5% per hour |
+| `identities` | identity disable and leaver end | 50 or 2% per hour |
+
+Each policy has `max_count` and/or `max_percent` (of the tenant's size in that category, never less than 5; the lower of the
+two applies), a `window_minutes` (1 to 10080) and a `mode`: `hold_excess` (default: apply up to the threshold in a
+deterministic order, by item kind and ref, and hold the rest), `hold_all` (hold the whole batch that would pass it, like the
+loader and provisioner failsafes) or `off`. The loader and provisioner failsafes keep working as before; the guard sits
+under them (an approved held loader run is an approved override and is not counted again).
+
+* **Race safety.** The check and the ledger write run in the transaction that makes the deletions, after a write to the
+  category's counter row (`deletion_guard_counters`): a row lock on Postgres, the single writer on SQLite. Concurrent
+  requests and workers cannot together pass the threshold (`TestConcurrentRequestsCannotExceedTheThreshold`, both dialects).
+* **Held deletions** (`deletion_holds`, `deletion_hold_items`) list exactly which items were not applied, why (category,
+  window, threshold, attempted, applied, mode), who asked (user) and from where (user, loader id, rule), and a correlation
+  id: the calls of one API request, one loader run, or one bulk action of the UI (`X-Deletion-Batch`) join one hold. A hold
+  raises the `deletion_held` alert (Alerts) and `deletion_guard.held` in the audit log.
+* **Deciding.** `POST /api/admin/deletion-holds/{id}/approve` (`admin.change.approve`, step-up) must come from a different
+  admin than the one whose request was held (`SameActor`: 403 `same_actor`). With `{"items":[ords]}` only those items are
+  released and the rest discarded ("approve partially"). A release re-checks each item (it must still exist and still be
+  deletable: otherwise `gone` or `failed`), is an approved override and does not count against the window again
+  (`deletion_guard.released` with `approved_override: true`). `.../discard` keeps everything as it is. A hold nobody decides
+  on is discarded when it expires (default 7 days; swept by the admin-changes sweeper).
+* **Settings.** `GET /api/admin/deletion-guard` (thresholds, window usage, hold expiry), `GET /api/admin/deletion-holds[?status=&category=]`,
+  `GET /api/admin/deletion-holds/{id}`. Thresholds change through the admin change requests
+  (`POST /api/admin/change-requests`, type `deletion_guard.update`, audited as `deletion_guard.policy_changed`): tightening
+  applies with one admin; loosening (a weaker mode, or a higher limit per minute of window at the tenant's current size)
+  needs a second admin and a step-up, like the other safety settings.
+* **API answers.** A deleting route the guard held part of (delete or purge a group, delete a folder or a tree, remove a
+  member, a members batch) answers **202** with its usual fields plus `{applied, held, hold_id, threshold, message}`
+  ("Deleted 25 of 40: 15 held for approval (threshold 25 per hour)"). A recursive folder delete that was partly held keeps
+  the folder and its attribute definitions until the rest is released. The UI shows the message with a link to the hold.
+* **UI.** Settings → Admin → *Deletion guard* (thresholds, window use, hold expiry) and *Held deletions* (list, side panel
+  with items, approve, approve the ticked items, discard).
+* **Accounts and identities.** `accounts`: a connector sync or flat-file import that reports an active account as disabled
+  or no longer lists it (the changed ones above the threshold keep their status and are held), disable and delete
+  operations queued for a target system (held at queue time with everything needed to queue them again; add, update and
+  entitlement operations are not guarded), and a leaver's account disable in an app with no connector. `identities`: a sync
+  that reports active identities as terminated or disabled, an HRIS leaver event, and the end-date leaver of the lifecycle
+  (held, the identity keeps its accounts and grants; a release runs the whole leaver plan). A sync with held changes
+  adds `held_identities` and `held_accounts` to its `connectors.sync` audit event.
+* **Corrupted source feeds (the main use case).** A removal set computed from an inbound feed (connector syncs, flat-file
+  imports, group loaders) is a *source-driven* run: when the category's mode was never set, the default for it is
+  `hold_all`, so a run that passes the threshold applies **none** of its removals (additions and attribute updates still
+  apply) and holds the whole set as one batch. Feed checks hold the batch whatever the thresholds say: the feed has fewer
+  records than the last good run by more than 20% (`deleteguard.DefaultFeedDropPercent`, per system for accounts; the
+  previous count is the tenant's active identities or the system's active accounts), the feed is empty, or the connector sets
+  `DiscoveryResult.Partial` (a partial or failed read). The reasons and the before/after counts are on the hold. While the
+  batch is held, later runs of the same source join the open hold (a stable correlation per source and category: items
+  already held are not added twice, and no second hold is opened). Release re-validates every item and needs a different
+  admin and a step-up. An explicit `hold_excess` on a category is honoured for sources.
+* **Not guarded, on purpose.** The manual containment disable (`POST /api/identities/{id}/disable`): holding an
+  emergency containment would defeat it. Nor is there an Inbox task per hold (the groups Inbox is folder/group scoped): the
+  alert and the Held deletions list are the queue.
+
 ## Operational monitoring (issue #303)
 
 `GET /livez` and `GET /readyz` (API listener, unauthenticated, constant-shape JSON, not audited) are the orchestrator probes. `GET /metrics` (Prometheus text) is served only on the separate internal listener `TESSERA_METRICS_ADDR` (dev default `127.0.0.1:9464`, `run.sh` uses `API_PORT+1000`; off in prod unless set to a loopback or private IP; `off` disables). `GET /api/admin/platform-health` (admin.read) backs Admin -> Platform health. `TESSERA_READY_MAX_LOOP_LAG_SECONDS` (default 300) is the loop-lag threshold of `/readyz`. Metrics, SLOs and alert rules: `docs/operations/slo.md`, `deploy/prometheus/tessera-rules.yml`.
@@ -3996,10 +4268,24 @@ server decides access on each request (the UI only hides what cannot work).
 | Screen | Route | What it has |
 |---|---|---|
 | Folder browser | `/directory/groups[?folder=<id>]` | breadcrumb, folders then groups with type badges and member counts, only what the caller may view; filter chips (type, definition, group or role, status), search, *Include subfolders*, CSV export; a row opens the side panel (overview, first members) with *Open group page* / *Open folder page*; commands *New group*, *New folder*, *New application* |
-| Group page | `/directory/groups/<id>[?tab=]` | header (path, type badges, owner, status, a *Recalculating…* banner while `recompute_state` is pending); tabs **Members** (direct / indirect / effective / composite, search, enabled filter, paging, add and remove, CSV import and export, a *Trace* drawer with every path), **Definition** (composite operator and factors as a set expression; edit or convert), **Privileges** (direct rows, grant, revoke, and the explanation of every path), **Usage** (what a composite is built from), **History** (members on a date, compare two dates, anyone in a period), **Attributes** (object types with lint findings, attribute assignments) |
+| Group page | `/directory/groups/<id>[?tab=]` | header (path, type badges, owner, status, a *Recalculating…* banner while `recompute_state` is pending); tabs **Members** (direct / indirect / effective / composite, search, enabled filter, paging, add and remove, CSV import and export, a *Trace* drawer with every path), **Definition** (composite operator and factors as a set expression; edit or convert), **Privileges** (direct rows, grant, revoke, and the explanation of every path), **Usage** (what a composite is built from), **History** (members on a date, compare two dates, anyone in a period), **Attributes** (object types with lint findings, attribute assignments), and **Source** (the membership source that fills the group: see below) |
+| Loaders | `/directory/groups/loaders[?selected=<id>]` | every membership source the caller may view with its state (On, Off, Held, Last run failed), kind, folder, last run, how long ago it loaded and its schedule; filter chips, search, CSV export; a row opens the loader in the side panel; *Add a source* opens the wizard; a banner counts held runs |
 | Folder page | `/directory/groups/folders/<id>[?tab=]` | contents, privileges with inheritance scope (`groups`, `folders`, `attr_defs`; one level or all), object types and attributes, details |
 | Change preview | a drawer | every member add or remove, CSV import and composite save calls `POST /api/groups:simulate` first and shows "+1,204 / −13 identities in 4 groups" with the groups changed; nothing is written until *Apply*. Batches carry an `Idempotency-Key` |
 | New application | a drawer | the Deployment Guide layout in one step (app, security and service folders; admin, reference, allow, allow-manual, deny groups; policy group `allow − deny`) as separate changes, safe to run again |
+
+**Membership sources (group loaders, GR-10).** Screens: `LoaderTab.tsx` (the group page's **Source** tab),
+`LoaderPanel.tsx` (state, schedule, *Run now*, *Preview*, *Turn on/off*, held runs to approve or reject with their
+failsafe trips, impact and plan, unresolved people, run history), `LoaderWizard.tsx` (*Add a source*: kind,
+source fields per type, how people are matched, name template and what to do when the source stops returning a
+group, schedule and failsafe limits, review), `LoadersPage.tsx` and `LoaderRuns.tsx`. The client is `groupLoaders`
+in `src/api.ts` (one typed function per route of `/api/groups/loaders` and `/api/groups/loader-tasks`); the pure
+logic (form to `LoaderSpec`, the checks that mirror the server's, words for runs) is `loaderModel.ts`, tested by
+`tests/group-loaders.test.ts`. A loader makes and owns its own groups, so a group edited by hand has no source and
+the tab offers *Add a source* in its folder. A group a loader fills carries `loader_id` in its API answer. A source
+that is not a SQL query is saved turned off and previewed at once, so the plan is seen before anything changes;
+a SQL source answers `202` and waits for a second administrator (*Admin, Change requests*), so it can be previewed
+once approved. Held runs also appear in the Inbox (filter chip *Loaders*) and link to the loader.
 
 **Inbox.** One queue for JIT and catalog approvals, access-review items, joiner/mover/leaver
 tasks and delegations, with keys: `j`/`k` move, `a` approve or keep, `d` deny, `r` revoke,
@@ -4902,6 +5188,7 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   and the screen-reader pass still to do by hand, is in `docs/accessibility/wcag-2.2-aa-audit.md`.
   `TESSERA_AUTH_RATE_BURST` and `TESSERA_ANON_RATE_BURST` (defaults 30 and 120) set the per-IP
   burst of the `/api/auth/*` and anonymous limiters; the suite raises them for its own instance.
+  With `TESSERA_ENV=prod` they are capped at 300 and 2000: a higher value refuses to start (#463).
 
 ## Server hardening
 

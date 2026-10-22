@@ -107,6 +107,13 @@ type NativeGroup struct {
 	CreatedAt         time.Time
 	CreatedBy         *string
 	Version           int64
+	// Who deleted it, when and why, while Status is deleted (cleared by a restore). DeletedBy is the
+	// display text kept with the row; DeletedWithFolder names the folder whose recursive delete took it.
+	DeletedByUser     *string
+	DeletedBy         string
+	DeletedAt         *time.Time
+	DeletedReason     string
+	DeletedWithFolder string
 }
 
 // MemberType is what a direct membership names.

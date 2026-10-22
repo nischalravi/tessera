@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	grpapi "github.com/nischalravi/tessera/mvp/server/internal/groups/api"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
@@ -395,6 +396,7 @@ func (s *Server) batchGrpMembers(r *http.Request, p *params) (int, any, error) {
 	atomic := in.Atomic == nil || *in.Atomic
 	ck := s.grpChecker(r)
 	var res *model.BatchResult
+	col := &deleteguard.Collector{}
 	err = s.grpWrite(r, func(e model.Env) error {
 		authorize := func(_ int, op model.BatchOp) error {
 			if op.Kind == model.BatchRemove {
@@ -409,6 +411,7 @@ func (s *Server) batchGrpMembers(r *http.Request, p *params) (int, any, error) {
 			return nil
 		}
 		var err error
+		e.Held = col
 		res, err = e.ApplyBatch(store.GroupID(id), ops, atomic, authorize)
 		var oe *model.OpError
 		if errors.As(err, &oe) {
@@ -445,8 +448,13 @@ func (s *Server) batchGrpMembers(r *http.Request, p *params) (int, any, error) {
 	if len(res.Ops) > 0 {
 		effective, status, ops64 = "pending", http.StatusAccepted, res.Ops
 	}
-	return status, map[string]any{"group_id": id, "atomic": atomic, "created": res.Created, "updated": res.Updated,
-		"removed": res.Removed, "failed": res.Failed, "effective": effective, "ops": ops64, "results": items}, nil
+	body := map[string]any{"group_id": id, "atomic": atomic, "created": res.Created, "updated": res.Updated,
+		"removed": res.Removed, "failed": res.Failed, "effective": effective, "ops": ops64, "results": items}
+	if held := col.Result(); held != nil {
+		// the deletion guard held some removals: 202 with what was applied and what waits for approval
+		return http.StatusAccepted, heldBody(held, body), nil
+	}
+	return status, body, nil
 }
 
 // allDenied reports whether every operation of a batch failed for want of a privilege.

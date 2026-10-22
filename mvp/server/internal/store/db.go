@@ -148,6 +148,9 @@ var tables = []string{
 	"stepup_policy",                                      // schema/0493_stepup_policy.sql
 	"user_preferences",                                   // schema/0494_user_preferences.sql
 	"org_owners", "org_settings", "org_hierarchy_source", // schema/0495_org_settings.sql
+	// deletion threshold guard (schema/0670_deletion_guard.sql)
+	"deletion_guard_policies", "deletion_guard_settings", "deletion_guard_counters", "deletion_guard_ledger",
+	"deletion_holds", "deletion_hold_items",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)
@@ -210,6 +213,8 @@ var tables = []string{
 	"queue_jobs", "queue_schedules", "queue_workers", "agent_jobs",
 	// per-target limits and breaker state of the connector workers (schema/0620_connection_limits.sql)
 	"connection_limits", "worker_target_states",
+	// the key an agent is sealed secrets to (schema/0621_agent_seal_keys.sql)
+	"agent_seal_keys",
 	// role mining (schema/0420_role_mining.sql)
 	"role_mining_runs", "role_mining_candidates",
 	// log retention settings and archive segments (schema/0400, 0401; issue #298)
@@ -230,6 +235,8 @@ var tables = []string{
 	"match_results", "identity_merge_requests", "matching_settings", "claim_links",
 	// SIS and HRIS intake (schema/0374_intake.sql)
 	"org_sponsors", "intake_events", "identity_conversions",
+	// contractor (VMS) feeds (schema/0600_vms_sources.sql)
+	"vms_sources",
 	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
 	// pending four-eyes OAuth app revokes (schema/0470_oauth_revoke_requests.sql)
@@ -429,7 +436,16 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	if err := d.upgradeLoginTxnPurpose(ctx); err != nil {
 		return err
 	}
+	if err := d.upgradeProvTargetKinds(ctx); err != nil {
+		return err
+	}
+	if err := d.upgradeAgentJobs(ctx); err != nil {
+		return err
+	}
 	if err := d.upgradeUserIDColumns(ctx); err != nil {
+		return err
+	}
+	if err := d.upgradeAdminChangeTypes(ctx); err != nil {
 		return err
 	}
 	files, err := fs.Glob(schemaFS, "schema/*.sql")
@@ -453,6 +469,28 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	})
 }
 
+// upgradeAgentJobs lets a SQLite database created before the provision_push agent
+// job kind (issue #302) take it: CREATE TABLE IF NOT EXISTS cannot widen a CHECK
+// or add the op_id column, so the table is dropped and the schema recreates it.
+// Its rows are queued or leased work (a sync, a push whose operation is still
+// "sent" and is queued again when it goes stale), finished rows are history the
+// jobs table keeps elsewhere. Postgres does this in migration 0622.
+func (d *DB) upgradeAgentJobs(ctx context.Context) error {
+	var ddl string
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_jobs'`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && strings.Contains(ddl, "provision_push")) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := d.sql.ExecContext(ctx, "DROP TABLE agent_jobs"); err != nil {
+		return fmt.Errorf("store: upgrade agent_jobs: %w", err)
+	}
+	return nil
+}
+
 // upgradeLoginTxnPurpose lets a SQLite database created before the 'test' and 'claim'
 // login purposes (0315, 0319) take them: CREATE TABLE IF NOT EXISTS cannot change a
 // CHECK, so the table is dropped and the schema recreates it. Its rows are
@@ -474,11 +512,47 @@ func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
 	return nil
 }
 
+// upgradeProvTargetKinds lets a SQLite database created before the vault and ERP target
+// kinds (issue #304) take them. CREATE TABLE IF NOT EXISTS cannot change a CHECK, and the
+// table holds sealed credentials that must survive, so it is rebuilt: the new table is
+// made from the old definition with the wider list, the rows are copied, the old table
+// (with its index and triggers, which the schema run recreates) is dropped, and the new
+// one takes its name. Postgres does this in migration 0601.
+func (d *DB) upgradeProvTargetKinds(ctx context.Context) error {
+	const old = "CHECK (kind IN ('scim','okta','fake'))"
+	const wider = "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle'))"
+	var ddl string
+	err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'provisioning_targets'`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !strings.Contains(ddl, old)) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	newDDL := strings.Replace(strings.Replace(ddl, old, wider, 1), "provisioning_targets", "provisioning_targets__new", 1)
+	for _, q := range []string{newDDL,
+		"INSERT INTO provisioning_targets__new SELECT * FROM provisioning_targets",
+		"DROP TABLE provisioning_targets",
+		"ALTER TABLE provisioning_targets__new RENAME TO provisioning_targets"} {
+		if _, err := tx.ExecContext(ctx, q); err != nil { // #nosec G202 -- fixed statements and the table's own stored definition
+			return fmt.Errorf("store: upgrade provisioning_targets: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
 // upgradeUserIDColumns adds the platform-user-id columns of issue #425 to a SQLite database created
 // before them (CREATE TABLE IF NOT EXISTS cannot). Postgres does this in migrations 0531 and 0532.
 func (d *DB) upgradeUserIDColumns(ctx context.Context) error {
 	for _, c := range []struct{ table, column string }{
 		{"identity_disables", "disabled_by_user_id"}, {"readiness_attestations", "actor_user_id"},
+		{"grp_groups", "deleted_by_user_id"}, {"grp_groups", "deleted_by_display"}, {"grp_groups", "deleted_at"},
+		{"grp_groups", "deleted_reason"}, {"grp_groups", "deleted_with_folder"},
 	} {
 		var exists, n int
 		if err := d.sql.QueryRowContext(ctx,

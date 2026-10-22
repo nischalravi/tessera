@@ -310,3 +310,48 @@ func dropStaleTemplates(adminURL string) {
 		_, _ = db.Exec("DROP DATABASE IF EXISTS " + n + " WITH (FORCE)") // #nosec G202 -- names read back from pg_database with our prefix
 	}
 }
+
+// ExtPGSource is a throwaway Postgres database that stands for a customer's
+// database in the tests of the loaders' Postgres source (RunExtQueryPG). Like
+// the rest of this file it is for test binaries only.
+type ExtPGSource struct {
+	// DSN reaches the database in the form a loader's secret takes
+	// (sslmode=disable: the test server has no certificate).
+	DSN   string
+	admin string
+	owner string
+}
+
+// NewExtPGSourceForTest creates the database (dropped when the test ends), or
+// skips the test when no Postgres is configured.
+func NewExtPGSourceForTest(tb testing.TB) *ExtPGSource {
+	tb.Helper()
+	admin := PostgresForTest(tb)
+	name := "tessera_ext_" + randHex(6)
+	owner, err := createTestDatabase(admin, name, "")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { dropTestDatabase(tb, admin, name) })
+	u, err := url.Parse(owner)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	u.RawQuery = "sslmode=disable"
+	return &ExtPGSource{DSN: u.String(), admin: admin, owner: owner}
+}
+
+// Statements runs statements on the database as its owner.
+func (s *ExtPGSource) Statements(tb testing.TB, stmts ...string) {
+	tb.Helper()
+	db, err := sql.Open("pgx", s.owner)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	defer db.Close()
+	for _, q := range stmts {
+		if _, err := db.Exec(q); err != nil {
+			tb.Fatalf("%s: %v", q, err)
+		}
+	}
+}

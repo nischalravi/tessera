@@ -177,6 +177,8 @@ type DiscoveryStats struct {
 	// Agents and MCPFindings (issue #116) are not in Object(): the sync
 	// response keeps its shape.
 	Agents, MCPFindings int
+	// HeldIdentities and HeldAccounts count the status changes the deletion guard held (not in Object()).
+	HeldIdentities, HeldAccounts int
 }
 
 // Object renders the stats as an ordered JSON object.
@@ -203,12 +205,23 @@ func Import(c *store.TenantTx, now time.Time, res *connectors.DiscoveryResult) (
 
 func discovery(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult, pruneEdges, delegations bool) (DiscoveryStats, error) {
 	var st DiscoveryStats
+	// the deletion guard (internal/deleteguard): what would end more active identities or accounts
+	// than the thresholds allow is held and keeps its current status
+	hold, err := vet(c, now, results)
+	if err != nil {
+		return st, err
+	}
+	st.HeldIdentities, st.HeldAccounts = len(hold.identities), len(hold.accounts)
 	// 1. identities (two passes so manager/owner refs resolve)
 	for _, r := range results {
 		for _, rec := range r.Identities {
+			status, ended := defaultStr(rec.Status, "active"), rec.TerminatedAt
+			if hold.identities[rec.ExternalID] {
+				status, ended = "active", nil
+			}
 			if err := c.UpsertIdentity(&store.Identity{ExternalID: rec.ExternalID, Name: rec.Name, Email: rec.Email,
-				Type: rec.Type, Department: rec.Department, Title: rec.Title, Status: defaultStr(rec.Status, "active"),
-				Description: rec.Description, HiredAt: rec.HiredAt, TerminatedAt: rec.TerminatedAt, CreatedAt: now}); err != nil {
+				Type: rec.Type, Department: rec.Department, Title: rec.Title, Status: status,
+				Description: rec.Description, HiredAt: rec.HiredAt, TerminatedAt: ended, CreatedAt: now}); err != nil {
 				return st, err
 			}
 			st.Identities++
@@ -267,8 +280,12 @@ func discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 	// 5. accounts
 	for _, r := range results {
 		for _, rec := range r.Accounts {
+			status := defaultStr(rec.Status, "active")
+			if hold.accounts[[2]string{rec.System, rec.ExternalID}] {
+				status = "active"
+			}
 			if err := c.UpsertAccount(&store.Account{System: rec.System, ExternalID: rec.ExternalID, Username: rec.Username,
-				IdentityID: res.AccountIdentity(rec.System, rec.ExternalID, rec.Identity), Kind: defaultStr(rec.Kind, "user"), Status: defaultStr(rec.Status, "active"),
+				IdentityID: res.AccountIdentity(rec.System, rec.ExternalID, rec.Identity), Kind: defaultStr(rec.Kind, "user"), Status: status,
 				CreatedAt: rec.CreatedAt, LastLoginAt: rec.LastLoginAt}); err != nil {
 				return st, err
 			}

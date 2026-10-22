@@ -76,8 +76,10 @@ type targetView struct {
 	Kind           string  `json:"kind"`
 	BaseURL        string  `json:"base_url"`
 	Dialect        string  `json:"dialect,omitempty"`
+	APIRoot        string  `json:"api_root,omitempty"`
 	Fault          string  `json:"fault,omitempty"`
 	OnDeprovision  string  `json:"on_deprovision,omitempty"` // "delete": accounts are deleted after the grace period (issue #74)
+	AgentID        string  `json:"agent_id,omitempty"`       // the Directory Agent that reaches this target (issue #302)
 	WriteBack      bool    `json:"write_back"`
 	HasCredential  bool    `json:"has_credential"`
 	CredentialVer  *string `json:"credential_version"`
@@ -88,7 +90,7 @@ func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, Fault: st.Fault, OnDeprovision: st.OnDeprovision, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -241,21 +243,31 @@ func (s *Server) listTargets(r *http.Request, _ *params) (int, any, error) {
 // omitted token keeps the stored credential, unless the edit changes the kind
 // or origin, which then needs a new token (422 credential_required).
 type targetInput struct {
-	Kind      string `json:"kind"`
-	BaseURL   string `json:"base_url"`
-	Dialect   string `json:"dialect"`
-	Fault     string `json:"fault"`
+	Kind    string `json:"kind"`
+	BaseURL string `json:"base_url"`
+	Dialect string `json:"dialect"`
+	Fault   string `json:"fault"`
+	// APIRoot overrides the API path of a vault target.
+	APIRoot string `json:"api_root"`
+	// Token is the credential: an API token (Okta, SCIM) or "user:secret" (a vault).
 	Token     string `json:"token"`
 	WriteBack bool   `json:"write_back"`
 	// OnDeprovision is "disable" (the default: leave a deprovisioned guest's
 	// account disabled) or "delete" it once the grace period has passed.
 	OnDeprovision string `json:"on_deprovision"`
+	// AgentID, for a SCIM or Okta target in a private network, is the active
+	// Directory Agent of the tenant that reaches it. Tessera then does not call
+	// the target: it queues each operation for that agent, which pulls it over
+	// its mutual-TLS channel and pushes from inside the network (issue #302).
+	// The base URL must then be https, and its host:port must be on the agent's
+	// own allowed_push_targets.
+	AgentID string `json:"agent_id"`
 }
 
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	var st provision.Settings
 	switch in.Kind {
-	case provision.KindSCIM, provision.KindOkta:
+	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle:
 		if s.cfg.Env == "prod" && !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://") {
 			return st, badRequest("invalid_base_url", "base_url must be https")
 		}
@@ -281,17 +293,33 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, cyberark, delinea, beyondtrust, sap, oracle or fake")
 	}
+	vault := slices.Contains(provision.PAMKinds, in.Kind) || slices.Contains(provision.ERPKinds, in.Kind) // a target with a path root and a user:secret credential
 	switch {
-	case in.Kind == provision.KindOkta && in.Dialect != "":
+	case (in.Kind == provision.KindOkta || vault) && in.Dialect != "":
 		return st, badRequest("invalid_dialect", "dialect applies to SCIM targets only")
-	case in.Kind != provision.KindOkta && !slices.Contains([]string{"", "standard", "entra"}, in.Dialect):
+	case in.Kind != provision.KindOkta && !vault && !slices.Contains([]string{"", "standard", "entra"}, in.Dialect):
 		return st, badRequest("invalid_dialect", "dialect must be standard or entra")
+	case in.APIRoot != "" && !vault:
+		return st, badRequest("invalid_api_root", "api_root applies to vault and ERP targets only")
+	case in.APIRoot != "" && (!strings.HasPrefix(in.APIRoot, "/") || strings.Contains(in.APIRoot, "..") || strings.Contains(in.APIRoot, "//") || len(in.APIRoot) > 200):
+		return st, badRequest("invalid_api_root", "api_root must be an absolute path")
 	}
-	st.Dialect = in.Dialect
-	if in.Kind == provision.KindOkta {
+	st.Dialect, st.APIRoot = in.Dialect, in.APIRoot
+	if in.Kind == provision.KindOkta || vault {
 		st.Dialect = ""
+	}
+	if in.AgentID != "" {
+		switch {
+		case in.Kind == provision.KindFake:
+			return st, badRequest("invalid_agent", "the dev fake target cannot be reached through an agent")
+		case !idRE.MatchString(in.AgentID):
+			return st, badRequest("invalid_agent", "agent_id is not a Directory Agent id")
+		case !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://"):
+			return st, badRequest("invalid_base_url", "a target reached through an agent must use https")
+		}
+		st.AgentID = in.AgentID
 	}
 	switch in.OnDeprovision {
 	case "", "disable":
@@ -326,6 +354,14 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	} else if err != nil {
 		return 0, nil, err
 	}
+	if in.AgentID != "" {
+		a, err := c.DirectoryAgent(in.AgentID)
+		if errors.Is(err, store.ErrNotFound) || (err == nil && a.Status != store.AgentActive) {
+			return 0, nil, badRequest("invalid_agent", "agent_id must be an active Directory Agent of this tenant")
+		} else if err != nil {
+			return 0, nil, err
+		}
+	}
 	t := &store.ProvTarget{ID: store.NewID(), ConnectionID: id, Kind: in.Kind, BaseURL: in.BaseURL, WriteBack: in.WriteBack,
 		CreatedBy: actor(r)}
 	settings, err := json.Marshal(st)
@@ -350,6 +386,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		credential = "kept"
 	}
 	switch {
+	case in.Token != "" && isUserSecretKind(in.Kind) && !strings.Contains(strings.Trim(in.Token, ":"), ":"):
+		return 0, nil, badRequest("invalid_credential", "the credential is user:secret")
 	case in.Token != "":
 		if t.CredentialEnc, err = provision.SealToken(s.provSeal, c.Tenant(), t.ID, in.Token); err != nil {
 			return 0, nil, err
@@ -370,6 +408,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 			Msg: "changing the target's kind or origin (scheme, host, port) needs a new token; the stored credential does not move with it"}
 	case in.Kind == provision.KindOkta && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
+	case isUserSecretKind(in.Kind) && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "a vault or ERP target needs its credential as user:secret (client_id:client_secret for an ERP)")
 	}
 	if err := c.UpsertProvTarget(t, now); err != nil {
 		return 0, nil, err
@@ -377,6 +417,9 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	detail := ojson.Object{{Key: "connection_id", Value: id},
 		{Key: "kind", Value: in.Kind}, {Key: "write_back", Value: in.WriteBack}, {Key: "dialect", Value: st.Dialect},
 		{Key: "origin", Value: targetOrigin(t.BaseURL)}, {Key: "credential", Value: credential}}
+	if in.AgentID != "" {
+		detail = append(detail, ojson.KV{Key: "agent_id", Value: in.AgentID})
+	}
 	if moved {
 		detail = append(detail, ojson.KV{Key: "previous_kind", Value: old.Kind},
 			ojson.KV{Key: "previous_origin", Value: targetOrigin(old.BaseURL)})
@@ -389,6 +432,11 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, viewTarget(saved, conn.Name), nil
+}
+
+// isUserSecretKind: the kinds whose credential is "user:secret" (vaults and ERPs).
+func isUserSecretKind(k string) bool {
+	return slices.Contains(provision.PAMKinds, k) || slices.Contains(provision.ERPKinds, k)
 }
 
 // targetOrigin is the scheme, host and port of a target URL, lower-cased and

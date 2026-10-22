@@ -30,6 +30,8 @@ const (
 	BatchUpdated = "updated"
 	BatchRemoved = "removed"
 	BatchFailed  = "failed"
+	// BatchHeld: the deletion guard held the removal (internal/deleteguard); nothing changed.
+	BatchHeld = "held"
 )
 
 // BatchOp is one operation. An add names an identity or a group (Group) and may
@@ -66,6 +68,7 @@ type BatchResult struct {
 	Updated int
 	Removed int
 	Failed  int
+	Held    int
 	// Ops are the operation ids of the queued recomputes (none when everything
 	// was applied in the transaction).
 	Ops []int64
@@ -129,6 +132,8 @@ func (e Env) ApplyBatch(id store.GroupID, ops []BatchOp, atomic bool, authorize 
 				res.Updated++
 			case BatchRemoved:
 				res.Removed++
+			case BatchHeld:
+				res.Held++
 			}
 			if item.Op != nil {
 				res.Ops = append(res.Ops, *item.Op)
@@ -194,6 +199,10 @@ func (e Env) batchOne(g store.GroupID, op BatchOp, atomic bool, item *BatchItem)
 		out, err := e.RemoveMember(g, op.Member)
 		if err != nil {
 			return err
+		}
+		if out.Held {
+			item.Status = BatchHeld
+			break
 		}
 		item.Status = BatchRemoved
 		item.setOutcome(out)

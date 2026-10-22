@@ -164,9 +164,9 @@ export interface RawBody {
  * upload is not: its body cannot be replayed from storage).
  */
 /** idempotencyKey is sent as the Idempotency-Key header: a retried write replays its first answer (the groups API). */
-export function api<T = any>(path: string, body?: unknown, method?: string, raw?: RawBody, idempotencyKey?: string): Promise<T> {
+export function api<T = any>(path: string, body?: unknown, method?: string, raw?: RawBody, idempotencyKey?: string, extraHeaders?: Record<string, string>): Promise<T> {
   const m = method ?? (body !== undefined || raw ? "POST" : "GET");
-  return send<T>(path, body, m, raw ? clearPendingAction : () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }), raw, idempotencyKey);
+  return send<T>(path, body, m, raw ? clearPendingAction : () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }), raw, idempotencyKey, extraHeaders);
 }
 
 /**
@@ -177,8 +177,8 @@ export function apiNoResume<T = any>(path: string, body: unknown, method = "POST
   return send<T>(path, body, method, clearPendingAction);
 }
 
-async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void, raw?: RawBody, idempotencyKey?: string): Promise<T> {
-  const headers: Record<string, string> = {};
+async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void, raw?: RawBody, idempotencyKey?: string, extraHeaders?: Record<string, string>): Promise<T> {
+  const headers: Record<string, string> = { ...extraHeaders };
   if (idempotencyKey) headers["idempotency-key"] = idempotencyKey;
   if (raw) headers["content-type"] = raw.contentType;
   else if (body !== undefined) headers["content-type"] = "application/json";
@@ -3752,6 +3752,64 @@ export const siemApi = {
   test: (id: string) => api<{ ok: boolean; error?: string }>(`/siem/sinks/${encodeURIComponent(id)}/test`, {}),
 };
 
+// ---- Contractor (VMS) feeds (issue #304)
+
+export type VmsVendor = "fieldglass" | "beeline" | "csv";
+export interface VmsSettings {
+  workers_path?: string; token_path?: string; page_size?: number;
+  mapping?: Record<string, string>; date_format?: string; csv_path?: string;
+}
+export interface VmsSource {
+  id: string; vendor: VmsVendor; name: string; base_url: string; settings: VmsSettings; has_credential: boolean;
+  status: "active" | "paused"; last_sync_at: string | null; last_result: "ok" | "failed" | null; last_error: string | null;
+  last_counts: Record<string, number>; cursor: string | null; created_by: string; created_at: string; updated_at: string;
+}
+export interface VmsSourceInput {
+  vendor?: VmsVendor; name: string; base_url?: string; settings?: VmsSettings; credential?: string; status?: "active" | "paused";
+}
+export interface VmsRecord {
+  id: string; source: string; status: string; record_state: string; outcome: string; reason?: string;
+  identity_id: number | null; person: string | null; effective_at: string | null; created_at: string;
+}
+export interface VmsReport {
+  source_id: string; name: string; vendor: VmsVendor; status: "ok" | "failed" | "skipped"; records: number;
+  applied: Record<string, number>; failed: number; error?: string;
+}
+export const vmsApi = {
+  sourcesPath: "/vms/sources",
+  recordsPath: "/vms/records?limit=100",
+  create: (body: VmsSourceInput) => apiNoResume<VmsSource>("/vms/sources", body),
+  update: (id: string, body: VmsSourceInput) => apiNoResume<VmsSource>(`/vms/sources/${encodeURIComponent(id)}`, body, "PUT"),
+  remove: (id: string) => api(`/vms/sources/${encodeURIComponent(id)}`, undefined, "DELETE"),
+  sync: (sourceId?: string) => api<{ reports: VmsReport[] }>("/vms/sync", sourceId ? { source_id: sourceId } : {}),
+  importCsv: (id: string, file: File) =>
+    api<VmsReport>(`/vms/sources/${encodeURIComponent(id)}/import`, undefined, "POST", { data: file, contentType: "text/csv" }),
+};
+
+/** What became of a contractor record, as a badge. */
+export const VMS_OUTCOME: Record<string, { tone: "ok" | "info" | "warning" | "critical" | "outline"; label: string }> = {
+  created: { tone: "ok", label: "Created" }, started: { tone: "ok", label: "Updated" }, ended: { tone: "info", label: "Ended" },
+  unchanged: { tone: "outline", label: "No change" }, review: { tone: "warning", label: "Held for review" },
+  rejected: { tone: "critical", label: "Rejected" }, duplicate: { tone: "outline", label: "Seen before" },
+};
+
+/** Why a record was held or rejected, in words. */
+export const VMS_REASON: Record<string, string> = {
+  sponsor_required: "The record names no sponsor.",
+  sponsor_not_found: "The sponsor is not a person in the directory.",
+  sponsor_ambiguous: "Two people share the sponsor's address.",
+  sponsor_not_eligible: "The sponsor cannot sponsor (not an active employee).",
+  sponsor_is_self: "A contractor cannot sponsor themselves.",
+  end_required: "The record has no end date.",
+  end_clamped: "The end date was past the longest term; it was set to the longest term.",
+  email_matches_another_person: "The e-mail address belongs to another person.",
+  term_already_ended: "This contractor's term already ended; a returning contractor needs a person to decide.",
+  identity_not_active: "The person is no longer active.",
+  not_a_contractor: "The person this record matched is not a contractor.",
+  stale_record: "An older version of a record already applied.",
+  invalid_record: "The record is malformed.",
+};
+
 /** Health → badge tone and label. */
 export const SIEM_HEALTH: Record<SiemSink["health"]["status"], { tone: "ok" | "info" | "warning" | "critical" | "outline"; label: string }> = {
   healthy: { tone: "ok", label: "Healthy" },
@@ -3929,12 +3987,12 @@ export interface ProvFinding {
 export interface ProvOpDetail extends ProvOp { payload: { account?: Record<string, unknown>; group?: Record<string, unknown> }; findings: ProvFinding[] }
 
 export interface ProvTarget {
-  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake"; base_url: string;
+  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle"; base_url: string; api_root?: string;
   dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
 /** token is write-only: omit it to keep the stored credential. A change of kind or origin (scheme, host, port) needs a new token (422 credential_required). */
-export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean; on_deprovision?: "disable" | "delete" }
+export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; api_root?: string; dialect?: string; fault?: string; token?: string; write_back: boolean; on_deprovision?: "disable" | "delete" }
 
 export const provisioning = {
   targets: () => api<ProvTarget[]>("/provisioning/targets"),
@@ -4059,7 +4117,7 @@ export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rej
 export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
   | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
-  | "groups.loader.save" | "retention.update";
+  | "groups.loader.save" | "retention.update" | "deletion_guard.update";
 
 export interface AdminPersonRef { id: string; display_name: string }
 
@@ -4451,11 +4509,27 @@ export type CompositeOp = "union" | "intersection" | "complement";
 export interface GrpGroup {
   id: string; folder_id: string; extension: string; display_extension: string; name: string; display_name: string;
   description: string; type: "group" | "role"; definition: GrpDefinition; composite_op: CompositeOp | null; factors?: string[];
-  managed_by: string; data_owner: string | null; member_description: string | null; status: string;
+  managed_by: string; /** the loader that fills a loader-managed group */ loader_id?: string; data_owner: string | null; member_description: string | null; status: string;
   enabled_from: string | null; disabled_at: string | null; requestable: boolean; effective_count: number;
   /** clean, pending (a queued recompute is running: the members are stale) or failed */
   recompute_state: string; created_at: string; version: number;
+  /** While status is deleted: who deleted it (name, role), when, why, and the folder whose delete took it along. */
+  deleted_by?: string; deleted_at?: string; deleted_reason?: string; deleted_with_folder?: string;
 }
+export interface GrpDeleteBlocker { kind: "folder" | "group" | "attr_def"; id: string; name: string; code: string; reason: string }
+export interface GrpDeletePlan {
+  folder_id: string; name: string; folders: number; groups: number; active_groups: number; deleted_groups: number; attr_defs: number;
+  groups_with_members: number; memberships: number; needs_approval: boolean; approval_reason?: string;
+  blockers: GrpDeleteBlocker[]; blocker_count: number;
+}
+export interface GrpTreeDeleted { id: string; deleted: true; recursive: true; folders: number; groups: number; attr_defs: number; memberships: number }
+/** A tree delete the deletion guard stopped part of: 202, the groups it let through are gone, the rest wait for a second admin. */
+export interface GrpTreeHeld extends HeldAnswer { id: string; deleted: false; recursive: true; folders: number; groups: number; attr_defs: number; memberships: number }
+/** The answer of a delete or purge: 200, or (when the deletion guard held it) 202 with HeldAnswer. */
+export type GrpDeleteAnswer = { id: string; deleted?: boolean; purged?: boolean } & Partial<HeldAnswer>
+/** X-Deletion-Batch joins the holds of one bulk action into a single held deletion. */
+const batchHeader = (batch?: string) => (batch ? { "x-deletion-batch": batch } : undefined);
+export interface GrpTreePending { status: "pending_approval"; change_request_id: string; type: string; folder_id: string; expires_at: string | null; reason?: string; detail: string }
 export interface GrpList<T> { items: T[]; limit: number; offset: number }
 export interface GrpDirectMember {
   id: string; type: "identity" | "group"; identity_id: number | null; group_id: string | null; name: string;
@@ -4512,7 +4586,14 @@ export const groups = {
   createFolder: (b: { parent?: string; extension: string; display_extension?: string; description?: string; data_owner?: string }) => api<GrpFolder>("/groups/folders", b),
   updateFolder: (id: string, b: { extension?: string; display_extension?: string; description?: string; data_owner?: string; version?: number }) =>
     api<GrpFolder>(`/groups/folders/${gid(id)}`, b, "PATCH"),
-  deleteFolder: (id: string) => api<{ id: string; deleted: boolean }>(`/groups/folders/${gid(id)}`, undefined, "DELETE"),
+  deleteFolder: (id: string, batch?: string) => api<GrpDeleteAnswer>(`/groups/folders/${gid(id)}`, undefined, "DELETE", undefined, undefined, batchHeader(batch)),
+  /** What deleting the folder and everything in it would remove, and what blocks it. */
+  folderDeletePlan: (id: string) => api<GrpDeletePlan>(`/groups/folders/${gid(id)}/delete-plan`),
+  /**
+   * Delete the folder and its whole tree. Needs a fresh phishing-resistant sign-in (the client resumes the call after
+   * the step-up). A large or populated tree answers 202 with a change request that a second admin approves.
+   */
+  deleteFolderRecursive: (id: string, reason: string) => api<GrpTreeDeleted | GrpTreePending | GrpTreeHeld>(`/groups/folders/${gid(id)}${qs({ recursive: true })}`, { reason }, "DELETE"),
   // groups
   listGroups: (o: { folder?: string; scope?: "one" | "sub"; q?: string; type?: string; deleted?: boolean; limit?: number; offset?: number } = {}) =>
     api<GrpList<GrpGroup>>(`/groups/native${qs({ limit: 500, ...o })}`),
@@ -4520,15 +4601,17 @@ export const groups = {
   createGroup: (b: { folder: string; extension: string; display_extension?: string; description?: string; type?: string; data_owner?: string; member_description?: string; requestable?: boolean; definition?: string; composite_op?: string; factors?: string[] }) =>
     api<GrpGroup>("/groups", b),
   updateGroup: (id: string, b: Record<string, unknown>) => api<GrpGroup>(`/groups/${gid(id)}`, b, "PATCH"),
-  deleteGroup: (id: string) => api<{ id: string; deleted: boolean }>(`/groups/${gid(id)}`, undefined, "DELETE"),
+  deleteGroup: (id: string, reason?: string, batch?: string) => api<GrpDeleteAnswer>(`/groups/${gid(id)}`, reason ? { reason } : undefined, "DELETE", undefined, undefined, batchHeader(batch)),
   restoreGroup: (id: string) => api<GrpGroup>(`/groups/${gid(id)}/restore`, {}),
+  /** Permanently delete a group that is already deleted. 409 group_in_use names the groups that still use it. */
+  purgeGroup: (id: string, reason: string, batch?: string) => api<GrpDeleteAnswer>(`/groups/${gid(id)}/purge`, { reason }, undefined, undefined, undefined, batchHeader(batch)),
   // members
   members: <T = GrpDirectMember | GrpEffectiveMember>(id: string, o: { filter?: MemberFilter; q?: string; sort?: string; enabled?: boolean; page?: number; limit?: number } = {}) =>
     api<GrpMembers<T>>(`/groups/${gid(id)}/members${qs(o)}`),
   addMember: (id: string, b: BatchAdd, key?: string) => api<MemberAnswer>(`/groups/${gid(id)}/members`, b, "POST", undefined, key),
-  removeMember: (id: string, member: string) => api<MemberAnswer>(`/groups/${gid(id)}/members/${gid(member)}`, undefined, "DELETE"),
+  removeMember: (id: string, member: string, batch?: string) => api<MemberAnswer & Partial<HeldAnswer>>(`/groups/${gid(id)}/members/${gid(member)}`, undefined, "DELETE", undefined, undefined, batchHeader(batch)),
   trace: (id: string, identity: number) => api<MemberTrace>(`/groups/${gid(id)}/members/${identity}?trace=true`),
-  batch: (id: string, b: BatchBody, key?: string) => api<BatchResult>(`/groups/${gid(id)}/members:batch`, b, "POST", undefined, key),
+  batch: (id: string, b: BatchBody, key?: string) => api<BatchResult & Partial<HeldAnswer>>(`/groups/${gid(id)}/members:batch`, b, "POST", undefined, key),
   simulate: (changes: SimChange[]) => api<SimulationResult>("/groups:simulate", { changes }),
   setComposite: (id: string, b: { op: string; factors: string[] }) => api<GrpGroup>(`/groups/${gid(id)}/composite`, b, "PUT"),
   convertToComposite: (id: string, b: { op: string; factors: string[]; discard_members?: boolean }) => api<GrpGroup>(`/groups/${gid(id)}/convert-to-composite`, b),
@@ -4551,6 +4634,86 @@ export const groups = {
   unassign: (id: string) => api<{ id: string; deleted: boolean }>(`/groups/attr-assignments/${gid(id)}`, undefined, "DELETE"),
   objectTypes: (kind: "group" | "folder", id: string) => api<ObjectTypes>(`/groups/${kind === "folder" ? "folders/" : ""}${gid(id)}/object-types`),
   setObjectTypes: (kind: "group" | "folder", id: string, types: string[]) => api<ObjectTypes>(`/groups/${kind === "folder" ? "folders/" : ""}${gid(id)}/object-types`, { types }, "PUT"),
+};
+
+// ------------------------------------------------------ group loaders (GR-10)
+// Membership sources: a loader reads a source on a schedule and keeps the members of the groups it owns in sync.
+// Design docs/design/groups-grouper-parity.md §9.1. Routes: /api/groups/loaders, /api/groups/loader-tasks.
+
+export type LoaderType = "sql_simple" | "sql_group_list" | "csv" | "connector_groups" | "attribute" | "recent_memberships" | "scim" | "ldap_simple" | "ldap_group_list";
+export type LoaderStatus = "enabled" | "disabled" | "held";
+export type OnMissingGroup = "empty" | "disable" | "delete" | "keep";
+export type LoaderRunKind = "full" | "incremental" | "preview";
+export type LoaderRunStatus = "running" | "applied" | "held" | "failed" | "approved" | "rejected" | "previewed";
+
+/** Failsafe limits; unset fields have the server's defaults (the stored form always has them filled). */
+export interface LoaderFailsafe {
+  max_removed_percent?: number; max_removed?: number; min_group_size?: number; max_groups_emptied_percent?: number; max_unresolved_percent?: number;
+}
+/** What a create sends: the whole definition (design §9.1). `config` depends on the type. */
+export interface LoaderSpec {
+  name: string; type: LoaderType; connection_id?: string; config: Record<string, unknown>; target_folder: string; name_template?: string;
+  on_missing_group?: OnMissingGroup; and_group?: string; schedule?: string; incremental_secs?: number; failsafe?: LoaderFailsafe; status?: "enabled" | "disabled";
+  /** The credential: a csv url's or SCIM provider's bearer token, a client secret, an LDAP bind password, or a Postgres connection string. Sealed by the server, never returned. */
+  secret?: string;
+}
+export interface LoaderTrip { rule: string; group?: string; value: number; limit: number; detail: string }
+export interface LoaderRun {
+  id: string; loader_id: string; kind: LoaderRunKind; status: LoaderRunStatus; started_at: string; finished_at: string | null;
+  source_rows: number | null; groups_seen: number | null; adds: number | null; removes: number | null; unresolved: number | null;
+  failsafe_tripped: LoaderTrip[] | null; source_hash: string | null; error: string | null;
+  requested_by: string | null; decided_by: string | null; decided_at: string | null; impact?: LoaderImpact | null; plan?: LoaderPlan | null;
+}
+export interface LoaderGroupPlan {
+  name: string; extension: string; display_name?: string; group_id?: string; create?: boolean; restore?: boolean; enable?: boolean;
+  add?: number[]; remove?: number[]; size: number; current: number; missing?: boolean; action?: string;
+}
+export interface LoaderPlan {
+  kind: string; groups: LoaderGroupPlan[]; unresolved?: { source: string; identifier: string; groups: string[] }[];
+  counts: { LoaderGroups: number; SourceRefs: number; UnresolvedRefs: number };
+}
+export interface LoaderImpactRef { id: string; name: string; definition: string; because: string }
+export interface LoaderImpact {
+  added_identities: number; removed_identities: number;
+  groups: { name: string; added: number; removed: number; current: number; size: number; missing?: boolean; action?: string }[];
+  parent_groups: LoaderImpactRef[]; policy_groups: LoaderImpactRef[]; provisioned_targets: string[];
+  removed_used_last_30_days: number; note: string;
+}
+export interface LoaderJob {
+  state: "idle" | "held" | "disabled" | string; next_full_at: string | null; next_incremental_at: string | null; lag_seconds: number | null; last_run: LoaderRun | null;
+}
+export interface GrpLoader {
+  id: string; name: string; type: LoaderType; connection_id: string | null;
+  /** Definition fields: only for those who administer the target folder. */
+  config?: Record<string, unknown>; failsafe?: LoaderFailsafe;
+  target_folder_id: string; target_folder: string; name_template: string; on_missing_group: OnMissingGroup; and_group_id: string | null;
+  schedule: string; incremental_secs: number | null; status: LoaderStatus; has_secret: boolean;
+  /** SQL loaders need a second admin's approval to be created or changed. */
+  requires_approval: boolean; last_full_at: string | null; last_incremental_at: string | null;
+  created_by: string | null; created_at: string; updated_at: string; version: number; job: LoaderJob | null;
+}
+export interface LoaderPending { status: "pending_approval"; change_request_id: string; type: string; loader_id: string | null; expires_at: string; detail: string }
+export interface LoaderUnresolved { source: string; identifier: string; first_seen: string; last_seen: string; groups: string[] }
+export interface LoaderTask {
+  type: "loader_held"; run_id: string; loader_id: string; loader_name: string; target_folder: string; held_at: string;
+  adds: number | null; removes: number | null; unresolved: number | null; failsafe_tripped: LoaderTrip[] | null; impact: LoaderImpact | null;
+}
+/** A create or change of a SQL loader answers 202 with a change request, not the loader. */
+export const loaderPending = (r: GrpLoader | LoaderPending): r is LoaderPending => r.status === "pending_approval";
+
+export const groupLoaders = {
+  list: (o: { limit?: number; offset?: number } = {}) => api<GrpList<GrpLoader>>(`/groups/loaders${qs({ limit: 500, ...o })}`),
+  get: (id: string) => api<GrpLoader>(`/groups/loaders/${gid(id)}`),
+  create: (b: LoaderSpec) => api<GrpLoader | LoaderPending>("/groups/loaders", b),
+  update: (id: string, b: Partial<LoaderSpec> & { version?: number }) => api<GrpLoader | LoaderPending>(`/groups/loaders/${gid(id)}`, b, "PATCH"),
+  /** Run now. A preview applies nothing and answers the plan; an incremental run with nothing new answers `no_changes`. */
+  run: (id: string, kind: LoaderRunKind = "full") => api<LoaderRun | { status: "no_changes" }>(`/groups/loaders/${gid(id)}/run`, { kind }),
+  runs: (id: string, o: { limit?: number; offset?: number } = {}) => api<GrpList<LoaderRun> & { total: number }>(`/groups/loaders/${gid(id)}/runs${qs({ limit: 20, ...o })}`),
+  runDetail: (id: string, runId: string) => api<LoaderRun>(`/groups/loaders/${gid(id)}/runs/${gid(runId)}`),
+  approve: (id: string, runId: string) => api<LoaderRun>(`/groups/loaders/${gid(id)}/runs/${gid(runId)}/approve`, {}),
+  reject: (id: string, runId: string) => api<LoaderRun>(`/groups/loaders/${gid(id)}/runs/${gid(runId)}/reject`, {}),
+  unresolved: (id: string, o: { limit?: number; offset?: number } = {}) => api<GrpList<LoaderUnresolved> & { total: number }>(`/groups/loaders/${gid(id)}/unresolved${qs({ limit: 50, ...o })}`),
+  tasks: () => api<GrpList<LoaderTask>>(`/groups/loader-tasks${qs({ limit: 200 })}`),
 };
 
 // ------------------------------------------------------ group event sinks (GR-18)
@@ -4647,4 +4810,62 @@ export const oauthApps = {
   revokeGrant: (id: string, grantId: string, reason: string) =>
     api<OAuthRevokeResult>(`/oauth-apps/${encodeURIComponent(id)}/grants/${encodeURIComponent(grantId)}/revoke`, { reason }),
   revokeVendor: (vendor: string, reason: string) => api<OAuthRevokeResult>("/oauth-apps/revoke-vendor", { vendor, reason }),
+};
+
+// ------------------------------------------------------------ deletion threshold guard (internal/deleteguard)
+
+export type DeletionCategory = "groups" | "folders" | "group_members" | "accounts" | "identities";
+export type DeletionMode = "hold_excess" | "hold_all" | "off";
+
+/** The answer (202) of a deleting route the guard held part of. */
+export interface HeldAnswer {
+  status: "partially_applied" | "held";
+  applied: number; held: number; hold_id: string;
+  /** The limit in force, "25 per hour". */
+  threshold: string;
+  /** "Deleted 25 of 40: 15 held for approval (threshold 25 per hour)". */
+  message: string;
+}
+
+/** A category's threshold and how much of its window is used. */
+export interface DeletionPolicy {
+  category: DeletionCategory; max_count: number | null; max_percent: number | null; window_minutes: number; mode: DeletionMode;
+  default: boolean; version: number; updated_at?: string;
+  used: number; population: number; limit: number | null; remaining: number | null;
+}
+
+/** GET /api/admin/deletion-guard. */
+export interface DeletionGuardView {
+  categories: DeletionPolicy[]; hold_expiry_hours: number; open_holds: number;
+  defaults: Record<DeletionCategory, { max_count: number | null; max_percent: number | null; window_minutes: number; mode: DeletionMode }>;
+}
+
+export type HoldStatus = "held" | "released" | "partially_released" | "discarded" | "expired";
+export type HoldItemStatus = "held" | "released" | "discarded" | "gone" | "failed";
+
+export interface DeletionHoldItem { ord: number; kind: string; ref: string; label: string; status: HoldItemStatus; note: string | null }
+
+export interface DeletionHold {
+  id: string; category: DeletionCategory; status: HoldStatus; mode: DeletionMode;
+  reason: { window_minutes?: number; max_count?: number | null; max_percent?: number | null; limit?: number | null; used_before?: number; attempted?: number; applied?: number; population?: number;
+    /** Why the feed itself looks broken (empty, much shorter than the last good run, a partial read). */
+    sanity?: string[]; previous_count?: number; new_count?: number; source_driven?: boolean };
+  actor: string; actor_name?: string; source: string; source_id: string; correlation_id: string; item_count: number;
+  created_at: string; expires_at: string; resolved_at: string | null; resolved_by: string | null; note: string | null;
+  items?: DeletionHoldItem[];
+}
+
+export interface HoldDecision { hold_id: string; status: HoldStatus; released: number; gone: number; failed: number; discarded: number }
+
+export interface DeletionPolicyInput { category: DeletionCategory; max_count: number | null; max_percent: number | null; window_minutes: number; mode: DeletionMode }
+
+export const deletionGuard = {
+  holds: (status = "", category = "") => api<{ holds: DeletionHold[] }>(`/admin/deletion-holds${qs({ status, category, limit: 500 })}`),
+  hold: (id: string) => api<DeletionHold>(`/admin/deletion-holds/${encodeURIComponent(id)}`),
+  /** Release the held items (all, or only the listed positions and discard the rest). A different admin than the actor; a step-up. */
+  approve: (id: string, items?: number[]) => api<HoldDecision>(`/admin/deletion-holds/${encodeURIComponent(id)}/approve`, items ? { items } : {}),
+  discard: (id: string, note = "") => api<HoldDecision>(`/admin/deletion-holds/${encodeURIComponent(id)}/discard`, { note }),
+  /** Thresholds change through an admin change request: tightening applies at once, loosening needs a second admin. */
+  change: (policies: DeletionPolicyInput[], holdExpiryHours?: number) =>
+    adminChanges.submit("deletion_guard.update", { ...(policies.length ? { policies } : {}), ...(holdExpiryHours !== undefined ? { hold_expiry_hours: holdExpiryHours } : {}) }),
 };

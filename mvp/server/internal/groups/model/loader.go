@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/naming"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
@@ -87,6 +88,8 @@ type LoaderSyncResult struct {
 	Added, Removed int
 	// Skipped counts adds of an identity that no longer exists.
 	Skipped int
+	// Held counts removals the deletion guard held (they are in a held deletion, not applied).
+	Held    int
 	Outcome Outcome
 }
 
@@ -136,6 +139,14 @@ func (e Env) LoaderSync(g *store.NativeGroup, loaderID string, add, remove []int
 		}
 		seeds, res.Added = append(seeds, id), res.Added+1
 	}
+	// what the loader would remove goes through the deletion guard as one batch; only what it
+	// lets through is removed, the rest is held (ref: identity id)
+	type removal struct {
+		id int64
+		m  *store.DirectMembership
+	}
+	var removals []removal
+	var items []deleteguard.Item
 	for _, id := range remove {
 		if seen[id] {
 			continue
@@ -151,13 +162,32 @@ func (e Env) LoaderSync(g *store.NativeGroup, loaderID string, add, remove []int
 		if m.Source != "loader" || m.SourceRef == nil || *m.SourceRef != loaderID {
 			continue
 		}
-		if err := e.Tx.DeleteGrpDirect(m.ID); err != nil {
+		removals = append(removals, removal{id, m})
+		items = append(items, deleteguard.Item{Kind: ItemMember, Ref: memberRef(g.ID, store.MemberIdentity, strconv.FormatInt(id, 10)),
+			Label: fmt.Sprintf("identity %d from %s", id, g.Name)})
+	}
+	if len(items) > 0 {
+		d, err := e.admit(deleteguard.CatMembers, items...)
+		if err != nil {
 			return res, err
 		}
-		if err := e.emitDirect(events.MembershipDirectRemoved, m); err != nil {
-			return res, err
+		res.Held = len(d.Held)
+		allowed := map[string]bool{}
+		for _, it := range d.Applied {
+			allowed[it.Ref] = true
 		}
-		seeds, res.Removed = append(seeds, id), res.Removed+1
+		for _, r := range removals {
+			if !allowed[memberRef(g.ID, store.MemberIdentity, strconv.FormatInt(r.id, 10))] {
+				continue
+			}
+			if err := e.Tx.DeleteGrpDirect(r.m.ID); err != nil {
+				return res, err
+			}
+			if err := e.emitDirect(events.MembershipDirectRemoved, r.m); err != nil {
+				return res, err
+			}
+			seeds, res.Removed = append(seeds, r.id), res.Removed+1
+		}
 	}
 	if len(seeds) == 0 {
 		return res, nil

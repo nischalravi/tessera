@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -36,7 +37,14 @@ type Service struct {
 	// DataDir is the directory SQL and CSV files must be under
 	// (TESSERA_LOADER_DATA_DIR); empty turns file sources off.
 	DataDir string
-	Log     *slog.Logger
+	// Prod refuses weaker source settings (a Postgres source that is not
+	// sslmode=verify-full). PGDial is the address-checked dialer of Postgres
+	// sources and Directory the opener of LDAP connections (NewDirectoryOpener);
+	// nil turns those sources off.
+	Prod      bool
+	PGDial    func(ctx context.Context, network, addr string) (net.Conn, error)
+	Directory DirectoryOpener
+	Log       *slog.Logger
 }
 
 func (s *Service) now() time.Time {
@@ -149,7 +157,8 @@ func (s *Service) Run(ctx context.Context, tenant tenancy.ID, loaderID, kind str
 	}
 	stats := &SourceStats{}
 	job := LoaderJob{Loader: l, Config: json.RawMessage(l.Config), Secret: secret,
-		Env: Env{DB: s.DB, Tenant: tenant, Now: started, DataDir: s.DataDir, HTTP: s.HTTP}, Stats: stats}
+		Env: Env{DB: s.DB, Tenant: tenant, Now: started, DataDir: s.DataDir, HTTP: s.HTTP, Prod: s.Prod, PGDial: s.PGDial,
+			Directory: s.Directory}, Stats: stats}
 	fctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	var loaded []LoadedGroup
@@ -255,7 +264,10 @@ func (s *Service) Run(ctx context.Context, tenant tenancy.ID, loaderID, kind str
 				}
 			}
 		default:
-			res, err := ApplyPlan(a.env(tx, now, s.Engine), cur, plan)
+			env := a.env(tx, now, s.Engine)
+			// the deletion guard (internal/deleteguard) sees the loader and counts this run as one batch
+			env.CauseRef, env.Correlation = cur.ID, "loader:"+cur.ID // stable: a later run of the same loader joins the open hold
+			res, err := ApplyPlan(env, cur, plan)
 			if err != nil {
 				var me *model.Error
 				if errors.As(err, &me) {
@@ -529,7 +541,10 @@ func (s *Service) decide(ctx context.Context, tenant tenancy.ID, loaderID, runID
 			if err := json.Unmarshal([]byte(*run.Plan), &plan); err != nil {
 				return err
 			}
-			res, err := ApplyPlan(a.env(tx, now, s.Engine), l, &plan)
+			env := a.env(tx, now, s.Engine)
+			// an approved held run is an approved override: the deletion guard neither counts nor holds it
+			env.CauseRef, env.Override = l.ID, true
+			res, err := ApplyPlan(env, l, &plan)
 			if err != nil {
 				return err
 			}
