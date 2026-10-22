@@ -77,9 +77,9 @@ export function LoaderPanel({ loader, onChanged }: { loader: GrpLoader; onChange
         canAdmin && { label: "Run now", icon: <Play size={16} />, onClick: () => run("full"), disabled: busy !== null || loader.status !== "enabled", title: loader.status !== "enabled" ? "Turn the source on first, or decide its held run" : undefined },
         canAdmin && { label: "Preview", icon: <Eye size={16} />, onClick: () => run("preview"), disabled: busy !== null },
         canAdmin && loader.status !== "held" && { label: loader.status === "disabled" ? "Turn on" : "Turn off", icon: <Power size={16} />, onClick: toggle, disabled: busy !== null,
-          title: loader.requires_approval && loader.status === "disabled" ? "Turning a SQL source on needs a second administrator" : undefined },
+          title: loader.requires_approval && loader.status === "disabled" ? "Turning this source on needs a second administrator" : undefined },
       ]} />
-      {loader.requires_approval && <Callout tone="info">This source runs a SQL query, so creating it or changing it needs a second administrator's approval. Turning it off does not.</Callout>}
+      {loader.requires_approval && <Callout tone="info">Creating this source, or changing its definition or credential, needs a second administrator's approval (it reads an outside system or runs a query). Turning it off, running it and previewing it do not.</Callout>}
       <dl className="kv">
         <dt>State</dt><dd><Badge tone={st.tone} dot>{st.label}</Badge></dd>
         <dt>Kind</dt><dd>{typeLabel(loader.type)}</dd>

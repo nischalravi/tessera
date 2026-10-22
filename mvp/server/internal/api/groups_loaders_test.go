@@ -583,12 +583,14 @@ func TestLoadersAPI_PostgresSourceCarriesItsSecretThroughApproval(t *testing.T) 
 	pa.call("PATCH", "/api/groups/loaders/"+id, `{"secret":"postgres://reader:new-pw@db.example.com/hr"}`, 202)
 }
 
-// TestLoadersAPI_ScimAndLDAPSources: the SCIM and LDAP types are saved directly
-// (no query a person wrote), each with its credential sealed and never
-// returned; the types still not built are refused.
-func TestLoadersAPI_ScimAndLDAPSources(t *testing.T) {
+// TestLoadersAPI_ScimAndLDAPNeedASecondApprover: like a SQL loader, a SCIM or
+// LDAP loader is not saved by the request that asks for it, and neither is any
+// change of its definition or credential; the requester cannot approve it, the
+// credential stays sealed in the request, and the types still not built are refused.
+func TestLoadersAPI_ScimAndLDAPNeedASecondApprover(t *testing.T) {
 	e, _ := newLoaderEnv(t)
 	app := e.admin.folder("", "app")
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
 	scim := fmt.Sprintf(`{"name":"IdP","type":"scim","target_folder":%q,"config":{"base_url":"https://scim.example.org/scim/v2","subject_attr":"email"}%%s}`, app)
 	ldap := fmt.Sprintf(`{"name":"Dir","type":"ldap_group_list","target_folder":%q,"config":{"url":"ldaps://ldap.example.org","bind_dn":"cn=r,dc=x",
 		"base_dn":"dc=x","filter":"(objectClass=groupOfNames)","member_rdn":"uid"}%%s}`, app)
@@ -597,17 +599,56 @@ func TestLoadersAPI_ScimAndLDAPSources(t *testing.T) {
 			t.Errorf("no credential = %d %s", rec.Code, rec.Body.String())
 		}
 	}
-	s := e.admin.call("POST", "/api/groups/loaders", fmt.Sprintf(scim, `,"secret":"scim-bearer-secret"`), 201)
-	d := e.admin.call("POST", "/api/groups/loaders", fmt.Sprintf(ldap, `,"secret":"bind-pw-secret"`), 201)
-	for _, l := range []map[string]any{s, d} {
-		if l["has_secret"] != true || l["requires_approval"] != false {
-			t.Errorf("loader = %v", l)
+	approve := func(who grpClient, cid string, want int) {
+		t.Helper()
+		ph := e.admin.call("GET", "/api/admin/change-requests/"+cid, "", 200)["payload_hash"]
+		if rec := who.do("POST", "/api/admin/change-requests/"+cid+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, ph)); rec.Code != want {
+			t.Errorf("approve = %d %s, want %d", rec.Code, rec.Body.String(), want)
+		}
+	}
+	ids := map[string]string{}
+	for name, b := range map[string]string{"scim": fmt.Sprintf(scim, `,"secret":"scim-bearer-secret"`), "ldap": fmt.Sprintf(ldap, `,"secret":"bind-pw-secret"`)} {
+		acc := e.admin.call("POST", "/api/groups/loaders", b, 202)
+		cid := acc["change_request_id"].(string)
+		if n := len(lItems(e.admin.call("GET", "/api/groups/loaders", "", 200))); n != len(ids) {
+			t.Fatalf("%s exists before it is approved (%d loaders)", name, n)
+		}
+		if rec := e.admin.do("GET", "/api/admin/change-requests/"+cid, ""); strings.Contains(rec.Body.String(), "scim-bearer-secret") || strings.Contains(rec.Body.String(), "bind-pw-secret") {
+			t.Errorf("the change request shows the credential: %s", rec.Body.String())
+		}
+		approve(e.admin, cid, 403) // the requester is not the approver
+		approve(admin2, cid, 200)
+		for _, l := range lItems(e.admin.call("GET", "/api/groups/loaders", "", 200)) {
+			if m := l.(map[string]any); m["type"] == map[string]string{"scim": "scim", "ldap": "ldap_group_list"}[name] {
+				ids[name] = m["id"].(string)
+				if m["has_secret"] != true || m["requires_approval"] != true {
+					t.Errorf("loader = %v", m)
+				}
+			}
 		}
 	}
 	if rec := e.admin.do("GET", "/api/groups/loaders", ""); strings.Contains(rec.Body.String(), "scim-bearer-secret") || strings.Contains(rec.Body.String(), "bind-pw-secret") {
 		t.Error("the list shows a credential")
 	}
-	// a private-address or odd-port directory is refused when it is configured
+	// a credential change, a definition change and turning it on need approval; turning it off does not
+	for name, id := range ids {
+		for _, body := range []string{`{"secret":"new-credential"}`, `{"schedule":"@hourly"}`} {
+			acc := e.admin.call("PATCH", "/api/groups/loaders/"+id, body, 202)
+			if acc["status"] != "pending_approval" {
+				t.Errorf("%s %s = %v", name, body, acc)
+			}
+			approve(e.admin, acc["change_request_id"].(string), 403)
+			approve(admin2, acc["change_request_id"].(string), 200)
+		}
+		if got := e.admin.call("GET", "/api/groups/loaders/"+id, "", 200); got["schedule"] != "@hourly" || got["has_secret"] != true {
+			t.Errorf("%s after the approved changes = %v", name, got)
+		}
+		if rec := e.admin.do("PATCH", "/api/groups/loaders/"+id, `{"secret":""}`); rec.Code != 422 {
+			t.Errorf("%s: clearing the credential = %d %s", name, rec.Code, rec.Body.String())
+		}
+		e.admin.call("PATCH", "/api/groups/loaders/"+id, `{"status":"disabled"}`, 200)
+	}
+	// a private-address or odd-port directory is refused when it is asked for
 	bad := strings.Replace(fmt.Sprintf(ldap, `,"secret":"x"`), "ldaps://ldap.example.org", "ldaps://ldap.example.org:3269", 1)
 	bad = strings.Replace(bad, `"Dir"`, `"Dir2"`, 1)
 	if rec := e.admin.do("POST", "/api/groups/loaders", bad); rec.Code != 422 || !strings.Contains(rec.Body.String(), "389") {
@@ -618,12 +659,5 @@ func TestLoadersAPI_ScimAndLDAPSources(t *testing.T) {
 		if rec.Code != 422 || !strings.Contains(rec.Body.String(), "loader_type_unavailable") {
 			t.Errorf("%s = %d %s", typ, rec.Code, rec.Body.String())
 		}
-	}
-	// the secret of a SCIM loader is replaced like a CSV's
-	if got := e.admin.call("PATCH", "/api/groups/loaders/"+s["id"].(string), `{"secret":"scim-2"}`, 200); got["has_secret"] != true {
-		t.Errorf("replaced = %v", got)
-	}
-	if rec := e.admin.do("PATCH", "/api/groups/loaders/"+s["id"].(string), `{"secret":""}`); rec.Code != 422 || !strings.Contains(rec.Body.String(), "secret_required") {
-		t.Errorf("clearing a required credential = %d %s", rec.Code, rec.Body.String())
 	}
 }

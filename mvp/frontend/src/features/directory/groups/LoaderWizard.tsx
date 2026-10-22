@@ -5,7 +5,7 @@ import { Badge, Button, Callout, Drawer, Loading, Stepper, useToast } from "../.
 import { PlanView } from "./LoaderRuns";
 import { errText, useLoad } from "./hooks";
 import {
-  ATTRIBUTES, LOADER_TYPES, LoaderForm, ON_MISSING, SCHEDULES, SUBJECT_SOURCES, buildSpec, emptyForm, isSqlType, scheduleText, stepProblems, typeInfo, typeLabel,
+  ATTRIBUTES, LOADER_TYPES, LoaderForm, ON_MISSING, SCHEDULES, SUBJECT_SOURCES, buildSpec, emptyForm, isSqlType, needsApproval, scheduleText, stepProblems, typeInfo, typeLabel,
 } from "./loaderModel";
 
 type StepId = "type" | "source" | "people" | "schedule" | "review";
@@ -24,7 +24,7 @@ function Field({ label, hint, children }: { label: string; hint?: ReactNode; chi
 /**
  * Add a membership source: pick the kind, configure it, say how people are matched, set the schedule and the
  * failsafes, then save. A source that is not a SQL query is saved turned off and previewed at once, so the plan
- * it computes is seen before anything changes; a SQL source waits for a second administrator's approval.
+ * it computes is seen before anything changes; a SQL, SCIM or LDAP source waits for a second administrator's approval.
  */
 export function LoaderWizard({ folder, onClose, onSaved }: { folder?: string; onClose: () => void; onSaved?: (l: GrpLoader | null) => void }) {
   const toast = useToast();
@@ -39,6 +39,7 @@ export function LoaderWizard({ folder, onClose, onSaved }: { folder?: string; on
   const conns = useApi<Connection[]>(f.type === "connector_groups" ? "/connections" : null);
   const info = typeInfo(f.type ?? "");
   const sql = isSqlType(f.type ?? "");
+  const approval = needsApproval(f.type ?? "");
 
   const order = STEPS.map((s) => s.id);
   const idx = order.indexOf(step);
@@ -103,7 +104,7 @@ export function LoaderWizard({ folder, onClose, onSaved }: { folder?: string; on
         <div className="stack">
           {result.pending && (
             <Callout tone="info">
-              A source that runs a SQL query needs a second administrator to approve it before it exists. The request is filed (change request {result.pending.change_request_id.slice(0, 8)}).{" "}
+              A SQL, SCIM or LDAP source needs a second administrator to approve it before it exists. The request is filed (change request {result.pending.change_request_id.slice(0, 8)}).{" "}
               <Link to="/admin/change-requests">Open the change requests</Link>. Once it is approved, open the group's Source tab, or Loaders, to preview it.
             </Callout>
           )}
@@ -126,7 +127,7 @@ export function LoaderWizard({ folder, onClose, onSaved }: { folder?: string; on
 
   const next = () => { if (!problems.length) setStep(order[idx + 1]); };
   const sub = (
-    <span>{info ? typeLabel(info.id) : "New source"}{sql && <> <Badge tone="warning">Second admin approves</Badge></>}</span>
+    <span>{info ? typeLabel(info.id) : "New source"}{approval && <> <Badge tone="warning">Second admin approves</Badge></>}</span>
   );
 
   return (
@@ -136,7 +137,7 @@ export function LoaderWizard({ folder, onClose, onSaved }: { folder?: string; on
         {idx > 0 && <Button onClick={() => setStep(order[idx - 1])}>Back</Button>}
         {step !== "review"
           ? <Button variant="primary" onClick={next} disabled={problems.length > 0}>Next</Button>
-          : <Button variant="primary" onClick={save} disabled={busy || allProblems.length > 0}>{busy ? "Saving…" : sql ? "Submit for approval" : "Save and preview"}</Button>}
+          : <Button variant="primary" onClick={save} disabled={busy || allProblems.length > 0}>{busy ? "Saving…" : approval ? "Submit for approval" : "Save and preview"}</Button>}
       </>}>
       <div className="stack">
         <Stepper label="Steps of adding a source" current={step} onSelect={(s) => goTo(s as StepId)}
@@ -146,9 +147,9 @@ export function LoaderWizard({ folder, onClose, onSaved }: { folder?: string; on
             <legend className="sr-only">Kind of source</legend>
             {LOADER_TYPES.map((t) => (
               <label key={t.id} className="row tight" style={{ alignItems: "flex-start", gap: 10, padding: 8, border: "1px solid var(--border)", borderRadius: "var(--r-md)" }}>
-                <input type="radio" name="loader-type" checked={f.type === t.id} onChange={() => set({ type: t.id, startEnabled: !!t.sql })} style={{ marginTop: 4 }} />
+                <input type="radio" name="loader-type" checked={f.type === t.id} onChange={() => set({ type: t.id, startEnabled: !!t.approval })} style={{ marginTop: 4 }} />
                 <span>
-                  <b>{t.label}</b>{t.sql && <> <Badge tone="warning">Second admin approves</Badge></>}
+                  <b>{t.label}</b>{t.approval && <> <Badge tone="warning">Second admin approves</Badge></>}
                   <span className="muted small" style={{ display: "block" }}>{t.blurb}</span>
                 </span>
               </label>
@@ -384,10 +385,10 @@ export function LoaderWizard({ folder, onClose, onSaved }: { folder?: string; on
               <dt>Runs</dt><dd>{scheduleText(f.schedule === "custom" ? f.cron : f.schedule)}</dd>
               <dt>If a group goes missing</dt><dd>{ON_MISSING.find((o) => o.id === f.onMissing)?.label}</dd>
             </dl>
-            {sql
+            {approval
               ? (
                 <>
-                  <Callout tone="warn">A second administrator must approve this before it exists. The query is part of the request, so they approve exactly what will run. After it is approved you can preview it from the group's Source tab.</Callout>
+                  <Callout tone="warn">A second administrator must approve this before it exists. The definition is part of the request, so they approve exactly what will run (the credential stays sealed). After it is approved you can preview it from the group's Source tab.</Callout>
                   <label className="row tight"><input type="checkbox" checked={f.startEnabled} onChange={(e) => set({ startEnabled: e.target.checked })} /><span>Start turned on (turning it on later needs another approval)</span></label>
                 </>
               )

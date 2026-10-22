@@ -3336,8 +3336,7 @@ second approver reads) and is stored on the loader when it is approved; a change
   AD's ranged member lists (1,500 at a time) are followed. The reader is `internal/connectors/ldap` (`Reader`,
   which has no write operation) over `internal/safedial`, so a private address is refused in production (the dev
   allowlist `TESSERA_SAFEDIAL_ALLOW` is refused there by the configuration) and a bind password is sent only on a
-  connection already protected by TLS 1.2 or later. LDAP loaders are saved directly (no second approver: no query a
-  person wrote); only SQL loaders need two admins.
+  connection already protected by TLS 1.2 or later. Like SQL loaders, LDAP and SCIM loaders need a second admin (see below).
 - *SQL on Postgres.* `config`: `"engine":"postgres"` (no `database`), `query`, optional `groups_query`,
   `incremental_query` (`@cursor` becomes a numeric parameter), `ca_pem`; the `secret` is
   `postgres://user:password@host:5432/db`. Only `sslmode` and `connect_timeout` are accepted as options (so no
@@ -3389,7 +3388,7 @@ LDAPS and StartTLS, no bind without TLS, bind refused), `internal/store` (`TestC
   (state, next run, last run, lag) is part of the loader's answer: there is no `/api/admin/jobs` yet.
 - **Who may configure.** Create and change need the platform permission `groups.loader.admin`
   (`tenant_admin`, `policy_admin`), a fresh phishing-resistant step-up (`STEP_UP_POLICY`) and `stem_admin`
-  on the target folder. A **SQL loader** is not saved by that request: it answers `202` with a
+  on the target folder. A **SQL, SCIM or LDAP loader** (`loaders.NeedsSecondApprover`) is not saved by that request, nor is any change of its definition or credential: it answers `202` with a
   `groups.loader.save` admin change request (internal/admin) that another admin approves (so a tenant
   needs two active admins); turning a loader off needs no approval. Run and preview need
   `groups.loader.admin` and `stem_admin`; reading needs `stem_view` (the definition, the runs' detail and

@@ -10,22 +10,24 @@ export interface LoaderTypeInfo {
   id: LoaderType;
   label: string;
   blurb: string;
-  /** Runs a query a person wrote: creating or changing it needs a second admin (GRP-6311). */
+  /** Runs a query a person wrote (incremental feeds apply). */
   sql?: boolean;
+  /** Creating or changing it needs a second admin (GRP-6311): SQL, SCIM and LDAP. */
+  approval?: boolean;
   needsConnection?: boolean;
 }
 
 /** The loader types that can be configured today (the others are designed but refused by the server). */
 export const LOADER_TYPES: LoaderTypeInfo[] = [
-  { id: "sql_simple", label: "SQL query: one group", sql: true, blurb: "A query on a database file returns the people; they all become members of one group." },
-  { id: "sql_group_list", label: "SQL query: many groups", sql: true, blurb: "A query returns group name and person pairs; one group is kept per name." },
+  { id: "sql_simple", label: "SQL query: one group", sql: true, approval: true, blurb: "A query on a database file returns the people; they all become members of one group." },
+  { id: "sql_group_list", label: "SQL query: many groups", sql: true, approval: true, blurb: "A query returns group name and person pairs; one group is kept per name." },
   { id: "csv", label: "CSV file or URL", blurb: "A file under the loader data directory, or an https URL, with a header row." },
   { id: "connector_groups", label: "A connected system's groups", needsConnection: true, blurb: "Every group a connection has becomes a native group here." },
   { id: "attribute", label: "Identity attribute rule", blurb: "One group per value of an identity attribute, such as department." },
   { id: "recent_memberships", label: "Recent members of a group", blurb: "People who were in a group in the last N days, optionally with its current members." },
-  { id: "scim", label: "SCIM provider's groups", blurb: "The groups and members of another system's SCIM 2.0 service, read on a schedule." },
-  { id: "ldap_simple", label: "LDAP search: one group", blurb: "People an LDAP or Active Directory search returns become the members of one group." },
-  { id: "ldap_group_list", label: "LDAP groups", blurb: "Group entries of an LDAP or Active Directory directory, with their members." },
+  { id: "scim", approval: true, label: "SCIM provider's groups", blurb: "The groups and members of another system's SCIM 2.0 service, read on a schedule." },
+  { id: "ldap_simple", approval: true, label: "LDAP search: one group", blurb: "People an LDAP or Active Directory search returns become the members of one group." },
+  { id: "ldap_group_list", approval: true, label: "LDAP groups", blurb: "Group entries of an LDAP or Active Directory directory, with their members." },
 ];
 /** Kinds that hold a credential the server seals (a token, a client secret, a bind password or a connection string). */
 export const needsSecret = (f: Pick<LoaderForm, "type" | "sqlEngine">) =>
@@ -33,6 +35,7 @@ export const needsSecret = (f: Pick<LoaderForm, "type" | "sqlEngine">) =>
 export const typeInfo = (t: string) => LOADER_TYPES.find((x) => x.id === t);
 export const typeLabel = (t: string) => typeInfo(t)?.label ?? t;
 export const isSqlType = (t: string) => !!typeInfo(t)?.sql;
+export const needsApproval = (t: string) => !!typeInfo(t)?.approval;
 
 /** Where the people named by a source are matched. The server matches exactly; nothing is guessed. */
 export const SUBJECT_SOURCES: { id: string; label: string; hint: string }[] = [

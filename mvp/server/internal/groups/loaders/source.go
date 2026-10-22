@@ -57,6 +57,19 @@ func Types() []string {
 // second approver (GRP-6311).
 func IsSQL(typ string) bool { return typ == TypeSQLSimple || typ == TypeSQLGroupList }
 
+// NeedsSecondApprover reports whether creating a loader of the type, and every
+// change of its definition or credential, needs a second administrator
+// (GRP-6311): a loader that runs a query a person wrote (SQL, on a file or a
+// Postgres server) or that reads a directory or a provider with a credential
+// (SCIM, LDAP). Turning it off, running it and previewing it do not.
+func NeedsSecondApprover(typ string) bool {
+	switch typ {
+	case TypeSQLSimple, TypeSQLGroupList, TypeSCIM, TypeLDAPSimple, TypeLDAPGroupList:
+		return true
+	}
+	return false
+}
+
 // SubjectRef names a person in a source: Source is "identity" (an identity's
 // external id, also the empty source), "email", "tessera_id", the system of a
 // connected account (a connector's system name) or the source recorded on the

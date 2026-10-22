@@ -188,3 +188,12 @@ func TestSQLPostgres_Run(t *testing.T) {
 		t.Errorf("a missing database: %s %q", r3.Status, deref(r3.Error))
 	}
 }
+
+func TestNeedsSecondApprover(t *testing.T) {
+	for _, typ := range loaders.Types() {
+		want := map[string]bool{loaders.TypeSQLSimple: true, loaders.TypeSQLGroupList: true, loaders.TypeSCIM: true, loaders.TypeLDAPSimple: true, loaders.TypeLDAPGroupList: true}[typ]
+		if got := loaders.NeedsSecondApprover(typ); got != want {
+			t.Errorf("NeedsSecondApprover(%s) = %v, want %v", typ, got, want)
+		}
+	}
+}

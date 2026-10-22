@@ -175,3 +175,10 @@ test("the checks of the new sources", () => {
   assert.match(m.stepProblems("source", sql).join(), /connection string/);
   assert.deepEqual(m.stepProblems("source", { ...sql, dsn: "postgres://u:p@db.example.com/hr" }), []);
 });
+
+test("SQL, SCIM and LDAP sources say a second admin approves; the others do not", () => {
+  assert.deepEqual(m.LOADER_TYPES.filter((t) => t.approval).map((t) => t.id), ["sql_simple", "sql_group_list", "scim", "ldap_simple", "ldap_group_list"]);
+  assert.equal(m.needsApproval("csv"), false);
+  assert.equal(m.needsApproval("scim"), true);
+  assert.equal(m.isSqlType("scim"), false);
+});

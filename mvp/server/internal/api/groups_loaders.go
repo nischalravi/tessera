@@ -101,7 +101,7 @@ type loaderView struct {
 func viewLoader(tx *store.TenantTx, l *store.GrpLoader, now time.Time, full bool) (loaderView, error) {
 	v := loaderView{ID: l.ID, Name: l.Name, Type: l.Type, ConnectionID: l.ConnectionID, TargetFolderID: string(l.TargetFolder),
 		NameTemplate: l.NameTemplate, OnMissingGroup: l.OnMissingGroup, Schedule: l.Schedule, IncrementalSecs: l.IncrementalSecs,
-		Status: l.Status, HasSecret: len(l.SecretEnc) > 0, RequiresApproval: loaders.IsSQL(l.Type), LastFullAt: rtPtr(l.LastFullAt),
+		Status: l.Status, HasSecret: len(l.SecretEnc) > 0, RequiresApproval: loaders.NeedsSecondApprover(l.Type), LastFullAt: rtPtr(l.LastFullAt),
 		LastIncrementalAt: rtPtr(l.LastIncrAt), CreatedBy: l.CreatedBy, CreatedAt: store.RT(l.CreatedAt),
 		UpdatedAt: store.RT(l.UpdatedAt), Version: l.Version}
 	if l.AndGroup != nil {
@@ -468,7 +468,7 @@ func (s *Server) createGrpLoader(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	ctx := r.Context()
-	if loaders.IsSQL(in.Type) {
+	if loaders.NeedsSecondApprover(in.Type) {
 		// validate and authorize now; the second approver applies it
 		err := p.scope.Read(ctx, func(c *store.TenantTx) error {
 			if err := s.requireFolder(r, c, in.TargetFolder); err != nil {
@@ -670,7 +670,7 @@ func (s *Server) patchGrpLoader(r *http.Request, p *params) (int, any, error) {
 			return 0, nil, err
 		}
 	}
-	if loaders.IsSQL(old.Type) && !in.disableOnly() {
+	if loaders.NeedsSecondApprover(old.Type) && !in.disableOnly() {
 		secret := ""
 		if in.Secret != nil {
 			secret = *in.Secret

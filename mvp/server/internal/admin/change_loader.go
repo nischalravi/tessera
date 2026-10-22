@@ -99,8 +99,8 @@ func planLoaderSave(e *env, v *loaderSavePayload) (plan, error) {
 	if err != nil {
 		return plan{}, loaderErr(err)
 	}
-	if !loaders.IsSQL(l.Type) {
-		return plan{}, invalid("only a loader that runs a SQL query goes through approval: save a %s loader directly", l.Type)
+	if !loaders.NeedsSecondApprover(l.Type) {
+		return plan{}, invalid("only a SQL, SCIM or LDAP loader goes through approval: save a %s loader directly", l.Type)
 	}
 	if other, err := e.tx.GrpLoaderByName(l.Name); err == nil && (existing == nil || other.ID != existing.ID) {
 		return plan{}, conflict("name_taken", "a loader named %q exists", l.Name)
