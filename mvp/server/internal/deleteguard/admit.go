@@ -44,6 +44,35 @@ type Request struct {
 	// Correlation groups the calls of one request, run or sync: items held under the same
 	// correlation join one hold. "" gives each call its own hold.
 	Correlation string
+	// SourceDriven marks a removal set computed from an inbound source feed (a sync, an import, a
+	// loader): unless the tenant set the category's mode itself, the default for these is hold_all, so a
+	// corrupted feed applies none of its removals.
+	SourceDriven bool
+	// Sanity are reasons the feed itself looks wrong (FeedChecks); any of them holds the whole batch
+	// whatever the threshold. PrevCount and NewCount are the source's record counts before and now.
+	Sanity              []string
+	PrevCount, NewCount int
+}
+
+// DefaultFeedDropPercent is how far a source's record count may fall against the last good run
+// before its removals are held whatever the thresholds say.
+const DefaultFeedDropPercent = 20.0
+
+// FeedChecks says why a feed looks broken: empty, shorter than the last good run by more than
+// DefaultFeedDropPercent, or reported as a partial or failed read (partial is the reason, "" if not).
+func FeedChecks(prev, now int, partial string) []string {
+	var out []string
+	if partial != "" {
+		out = append(out, "the source reported a partial or failed read: "+partial)
+	}
+	if now == 0 && prev > 0 {
+		out = append(out, fmt.Sprintf("the feed is empty (the last good run had %d records)", prev))
+	} else if prev > 0 && now < prev {
+		if pct := 100 * float64(prev-now) / float64(prev); pct > DefaultFeedDropPercent {
+			out = append(out, fmt.Sprintf("the feed has %d records, %.0f%% fewer than the last good run's %d (limit %.0f%%)", now, pct, prev, DefaultFeedDropPercent))
+		}
+	}
+	return out
 }
 
 // Decision is what Admit decided: the caller applies Applied and nothing else.
@@ -172,7 +201,11 @@ func Overriding(tx *store.TenantTx) bool { _, ok := overrides.Load(tx); return o
 // AdmitFrom is Admit for a path that has no actor of its own (an ingest, a job): the actor and
 // source are read from the transaction's audit context (a signed-in user, or a named system job).
 func AdmitFrom(tx *store.TenantTx, now time.Time, category, source, sourceID, correlation string, items ...Item) (*Decision, error) {
-	req := Request{Category: category, Items: items, Source: source, SourceID: sourceID, Correlation: correlation}
+	return AdmitWith(tx, now, Request{Category: category, Items: items, Source: source, SourceID: sourceID, Correlation: correlation})
+}
+
+// AdmitWith is AdmitFrom for a request built by the caller (a source-driven run with feed checks).
+func AdmitWith(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
 	if ac, ok := store.AuditContextFrom(tx.Context()); ok {
 		if ac.Actor.Type == "user" && ac.Actor.ID != nil {
 			req.Actor = *ac.Actor.ID
@@ -206,6 +239,9 @@ func Admit(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
 	if err != nil {
 		return nil, err
 	}
+	if req.SourceDriven && pol.Default && pol.Mode == ModeHoldExcess {
+		pol.Mode = ModeHoldAll
+	}
 	d.Mode, d.WindowMinutes = pol.Mode, pol.WindowMinutes
 	if pol.Mode == ModeOff {
 		d.Applied = items
@@ -231,6 +267,8 @@ func Admit(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
 		room = max(*d.Limit-used, 0)
 	}
 	switch {
+	case len(req.Sanity) > 0:
+		d.Held = items // a broken feed: everything it would remove is held, whatever the room
 	case len(items) <= room:
 		d.Applied = items
 	case pol.Mode == ModeHoldAll:
@@ -265,6 +303,10 @@ type reason struct {
 	Attempted     int      `json:"attempted"`
 	Applied       int      `json:"applied"`
 	Mode          string   `json:"mode"`
+	Sanity        []string `json:"sanity,omitempty"`
+	PreviousCount int      `json:"previous_count,omitempty"`
+	NewCount      int      `json:"new_count,omitempty"`
+	SourceDriven  bool     `json:"source_driven,omitempty"`
 }
 
 func hold(tx *store.TenantTx, now time.Time, req Request, pol Policy, pop int, d *Decision) error {
@@ -320,7 +362,8 @@ func hold(tx *store.TenantTx, now time.Time, req Request, pol Policy, pop int, d
 	}
 	raw, err := json.Marshal(reason{Category: req.Category, WindowMinutes: pol.WindowMinutes, MaxCount: pol.MaxCount,
 		MaxPercent: pol.MaxPercent, Population: pop, Limit: d.Limit, UsedBefore: d.Used, Attempted: d.Attempted,
-		Applied: len(d.Applied), Mode: pol.Mode})
+		Applied: len(d.Applied), Mode: pol.Mode, Sanity: req.Sanity, PreviousCount: req.PrevCount, NewCount: req.NewCount,
+		SourceDriven: req.SourceDriven})
 	if err != nil {
 		return err
 	}

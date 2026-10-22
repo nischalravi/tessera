@@ -51,7 +51,33 @@ type held struct {
 // vet asks the guard about every active identity and account the results turn inactive.
 func vet(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult) (held, error) {
 	h := held{identities: map[string]bool{}, accounts: map[[2]string]bool{}}
-	corr := "ingest:" + store.RT(now)
+	// the correlation is stable per source and category: while a batch is held, later runs of the same
+	// source join that hold (their items are not held twice) instead of opening another every run
+	partial := ""
+	idRecords, acRecords := 0, map[string]int{}
+	for _, r := range results {
+		if r.Partial != "" {
+			partial = r.Partial
+		}
+		idRecords += len(r.Identities)
+		for _, a := range r.Accounts {
+			acRecords[a.System]++
+		}
+	}
+	prevIdentities, err := c.DeletionPopulation(deleteguard.CatIdentities)
+	if err != nil {
+		return h, err
+	}
+	all, err := c.Accounts()
+	if err != nil {
+		return h, err
+	}
+	prevAccounts := map[string]int{}
+	for _, a := range all {
+		if a.Status == "active" {
+			prevAccounts[a.System]++
+		}
+	}
 
 	var idItems []deleteguard.Item
 	seen := map[string]bool{}
@@ -82,7 +108,13 @@ func vet(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult
 		}
 	}
 	if len(idItems) > 0 {
-		d, err := deleteguard.AdmitFrom(c, now, deleteguard.CatIdentities, deleteguard.SourceConnector, "", corr, idItems...)
+		var sanity []string
+		if idRecords > 0 || partial != "" {
+			sanity = deleteguard.FeedChecks(prevIdentities, idRecords, partial)
+		}
+		d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatIdentities, Items: idItems,
+			Source: deleteguard.SourceConnector, Correlation: "ingest:identities", SourceDriven: true, Sanity: sanity,
+			PrevCount: prevIdentities, NewCount: idRecords})
 		if err != nil {
 			return h, err
 		}
@@ -130,7 +162,15 @@ func vet(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult
 			names = append(names, s)
 		}
 		sort.Strings(names)
-		d, err := deleteguard.AdmitFrom(c, now, deleteguard.CatAccounts, deleteguard.SourceConnector, strings.Join(names, ","), corr, acItems...)
+		var sanity []string
+		prev, cur := 0, 0
+		for _, sysName := range names {
+			prev, cur = prev+prevAccounts[sysName], cur+acRecords[sysName]
+			sanity = append(sanity, deleteguard.FeedChecks(prevAccounts[sysName], acRecords[sysName], partial)...)
+		}
+		d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatAccounts, Items: acItems,
+			Source: deleteguard.SourceConnector, SourceID: strings.Join(names, ","), Correlation: "ingest:accounts:" + strings.Join(names, ","),
+			SourceDriven: true, Sanity: sanity, PrevCount: prev, NewCount: cur})
 		if err != nil {
 			return h, err
 		}

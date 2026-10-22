@@ -3,6 +3,7 @@ package ingest_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,9 +49,10 @@ func statuses(t *testing.T, f *storetest.Fixture, n int) (ended, accountsOff int
 	return ended, accountsOff
 }
 
-// A source that suddenly reports everyone as terminated is held past the default thresholds
-// (identities: the lower of 50 and 2% of the tenant, never fewer than 5; accounts the same shape),
-// the rest stays active, and a second admin's release applies it.
+// A source that suddenly reports everyone as terminated trips the default thresholds (identities:
+// the lower of 50 and 2% of the tenant, never fewer than 5; accounts the same shape). A source-driven
+// run holds the WHOLE removal set by default (hold_all), applying none of it; a second admin's
+// release applies exactly the held set.
 func TestSyncHoldsMassTerminationsAndDisables(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	now := storetest.Now
@@ -74,17 +76,17 @@ func TestSyncHoldsMassTerminationsAndDisables(t *testing.T) {
 		return err
 	})
 	ended, off := statuses(t, f, n)
-	if ended != 5 || off != 5 || stats.HeldIdentities != n-5 || stats.HeldAccounts != n-5 {
+	if ended != 0 || off != 0 || stats.HeldIdentities != n || stats.HeldAccounts != n {
 		t.Fatalf("ended %d, accounts disabled %d, held %d identities and %d accounts", ended, off, stats.HeldIdentities, stats.HeldAccounts)
 	}
-	// the deterministic order: the first five by ref were let through
+	// nothing was applied: the whole removal set is held as one batch per category
 	in(func(c *store.TenantTx) error {
 		hs, err := c.DeletionHolds("held", "", 10, 0)
 		if err != nil || len(hs) != 2 {
 			t.Fatalf("holds = %v, %v", hs, err)
 		}
 		for _, h := range hs {
-			if h.Source != "connector" || h.ItemCount != n-5 {
+			if h.Source != "connector" || h.ItemCount != n {
 				t.Errorf("hold %+v", h)
 			}
 		}
@@ -97,9 +99,14 @@ func TestSyncHoldsMassTerminationsAndDisables(t *testing.T) {
 		return err
 	})
 	in(func(c *store.TenantTx) error {
-		hs, _ := c.DeletionHolds("held", deleteguard.CatIdentities, 10, 0)
-		if len(hs) != 2 { // each sync is its own correlation: its own hold
-			t.Errorf("identity holds after a second sync = %d", len(hs))
+		hs, _ := c.DeletionHolds("held", "", 10, 0)
+		if len(hs) != 2 { // the same corrupted feed again joins the open holds: no duplicate hold, no duplicate items
+			t.Errorf("holds after a second identical sync = %d, want still 2", len(hs))
+		}
+		for _, h := range hs {
+			if h.ItemCount != n {
+				t.Errorf("hold %s has %d items", h.Category, h.ItemCount)
+			}
 		}
 		return nil
 	})
@@ -117,5 +124,63 @@ func TestSyncHoldsMassTerminationsAndDisables(t *testing.T) {
 	})
 	if e, a := statuses(t, f, n); e != n || a != n {
 		t.Errorf("after the releases %d identities ended and %d accounts disabled, want all %d", e, a, n)
+	}
+}
+
+// A truncated feed (30 people, the source now sends 20 and two of them ended) is held even though
+// two is under the threshold: the feed itself looks broken. The reasons are on the hold.
+func TestSyncHoldsEverythingFromATruncatedFeed(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	now := storetest.Now
+	in := func(fn func(c *store.TenantTx) error) {
+		t.Helper()
+		if err := f.DB.InTenant(context.Background(), f.A.ID, fn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in(func(c *store.TenantTx) error {
+		_, err := ingest.Discovery(c, now, []*connectors.DiscoveryResult{feed(30, "active")}, false)
+		return err
+	})
+	small := feed(20, "active")
+	small.Identities[0].Status, small.Identities[1].Status = "terminated", "terminated"
+	in(func(c *store.TenantTx) error {
+		_, err := ingest.Discovery(c, now.Add(time.Hour), []*connectors.DiscoveryResult{small}, false)
+		return err
+	})
+	if e, _ := statuses(t, f, 30); e != 0 {
+		t.Fatalf("%d identities ended by a truncated feed", e)
+	}
+	in(func(c *store.TenantTx) error {
+		hs, err := c.DeletionHolds("held", deleteguard.CatIdentities, 10, 0)
+		if err != nil || len(hs) != 1 || hs[0].ItemCount != 2 {
+			t.Fatalf("holds %+v %v", hs, err)
+		}
+		if !strings.Contains(hs[0].Reason, "fewer than the last good run") || !strings.Contains(hs[0].Reason, `"previous_count":35`) || !strings.Contains(hs[0].Reason, `"new_count":20`) {
+			t.Errorf("reason %s", hs[0].Reason)
+		}
+		return nil
+	})
+	// a partial read reported by the connector holds too, and a normal small change applies
+	partial := feed(30, "active")
+	partial.Identities[5].Status = "terminated"
+	partial.Partial = "page 3 of 7 failed"
+	in(func(c *store.TenantTx) error {
+		_, err := ingest.Discovery(c, now.Add(2*time.Hour), []*connectors.DiscoveryResult{partial}, false)
+		return err
+	})
+	if e, _ := statuses(t, f, 30); e != 0 {
+		t.Fatalf("%d identities ended by a partial read", e)
+	}
+	ok := feed(30, "active")
+	ok.Identities[7].Status = "terminated"
+	in(func(c *store.TenantTx) error {
+		_, err := ingest.Discovery(c, now.Add(3*time.Hour), []*connectors.DiscoveryResult{ok}, false)
+		return err
+	})
+	// a hold is open for this source, but this removal is a normal small change of a complete feed:
+	// hold_all applies only while over the threshold
+	if e, _ := statuses(t, f, 30); e != 1 {
+		t.Errorf("a normal small change ended %d identities, want 1", e)
 	}
 }

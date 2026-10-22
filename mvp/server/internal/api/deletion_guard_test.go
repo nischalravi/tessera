@@ -223,17 +223,17 @@ func TestDeletionGuardAPI_ReleasesSyncHolds(t *testing.T) {
 	sync(storetest.Now, "active")
 	sync(storetest.Now.Add(time.Minute), "terminated")
 	holds := e.admin.call("GET", "/api/admin/deletion-holds?category=identities&status=held", "", 200)["holds"].([]any)
-	if len(holds) != 1 || holds[0].(map[string]any)["source"] != "connector" || holds[0].(map[string]any)["item_count"] != float64(15) {
+	if len(holds) != 1 || holds[0].(map[string]any)["source"] != "connector" || holds[0].(map[string]any)["item_count"] != float64(20) {
 		t.Fatalf("holds = %v", holds)
 	}
 	id := holds[0].(map[string]any)["id"].(string)
 	one := e.admin.call("GET", "/api/admin/deletion-holds/"+id, "", 200)
-	if its := one["items"].([]any); len(its) != 15 || !strings.Contains(its[0].(map[string]any)["label"].(string), "set to terminated") {
+	if its := one["items"].([]any); len(its) != 20 || !strings.Contains(its[0].(map[string]any)["label"].(string), "set to terminated") {
 		t.Fatalf("items = %v", one["items"])
 	}
 	// release only two of them: the rest is discarded
 	res := e.admin.call("POST", "/api/admin/deletion-holds/"+id+"/approve", `{"items":[0,1]}`, 200)
-	if res["status"] != "partially_released" || res["released"] != float64(2) || res["discarded"] != float64(13) {
+	if res["status"] != "partially_released" || res["released"] != float64(2) || res["discarded"] != float64(18) {
 		t.Fatalf("partial release = %v", res)
 	}
 	ended := 0
@@ -249,7 +249,7 @@ func TestDeletionGuardAPI_ReleasesSyncHolds(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if ended != 5+2 { // five let through by the default threshold, two released
-		t.Errorf("%d identities ended, want 7", ended)
+	if ended != 2 { // a source-driven run applies none by default; two were released
+		t.Errorf("%d identities ended, want 2", ended)
 	}
 }

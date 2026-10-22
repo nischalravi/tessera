@@ -66,7 +66,7 @@ func (e Env) admit(category string, items ...deleteguard.Item) (*deleteguard.Dec
 		actor = *e.By
 	}
 	d, err := deleteguard.Admit(e.Tx, e.Now, deleteguard.Request{Category: category, Items: items, Actor: actor, Source: src,
-		SourceID: id, Correlation: e.Correlation})
+		SourceID: id, Correlation: e.Correlation, SourceDriven: e.Cause == store.CauseLoader})
 	if err != nil {
 		return nil, err
 	}

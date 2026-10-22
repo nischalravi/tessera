@@ -3759,6 +3759,16 @@ under them (an approved held loader run is an approved override and is not count
   that reports active identities as terminated or disabled, an HRIS leaver event, and the end-date leaver of the lifecycle
   (held, the identity keeps its accounts and grants; a release runs the whole leaver plan). A sync with held changes
   adds `held_identities` and `held_accounts` to its `connectors.sync` audit event.
+* **Corrupted source feeds (the main use case).** A removal set computed from an inbound feed (connector syncs, flat-file
+  imports, group loaders) is a *source-driven* run: when the category's mode was never set, the default for it is
+  `hold_all`, so a run that passes the threshold applies **none** of its removals (additions and attribute updates still
+  apply) and holds the whole set as one batch. Feed checks hold the batch whatever the thresholds say: the feed has fewer
+  records than the last good run by more than 20% (`deleteguard.DefaultFeedDropPercent`, per system for accounts; the
+  previous count is the tenant's active identities or the system's active accounts), the feed is empty, or the connector sets
+  `DiscoveryResult.Partial` (a partial or failed read). The reasons and the before/after counts are on the hold. While the
+  batch is held, later runs of the same source join the open hold (a stable correlation per source and category: items
+  already held are not added twice, and no second hold is opened). Release re-validates every item and needs a different
+  admin and a step-up. An explicit `hold_excess` on a category is honoured for sources.
 * **Not guarded, on purpose.** The manual containment disable (`POST /api/identities/{id}/disable`): holding an
   emergency containment would defeat it. Nor is there an Inbox task per hold (the groups Inbox is folder/group scoped): the
   alert and the Held deletions list are the queue.

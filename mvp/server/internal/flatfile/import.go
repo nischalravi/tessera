@@ -209,9 +209,24 @@ func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
 	if _, err := ingest.Import(c, now, discovery(m, accounts, ents, held)); err != nil {
 		return nil, err
 	}
+	feed := feedCheck{}
+	if in.Kind == KindAccounts && len(delta.Removed) > 0 {
+		// the file is the feed: an empty or much shorter one than the last good upload is not trusted to say who is gone
+		all, err := c.Accounts()
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range all {
+			if a.System == in.System && a.Status == "active" {
+				feed.prev++
+			}
+		}
+		feed.now = len(accounts)
+		feed.sanity = deleteguard.FeedChecks(feed.prev, feed.now, "")
+	}
 	for _, r := range delta.Removed {
 		if in.Kind == KindAccounts {
-			err = dropAccount(c, now, in.System, r.Key)
+			err = dropAccount(c, now, in.System, r.Key, feed)
 		} else {
 			err = dropEntitlement(c, now, in.System, r.Key)
 		}
@@ -337,7 +352,13 @@ func discovery(m *Mapping, accounts, ents []Record, held map[string]bool) *conne
 // dropAccount handles an account the file no longer lists: it is disabled,
 // and the grants an import made for it go. It is not deleted: reviews and the
 // audit trail still refer to it.
-func dropAccount(c *store.TenantTx, now time.Time, system, xid string) error {
+// feedCheck is what Apply knows about the file as a feed: record counts and why it looks broken.
+type feedCheck struct {
+	prev, now int
+	sanity    []string
+}
+
+func dropAccount(c *store.TenantTx, now time.Time, system, xid string, feed feedCheck) error {
 	a, err := c.AccountByXID(system, xid)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
@@ -352,8 +373,9 @@ func dropAccount(c *store.TenantTx, now time.Time, system, xid string) error {
 		if err != nil {
 			return err
 		}
-		d, err := deleteguard.AdmitFrom(c, now, deleteguard.CatAccounts, deleteguard.SourceConnector, system, "flatfile:"+system+":"+store.RT(now),
-			deleteguard.Item{Kind: ItemDropAccount, Ref: string(ref), Label: fmt.Sprintf("account %s in %s dropped by an import", a.Username, system)})
+		d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatAccounts, Source: deleteguard.SourceConnector,
+			SourceID: system, Correlation: "flatfile:" + system, SourceDriven: true, Sanity: feed.sanity, PrevCount: feed.prev, NewCount: feed.now,
+			Items: []deleteguard.Item{{Kind: ItemDropAccount, Ref: string(ref), Label: fmt.Sprintf("account %s in %s dropped by an import", a.Username, system)}}})
 		if err != nil {
 			return err
 		}

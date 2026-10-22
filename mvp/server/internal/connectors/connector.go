@@ -220,6 +220,9 @@ type MCPFindingRecord struct {
 
 // DiscoveryResult is a full snapshot of one system.
 type DiscoveryResult struct {
+	// Partial, when set, says the read was partial or failed part way (why): the deletion guard then
+	// holds every removal this result would cause (internal/deleteguard).
+	Partial     string
 	Identities  []IdentityRecord
 	Accounts    []AccountRecord
 	Groups      []GroupRecord

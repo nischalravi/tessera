@@ -129,6 +129,13 @@ function HoldPanel({ id, onClose, onChanged }: { id: string; onClose: () => void
           {CATEGORY_LABEL[h.category]}: {r.attempted ?? h.item_count} attempted, {r.applied ?? 0} applied, {h.item_count} held. The threshold was {r.limit ?? "—"} {windowText(r.window_minutes ?? 60)} and {r.used_before ?? 0} had been used when this arrived.
           {h.mode === "hold_all" && " The category holds the whole batch when it passes the threshold."}
         </Callout>
+        {r.sanity && r.sanity.length > 0 && (
+          <Callout tone="warn">
+            <b>The feed looks wrong, so nothing it would remove was applied.</b>
+            <ul className="small" style={{ margin: "4px 0 0", paddingLeft: 18 }}>{r.sanity.map((x) => <li key={x}>{x}</li>)}</ul>
+            {r.previous_count !== undefined && <span className="small">Records before: {r.previous_count}. Records now: {r.new_count ?? 0}.</span>}
+          </Callout>
+        )}
         <dl className="kv small">
           <dt>From</dt><dd>{SOURCE_LABEL[h.source] ?? h.source}{h.source_id ? ` (${h.source_id})` : ""}</dd>
           <dt>Requested by</dt><dd>{h.actor_name || h.actor || "No person: a worker did it"}</dd>

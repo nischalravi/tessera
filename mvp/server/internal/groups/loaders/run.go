@@ -257,7 +257,7 @@ func (s *Service) Run(ctx context.Context, tenant tenancy.ID, loaderID, kind str
 		default:
 			env := a.env(tx, now, s.Engine)
 			// the deletion guard (internal/deleteguard) sees the loader and counts this run as one batch
-			env.CauseRef, env.Correlation = cur.ID, "loader:"+cur.ID+":"+now.UTC().Format(time.RFC3339Nano)
+			env.CauseRef, env.Correlation = cur.ID, "loader:"+cur.ID // stable: a later run of the same loader joins the open hold
 			res, err := ApplyPlan(env, cur, plan)
 			if err != nil {
 				var me *model.Error
