@@ -149,7 +149,7 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 	}
 	tokenPath := cfg.Settings.TokenPath
 	if tokenPath == "" {
-		tokenPath = "/api/oauth2/v2.0/token"
+		tokenPath = "/api/oauth2/v2.0/token" // #nosec G101 -- an endpoint path, not a credential
 	}
 	tu := *base
 	tu.Path = tokenPath

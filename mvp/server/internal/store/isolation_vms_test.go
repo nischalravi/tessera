@@ -17,7 +17,16 @@ func TestIsolation_VmsSources(t *testing.T) {
 		return &store.VmsSource{ID: id, Vendor: store.VmsFieldglass, Name: "Fieldglass", BaseURL: "https://fg.example",
 			Settings: "{}", CredentialEnc: []byte("sealed"), Status: store.VmsActive, CreatedBy: "alice"}
 	}
-	inA(t, f, func(c *store.TenantTx) error { return c.InsertVmsSource(src("vms-a"), now) })
+	mail := "vms.sponsor@a.example"
+	inA(t, f, func(c *store.TenantTx) error {
+		if _, err := c.InsertIdentity(&store.Identity{ExternalID: "vms-emp", Name: "Sponsor", Email: &mail, Type: "human", Status: "active", CreatedAt: now}); err != nil {
+			return err
+		}
+		if got, err := c.IdentitiesByEmail("VMS.Sponsor@A.example"); err != nil || len(got) != 1 {
+			t.Errorf("A finds its own sponsor by e-mail: %v, %v", got, err)
+		}
+		return c.InsertVmsSource(src("vms-a"), now)
+	})
 	before := storetest.Dump(t, f.DB, f.A.ID)
 	inB(t, f, func(c *store.TenantTx) error {
 		if _, err := c.VmsSource("vms-a"); !errors.Is(err, store.ErrNotFound) {
@@ -36,6 +45,9 @@ func TestIsolation_VmsSources(t *testing.T) {
 		}
 		if err := c.DeleteVmsSource("vms-a"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("DeleteVmsSource(A's) = %v", err)
+		}
+		if got, err := c.IdentitiesByEmail(mail); err != nil || len(got) != 0 {
+			t.Errorf("IdentitiesByEmail(A's) = %v, %v", got, err)
 		}
 		if ev, err := c.IntakeEventsByChannel(store.ChannelVMS, 10); err != nil || len(ev) != 0 {
 			t.Errorf("IntakeEventsByChannel = %v, %v", ev, err)
@@ -68,4 +80,13 @@ func TestIsolation_VmsSources(t *testing.T) {
 		}
 		return c.DeleteVmsSource("vms-a")
 	})
+}
+
+func vmsCovered() map[string]bool { // TestIsolation_VmsSources
+	out := map[string]bool{}
+	for _, k := range []string{"InsertVmsSource", "UpdateVmsSource", "VmsSource", "VmsSources", "DeleteVmsSource", "SetVmsResult",
+		"IntakeEventsByChannel", "IdentitiesByEmail"} {
+		out[k] = true
+	}
+	return out
 }
