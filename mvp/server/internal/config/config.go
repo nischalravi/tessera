@@ -10,7 +10,8 @@
 // off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_SAFEDIAL_ALLOW is set; TESSERA_DEV_IDP_URL is set; the
 // audit anchor is not an s3:// URL (missing or file:// included); TESSERA_NOW freezes the clock; a
 // trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6); TESSERA_METRICS_ADDR is a wildcard, hostname or public
-// address (/metrics is internal only). The guard rail on dev_mock IdP connections
+// address (/metrics is internal only); TESSERA_AUTH_RATE_BURST or TESSERA_ANON_RATE_BURST
+// exceeds its production cap. The guard rail on dev_mock IdP connections
 // needs the idp_connections table and lands with it (PR6).
 package config
 
@@ -360,6 +361,14 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.AuditCheckpointEvents = integer("TESSERA_AUDIT_CHECKPOINT_EVENTS", 1000, 1, 1_000_000)
 	c.AuthRateBurst = integer("TESSERA_AUTH_RATE_BURST", 30, 1, 100_000)
 	c.AnonRateBurst = integer("TESSERA_ANON_RATE_BURST", 120, 1, 100_000)
+	// The wide range is for load tests and the e2e suite; production keeps per-IP throttling of the
+	// unauthenticated sign-in and anonymous endpoints meaningful (issue #463).
+	if prod && c.AuthRateBurst > MaxProdAuthRateBurst {
+		bad("TESSERA_AUTH_RATE_BURST must be at most %d with TESSERA_ENV=prod (got %d)", MaxProdAuthRateBurst, c.AuthRateBurst)
+	}
+	if prod && c.AnonRateBurst > MaxProdAnonRateBurst {
+		bad("TESSERA_ANON_RATE_BURST must be at most %d with TESSERA_ENV=prod (got %d)", MaxProdAnonRateBurst, c.AnonRateBurst)
+	}
 	c.BackupDir = str("TESSERA_BACKUP_DIR", "", "")
 	c.ArchiveDir = str("TESSERA_ARCHIVE_DIR", "", "")
 	c.ArchiveURL = str("TESSERA_ARCHIVE_URL", "", "")
@@ -700,6 +709,14 @@ func (c *Config) Clock() timeutil.Clock {
 	}
 	return timeutil.Frozen(c.FrozenNow)
 }
+
+// MaxProdAuthRateBurst and MaxProdAnonRateBurst cap the per-IP bursts in
+// production: above them per-IP throttling of the sign-in and anonymous
+// endpoints no longer limits anything (issue #463).
+const (
+	MaxProdAuthRateBurst = 300
+	MaxProdAnonRateBurst = 2000
+)
 
 // IsProd reports whether the production guard rails apply.
 func (c *Config) IsProd() bool { return c.Env == Prod }

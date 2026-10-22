@@ -4998,6 +4998,7 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   and the screen-reader pass still to do by hand, is in `docs/accessibility/wcag-2.2-aa-audit.md`.
   `TESSERA_AUTH_RATE_BURST` and `TESSERA_ANON_RATE_BURST` (defaults 30 and 120) set the per-IP
   burst of the `/api/auth/*` and anonymous limiters; the suite raises them for its own instance.
+  With `TESSERA_ENV=prod` they are capped at 300 and 2000: a higher value refuses to start (#463).
 
 ## Server hardening
 
