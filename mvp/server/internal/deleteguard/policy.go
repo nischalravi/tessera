@@ -152,21 +152,63 @@ func modeRank(m string) int {
 	return 2
 }
 
-// Loosens reports whether next is a weaker safety setting than cur for a tenant whose population
-// in scope is pop: a weaker mode, or a higher limit per minute of window (the limit is the lower
-// of the count and the percent of pop, see Limit). Loosening takes two admins.
+// sdRank is the strength of the mode a source-driven run gets: a category the tenant never set
+// holds the whole batch (hold_all) even though its mode reads hold_excess.
+func sdRank(p Policy) int {
+	if p.Default && p.Mode == ModeHoldExcess {
+		return modeRank(ModeHoldAll)
+	}
+	return modeRank(p.Mode)
+}
+
+// SameSettings says whether two policies set the same thresholds and mode.
+func (p Policy) SameSettings(o Policy) bool {
+	eqI := func(a, b *int) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
+	eqF := func(a, b *float64) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
+	return p.Mode == o.Mode && p.WindowMinutes == o.WindowMinutes && eqI(p.MaxCount, o.MaxCount) && eqF(p.MaxPercent, o.MaxPercent)
+}
+
+// IsNoop says whether saving next over cur changes nothing: the same settings, or the displayed default
+// saved as it is. The default is not stored (a stored row would drop the source-driven hold_all it implies).
+func IsNoop(cur, next Policy) bool {
+	if cur.Default {
+		return next.SameSettings(Defaults()[cur.Category])
+	}
+	return cur.SameSettings(next)
+}
+
+// loosenPops are the populations a percent limit is compared at: today's, and larger ones, because the
+// percent of a bigger tenant is a bigger batch.
+func loosenPops(pop int) []int {
+	return []int{pop, max(pop, 1) * 2, max(pop, 1) * 10, 1_000_000, 1_000_000_000}
+}
+
+// Loosens reports whether next is a weaker safety setting than cur for a tenant whose population in
+// scope is pop. It is judged on what the guard lets through: a weaker mode (hold_all > hold_excess >
+// off, and for a category never set, the hold_all its source-driven runs get), a larger limit (the
+// largest batch in one window, from the count or the percent, at today's and at larger populations)
+// whatever the window, or a higher limit per minute of window. Loosening takes two admins. A category
+// save that changes nothing (IsNoop) is not a change: callers check it first.
 func Loosens(cur, next Policy, pop int) bool {
-	if modeRank(next.Mode) > modeRank(cur.Mode) {
+	if modeRank(next.Mode) > modeRank(cur.Mode) || sdRank(next) > sdRank(cur) {
 		return true
 	}
 	if next.Mode == ModeOff {
 		return false
 	}
-	nl, cl := next.Limit(pop), cur.Limit(pop)
-	if cl == nil || nl == nil {
-		return cl != nil // a limit was removed
+	for _, n := range loosenPops(pop) {
+		nl, cl := next.Limit(n), cur.Limit(n)
+		if cl == nil {
+			continue // the current policy has no limit: nothing is looser than that
+		}
+		if nl == nil {
+			return true
+		}
+		if *nl > *cl || float64(*nl)/float64(next.WindowMinutes) > float64(*cl)/float64(cur.WindowMinutes) {
+			return true
+		}
 	}
-	return float64(*nl)/float64(next.WindowMinutes) > float64(*cl)/float64(cur.WindowMinutes)
+	return false
 }
 
 func fromRow(r *store.DeletionPolicy) Policy {
