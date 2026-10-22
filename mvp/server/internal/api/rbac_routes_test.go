@@ -791,8 +791,10 @@ func TestRBACRouteMatrix(t *testing.T) {
 	h := srv.Handler()
 	logins := map[auth.Role]authtest.Login{}
 	for _, r := range rbacRoles {
-		logins[r] = signIn(t, f.DB, f.B.ID, authtest.User{Email: string(r) + "@b.example", Roles: []auth.Role{r}},
-			authtest.Phr, storetest.Now)
+		// linked, so an approval route reaches its handler (approver_unlinked, #443)
+		u := authtest.User{Email: string(r) + "@b.example", Roles: []auth.Role{r}}
+		u.IdentityID = ensureIdentity(t, f.DB, f.B.ID, "rbac-"+string(r), "rbac-"+string(r), storetest.Now)
+		logins[r] = signIn(t, f.DB, f.B.ID, u, authtest.Phr, storetest.Now)
 	}
 	routes := map[string]RouteInfo{}
 	for _, rt := range srv.Routes() {

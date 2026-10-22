@@ -138,7 +138,8 @@ func TestGuestLifecycleAPI_SponsorLeaverTaskThroughHRIS(t *testing.T) {
 	seeded := seedSponsorships(t, f)[f.B.ID]
 	h := newIsolationServer(f).Handler()
 	b := f.B.IDs
-	admin := reqLogin(t, f, "pa@b.example", []auth.Role{auth.RolePolicyAdmin}, "")
+	// nobody's identity on purpose (reqLogin links policy admins, approver_unlinked #443)
+	admin := signIn(t, f.DB, f.B.ID, authtest.User{Email: "pa@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, storetest.Now)
 	bobAdmin := reqLogin(t, f, "bobadmin@b.example", []auth.Role{auth.RolePolicyAdmin}, "bob") // an approver who is also an eligible sponsor
 	aliceUser := reqLogin(t, f, "alice@b.example", []auth.Role{auth.RoleViewer}, "alice")
 	var ev int64

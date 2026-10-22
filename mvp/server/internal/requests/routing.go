@@ -285,6 +285,9 @@ func authorize(tx *store.TenantTx, l *store.RequestLine, by Actor, now time.Time
 	} else if same {
 		return nil, refuse(403, "self_approval", "you cannot decide a request you made")
 	}
+	if err := RefuseUnlinked(by); err != nil {
+		return nil, err
+	}
 	if by.IdentityID != nil && *by.IdentityID == l.BeneficiaryID {
 		return nil, refuse(403, "self_approval", "you cannot decide access for yourself")
 	}
@@ -322,6 +325,9 @@ func AuthorizeStages(tx *store.TenantTx, sub Subject, stages []*store.RequestSta
 		return nil, err
 	} else if same {
 		return nil, refuse(403, "self_approval", "you cannot decide a request you made")
+	}
+	if err := RefuseUnlinked(by); err != nil { // service-account requests reach here without authorize
+		return nil, err
 	}
 	plan, err := workflow.PlanFor(tx, sub.Kind, sub.ID)
 	if err != nil {

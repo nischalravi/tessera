@@ -91,6 +91,17 @@ func refuseSubject(c *store.TenantTx, subject int64, by store.UserRef) error {
 	return nil
 }
 
+// findSecurityLead is the active identity titled "Head of Security" (nil: none).
+// A disabled or departed one is never picked (issue #443).
+func findSecurityLead(all []*store.Identity) *store.Identity {
+	for _, i := range all {
+		if i.Title != nil && *i.Title == "Head of Security" && i.Status == "active" {
+			return i
+		}
+	}
+	return nil
+}
+
 // avoidSelf keeps a subject from being their own reviewer: when the picked
 // reviewer is the subject it returns the type's fallback reviewer (the
 // escalation target), else the security lead, else nil.
@@ -169,13 +180,7 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 	if err != nil {
 		return 0, err
 	}
-	var securityLead *store.Identity
-	for _, i := range all {
-		if i.Title != nil && *i.Title == "Head of Security" {
-			securityLead = i
-			break
-		}
-	}
+	securityLead := findSecurityLead(all)
 	// peer coverage: how common is each grant target within a department
 	type deptK struct {
 		dept string

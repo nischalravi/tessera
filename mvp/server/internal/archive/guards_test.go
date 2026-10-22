@@ -26,12 +26,17 @@ func seedGuards(t *testing.T, f *storetest.Fixture, tn storetest.Tenant) guardWo
 	ids := tn.IDs
 	if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
 		a := ids["alice"]
+		// a decider with no linked identity is refused (approver_unlinked, issue #443)
+		patID, err := c.InsertIdentity(&store.Identity{TenantID: c.Tenant(), ExternalID: "pat", Name: "Pat", Type: "human", Status: "active", CreatedAt: old})
+		if err != nil {
+			return err
+		}
 		var alice, pat requests.Actor
 		for _, u := range []struct {
 			actor *requests.Actor
 			name  string
 			ident *int64
-		}{{&alice, "Alice", &a}, {&pat, "Pat", nil}} {
+		}{{&alice, "Alice", &a}, {&pat, "Pat", &patID}} {
 			pu := &store.PlatformUser{DisplayName: u.name, IdentityID: u.ident, CreatedAt: old}
 			if err := c.InsertPlatformUser(pu); err != nil {
 				return err

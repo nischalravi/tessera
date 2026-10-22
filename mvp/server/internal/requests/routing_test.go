@@ -26,12 +26,16 @@ func newRouted(t *testing.T, stages ...string) *routed {
 			a     *requests.Actor
 			name  string
 			ident string
-		}{{&r.carol, "Carol", "carol"}, {&r.bob, "Bob", "bob"}, {&r.zed, "Zed", ""}} {
+		}{{&r.carol, "Carol", "carol"}, {&r.bob, "Bob", "bob"}, {&r.zed, "Zed", "zed"}} {
 			pu := &store.PlatformUser{DisplayName: u.name, CreatedAt: r.now}
-			if u.ident != "" {
-				id := r.ids[u.ident]
-				pu.IdentityID = &id
+			id, ok := r.ids[u.ident]
+			if !ok { // zed has no demo identity of his own
+				var err error
+				if id, err = newPerson(c, u.ident, r.now); err != nil {
+					return err
+				}
 			}
+			pu.IdentityID = &id
 			if err := c.InsertPlatformUser(pu); err != nil {
 				return err
 			}
@@ -134,6 +138,27 @@ func TestRouting_FourEyesAcrossStages(t *testing.T) {
 	}
 	if got := r.inbox(r.carol, r.now); len(got) != 0 {
 		t.Errorf("carol's inbox still has it: %v", got)
+	}
+}
+
+// An unlinked decider is refused on a pending line and on an escalated stage
+// (approver_unlinked, issue #443); the linked decider still decides.
+func TestRouting_UnlinkedDeciderRefused(t *testing.T) {
+	r := newRouted(t, "manager", "decider")
+	lines, err := r.submit(r.alice, false, []string{"alice"}, []string{"group:okta:platform"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlinked := r.pat
+	unlinked.IdentityID = nil
+	later := r.now.Add(49 * time.Hour)
+	for name, at := range map[string]time.Time{"pending": r.now, "escalated": later} {
+		if _, err := r.approve(unlinked, lines[0].ID, at); code(err) != "approver_unlinked" {
+			t.Errorf("unlinked decider on a %s stage: %v", name, err)
+		}
+	}
+	if _, err := r.approve(r.pat, lines[0].ID, later); err != nil {
+		t.Errorf("linked decider on the escalated stage: %v", err)
 	}
 }
 
@@ -256,11 +281,16 @@ func TestRouting_PolicyRules(t *testing.T) {
 func (r *routed) decider() requests.Actor {
 	var a requests.Actor
 	r.tx(func(c *store.TenantTx) error {
-		u := &store.PlatformUser{DisplayName: "Olu", CreatedAt: r.now}
-		a = requests.Actor{UserID: u.ID, Display: "Olu", Decider: true}
-		err := c.InsertPlatformUser(u)
-		a.UserID = u.ID
-		return err
+		olu, err := newPerson(c, "olu", r.now)
+		if err != nil {
+			return err
+		}
+		u := &store.PlatformUser{DisplayName: "Olu", IdentityID: &olu, CreatedAt: r.now}
+		if err := c.InsertPlatformUser(u); err != nil {
+			return err
+		}
+		a = requests.Actor{UserID: u.ID, Display: "Olu", Decider: true, IdentityID: &olu}
+		return nil
 	})
 	return a
 }

@@ -60,6 +60,11 @@ func (e *Error) Error() string { return e.Msg }
 // access (separation of duties: nobody grants themselves access).
 var ErrSelfApproval = errors.New("jit: the requester cannot approve their own request")
 
+// ErrApproverUnlinked refuses an approval by a platform user with no linked
+// identity: the self-approval check cannot prove they are not the beneficiary,
+// so it fails closed (issue #443, as reviewer_unlinked in #439).
+var ErrApproverUnlinked = errors.New("jit: the approver's account is not linked to an identity")
+
 func jitErr(format string, args ...any) error { return &Error{Msg: fmt.Sprintf(format, args...)} }
 
 func notFound(msg string) error { return &Error{Msg: msg, Kind: KindNotFound} }
@@ -222,7 +227,10 @@ func Approve(c *store.TenantTx, requestID int64, by store.UserRef, now, createdA
 		if err != nil {
 			return nil, err
 		}
-		if u.IdentityID != nil && *u.IdentityID == req.IdentityID {
+		if u.IdentityID == nil {
+			return nil, ErrApproverUnlinked
+		}
+		if *u.IdentityID == req.IdentityID {
 			return nil, ErrSelfApproval
 		}
 	}

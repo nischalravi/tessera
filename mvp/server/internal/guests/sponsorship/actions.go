@@ -86,6 +86,10 @@ func fourEyes(tx *store.TenantTx, ss *store.Sponsorship, by Actor) error {
 	if self {
 		return refuse(403, "self_approval", "a second person approves: not the sponsor, the guest or whoever made the request")
 	}
+	// a user with no linked identity cannot be shown to be neither the sponsor nor the guest: fail closed (#443)
+	if by.uid() != nil && by.IdentityID == nil {
+		return refuse(403, "approver_unlinked", "your account is not linked to an identity, so it cannot approve sponsorships; ask an administrator to link it")
+	}
 	return nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -55,6 +56,8 @@ func reqLogin(t *testing.T, f *storetest.Fixture, email string, roles []auth.Rol
 	if person != "" {
 		id := f.B.IDs[person]
 		u.IdentityID = &id
+	} else if slices.Contains(roles, auth.RolePolicyAdmin) { // a decider with no linked identity is refused (approver_unlinked, #443)
+		u.IdentityID = ensureIdentity(t, f.DB, f.B.ID, "approver-"+email, "approver-"+email, storetest.Now)
 	}
 	return signIn(t, f.DB, f.B.ID, u, authtest.Phr, storetest.Now)
 }

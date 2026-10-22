@@ -36,8 +36,16 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	f := storetest.TwoTenants(t)
 	carol, bob := f.B.IDs["carol"], f.B.IDs["bob"]
+	// the approver is linked to a person of their own: an unlinked approver is refused (approver_unlinked, #443)
+	var pat int64
+	if err := f.DB.InTenant(context.Background(), f.B.ID, func(tx *store.TenantTx) (err error) {
+		pat, err = tx.InsertIdentity(&store.Identity{TenantID: f.B.ID, ExternalID: "pat", Name: "Pat", Type: "human", Status: "active", CreatedAt: storetest.Now})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return &env{t: t, f: f, svc: sponsorship.New(storetest.IdentityKeyer(t)),
-		carol: actor("Carol", &carol, false), bob: actor("Bob", &bob, false), admin: actor("Pat", nil, true)}
+		carol: actor("Carol", &carol, false), bob: actor("Bob", &bob, false), admin: actor("Pat", &pat, true)}
 }
 
 func (e *env) do(fn func(tx *store.TenantTx) error) error {
@@ -386,8 +394,10 @@ func TestSponsorship_InvitationRefusals(t *testing.T) {
 		t.Errorf("%d sponsorships written by refusals", n)
 	}
 	// the sponsor must be a person
+	noPerson := e.admin
+	noPerson.IdentityID = nil
 	err := e.do(func(tx *store.TenantTx) error {
-		_, err := e.svc.Invite(tx, e.admin, invite("g@x.example", "visitor", day(5)), store.ChannelSponsorInvite, "", now)
+		_, err := e.svc.Invite(tx, noPerson, invite("g@x.example", "visitor", day(5)), store.ChannelSponsorInvite, "", now)
 		return err
 	})
 	e.wantCode(err, "sponsor_identity_required")
@@ -631,6 +641,9 @@ func TestSponsorship_ApprovalFlow(t *testing.T) {
 		return e.do(func(tx *store.TenantTx) error { _, err := e.svc.Approve(tx, by, id, now); return err })
 	}
 	e.wantCode(approve(e.carol), "approver_required")
+	unlinked := e.admin
+	unlinked.IdentityID = nil // a user with no linked identity cannot be shown not to be the sponsor
+	e.wantCode(approve(unlinked), "approver_unlinked")
 	self := e.admin
 	self.IdentityID = e.carol.IdentityID // an approver who is the sponsor
 	e.wantCode(approve(self), "self_approval")
