@@ -4095,6 +4095,10 @@ The same fail-closed rule (issue #446) covers the other self checks: an unlinked
 verify a help-desk reset case (403 `actor_unlinked`), and an unlinked approver cannot decide a guest-departure task (403 `actor_unlinked`).
 Nobody, an approver included, decides a guest-departure task about their own identity (403 `self_decision`). Callers with no platform
 user (services, the scheduler) are unchanged.
+Issue #449 closes the remaining ones: an unlinked operator cannot second-approve or execute a help-desk reset (403 `actor_unlinked`), and an
+unlinked admin cannot disable or enable an identity (403 `actor_unlinked`, audited as `identity.disable.refused` / `identity.enable.refused`).
+The four-eyes rule on enable (the admin who disabled an identity cannot enable it) now also holds when no user is linked to that identity.
+The guest-departure list's `can_act` is false for an unlinked approver, matching the refusal.
 When the sign-in is too old or too weak the API answers `401 step_up_required` with the RFC 9470
 challenge (`WWW-Authenticate: Bearer error="insufficient_user_authentication", acr_values=…, max_age=…`)
 and a `step_up_url`. The UI explains why and, on **Continue**, re-authenticates at the IdP

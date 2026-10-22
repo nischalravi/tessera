@@ -133,10 +133,17 @@ type EnableResult struct {
 // tried to disable, which would sign them out and lock them out (#335).
 const RefuseSelfDisable = "self_disable_not_allowed"
 
+// RefuseUnlinked: the caller is a platform user with no linked identity, so the
+// self checks cannot place them and fail closed (#449).
+const RefuseUnlinked = "actor_unlinked"
+
 // DisableRefusal reports why byUser may not disable identityID, or "" when
 // they may. Nobody disables the identity their own Tessera user is linked to:
 // another admin must (#335).
 func DisableRefusal(identityID int64, byUser *store.PlatformUser) string {
+	if byUser != nil && byUser.IdentityID == nil {
+		return RefuseUnlinked
+	}
 	if byUser != nil && byUser.IdentityID != nil && *byUser.IdentityID == identityID {
 		return RefuseSelfDisable
 	}
@@ -158,11 +165,14 @@ const (
 // principal) and by the actor name Disable recorded as disabled_by.
 //
 //   - Nobody linked to the identity may enable it (no self re-enable).
-//   - When the identity is linked to a Tessera user, enabling restores their
-//     sign-in, so four eyes apply: the person who disabled it cannot also
-//     enable it. An identity with no linked user only gets its local account
-//     status back, and its disabler may undo their own disable.
+//   - A platform user with no linked identity is refused (actor_unlinked, #449).
+//   - Four eyes apply whether or not a user is linked to the identity (a
+//     directory identity can turn out to be someone's, #449): the person who
+//     disabled it cannot also enable it.
 func EnableRefusal(c *store.TenantTx, identityID int64, byUser *store.PlatformUser, by string) (string, error) {
+	if byUser != nil && byUser.IdentityID == nil {
+		return RefuseUnlinked, nil
+	}
 	if byUser != nil && byUser.IdentityID != nil && *byUser.IdentityID == identityID {
 		return RefuseSelfEnable, nil
 	}
@@ -172,13 +182,6 @@ func EnableRefusal(c *store.TenantTx, identityID int64, byUser *store.PlatformUs
 	}
 	if err != nil {
 		return "", err
-	}
-	linked, err := c.UsersLinkedTo(identityID)
-	if err != nil {
-		return "", err
-	}
-	if len(linked) == 0 {
-		return "", nil
 	}
 	// Compare users, not display names: a second user linked to the disabler's identity is the
 	// same person (#425). A row without a recorded user id (older, or disabled by a non-user

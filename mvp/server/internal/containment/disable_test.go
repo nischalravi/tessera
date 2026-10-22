@@ -119,9 +119,12 @@ func TestDisableEnable(t *testing.T) {
 			if _, err := containment.Disable(c, id, "pa", "suspected takeover", "none", now); err != nil {
 				t.Fatal(err)
 			}
-			// no linked user: the disabler may undo their own disable
-			if got, err := containment.EnableRefusal(c, id, nil, "pa"); err != nil || got != "" {
-				t.Errorf("unlinked, disabler = %q, %v", got, err)
+			// no linked user: four eyes still apply, the disabler cannot undo their own disable (#449)
+			if got, err := containment.EnableRefusal(c, id, nil, "pa"); err != nil || got != containment.RefuseFourEyes {
+				t.Errorf("no linked user, disabler = %q, %v", got, err)
+			}
+			if got, err := containment.EnableRefusal(c, id, nil, "pa2"); err != nil || got != "" {
+				t.Errorf("no linked user, second admin = %q, %v", got, err)
 			}
 			u := &store.PlatformUser{ID: uuid.New(), DisplayName: "Alice", Status: "active", IdentityID: &id, CreatedAt: now}
 			if err := c.InsertPlatformUser(u); err != nil {
@@ -166,5 +169,44 @@ func TestDisableEnable(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// A platform user with no linked identity is refused on both disable and enable (#449); a linked
+// unrelated one is not, and a caller with no platform user (nil) keeps the old behavior.
+func TestDisableEnableRefusalUnlinkedUser(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		target, other := f.A.IDs["alice"], f.A.IDs["bob"]
+		unlinked := &store.PlatformUser{ID: uuid.New(), DisplayName: "Unlinked", Status: "active", CreatedAt: storetest.Now}
+		linked := &store.PlatformUser{ID: uuid.New(), DisplayName: "Linked", Status: "active", IdentityID: &other, CreatedAt: storetest.Now}
+		for _, u := range []*store.PlatformUser{unlinked, linked} {
+			if err := c.InsertPlatformUser(u); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for name, tc := range map[string]struct {
+			user *store.PlatformUser
+			want string
+		}{"unlinked": {unlinked, containment.RefuseUnlinked}, "linked unrelated": {linked, ""}, "no user": {nil, ""}} {
+			if got := containment.DisableRefusal(target, tc.user); got != tc.want {
+				t.Errorf("disable, %s: %q, want %q", name, got, tc.want)
+			}
+		}
+		if _, err := containment.Disable(c, target, "pa", "suspected takeover", "none", storetest.Now); err != nil {
+			t.Fatal(err)
+		}
+		for name, tc := range map[string]struct {
+			user *store.PlatformUser
+			want string
+		}{"unlinked": {unlinked, containment.RefuseUnlinked}, "linked unrelated": {linked, ""}, "no user": {nil, ""}} {
+			if got, err := containment.EnableRefusal(c, target, tc.user, "pa2"); err != nil || got != tc.want {
+				t.Errorf("enable, %s: %q, %v, want %q", name, got, err, tc.want)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
