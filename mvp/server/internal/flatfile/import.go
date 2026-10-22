@@ -157,46 +157,9 @@ func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
 		isDue[t.ID] = true
 	}
 
-	up.Status, up.Added, up.Removed, up.Changed, up.Unchanged = store.FlatUploadApplied, len(delta.Added), len(delta.Removed),
-		len(delta.Changed), delta.Unchanged
-	up.TasksConfirmed = len(due)
-	if err := c.InsertFlatUpload(up); err != nil {
-		return nil, err
-	}
-	for i, ch := range changes {
-		if err := c.InsertFlatChange(up.ID, store.FlatChange{Seq: i + 1, Kind: ch.Kind, Change: ch.Type, Label: ch.Label,
-			Detail: ch.Detail}); err != nil {
-			return nil, err
-		}
-	}
-
-	// The snapshot: this upload's rows replace the last one's.
-	for _, r := range delta.Removed {
-		if err := c.DeleteFlatRecord(in.System, in.Kind, r.Key); err != nil {
-			return nil, err
-		}
-	}
-	for _, r := range cascade {
-		if err := c.DeleteFlatRecord(in.System, KindEntitlements, r.Key); err != nil {
-			return nil, err
-		}
-	}
-	touched := map[string]bool{}
-	for _, r := range delta.Added {
-		touched[r.Key] = true
-	}
-	for _, r := range delta.Changed {
-		touched[r.Key] = true
-	}
-	for _, r := range recs {
-		if touched[r.Key] {
-			if err := c.PutFlatRecord(&store.FlatRecord{System: in.System, Kind: in.Kind, Key: r.Key, Data: r.Data(),
-				Hash: r.Hash, UploadID: up.ID}); err != nil {
-				return nil, err
-			}
-		}
-	}
-
+	up.Held = 0
+	// The graph and the removals come before the upload is recorded (the record is append-only and says
+	// how many removals the deletion guard held). The snapshot rows below need the upload.
 	// The graph. An account whose leaver task is still open stays disabled
 	// even though the file still lists it as active: Tessera has decided it
 	// goes, and the file has not caught up.
@@ -240,7 +203,12 @@ func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
 	}
 	for _, r := range delta.Removed {
 		if in.Kind == KindAccounts {
-			err = dropAccount(c, now, in.System, r.Key, feed)
+			var hid string
+			hid, err = dropAccount(c, now, in.System, r.Key, feed)
+			if hid != "" {
+				up.Held++
+				up.HoldID = hid
+			}
 		} else {
 			err = dropEntitlement(c, now, in.System, r.Key)
 		}
@@ -251,6 +219,47 @@ func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
 	for _, r := range cascade {
 		if err := dropEntitlement(c, now, in.System, r.Key); err != nil {
 			return nil, err
+		}
+	}
+
+	up.Status, up.Added, up.Removed, up.Changed, up.Unchanged = store.FlatUploadApplied, len(delta.Added), len(delta.Removed),
+		len(delta.Changed), delta.Unchanged
+	up.Removed -= up.Held // the removals the guard held did not happen
+	up.TasksConfirmed = len(due)
+	if err := c.InsertFlatUpload(up); err != nil {
+		return nil, err
+	}
+	for i, ch := range changes {
+		if err := c.InsertFlatChange(up.ID, store.FlatChange{Seq: i + 1, Kind: ch.Kind, Change: ch.Type, Label: ch.Label,
+			Detail: ch.Detail}); err != nil {
+			return nil, err
+		}
+	}
+
+	// The snapshot: this upload's rows replace the last one's.
+	for _, r := range delta.Removed {
+		if err := c.DeleteFlatRecord(in.System, in.Kind, r.Key); err != nil {
+			return nil, err
+		}
+	}
+	for _, r := range cascade {
+		if err := c.DeleteFlatRecord(in.System, KindEntitlements, r.Key); err != nil {
+			return nil, err
+		}
+	}
+	touched := map[string]bool{}
+	for _, r := range delta.Added {
+		touched[r.Key] = true
+	}
+	for _, r := range delta.Changed {
+		touched[r.Key] = true
+	}
+	for _, r := range recs {
+		if touched[r.Key] {
+			if err := c.PutFlatRecord(&store.FlatRecord{System: in.System, Kind: in.Kind, Key: r.Key, Data: r.Data(),
+				Hash: r.Hash, UploadID: up.ID}); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -304,6 +313,7 @@ func uploadDetail(up *store.FlatUpload, errCount int) ojson.Object {
 		{Key: "source", Value: up.Source}, {Key: "filename", Value: Neutralize(up.Filename)}, {Key: "sha256", Value: up.SHA256},
 		{Key: "status", Value: up.Status}, {Key: "rows", Value: up.RowsTotal}, {Key: "rows_rejected", Value: up.RowsRejected},
 		{Key: "errors", Value: errCount}, {Key: "added", Value: up.Added}, {Key: "removed", Value: up.Removed},
+		{Key: "held", Value: up.Held}, {Key: "hold_id", Value: up.HoldID},
 		{Key: "changed", Value: up.Changed}, {Key: "unchanged", Value: up.Unchanged},
 		{Key: "tasks_confirmed", Value: up.TasksConfirmed}}
 }
@@ -372,32 +382,33 @@ type feedCheck struct {
 	sanity    []string
 }
 
-func dropAccount(c *store.TenantTx, now time.Time, system, xid string, feed feedCheck) error {
+// It answers the id of the held deletion when the guard held the drop ("" when it was applied or moot).
+func dropAccount(c *store.TenantTx, now time.Time, system, xid string, feed feedCheck) (string, error) {
 	a, err := c.AccountByXID(system, xid)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil
+		return "", nil
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if a.Status == "active" {
 		// the deletion guard (internal/deleteguard): an import that drops more accounts than the
 		// threshold allows holds the rest; they stay as they are until a second admin releases them
 		ref, err := json.Marshal([2]string{system, xid})
 		if err != nil {
-			return err
+			return "", err
 		}
 		d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatAccounts, Source: deleteguard.SourceConnector,
 			SourceID: system, Correlation: "flatfile:" + system, SourceDriven: true, Sanity: feed.sanity, PrevCount: feed.prev, NewCount: feed.now,
 			Items: []deleteguard.Item{{Kind: ItemDropAccount, Ref: string(ref), Label: fmt.Sprintf("account %s in %s dropped by an import", a.Username, system)}}})
 		if err != nil {
-			return err
+			return "", err
 		}
 		if len(d.Held) > 0 {
-			return nil
+			return d.HoldID, nil
 		}
 	}
-	return disableAndDropEdges(c, now, a)
+	return "", disableAndDropEdges(c, now, a)
 }
 
 // ItemDropAccount is the kind of a held drop of an account the file no longer lists.

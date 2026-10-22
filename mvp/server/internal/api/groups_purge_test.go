@@ -120,7 +120,7 @@ func TestGroupsAPI_RecursiveFolderDelete(t *testing.T) {
 	e.admin.call("DELETE", "/api/groups/folders/"+app+"?recursive=maybe", "", 422)
 	e.admin.call("DELETE", "/api/groups/folders/"+app+"?recursive=true", "", 422) // a reason is required
 	plan := e.admin.call("GET", "/api/groups/folders/"+app+"/delete-plan", "", 200)
-	if plan["folders"] != float64(2) || plan["groups"] != float64(2) || plan["active_groups"] != float64(1) || plan["deleted_groups"] != float64(1) ||
+	if plan["folders"] != float64(3) || plan["groups"] != float64(2) || plan["active_groups"] != float64(1) || plan["deleted_groups"] != float64(1) ||
 		plan["needs_approval"] != false || plan["blocker_count"] != float64(0) {
 		t.Fatalf("plan = %v", plan)
 	}
@@ -196,6 +196,10 @@ func TestGroupsAPI_RecursiveFolderDelete(t *testing.T) {
 	t1 := e.admin.folder("", "t1")
 	e.admin.folder(t1, "t2")
 	e.admin.group(t1, "x")
+	// the plan counts the folder itself, as the delete does (#470)
+	if p := e.admin.call("GET", "/api/groups/folders/"+t1+"/delete-plan", "", 200); p["folders"] != float64(2) {
+		t.Errorf("plan folders = %v, want 2 (the folder and its subfolder)", p["folders"])
+	}
 	res := e.admin.call("DELETE", "/api/groups/folders/"+t1+"?recursive=true", `{"reason":"tidy up"}`, 200)
 	if res["deleted"] != true || res["folders"] != float64(2) || res["groups"] != float64(1) {
 		t.Errorf("result = %v", res)

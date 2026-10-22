@@ -27,3 +27,10 @@ mvp/logs/
 # Playwright (mvp/frontend e2e)
 test-results/
 playwright-report/
+
+# Built binaries (go build output; mvp/run.sh builds into mvp/server/bin/)
+mvp/server/tessera
+mvp/server/tessera-*
+mvp/server/bin/
+mvp/server/*.test
+*.exe

@@ -197,7 +197,7 @@ type DeletePlan struct {
 	Subtree []*store.Folder `json:"-"`
 	// Groups, in the order they are purged (a group before the groups it nests).
 	Groups            []*store.NativeGroup `json:"-"`
-	Folders           int                  `json:"folders"` // below the folder, not counting it
+	Folders           int                  `json:"folders"` // the folder and every folder below it: what the delete reports
 	ActiveGroups      int                  `json:"active_groups"`
 	DeletedGroups     int                  `json:"deleted_groups"`
 	AttrDefs          int                  `json:"attr_defs"`
@@ -246,7 +246,7 @@ func (e Env) PlanFolderDelete(id store.FolderID) (*DeletePlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &DeletePlan{Folder: f, Folders: len(below)}
+	p := &DeletePlan{Folder: f, Folders: len(below) + 1}
 	p.Subtree = append(below, f)
 	slices.SortStableFunc(p.Subtree, func(a, b *store.Folder) int { return depth(b.Name) - depth(a.Name) })
 	folders := map[store.FolderID]bool{}
