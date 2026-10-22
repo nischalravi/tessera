@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,8 +11,10 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/attest"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/deprov"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/gov"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/inbox"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -262,12 +265,25 @@ func (s *Server) decideAttestation(r *http.Request, p *params) (int, any, error)
 	}
 	ck := s.grpChecker(r)
 	var out *attest.ItemView
-	err = grpErr(s.write(r, func(c *store.TenantTx, now time.Time) (err error) {
+	err = s.write(r, func(c *store.TenantTx, now time.Time) (err error) {
 		out, err = attest.Decide(s.attestEnv(r, c, now, ck), principal(r).User(), cid, iid, in.Decision, in.Comment)
 		return err
-	}))
+	})
+	var ge *gov.Error
+	if errors.As(err, &ge) && ge.Kind == gov.KindForbidden && (ge.Code == "self_review" || ge.Code == "reviewer_unlinked") {
+		// nothing changed; the refusal is evidence of the control, so it is
+		// returned as a body (not an error) and the audit event commits
+		by := principal(r).User()
+		if _, aerr := store.TxFrom(r.Context()).RecordAudit(store.AuditRecord{At: s.clock(), Action: "review.decide.refused",
+			LegacyActor: by.Display, Detail: ojson.Object{{Key: "attestation_id", Value: cid}, {Key: "item_id", Value: iid},
+				{Key: "reason", Value: ge.Code}},
+			TargetType: "attestation", TargetID: cid}); aerr != nil {
+			return 0, nil, aerr
+		}
+		return http.StatusForbidden, map[string]any{"error": ge.Code, "detail": ge.Msg}, nil
+	}
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, grpErr(err)
 	}
 	return http.StatusOK, out, nil
 }

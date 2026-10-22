@@ -197,7 +197,11 @@ func TestSchedule_EscalateThenRevoke(t *testing.T) {
 	s.tx(func(c *store.TenantTx) error {
 		items, err := c.CampaignItems(l.CampaignID)
 		for _, it := range items {
-			if it.ReviewerID == nil || *it.ReviewerID != carol {
+			if it.IdentityID == carol { // never escalated to their own subject (#440)
+				if it.ReviewerID != nil && *it.ReviewerID == carol {
+					t.Errorf("item %d about carol is assigned to carol", it.ID)
+				}
+			} else if it.ReviewerID == nil || *it.ReviewerID != carol {
 				t.Errorf("item %d reviewer %v, want carol", it.ID, it.ReviewerID)
 			}
 		}
@@ -350,5 +354,41 @@ func TestSchedule_InactiveEscalationIdentity(t *testing.T) {
 		if se, ok := err.(*reviews.SpecError); !ok || se.Code != tc.want {
 			t.Errorf("%d %s: %v, want %s", *tc.id, tc.closeOut, err, tc.want)
 		}
+	}
+}
+
+// Issue #440: close-out escalation never hands an item to its own subject: the
+// subject's items go to the security lead (here none exists, so they keep their
+// reviewer) and everyone else's go to the escalation target.
+func TestSchedule_EscalateNeverAssignsTheSubject(t *testing.T) {
+	var sawSubjectItem bool
+	for _, who := range []string{"alice", "bob", "carol"} {
+		t.Run(who, func(t *testing.T) {
+			s := newSched(t)
+			target := s.f.B.IDs[who]
+			s.template(func(tm *store.ReviewTemplate) { tm.CloseOut, tm.EscalationIdentityID = "escalate", &target })
+			s.tick(s.now)
+			l := s.launches()[0]
+			if r := s.tick(l.DueAt.Add(time.Minute)); r.Escalated != 1 {
+				t.Fatalf("at due: %+v", r)
+			}
+			s.tx(func(c *store.TenantTx) error {
+				items, err := c.CampaignItems(l.CampaignID)
+				for _, it := range items {
+					if it.ReviewerID != nil && *it.ReviewerID == it.IdentityID {
+						t.Errorf("item %d is assigned to its own subject %d", it.ID, it.IdentityID)
+					}
+					if it.IdentityID == target {
+						sawSubjectItem = true
+					} else if it.ReviewerID == nil || *it.ReviewerID != target {
+						t.Errorf("item %d about %d: reviewer %v, want the escalation target %d", it.ID, it.IdentityID, it.ReviewerID, target)
+					}
+				}
+				return err
+			})
+		})
+	}
+	if !sawSubjectItem {
+		t.Fatal("no campaign had an item about its escalation target: the test checks nothing")
 	}
 }

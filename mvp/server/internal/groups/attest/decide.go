@@ -217,6 +217,12 @@ func Decide(e Env, ur store.UserRef, campaignID, itemID, decision string, commen
 		return nil, gov.Conflict("already_decided", "this item was decided: %s", *ri.Decision)
 	}
 	if _, err := reviews.Decide(e.Tx, e.Now, ri.ID, decision, ur, comment); err != nil {
+		switch {
+		case errors.Is(err, reviews.ErrSelfReview):
+			return nil, gov.Forbidden("self_review", "You cannot decide an item about your own access; another reviewer must decide it.")
+		case errors.Is(err, reviews.ErrReviewerUnlinked):
+			return nil, gov.Forbidden("reviewer_unlinked", "Your account is not linked to an identity, so it cannot decide reviews. Ask an administrator to link it.")
+		}
 		var re *reviews.Error
 		if errors.As(err, &re) {
 			return nil, gov.Invalid("invalid_decision", "%s", re.Msg)

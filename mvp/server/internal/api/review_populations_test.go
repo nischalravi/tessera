@@ -160,7 +160,7 @@ func TestReviewPopulationRoles(t *testing.T) {
 
 func TestReviewQAAndSettingsAPI(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	h := isolationServer(t, f, f.B.ID).Handler()
+	h := asLinkedAdmin(t, newIsolationServer(f), f.DB, f.B.ID, storetest.Now).Handler()
 	for body, want := range map[string]int{`{"qa_sample_pct":101}`: 400, `{"qa_sample_pct":-1}`: 400, `{"qa_sample_pct":"x"}`: 422,
 		`{}`: 422, `{"qa_sample_pct":25}`: 200} {
 		if rec := serveOnce(h, "PUT", "/api/reviews/settings", body); rec.Code != want {

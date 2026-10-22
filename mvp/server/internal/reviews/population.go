@@ -343,6 +343,9 @@ func QADecide(c *store.TenantTx, now time.Time, id int64, decision string, by st
 	if ad.QADecision != nil {
 		return nil, &Error{"QA decision already recorded"}
 	}
+	if err := refuseSubject(c, ad.IdentityID, by); err != nil {
+		return nil, err
+	}
 	rows, err := c.PopulationRows(ad.CampaignID)
 	if err != nil {
 		return nil, err

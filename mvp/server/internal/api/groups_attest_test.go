@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/deprov"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
@@ -15,6 +16,7 @@ import (
 
 func TestAttestationAPI_DecideRevokesThroughTheEngine(t *testing.T) {
 	e := newPrivEnv(t)
+	e.linkAdmin()
 	app := e.admin.folder("", "app")
 	g := e.admin.group(app, "g")
 	for _, who := range []string{"alice", "bob"} {
@@ -84,4 +86,36 @@ func TestDeprovAPI_VetoNeedsAnOverrideByAnAdmin(t *testing.T) {
 	over := fmt.Sprintf(`{"identity":%d,"override_reason":"returning contractor"}`, e.ident("carol"))
 	denied(t, bob, "POST", "/api/groups/"+g+"/members", over, "admin")
 	e.admin.call("POST", "/api/groups/"+g+"/members", over, 201)
+}
+
+// Issues #439 and #440: a group attestation decision is refused like a review
+// decision: 403 self_review for the subject, 403 reviewer_unlinked for an
+// account with no linked identity, each audited, and the item stays open.
+func TestAttestationAPI_RefusesSelfAndUnlinkedDeciders(t *testing.T) {
+	e := newPrivEnv(t)
+	g := e.admin.group(e.admin.folder("", "app"), "g")
+	e.admin.call("POST", "/api/groups/"+g+"/members", fmt.Sprintf(`{"identity":%d}`, e.ident("alice")), 201)
+	camp := e.admin.call("POST", "/api/groups/"+g+"/attestation/campaigns", "", 201)["id"].(string)
+	item := e.admin.call("GET", "/api/groups/attestation/campaigns/"+camp, "", 200)["items"].([]any)[0].(map[string]any)["id"].(string)
+	path := "/api/groups/attestation/campaigns/" + camp + "/items/" + item + "/decision"
+	alice := e.ident("alice")
+	admins := []auth.Role{auth.RoleTenantAdmin}
+	for _, tc := range []struct {
+		name, code string
+		by         grpClient
+	}{
+		{"unlinked", "reviewer_unlinked", e.as("unlinked-admin", admins, nil)},
+		{"subject", "self_review", e.as("alice-admin", admins, &alice)},
+	} {
+		before := auditCount(t, e.f, "review.decide.refused")
+		if rec := tc.by.do("POST", path, `{"decision":"keep"}`); rec.Code != 403 || !strings.Contains(rec.Body.String(), `"`+tc.code+`"`) {
+			t.Errorf("%s: %d %s, want 403 %s", tc.name, rec.Code, rec.Body, tc.code)
+		}
+		if n := auditCount(t, e.f, "review.decide.refused"); n != before+1 {
+			t.Errorf("%s: %d review.decide.refused events, want %d", tc.name, n, before+1)
+		}
+	}
+	if v := e.admin.call("GET", "/api/groups/attestation/campaigns/"+camp, "", 200)["campaign"].(map[string]any); v["status"] != "open" {
+		t.Errorf("a refused decision changed the campaign: %v", v)
+	}
 }
