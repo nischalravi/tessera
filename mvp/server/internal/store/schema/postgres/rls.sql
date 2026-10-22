@@ -2109,3 +2109,10 @@ DROP POLICY IF EXISTS tenant_isolation ON worker_target_states;
 CREATE POLICY tenant_isolation ON worker_target_states
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE agent_seal_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_seal_keys FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON agent_seal_keys;
+CREATE POLICY tenant_isolation ON agent_seal_keys
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

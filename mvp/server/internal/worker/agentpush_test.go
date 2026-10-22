@@ -295,6 +295,14 @@ func TestAgentPush_EndToEnd(t *testing.T) {
 		t.Errorf("a second pass: attempts = %d, jobs = %d", got.Attempts, len(s.jobs()))
 	}
 
+	// an agent that is away for a long time (the engine requeues a "sent" operation after ten minutes) costs
+	// no attempt and no second job: the operation waits with the job it has
+	s.now = s.now.Add(11 * time.Minute)
+	s.run()
+	if got := s.op(op.ID); got.Status != provision.Sent || got.Attempts != 1 || len(s.jobs()) != 1 {
+		t.Errorf("after a long wait: %s, attempts %d, %d jobs", got.Status, got.Attempts, len(s.jobs()))
+	}
+
 	j, res := s.pull(a)
 	if res.Error != nil || res.Push == nil || !res.Push.Applied || !res.Push.Verified {
 		t.Fatalf("agent result = %+v", res)

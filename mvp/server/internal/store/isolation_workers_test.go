@@ -460,12 +460,18 @@ func TestIsolation_AgentPushJobs(t *testing.T) {
 	}); err == nil {
 		t.Error("a job of B naming A's operation was accepted")
 	}
-	// an unknown kind is refused by the CHECK
-	if err := f.DB.InTenant(t.Context(), f.A.ID, func(c *store.TenantTx) error {
-		_, err := c.EnqueueAgentJob(&store.AgentJob{AgentID: aAgent, ConnectionID: aConn, Kind: "shell", Payload: `{}`}, now)
-		return err
-	}); err == nil {
-		t.Error("an unknown job kind was accepted")
+	// an unknown kind, a push without its operation and a sync with one are refused
+	for name, bad := range map[string]*store.AgentJob{
+		"an unknown kind":     {AgentID: aAgent, ConnectionID: aConn, Kind: "shell", Payload: `{}`},
+		"a push with no op":   {AgentID: aAgent, ConnectionID: aConn, Kind: store.AgentJobProvisionPush, Payload: `{}`},
+		"a sync naming an op": {AgentID: aAgent, ConnectionID: aConn, Kind: store.AgentJobSync, OpID: &opA, Payload: `{}`},
+	} {
+		if err := f.DB.InTenant(t.Context(), f.A.ID, func(c *store.TenantTx) error {
+			_, err := c.EnqueueAgentJob(bad, now)
+			return err
+		}); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
 	}
 	inA(t, f, func(c *store.TenantTx) error {
 		if n, err := c.CancelAgentJobsForOp(opA, "the operation was cancelled", now); err != nil || n != 1 {

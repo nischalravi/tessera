@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -144,6 +145,13 @@ func scanAgentJob(s scanner) (*AgentJob, error) {
 // makes this a no-op and created is false. The agent and the connection must
 // be this tenant's (the schema refuses others).
 func (tx *TenantTx) EnqueueAgentJob(j *AgentJob, now time.Time) (created bool, err error) {
+	// checked here as well as by the schema: INSERT OR IGNORE swallows a CHECK violation on SQLite
+	switch {
+	case j.Kind != AgentJobSync && j.Kind != AgentJobProvisionPush:
+		return false, fmt.Errorf("store: unknown agent job kind %q", j.Kind)
+	case (j.Kind == AgentJobProvisionPush) != (j.OpID != nil):
+		return false, errors.New("store: a provision_push agent job names its operation, a sync job does not")
+	}
 	if j.ID == "" {
 		j.ID = NewID()
 	}
