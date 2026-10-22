@@ -136,6 +136,9 @@ func TestLoadersAPI_Lifecycle(t *testing.T) {
 		t.Fatalf("groups = %v", groups)
 	}
 	gid := groups[0].(map[string]any)["id"].(string)
+	if got := e.admin.call("GET", "/api/groups/"+gid, "", 200)["loader_id"]; got != id {
+		t.Errorf("group loader_id = %v, want %s", got, id)
+	}
 	if total := e.admin.call("GET", "/api/groups/"+gid+"/members", "", 200)["total"]; total != float64(4) {
 		t.Errorf("members = %v, want 4", total)
 	}

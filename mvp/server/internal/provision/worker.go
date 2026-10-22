@@ -60,6 +60,12 @@ type Settings struct {
 	OnDeprovision string `json:"on_deprovision,omitempty"`
 	// APIRoot overrides the API path of a vault or ERP target (default: the vendor's).
 	APIRoot string `json:"api_root,omitempty"`
+	// AgentID, when set, is the Directory Agent that reaches this target: the
+	// target is in a private network the server cannot dial. The engine then
+	// queues a provision_push job for that agent (internal/agent pull channel)
+	// instead of calling the target itself, and the agent's report finishes
+	// the operation (issue #302). SCIM and Okta targets only.
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 // Engine sends queued operations to their targets and verifies them.
@@ -87,6 +93,37 @@ type Engine struct {
 	Runtime connsync.Runtime
 	// Build creates the connector of a target (tests inject fakes).
 	Build func(t *store.ProvTarget, token string) (target.Connector, error)
+	// Guard, when set, runs every call to a target under that target's
+	// limits and circuit breaker (internal/worker.Guard). A call it refuses
+	// with a Deferred error is not an attempt: the operation waits and is
+	// taken again later.
+	Guard Guarder
+}
+
+// Guarder runs fn as one call to the target of connection connID, or refuses it.
+type Guarder interface {
+	Do(ctx context.Context, t tenancy.ID, connID string, fn func(context.Context) error) error
+}
+
+// Deferred is an error from a Guarder that says "not now": the call was not
+// made, and may be tried again after DeferFor.
+type Deferred interface {
+	error
+	DeferFor() time.Duration
+}
+
+// guarded makes one call to a connection's target: under the Guard if there
+// is one, with the call timeout either way.
+func (e *Engine) guarded(ctx context.Context, t tenancy.ID, connID string, fn func(context.Context) error) error {
+	run := func(ctx context.Context) error {
+		cctx, cancel := e.call(ctx)
+		defer cancel()
+		return fn(cctx)
+	}
+	if e.Guard == nil {
+		return run(ctx)
+	}
+	return e.Guard.Do(ctx, t, connID, run)
 }
 
 // Stats counts what one pass did.
@@ -144,15 +181,22 @@ func SealToken(s *seal.Sealer, t tenancy.ID, targetID, token string) ([]byte, er
 	return s.Seal([]byte(token), seal.AAD(t, "provisioning_targets", "credential_enc", targetID))
 }
 
-func (e *Engine) openToken(t tenancy.ID, pt *store.ProvTarget) (string, error) {
+// OpenCredential opens a target's stored credential under the KEK ("" when it
+// has none). The caller decides where the token goes: into an outbound request
+// of this process, or sealed to an agent (internal/seal SealToAgent).
+func OpenCredential(s *seal.Sealer, t tenancy.ID, pt *store.ProvTarget) (string, error) {
 	if len(pt.CredentialEnc) == 0 {
 		return "", nil
 	}
-	b, err := e.Sealer.Open(pt.CredentialEnc, seal.AAD(t, "provisioning_targets", "credential_enc", pt.ID))
+	b, err := s.Open(pt.CredentialEnc, seal.AAD(t, "provisioning_targets", "credential_enc", pt.ID))
 	if err != nil {
 		return "", errors.New("the stored credential cannot be opened with the current key")
 	}
 	return string(b), nil
+}
+
+func (e *Engine) openToken(t tenancy.ID, pt *store.ProvTarget) (string, error) {
+	return OpenCredential(e.Sealer, t, pt)
 }
 
 func (e *Engine) build(pt *store.ProvTarget, token string) (target.Connector, error) {
@@ -252,13 +296,13 @@ func (e *Engine) RunTenant(ctx context.Context, t tenancy.ID) (Stats, error) {
 	if err != nil {
 		return stats, err
 	}
-	conns := map[string]target.Connector{}
+	conns, agents := map[string]target.Connector{}, map[string]string{}
 	var firstErr error
 	for _, op := range due {
 		if ctx.Err() != nil {
 			break
 		}
-		s, err := e.process(ctx, t, op, conns)
+		s, err := e.process(ctx, t, op, conns, agents)
 		stats.add(s)
 		if err != nil && firstErr == nil {
 			firstErr = err
@@ -312,11 +356,23 @@ func errText(err error) string { return jobs.ErrorSummary(err) }
 func sp(s string) *string { return &s }
 
 // process drives one claimed operation.
-func (e *Engine) process(ctx context.Context, t tenancy.ID, op *store.ProvOp, conns map[string]target.Connector) (Stats, error) {
+func (e *Engine) process(ctx context.Context, t tenancy.ID, op *store.ProvOp, conns map[string]target.Connector, agents map[string]string) (Stats, error) {
 	st := Stats{Processed: 1}
 	req, err := Request(op)
 	if err != nil {
 		return st, e.fail(ctx, t, op, err, &st)
+	}
+	if op.Status == Sent {
+		agentID, err := e.agentOf(ctx, t, op.ConnectionID, agents)
+		if err != nil {
+			if target.Retryable(err) {
+				return st, e.retryLater(ctx, t, op, err, &st)
+			}
+			return st, e.fail(ctx, t, op, err, &st)
+		}
+		if agentID != "" {
+			return st, e.dispatch(ctx, t, op, agentID, &st)
+		}
 	}
 	conn, err := e.connector(ctx, t, op.ConnectionID, conns)
 	if err != nil {
@@ -326,9 +382,11 @@ func (e *Engine) process(ctx context.Context, t tenancy.ID, op *store.ProvOp, co
 		return st, e.fail(ctx, t, op, err, &st)
 	}
 	if op.Status == Sent {
-		cctx, cancel := e.call(ctx)
-		err := conn.Apply(cctx, req)
-		cancel()
+		err := e.guarded(ctx, t, op.ConnectionID, func(cctx context.Context) error { return conn.Apply(cctx, req) })
+		var def Deferred
+		if errors.As(err, &def) {
+			return st, e.deferOp(ctx, t, op, def, &st)
+		}
 		if err != nil {
 			if target.Retryable(err) && op.Attempts < e.maxAttempts() {
 				return st, e.retryLater(ctx, t, op, err, &st)
@@ -374,6 +432,23 @@ func (e *Engine) set(ctx context.Context, t tenancy.ID, op *store.ProvOp, from s
 	})
 }
 
+// deferOp puts back an operation whose call the target's guard refused (the
+// breaker is open, or the rate limit is spent). Nothing was sent, so the
+// attempt this pass counted is given back: a target that is down for an hour
+// does not fail every operation queued for it.
+func (e *Engine) deferOp(ctx context.Context, t tenancy.ID, op *store.ProvOp, d Deferred, st *Stats) error {
+	now := e.now()
+	st.Retrying++
+	next := now.Add(max(d.DeferFor(), time.Second))
+	msg := sp("waiting: " + errText(d))
+	if op.Status == Sent {
+		return e.set(ctx, t, op, Sent, store.ProvOpState{Status: Queued, Attempts: max(0, op.Attempts-1),
+			VerifyAttempts: op.VerifyAttempts, NextAttemptAt: next, LastError: msg}, "", nil)
+	}
+	return e.set(ctx, t, op, op.Status, store.ProvOpState{Status: op.Status, Attempts: op.Attempts,
+		VerifyAttempts: max(0, op.VerifyAttempts-1), NextAttemptAt: next, LastError: msg, Observed: op.Observed}, "", nil)
+}
+
 // retryLater re-queues an operation whose send failed in a way a later
 // attempt may fix.
 func (e *Engine) retryLater(ctx context.Context, t tenancy.ID, op *store.ProvOp, cause error, st *Stats) error {
@@ -396,9 +471,15 @@ func (e *Engine) fail(ctx context.Context, t tenancy.ID, op *store.ProvOp, cause
 
 // verify re-reads the target and settles the operation.
 func (e *Engine) verify(ctx context.Context, t tenancy.ID, op *store.ProvOp, conn target.Connector, req target.Request, st *Stats) error {
-	cctx, cancel := e.call(ctx)
-	v, err := conn.Verify(cctx, req)
-	cancel()
+	var v target.Verdict
+	err := e.guarded(ctx, t, op.ConnectionID, func(cctx context.Context) (err error) {
+		v, err = conn.Verify(cctx, req)
+		return err
+	})
+	var def Deferred
+	if errors.As(err, &def) {
+		return e.deferOp(ctx, t, op, def, st)
+	}
 	now := e.now()
 	switch {
 	case err != nil:
@@ -423,22 +504,7 @@ func (e *Engine) verify(ctx context.Context, t tenancy.ID, op *store.ProvOp, con
 	}
 	// Verified: the completion and the status change commit together.
 	err = e.DB.InTenant(ctx, t, func(tx *store.TenantTx) error {
-		now := e.now()
-		if op.Completion != nil {
-			if err := runCompletion(tx, now, *op.Completion); err != nil {
-				return err
-			}
-		}
-		if err := tx.SetProvOpState(op.ID, PendingVerification, store.ProvOpState{Status: Verified, Attempts: op.Attempts,
-			VerifyAttempts: op.VerifyAttempts, NextAttemptAt: now, Observed: sp(v.Observed), CompletedAt: &now}, now); err != nil {
-			return err
-		}
-		if _, err := tx.ResolveProvFindings(op.ID, now); err != nil {
-			return err
-		}
-		return tx.Audit(now, WorkerActor, "provision.verified", ojson.Object{{Key: "op_id", Value: op.ID},
-			{Key: "kind", Value: op.Kind}, {Key: "target", Value: op.TargetRef}, {Key: "attempts", Value: op.Attempts},
-			{Key: "observed", Value: v.Observed}})
+		return FinishVerified(tx, e.now(), op, v.Observed, "")
 	})
 	if err == nil {
 		st.Verified++
@@ -446,7 +512,10 @@ func (e *Engine) verify(ctx context.Context, t tenancy.ID, op *store.ProvOp, con
 	}
 	// The completion could not be applied (the graph changed under it): the
 	// target is right but Tessera is not; retry the re-read, then fail loudly.
-	cause := fmt.Errorf("verified in the target but Tessera could not apply the change: %w", err)
+	cause := err
+	if ce := (*CompletionError)(nil); !errors.As(err, &ce) {
+		cause = fmt.Errorf("verified in the target but Tessera could not apply the change: %w", err)
+	}
 	if op.VerifyAttempts >= e.maxVerifies() {
 		return e.fail(ctx, t, op, cause, st)
 	}
@@ -470,24 +539,7 @@ func runCompletion(tx *store.TenantTx, now time.Time, raw string) error {
 // mismatch ends an operation whose re-read never showed the change, and
 // raises a finding.
 func (e *Engine) mismatch(ctx context.Context, t tenancy.ID, op *store.ProvOp, v target.Verdict) error {
-	now := e.now()
-	severity := "medium"
-	if op.Kind == target.DisableAccount || op.Kind == target.DeleteAccount || op.Kind == target.RemoveEntitlement {
-		severity = "high" // the access that should be gone is still there
-	}
-	return e.set(ctx, t, op, PendingVerification, store.ProvOpState{Status: Mismatch, Attempts: op.Attempts,
-		VerifyAttempts: op.VerifyAttempts, NextAttemptAt: now, LastError: sp("the target does not show the change: expected " + v.Expected + ", observed " + v.Observed),
-		Observed: sp(v.Observed), CompletedAt: &now}, "provision.mismatch",
-		func(tx *store.TenantTx, now time.Time) (ojson.Object, error) {
-			f := &store.ProvFinding{ID: store.NewID(), OpID: op.ID, ConnectionID: op.ConnectionID, Code: "verify_mismatch",
-				Severity: severity, Title: fmt.Sprintf("Target did not apply %s for %s", strings.ReplaceAll(op.Kind, "_", " "), op.TargetRef),
-				Expected: v.Expected, Observed: v.Observed}
-			if err := tx.InsertProvFinding(f, now); err != nil {
-				return nil, err
-			}
-			return ojson.Object{{Key: "finding_id", Value: f.ID}, {Key: "expected", Value: v.Expected},
-				{Key: "observed", Value: v.Observed}}, nil
-		})
+	return e.DB.InTenant(ctx, t, func(tx *store.TenantTx) error { return FinishMismatch(tx, e.now(), op, v, "") })
 }
 
 // RunAll runs one pass for every active tenant. A tenant whose pass failed is

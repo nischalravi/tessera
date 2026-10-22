@@ -4064,6 +4064,15 @@ export interface QueueSchedule {
 export interface QueueWorker {
   worker_id: string; mode: "worker" | "api"; status: "healthy" | "stale";
   kinds: string[]; concurrency: number; running: number; started_at: string; last_heartbeat_at: string; lag_seconds: number;
+  /** What this worker knows of the connections it called: the circuit breaker state and the calls in flight. */
+  targets: QueueWorkerTarget[];
+}
+
+/** One connection as one worker sees it (issue #302). An open breaker refuses calls until `open_until`, then one probe decides. */
+export interface QueueWorkerTarget {
+  connection_id: string; connection: string; breaker: "closed" | "open" | "half_open";
+  consecutive_failures: number; open_until: string | null; last_error: string;
+  in_flight: number; calls: number; failures: number; rejected: number;
 }
 
 export const queue = {
@@ -4500,7 +4509,7 @@ export type CompositeOp = "union" | "intersection" | "complement";
 export interface GrpGroup {
   id: string; folder_id: string; extension: string; display_extension: string; name: string; display_name: string;
   description: string; type: "group" | "role"; definition: GrpDefinition; composite_op: CompositeOp | null; factors?: string[];
-  managed_by: string; data_owner: string | null; member_description: string | null; status: string;
+  managed_by: string; /** the loader that fills a loader-managed group */ loader_id?: string; data_owner: string | null; member_description: string | null; status: string;
   enabled_from: string | null; disabled_at: string | null; requestable: boolean; effective_count: number;
   /** clean, pending (a queued recompute is running: the members are stale) or failed */
   recompute_state: string; created_at: string; version: number;
@@ -4600,6 +4609,86 @@ export const groups = {
   unassign: (id: string) => api<{ id: string; deleted: boolean }>(`/groups/attr-assignments/${gid(id)}`, undefined, "DELETE"),
   objectTypes: (kind: "group" | "folder", id: string) => api<ObjectTypes>(`/groups/${kind === "folder" ? "folders/" : ""}${gid(id)}/object-types`),
   setObjectTypes: (kind: "group" | "folder", id: string, types: string[]) => api<ObjectTypes>(`/groups/${kind === "folder" ? "folders/" : ""}${gid(id)}/object-types`, { types }, "PUT"),
+};
+
+// ------------------------------------------------------ group loaders (GR-10)
+// Membership sources: a loader reads a source on a schedule and keeps the members of the groups it owns in sync.
+// Design docs/design/groups-grouper-parity.md §9.1. Routes: /api/groups/loaders, /api/groups/loader-tasks.
+
+export type LoaderType = "sql_simple" | "sql_group_list" | "csv" | "connector_groups" | "attribute" | "recent_memberships";
+export type LoaderStatus = "enabled" | "disabled" | "held";
+export type OnMissingGroup = "empty" | "disable" | "delete" | "keep";
+export type LoaderRunKind = "full" | "incremental" | "preview";
+export type LoaderRunStatus = "running" | "applied" | "held" | "failed" | "approved" | "rejected" | "previewed";
+
+/** Failsafe limits; unset fields have the server's defaults (the stored form always has them filled). */
+export interface LoaderFailsafe {
+  max_removed_percent?: number; max_removed?: number; min_group_size?: number; max_groups_emptied_percent?: number; max_unresolved_percent?: number;
+}
+/** What a create sends: the whole definition (design §9.1). `config` depends on the type. */
+export interface LoaderSpec {
+  name: string; type: LoaderType; connection_id?: string; config: Record<string, unknown>; target_folder: string; name_template?: string;
+  on_missing_group?: OnMissingGroup; and_group?: string; schedule?: string; incremental_secs?: number; failsafe?: LoaderFailsafe; status?: "enabled" | "disabled";
+  /** Bearer token of a csv loader's url: sealed by the server, never returned. */
+  secret?: string;
+}
+export interface LoaderTrip { rule: string; group?: string; value: number; limit: number; detail: string }
+export interface LoaderRun {
+  id: string; loader_id: string; kind: LoaderRunKind; status: LoaderRunStatus; started_at: string; finished_at: string | null;
+  source_rows: number | null; groups_seen: number | null; adds: number | null; removes: number | null; unresolved: number | null;
+  failsafe_tripped: LoaderTrip[] | null; source_hash: string | null; error: string | null;
+  requested_by: string | null; decided_by: string | null; decided_at: string | null; impact?: LoaderImpact | null; plan?: LoaderPlan | null;
+}
+export interface LoaderGroupPlan {
+  name: string; extension: string; display_name?: string; group_id?: string; create?: boolean; restore?: boolean; enable?: boolean;
+  add?: number[]; remove?: number[]; size: number; current: number; missing?: boolean; action?: string;
+}
+export interface LoaderPlan {
+  kind: string; groups: LoaderGroupPlan[]; unresolved?: { source: string; identifier: string; groups: string[] }[];
+  counts: { LoaderGroups: number; SourceRefs: number; UnresolvedRefs: number };
+}
+export interface LoaderImpactRef { id: string; name: string; definition: string; because: string }
+export interface LoaderImpact {
+  added_identities: number; removed_identities: number;
+  groups: { name: string; added: number; removed: number; current: number; size: number; missing?: boolean; action?: string }[];
+  parent_groups: LoaderImpactRef[]; policy_groups: LoaderImpactRef[]; provisioned_targets: string[];
+  removed_used_last_30_days: number; note: string;
+}
+export interface LoaderJob {
+  state: "idle" | "held" | "disabled" | string; next_full_at: string | null; next_incremental_at: string | null; lag_seconds: number | null; last_run: LoaderRun | null;
+}
+export interface GrpLoader {
+  id: string; name: string; type: LoaderType; connection_id: string | null;
+  /** Definition fields: only for those who administer the target folder. */
+  config?: Record<string, unknown>; failsafe?: LoaderFailsafe;
+  target_folder_id: string; target_folder: string; name_template: string; on_missing_group: OnMissingGroup; and_group_id: string | null;
+  schedule: string; incremental_secs: number | null; status: LoaderStatus; has_secret: boolean;
+  /** SQL loaders need a second admin's approval to be created or changed. */
+  requires_approval: boolean; last_full_at: string | null; last_incremental_at: string | null;
+  created_by: string | null; created_at: string; updated_at: string; version: number; job: LoaderJob | null;
+}
+export interface LoaderPending { status: "pending_approval"; change_request_id: string; type: string; loader_id: string | null; expires_at: string; detail: string }
+export interface LoaderUnresolved { source: string; identifier: string; first_seen: string; last_seen: string; groups: string[] }
+export interface LoaderTask {
+  type: "loader_held"; run_id: string; loader_id: string; loader_name: string; target_folder: string; held_at: string;
+  adds: number | null; removes: number | null; unresolved: number | null; failsafe_tripped: LoaderTrip[] | null; impact: LoaderImpact | null;
+}
+/** A create or change of a SQL loader answers 202 with a change request, not the loader. */
+export const loaderPending = (r: GrpLoader | LoaderPending): r is LoaderPending => r.status === "pending_approval";
+
+export const groupLoaders = {
+  list: (o: { limit?: number; offset?: number } = {}) => api<GrpList<GrpLoader>>(`/groups/loaders${qs({ limit: 500, ...o })}`),
+  get: (id: string) => api<GrpLoader>(`/groups/loaders/${gid(id)}`),
+  create: (b: LoaderSpec) => api<GrpLoader | LoaderPending>("/groups/loaders", b),
+  update: (id: string, b: Partial<LoaderSpec> & { version?: number }) => api<GrpLoader | LoaderPending>(`/groups/loaders/${gid(id)}`, b, "PATCH"),
+  /** Run now. A preview applies nothing and answers the plan; an incremental run with nothing new answers `no_changes`. */
+  run: (id: string, kind: LoaderRunKind = "full") => api<LoaderRun | { status: "no_changes" }>(`/groups/loaders/${gid(id)}/run`, { kind }),
+  runs: (id: string, o: { limit?: number; offset?: number } = {}) => api<GrpList<LoaderRun> & { total: number }>(`/groups/loaders/${gid(id)}/runs${qs({ limit: 20, ...o })}`),
+  runDetail: (id: string, runId: string) => api<LoaderRun>(`/groups/loaders/${gid(id)}/runs/${gid(runId)}`),
+  approve: (id: string, runId: string) => api<LoaderRun>(`/groups/loaders/${gid(id)}/runs/${gid(runId)}/approve`, {}),
+  reject: (id: string, runId: string) => api<LoaderRun>(`/groups/loaders/${gid(id)}/runs/${gid(runId)}/reject`, {}),
+  unresolved: (id: string, o: { limit?: number; offset?: number } = {}) => api<GrpList<LoaderUnresolved> & { total: number }>(`/groups/loaders/${gid(id)}/unresolved${qs({ limit: 50, ...o })}`),
+  tasks: () => api<GrpList<LoaderTask>>(`/groups/loader-tasks${qs({ limit: 200 })}`),
 };
 
 // ------------------------------------------------------ group event sinks (GR-18)

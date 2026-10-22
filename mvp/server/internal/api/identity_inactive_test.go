@@ -51,7 +51,7 @@ func TestLeaverOnDisabledIdentityKeepsSignInBlocked(t *testing.T) {
 	alice := f.A.IDs["alice"]
 	linked := signIn(t, f.DB, f.A.ID, authtest.User{Email: "alice@a.example", Roles: []auth.Role{auth.RolePolicyAdmin},
 		IdentityID: &alice}, authtest.Phr, storetest.Now)
-	l := policyAdmin(t, f, f.A.ID, "pa@a.example")
+	l := linkedPolicyAdmin(t, f, f.A.ID, "pa@a.example")
 	if rec := corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/disable", alice), `{"reason":"suspected insider activity"}`); rec.Code != 200 {
 		t.Fatalf("disable: %d %s", rec.Code, rec.Body)
 	}
@@ -67,7 +67,7 @@ func TestLeaverOnDisabledIdentityKeepsSignInBlocked(t *testing.T) {
 		t.Error("a session was issued to a user whose identity was disabled and then terminated")
 	}
 	// enable cannot bring a terminated identity back
-	l2 := policyAdmin(t, f, f.A.ID, "pa2@a.example")
+	l2 := linkedPolicyAdmin(t, f, f.A.ID, "pa2@a.example")
 	if rec := corrDo(h, l2, "POST", fmt.Sprintf("/api/identities/%d/enable", alice), `{"reason":"cleared by investigation"}`); rec.Code == 200 {
 		t.Errorf("enable of a terminated identity succeeded: %s", rec.Body)
 	}
@@ -84,7 +84,7 @@ func TestLeaverRevokesLinkedUserSessions(t *testing.T) {
 	alice := f.A.IDs["alice"]
 	linked := signIn(t, f.DB, f.A.ID, authtest.User{Email: "alice@a.example", Roles: []auth.Role{auth.RolePolicyAdmin},
 		IdentityID: &alice}, authtest.Phr, storetest.Now)
-	l := policyAdmin(t, f, f.A.ID, "pa@a.example")
+	l := linkedPolicyAdmin(t, f, f.A.ID, "pa@a.example")
 	if rec := corrDo(h, linked, "GET", "/api/auth/session", ""); rec.Code != 200 {
 		t.Fatalf("session before leaver: %d", rec.Code)
 	}
@@ -144,7 +144,7 @@ func TestMergeRefusesIdentityWithLinkedUser(t *testing.T) {
 	alice, bob := f.A.IDs["alice"], f.A.IDs["bob"]
 	linked := signIn(t, f.DB, f.A.ID, authtest.User{Email: "alice@a.example", Roles: []auth.Role{auth.RolePolicyAdmin},
 		IdentityID: &alice}, authtest.Phr, storetest.Now)
-	admin := policyAdmin(t, f, f.A.ID, "pa@a.example")
+	admin := linkedPolicyAdmin(t, f, f.A.ID, "pa@a.example")
 	rec := corrDo(h, admin, "POST", fmt.Sprintf("/api/identities/%d/merge", alice), fmt.Sprintf(`{"into":%d,"reason":"duplicate person record"}`, bob))
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "merged_identity_signs_in") {
 		t.Errorf("merge of a signed-in identity: %d %s", rec.Code, rec.Body)
@@ -182,7 +182,7 @@ func TestDisableRefusesSelfDisable(t *testing.T) {
 		t.Errorf("identity.disable.refused detail %s", d)
 	}
 	// another admin may disable it
-	l := policyAdmin(t, f, f.A.ID, "pa@a.example")
+	l := linkedPolicyAdmin(t, f, f.A.ID, "pa@a.example")
 	if rec := corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/disable", alice), `{"reason":"suspected insider activity"}`); rec.Code != 200 {
 		t.Errorf("disable by another admin: %d %s", rec.Code, rec.Body)
 	}

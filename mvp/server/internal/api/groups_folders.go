@@ -106,6 +106,7 @@ type groupView struct {
 	CompositeOp       *string   `json:"composite_op"`
 	Factors           *[]string `json:"factors,omitempty"` // composites, on single-group answers
 	ManagedBy         string    `json:"managed_by"`
+	LoaderID          *string   `json:"loader_id,omitempty"` // the loader that fills a loader-managed group
 	DataOwner         *string   `json:"data_owner"`
 	MemberDescription *string   `json:"member_description"`
 	Status            string    `json:"status"`
@@ -129,6 +130,7 @@ func viewGroup(g *store.NativeGroup) groupView {
 		MemberDescription: g.MemberDescription, Status: g.Status, Requestable: g.Requestable,
 		EffectiveCount: g.EffectiveCount, EffectiveVersion: g.EffectiveVersion, RecomputeState: g.RecomputeState,
 		CreatedAt: store.RT(g.CreatedAt), CreatedBy: g.CreatedBy, Version: g.Version}
+	v.LoaderID = g.LoaderID
 	if g.CompositeOp != nil {
 		op := string(*g.CompositeOp)
 		v.CompositeOp = &op
