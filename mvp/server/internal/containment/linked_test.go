@@ -29,7 +29,8 @@ func TestEnableRefusal_LinkedUserOfTheDisabler(t *testing.T) {
 			}
 			return u
 		}
-		first, second, other := user("Bob (okta)", &admin), user("Bob (entra)", &admin), user("Carol", nil)
+		carol := f.A.IDs["carol"]
+		first, second, other, unlinked := user("Bob (okta)", &admin), user("Bob (entra)", &admin), user("Carol", &carol), user("Unlinked", nil)
 		if _, err := containment.DisableAs(c, target, first.DisplayName, first.ID.String(), "suspected takeover", "none", now); err != nil {
 			t.Fatal(err)
 		}
@@ -40,6 +41,7 @@ func TestEnableRefusal_LinkedUserOfTheDisabler(t *testing.T) {
 			"the disabler":               {first, containment.RefuseFourEyes},
 			"the disabler's linked user": {second, containment.RefuseFourEyes},
 			"another person":             {other, ""},
+			"an unlinked user":           {unlinked, containment.RefuseUnlinked},
 		} {
 			if got, err := containment.EnableRefusal(c, target, tc.user, tc.user.DisplayName); err != nil || got != tc.want {
 				t.Errorf("%s: %q, %v, want %q", name, got, err, tc.want)

@@ -636,3 +636,33 @@ func TestHelpdeskUnlinkedOperatorIsRefused(t *testing.T) {
 		t.Fatalf("linked unrelated operator: %d %s", code, body)
 	}
 }
+
+// An operator with no linked identity can neither second-approve nor execute a reset (#449); a
+// linked unrelated operator still can.
+func TestHelpdeskUnlinkedOperatorCannotApproveOrExecute(t *testing.T) {
+	e := newHelpdeskEnv(t, nil)
+	v := e.start(e.agent, e.carol, "mfa")
+	if code, body := e.verify(e.agent, v.ID, `{"method":"idv","session_ref":"idv-123"}`); code != 200 {
+		t.Fatalf("idv: %d %s", code, body)
+	}
+	if code, body := e.verify(e.other, v.ID, callbackBody); code != 200 {
+		t.Fatalf("callback: %d %s", code, body)
+	}
+	unlinked := e.signin("unlinked@a.example", nil)
+	base := "/api/helpdesk/cases/" + v.ID
+	for name, path := range map[string]string{"second approval": base + "/second-approval", "execute": base + "/execute"} {
+		code, body := e.do(unlinked, "POST", path, "")
+		if code != http.StatusForbidden || !strings.Contains(body, `"`+helpdesk.ReasonActorUnlinked+`"`) {
+			t.Errorf("%s: %d %s, want 403 actor_unlinked", name, code, body)
+		}
+	}
+	if code, body := e.do(e.other, "POST", base+"/second-approval", ""); code != 200 {
+		t.Fatalf("linked second approval: %d %s", code, body)
+	}
+	if code, body := e.do(e.other, "POST", base+"/execute", ""); code != 200 {
+		t.Fatalf("linked execute: %d %s", code, body)
+	}
+	if got := e.fake.Calls(); len(got) != 1 {
+		t.Errorf("executor calls: %+v", got)
+	}
+}
