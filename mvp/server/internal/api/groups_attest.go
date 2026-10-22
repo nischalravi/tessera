@@ -316,7 +316,7 @@ func (s *Server) listInbox(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	kind, err := queryEnum(p, "kind", store.TaskDeprovisioning, store.TaskRule, store.TaskMicroCertification, store.TaskAttestation,
-		store.TaskAttestationOverdue)
+		store.TaskAttestationOverdue, store.TaskDeletionHeld)
 	if err != nil {
 		return 0, nil, err
 	}

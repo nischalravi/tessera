@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Eye, Play, Power } from "lucide-react";
 import { GrpLoader, LoaderRun, fmtDate, groupLoaders, loaderPending } from "../../../api";
 import { useSession } from "../../../app/auth";
+import { SourceDeletionGuard } from "../../admin/SourceDeletionGuard";
 import { Badge, Callout, CommandBar, Drawer, Loading, useToast } from "../../../components";
 import { errText, useLoad } from "./hooks";
 import { HeldRun, ImpactView, PlanView, RunRow, Trips } from "./LoaderRuns";
@@ -99,6 +100,8 @@ export function LoaderPanel({ loader, onChanged }: { loader: GrpLoader; onChange
           {held.map((h) => <HeldRun key={h.id} loaderId={loader.id} run={h} canDecide={canAdmin && folderAdmin} onDone={onChanged} />)}
         </section>
       )}
+
+      <SourceDeletionGuard kind="loader" id={loader.id} />
 
       <section className="stack-sm" aria-label="Unresolved people">
         <h3 style={{ fontSize: "var(--fs-lg)" }}>Unresolved people{unresolved.data ? ` (${unresolved.data.total})` : ""}</h3>

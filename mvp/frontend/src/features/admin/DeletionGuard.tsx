@@ -1,10 +1,10 @@
 import { FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
-import { DeletionGuardView, DeletionMode, DeletionPolicy, DeletionPolicyInput, deletionGuard, useApi } from "../../api";
+import { DeletionGuardView, DeletionMode, DeletionPolicy, DeletionPolicyInput, DeletionSourceRow, deletionGuard, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { Badge, Button, Callout, useToast } from "../../components";
 import { errText, outcome } from "./common";
-import { CATEGORY_HELP, CATEGORY_LABEL, MODE_LABEL, PolicyEdit, checkEdit, editOf, inputOf, looksLooser, thresholdText, usageRatio, windowText } from "./deletionGuardModel";
+import { CATEGORY_HELP, CATEGORY_LABEL, MODE_LABEL, PolicyEdit, SOURCE_KIND_LABEL, checkEdit, editOf, inputOf, looksLooser, sourceLink, thresholdText, usageRatio, windowText } from "./deletionGuardModel";
 
 /**
  * Admin → Deletion guard: the threshold window that stops a mistake (a bad admin action, a bad source feed, a
@@ -142,7 +142,41 @@ export function DeletionGuard() {
           <Link className="small" to="/admin/change-requests">Change requests</Link>
         </div>
       </form>
+      <SourceList rows={data.sources ?? []} />
     </div>
   );
 }
 
+/** The sources that have their own threshold or feed checks; each is edited on its own settings page. */
+function SourceList({ rows }: { rows: DeletionSourceRow[] }) {
+  return (
+    <section className="card stack-sm" aria-label="Sources with their own settings">
+      <h2>Sources with their own settings</h2>
+      <p className="small muted" style={{ margin: 0 }}>
+        A connection, group loader or contractor feed can carry its own threshold and feed checks. Edit them on the source's own page: a connection's settings,
+        a loader's Source tab, a contractor feed's settings.
+      </p>
+      {rows.length === 0 ? <p className="small muted" style={{ margin: 0 }}>No source has settings of its own. Each uses the thresholds above and the default feed checks.</p> : (
+        <div className="table-scroll">
+          <table>
+            <caption className="sr-only">Sources with their own deletion guard settings</caption>
+            <thead><tr><th scope="col">Source</th><th scope="col">Category</th><th scope="col">Threshold</th><th scope="col">Feed checks</th></tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={`${r.kind}:${r.source_id}:${r.category}`}>
+                  <th scope="row">
+                    <Link to={sourceLink(r.kind, r.source_id)}>{r.name || r.source_id}</Link>
+                    <div className="xs faint" style={{ fontWeight: 400 }}>{SOURCE_KIND_LABEL[r.kind]}</div>
+                  </th>
+                  <td>{CATEGORY_LABEL[r.category]}</td>
+                  <td className="small">{r.mode ? `${MODE_LABEL[r.mode]}: ${thresholdText({ ...r.effective, limit: null })}` : "The category's"}</td>
+                  <td className="small">Drop limit {r.effective.feed.drop_percent}%, empty feed {r.effective.feed.empty_check ? "held" : "not held on its own"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}

@@ -1,3 +1,4 @@
+import { SourceDeletionGuard } from "./SourceDeletionGuard";
 import { ChangeEvent, FormEvent, useRef, useState } from "react";
 import { Plus, RefreshCw, Upload, UserPlus } from "lucide-react";
 import { VMS_OUTCOME, VMS_REASON, VmsRecord, VmsReport, VmsSettings, VmsSource, VmsVendor, relTime, useApi, vmsApi } from "../../api";
@@ -218,6 +219,7 @@ function FeedForm({ source, onClose, onSaved }: { source: VmsSource | null; onCl
         {error && <Callout tone="bad">{error}</Callout>}
         <div className="row"><Button type="submit" variant="primary" disabled={busy}>{busy ? "Saving…" : "Save"}</Button><Button onClick={onClose}>Cancel</Button></div>
       </form>
+      {s && <SourceDeletionGuard kind="vms_source" id={s.id} />}
     </Drawer>
   );
 }

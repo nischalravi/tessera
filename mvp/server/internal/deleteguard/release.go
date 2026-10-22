@@ -177,6 +177,9 @@ func Release(tx *store.TenantTx, now time.Time, id, by string, ords []int, ap Ap
 	if err := tx.ResolveDeletionHold(h.ID, res.Status, by, "", now); err != nil {
 		return nil, err
 	}
+	if err := closeTask(tx, now, h.ID, store.TaskDone, by); err != nil {
+		return nil, err
+	}
 	// the override is audited in the transaction that applies it
 	return res, audit(tx, now, "deletion_guard.released", h.DeletionHold, ojson.Object{{Key: "hold_id", Value: h.ID},
 		{Key: "category", Value: h.Category}, {Key: "approved_by", Value: by}, {Key: "requested_by", Value: h.Actor},
@@ -205,6 +208,9 @@ func Discard(tx *store.TenantTx, now time.Time, id, by, note string) (*ReleaseRe
 	if err := tx.ResolveDeletionHold(h.ID, "discarded", by, note, now); err != nil {
 		return nil, err
 	}
+	if err := closeTask(tx, now, h.ID, store.TaskDismissed, by); err != nil {
+		return nil, err
+	}
 	return res, audit(tx, now, "deletion_guard.discarded", h.DeletionHold, ojson.Object{{Key: "hold_id", Value: h.ID},
 		{Key: "category", Value: h.Category}, {Key: "discarded_by", Value: by}, {Key: "discarded", Value: res.Discards}})
 }
@@ -221,6 +227,9 @@ func expire(tx *store.TenantTx, now time.Time, h *Hold) error {
 		n++
 	}
 	if err := tx.ResolveDeletionHold(h.ID, "expired", "", "expired without a decision", now); err != nil {
+		return err
+	}
+	if err := closeTask(tx, now, h.ID, store.TaskDismissed, ""); err != nil {
 		return err
 	}
 	return audit(tx, now, "deletion_guard.expired", h.DeletionHold, ojson.Object{{Key: "hold_id", Value: h.ID},

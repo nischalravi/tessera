@@ -105,6 +105,7 @@ GET    /api/audit/export                             audit.read      -
 GET    /api/admin/retention                          admin.read      -  # issue #298
 GET    /api/admin/archive/segments                   audit.read      -  # issue #298
 GET    /api/admin/deletion-guard                     admin.read      -  # deletion threshold guard
+GET    /api/admin/deletion-guard/sources/{kind}/{id}  admin.read      -  # deletion guard per-source settings
 GET    /api/admin/deletion-holds                     admin.read      -  # deletion threshold guard
 GET    /api/admin/deletion-holds/{id}                admin.read      -  # deletion threshold guard
 POST   /api/admin/deletion-holds/{id}/approve        admin.change.approve STEP_UP_ADMIN  # deletion threshold guard
