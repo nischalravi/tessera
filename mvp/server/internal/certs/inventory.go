@@ -38,6 +38,10 @@ type Entry struct {
 	SigAlgorithm string
 	IdPConnID    *string // the SAML connection of a saml_sp entry
 	Manageable   bool    // an uploaded row: it can be promoted or retired
+	// Chain is how many certificates an mtls_client upload holds (the leaf and its intermediates); Anchors are the
+	// subjects of its trust anchors. Both are zero for every other entry.
+	Chain   int
+	Anchors []string
 }
 
 // Inventory lists every certificate and key Tessera holds for the tenant, ordered by purpose and label.
@@ -85,6 +89,15 @@ func Inventory(tx *store.TenantTx, now time.Time) ([]Entry, error) {
 		e := Entry{ID: "cert:" + r.ID, Source: SourceUploaded, Purpose: r.Purpose, Label: r.Label, Status: r.Status, Subject: r.Subject,
 			Issuer: r.Issuer, SANs: r.SANs, NotBefore: &nb, NotAfter: &na, Fingerprint: r.Fingerprint, KeyAlgorithm: r.KeyAlgorithm,
 			SigAlgorithm: r.SigAlgorithm, IdPConnID: r.IdPConnectionID, Manageable: true, UsedBy: usedBy(r, idpName, connName)}
+		if r.Purpose == store.CertMTLSClient {
+			chain, _ := parseBundle("chain", r.CertPEM, MaxChainCerts)
+			e.Chain = len(chain)
+			anchors, _ := parseBundle("anchors", r.TrustPEM, MaxTrustAnchors)
+			e.Anchors = []string{}
+			for _, a := range anchors {
+				e.Anchors = append(e.Anchors, a.Subject.String())
+			}
+		}
 		out = append(out, e)
 	}
 	for _, purpose := range []string{"access_token", "idp_client_auth"} {
@@ -142,7 +155,7 @@ func usedBy(r *store.TenantCertificate, idpName, connName map[string]string) str
 		return "SP signing certificate of " + name
 	case store.CertMTLSClient:
 		if r.ConnectionID != nil && connName[*r.ConnectionID] != "" {
-			return "Mutual TLS client certificate for connector " + connName[*r.ConnectionID]
+			return "Mutual TLS client certificate presented by the target of connection " + connName[*r.ConnectionID]
 		}
 		return "Mutual TLS client certificate (not assigned to a connector)"
 	case store.CertEncryption:

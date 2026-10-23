@@ -458,6 +458,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	if err := d.upgradeAdminChangeTypes(ctx); err != nil {
 		return err
 	}
+	if err := d.upgradeCertTrust(ctx); err != nil {
+		return err
+	}
 	if err := d.upgradeGrpInboxKinds(ctx); err != nil {
 		return err
 	}

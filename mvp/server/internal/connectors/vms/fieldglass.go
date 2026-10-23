@@ -2,6 +2,8 @@ package vms
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -53,14 +55,17 @@ func (f *Fieldglass) VmsRecords(ctx context.Context, since *time.Time, yield fun
 	}
 	return connsync.Walk(ctx, f.base, f.url(path, q), func(ctx context.Context, pageURL string) (string, error) {
 		var page struct {
-			Workers  []fgWorker `json:"workers"`
-			NextPage *string    `json:"next_page"`
+			Workers  []json.RawMessage `json:"workers"`
+			NextPage *string           `json:"next_page"`
 		}
 		if _, err := f.api.GetJSON(ctx, pageURL, nil, &page); err != nil {
 			return "", err
 		}
 		for i := range page.Workers {
-			w := &page.Workers[i]
+			var w fgWorker
+			if err := json.Unmarshal(page.Workers[i], &w); err != nil {
+				return "", fmt.Errorf("fieldglass: a worker is not readable: %w", err)
+			}
 			rec := &connectors.VmsRecord{System: "fieldglass", WorkerID: w.WorkerID,
 				Name: strings.TrimSpace(w.FirstName + " " + w.LastName), Email: w.Email, Supplier: w.Supplier, Role: w.JobTitle,
 				SponsorEmployeeID: w.MgrID, SponsorEmail: w.MgrEmail, Status: status(w.Status),
@@ -68,8 +73,9 @@ func (f *Fieldglass) VmsRecords(ctx context.Context, since *time.Time, yield fun
 			if t := parseTime(w.ModifiedAt); t != nil {
 				rec.UpdatedAt = *t
 			}
-			rec.EventID = eventID("fieldglass", w.WorkerID, rec.Status, tstr(rec.StartsAt), tstr(rec.EndsAt), w.MgrID,
-				strings.ToLower(w.MgrEmail), strings.ToLower(w.Email), w.ModifiedAt)
+			modified := applyMapping(rec, page.Workers[i], f.set.Mapping, w.ModifiedAt)
+			rec.EventID = eventID("fieldglass", rec.WorkerID, rec.Status, tstr(rec.StartsAt), tstr(rec.EndsAt), rec.SponsorEmployeeID,
+				strings.ToLower(rec.SponsorEmail), strings.ToLower(rec.Email), modified)
 			if err := yield(rec); err != nil {
 				return "", err
 			}

@@ -2,6 +2,7 @@ package provision
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/certs"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
@@ -19,6 +21,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -200,10 +203,60 @@ func (e *Engine) openToken(t tenancy.ID, pt *store.ProvTarget) (string, error) {
 }
 
 func (e *Engine) build(pt *store.ProvTarget, token string) (target.Connector, error) {
+	return e.buildWith(e.HTTP, pt, token)
+}
+
+// httpFor is the outbound client of a connection's target: the engine's own, or, when the tenant uploaded a
+// mutual-TLS certificate for the connection (Admin > Certificates), a copy of it that presents that certificate
+// chain and trusts only the uploaded trust anchors, if there are any (issue #498). The key is opened only here,
+// for the pass that uses it.
+func (e *Engine) httpFor(ctx context.Context, t tenancy.ID, connID string) (*http.Client, error) {
+	if e.HTTP == nil || e.Build != nil {
+		return e.HTTP, nil
+	}
+	var c *store.TenantCertificate
+	var sealed []byte
+	err := e.DB.ReadTenant(ctx, t, func(tx *store.TenantTx) error {
+		var err error
+		if c, err = tx.ActiveMTLSCertificate(connID); err != nil {
+			return err
+		}
+		sealed, err = tx.CertificateKey(c.ID)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return e.HTTP, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if e.Sealer == nil {
+		return nil, target.Permanent("the mutual-TLS certificate of this connection cannot be opened: no key-encryption key is configured")
+	}
+	keyPEM, err := e.Sealer.Open(sealed, certs.KeyAAD(t, c.ID))
+	if err != nil {
+		return nil, target.Permanent("the mutual-TLS key of this connection cannot be opened")
+	}
+	pair, err := tls.X509KeyPair([]byte(c.CertPEM), keyPEM)
+	if err != nil {
+		return nil, target.Permanent("the mutual-TLS certificate of this connection is not usable: %v", err)
+	}
+	roots, err := certs.TrustPool(c.TrustPEM)
+	if err != nil {
+		return nil, target.Permanent("the trust anchors of this connection are not usable: %v", err)
+	}
+	hc, ok := safehttp.WithClientTLS(e.HTTP, []tls.Certificate{pair}, roots)
+	if !ok {
+		return nil, target.Permanent("a mutual-TLS certificate needs the guarded outbound client")
+	}
+	return hc, nil
+}
+
+func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) (target.Connector, error) {
 	if e.Build != nil {
 		return e.Build(pt, token)
 	}
-	if e.HTTP == nil {
+	if hc == nil {
 		return nil, errors.New("no outbound client is configured")
 	}
 	var s Settings
@@ -212,30 +265,30 @@ func (e *Engine) build(pt *store.ProvTarget, token string) (target.Connector, er
 	}
 	switch pt.Kind {
 	case KindSCIM, KindFake:
-		c := &scim.Client{HTTP: e.HTTP, BaseURL: pt.BaseURL, Token: token, Dialect: s.Dialect}
+		c := &scim.Client{HTTP: hc, BaseURL: pt.BaseURL, Token: token, Dialect: s.Dialect}
 		if pt.Kind == KindFake && s.Fault != "" {
 			c.Header = http.Header{"X-Fake-Fault": {s.Fault}}
 		}
 		return c, nil
 	case KindOkta:
-		return &okta.Client{HTTP: e.HTTP, BaseURL: pt.BaseURL, Token: token}, nil
+		return &okta.Client{HTTP: hc, BaseURL: pt.BaseURL, Token: token}, nil
 	case KindCyberArk, KindDelinea, KindBeyondTrust:
-		return e.buildVault(pt, token, s)
+		return e.buildVault(hc, pt, token, s)
 	case KindSAP, KindOracle:
-		return e.buildERP(pt, token, s)
+		return e.buildERP(hc, pt, token, s)
 	}
 	return nil, fmt.Errorf("unknown target kind %q", pt.Kind)
 }
 
 // buildVault builds the target of a vault. The credential is "user:secret"
 // (BeyondTrust: "run-as user:API key").
-func (e *Engine) buildVault(pt *store.ProvTarget, token string, s Settings) (target.Connector, error) {
+func (e *Engine) buildVault(hc *http.Client, pt *store.ProvTarget, token string, s Settings) (target.Connector, error) {
 	i := strings.IndexByte(token, ':')
 	if i <= 0 || i == len(token)-1 {
 		return nil, errors.New("the vault credential is user:secret")
 	}
 	v, err := pam.Open(pam.Config{Vendor: pt.Kind, BaseURL: pt.BaseURL, Username: token[:i], Secret: connsync.NewSecret(token[i+1:]),
-		APIRoot: s.APIRoot}, e.Runtime, e.HTTP, e.Clock)
+		APIRoot: s.APIRoot}, e.Runtime, hc, e.Clock)
 	if err != nil {
 		return nil, err
 	}
@@ -243,13 +296,13 @@ func (e *Engine) buildVault(pt *store.ProvTarget, token string, s Settings) (tar
 }
 
 // buildERP builds the target of an ERP. The credential is "client_id:client_secret".
-func (e *Engine) buildERP(pt *store.ProvTarget, token string, s Settings) (target.Connector, error) {
+func (e *Engine) buildERP(hc *http.Client, pt *store.ProvTarget, token string, s Settings) (target.Connector, error) {
 	i := strings.IndexByte(token, ':')
 	if i <= 0 || i == len(token)-1 {
 		return nil, errors.New("the ERP credential is client_id:client_secret")
 	}
 	sys, err := erp.Open(erp.Config{System: pt.Kind, BaseURL: pt.BaseURL, ClientID: token[:i], ClientSecret: connsync.NewSecret(token[i+1:]),
-		APIRoot: s.APIRoot}, e.Runtime, e.HTTP, e.Clock)
+		APIRoot: s.APIRoot}, e.Runtime, hc, e.Clock)
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +385,11 @@ func (e *Engine) connector(ctx context.Context, t tenancy.ID, connID string, cac
 	if err != nil {
 		return nil, target.Permanent("%v", err)
 	}
-	c, err := e.build(pt, token)
+	hc, err := e.httpFor(ctx, t, connID)
+	if err != nil {
+		return nil, err
+	}
+	c, err := e.buildWith(hc, pt, token)
 	if err != nil {
 		return nil, target.Permanent("%v", err)
 	}

@@ -25,6 +25,8 @@ type Worker struct {
 	Supplier, Role          string
 	ManagerEmail, ManagerID string
 	Modified                time.Time
+	// Custom is sent as the worker's "custom_fields" object (both vendors), for field-mapping tests.
+	Custom map[string]any
 }
 
 // Faults to inject.
@@ -216,11 +218,15 @@ func (f *Fake) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *Fake) fieldglass(w http.ResponseWriter, ws []Worker, next string) {
-	out := make([]map[string]string, 0, len(ws))
+	out := make([]map[string]any, 0, len(ws))
 	for _, x := range ws {
-		out = append(out, map[string]string{"worker_id": x.ID, "first_name": x.First, "last_name": x.Last, "email": x.Email,
+		m := map[string]any{"worker_id": x.ID, "first_name": x.First, "last_name": x.Last, "email": x.Email,
 			"status": x.Status, "start_date": x.Start, "end_date": x.End, "supplier_name": x.Supplier, "job_title": x.Role,
-			"buyer_manager_email": x.ManagerEmail, "buyer_manager_id": x.ManagerID, "modified_at": x.Modified.UTC().Format(time.RFC3339)})
+			"buyer_manager_email": x.ManagerEmail, "buyer_manager_id": x.ManagerID, "modified_at": x.Modified.UTC().Format(time.RFC3339)}
+		if x.Custom != nil {
+			m["custom_fields"] = x.Custom
+		}
+		out = append(out, m)
 	}
 	var n any
 	if next != "" {
@@ -232,10 +238,14 @@ func (f *Fake) fieldglass(w http.ResponseWriter, ws []Worker, next string) {
 func (f *Fake) beeline(w http.ResponseWriter, ws []Worker, next string) {
 	out := make([]map[string]any, 0, len(ws))
 	for _, x := range ws {
-		out = append(out, map[string]any{"id": x.ID, "state": strings.ToLower(x.Status), "start": x.Start, "end": x.End,
+		m := map[string]any{"id": x.ID, "state": strings.ToLower(x.Status), "start": x.Start, "end": x.End,
 			"vendor": x.Supplier, "position": x.Role, "updated": x.Modified.UTC().Format(time.RFC3339),
 			"worker":  map[string]string{"first_name": x.First, "last_name": x.Last, "email": x.Email},
-			"manager": map[string]string{"email": x.ManagerEmail, "employee_id": x.ManagerID}})
+			"manager": map[string]string{"email": x.ManagerEmail, "employee_id": x.ManagerID}}
+		if x.Custom != nil {
+			m["custom_fields"] = x.Custom
+		}
+		out = append(out, m)
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": out, "links": map[string]string{"next": next}})
 }

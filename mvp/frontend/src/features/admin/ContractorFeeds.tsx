@@ -165,12 +165,12 @@ function FeedForm({ source, onClose, onSaved }: { source: VmsSource | null; onCl
       if (!rest) {
         if (f.csvPath.trim()) settings.csv_path = f.csvPath.trim();
         if (f.dateFormat.trim()) settings.date_format = f.dateFormat.trim();
-        if (f.mapping.trim()) {
-          try {
-            settings.mapping = JSON.parse(f.mapping);
-          } catch {
-            throw new Error("The column mapping must be a JSON object, for example {\"worker_id\": \"Contractor No\"}.");
-          }
+      }
+      if (f.mapping.trim()) {
+        try {
+          settings.mapping = JSON.parse(f.mapping);
+        } catch {
+          throw new Error(rest ? "The field mapping must be a JSON object, for example {\"sponsor_email\": \"custom_fields.sponsor\"}." : "The column mapping must be a JSON object, for example {\"worker_id\": \"Contractor No\"}.");
         }
       }
       const body = { name: f.name.trim(), base_url: f.baseUrl.trim(), settings, status: f.status, ...(f.credential ? { credential: f.credential } : {}) };
@@ -201,9 +201,15 @@ function FeedForm({ source, onClose, onSaved }: { source: VmsSource | null; onCl
           <input className="input" type="password" autoComplete="off" value={f.credential} onChange={(e) => setF({ ...f, credential: e.target.value })} required={rest && !s?.has_credential} placeholder={s?.has_credential ? "Keep the stored credential" : ""} />
         </label>
         {rest ? (
-          <label className="field">Listing path (optional)
-            <input className="input" value={f.workersPath} onChange={(e) => setF({ ...f, workersPath: e.target.value })} placeholder={f.vendor === "beeline" ? "/api/v2/assignments" : "/api/v1/workers"} />
-          </label>
+          <>
+            <label className="field">Listing path (optional)
+              <input className="input" value={f.workersPath} onChange={(e) => setF({ ...f, workersPath: e.target.value })} placeholder={f.vendor === "beeline" ? "/api/v2/assignments" : "/api/v1/workers"} />
+            </label>
+            <label className="field">Custom field mapping (optional JSON)
+              <textarea className="input" rows={4} value={f.mapping} onChange={(e) => setF({ ...f, mapping: e.target.value })} placeholder={'{"sponsor_email": "custom_fields.hiring_manager", "end_date": "custom_fields.contract_end"}'} />
+            </label>
+            <p className="xs faint">Take a field from the worker's own JSON instead of the documented one: a dotted path such as custom_fields.hiring_manager. Fields: worker_id, name, email, supplier, role, sponsor_email, sponsor_employee_id, status, start_date, end_date, updated_at. A path that is missing or empty keeps the documented field.</p>
+          </>
         ) : (
           <>
             <label className="field">File path under the base URL (with a base URL)<input className="input" value={f.csvPath} onChange={(e) => setF({ ...f, csvPath: e.target.value })} placeholder="/feeds/contractors.csv" /></label>

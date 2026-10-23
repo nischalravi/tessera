@@ -219,6 +219,34 @@ func WithConfiguredPorts(c *http.Client, urls ...string) *http.Client {
 		CheckRedirect: checkRedirect(g.o, m), Jar: c.Jar}
 }
 
+// WithClientTLS returns a copy of c (a client from ForConfig) that presents certs as its TLS client certificate and,
+// when roots is not nil, verifies server certificates against roots instead of the system roots. Every other rule of
+// the guard (addresses, ports, redirects, size limits) is unchanged. The copy has its own connection pool, so it is
+// meant to live for one pass of work, not forever. ok is false, with c returned as it is, when c is not a safehttp
+// client.
+func WithClientTLS(c *http.Client, certs []tls.Certificate, roots *x509.CertPool) (*http.Client, bool) {
+	g, ok := c.Transport.(*guard)
+	if !ok {
+		return c, false
+	}
+	tr, ok := g.next.(*http.Transport)
+	if !ok {
+		return c, false
+	}
+	tr = tr.Clone()
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: certs}
+	if tr.TLSClientConfig != nil {
+		cfg = tr.TLSClientConfig.Clone()
+		cfg.Certificates = certs
+	}
+	if roots != nil {
+		cfg.RootCAs = roots
+	}
+	tr.TLSClientConfig = cfg
+	return &http.Client{Transport: &guard{next: tr, o: g.o, ports: g.ports}, Timeout: c.Timeout,
+		CheckRedirect: c.CheckRedirect, Jar: c.Jar}, true
+}
+
 func hostPort(host, port string) string { return strings.ToLower(host) + "|" + port }
 
 // portAllowed reports whether a request may connect to host:port.
