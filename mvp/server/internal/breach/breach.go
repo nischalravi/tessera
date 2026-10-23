@@ -501,10 +501,12 @@ func (s *Service) rereadSecret(tx *store.TenantTx, p *store.BreachPlan, it *stor
 			t := job.VerifiedAt.UTC().Format(time.RFC3339)
 			ev.Verified = &t
 		}
+		detail := "rotated: the rotation job is " + job.State
 		if job.Verification != nil {
 			ev.Read = json.RawMessage(*job.Verification)
+			detail = verifiedDetail(*job.Verification)
 		}
-		return store.BreachVerified, "rotated: a re-read showed the old credential disabled", ev, nil
+		return store.BreachVerified, detail, ev, nil
 	case "failed", "cancelled":
 		d := "the rotation job " + job.State
 		if job.LastError != nil && *job.LastError != "" {
@@ -639,4 +641,22 @@ func (s *Service) List(tx *store.TenantTx) ([]Summary, error) {
 			CompletedAt: p.CompletedAt, Counts: v.Report.Counts})
 	}
 	return out, nil
+}
+
+// verifiedDetail says what the rotation job's re-read actually observed, so the
+// evidence never claims more than the provider showed.
+func verifiedDetail(verification string) string {
+	var v struct {
+		Evidence string `json:"evidence"`
+	}
+	_ = json.Unmarshal([]byte(verification), &v)
+	switch v.Evidence {
+	case rotation.EvidenceAgeAndLastUse:
+		return "rotated: a re-read showed the old credential disabled and unused since"
+	case rotation.EvidenceAbsent:
+		return "rotated: a re-read showed the old credential gone"
+	case rotation.EvidenceAgeOnly:
+		return "rotated: the provider shows only the old credential's age, not whether it is disabled"
+	}
+	return "rotated: the rotation job recorded a re-read without evidence detail"
 }
