@@ -95,6 +95,9 @@ func TestIsolation_Queue(t *testing.T) {
 		if err := c.RetryDeadQueueJob(jobID, now); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("RetryDeadQueueJob(A's) = %v", err)
 		}
+		if err := c.SetDeadQueueJobPayload(jobID, `{"retried_by":["x"]}`, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetDeadQueueJobPayload(A's) = %v", err)
+		}
 		if err := c.AdvanceQueueSchedule(schedID, now, now, now); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("AdvanceQueueSchedule(A's) = %v", err)
 		}
@@ -124,7 +127,7 @@ func TestIsolation_Queue(t *testing.T) {
 func queueCovered() map[string]bool {
 	out := map[string]bool{}
 	for _, k := range []string{"EnqueueQueueJob", "QueueJob", "QueueJobs", "ClaimQueueJobs", "HasDueQueueJobs", "HeartbeatQueueJob",
-		"CompleteQueueJob", "FailQueueJob", "ReleaseQueueJob", "RetryDeadQueueJob", "PruneQueueJobs", "EnsureQueueSchedule",
+		"CompleteQueueJob", "FailQueueJob", "ReleaseQueueJob", "RetryDeadQueueJob", "SetDeadQueueJobPayload", "PruneQueueJobs", "EnsureQueueSchedule",
 		"QueueSchedule", "QueueSchedules", "DueQueueSchedules", "AdvanceQueueSchedule"} {
 		out[k] = true // TestIsolation_Queue
 	}

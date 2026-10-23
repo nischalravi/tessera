@@ -184,13 +184,32 @@ func Apply(tx *store.TenantTx, snap *Snapshot, now time.Time, actor string) (Pro
 		byName[strings.ToLower(a.Username)] = a
 		byXID[a.ExternalID] = a
 	}
+	// The baseline is per provider: the provider's first successful sync
+	// records what exists and reports nothing. After that an app seen for the
+	// first time is itself a change unless its state predates the last sync.
+	var prevSync *time.Time
+	states, err := tx.OAuthSyncStates()
+	if err != nil {
+		return pr, err
+	}
+	for _, st := range states {
+		if st.Provider == snap.Provider && st.SucceededAt != nil {
+			t := *st.SucceededAt
+			prevSync = &t
+		}
+	}
 	for _, a := range snap.Apps {
+		_, aerr := tx.OAuthAppByKey(snap.Provider, a.ClientID)
+		if aerr != nil && !errors.Is(aerr, store.ErrNotFound) {
+			return pr, aerr
+		}
+		existed := aerr == nil
 		app := &store.OAuthApp{Provider: snap.Provider, ClientID: a.ClientID, Name: a.Name, Publisher: a.Publisher,
 			Verified: a.Verified, LastUsed: a.LastUsed}
 		if err := tx.UpsertOAuthApp(app, now); err != nil {
 			return pr, err
 		}
-		var newGrants []*store.OAuthGrant
+		var newGrants []grantChange
 		for _, g := range a.Grants {
 			row := &store.OAuthGrant{AppID: app.ID, Provider: snap.Provider, GrantKey: g.Key, ProviderRef: g.Ref, Kind: g.Kind,
 				UserRef: g.UserRef, GranterAdmin: g.GranterAdmin, Scopes: g.Scopes, ConsentType: g.Consent, GrantedAt: g.GrantedAt,
@@ -206,7 +225,7 @@ func Apply(tx *store.TenantTx, snap *Snapshot, now time.Time, actor string) (Pro
 				id := acct.ID
 				row.AccountID, row.IdentityID = &id, acct.IdentityID
 			}
-			_, err := tx.OAuthGrantByKey(app.ID, g.Key)
+			old, err := tx.OAuthGrantByKey(app.ID, g.Key)
 			isNew := errors.Is(err, store.ErrNotFound)
 			if err != nil && !isNew {
 				return pr, err
@@ -214,12 +233,21 @@ func Apply(tx *store.TenantTx, snap *Snapshot, now time.Time, actor string) (Pro
 			if err := tx.UpsertOAuthGrant(row, now); err != nil {
 				return pr, err
 			}
-			if isNew {
-				newGrants = append(newGrants, row)
+			switch {
+			case isNew:
+				newGrants = append(newGrants, grantChange{g: row, scopes: row.Scopes})
+			case old.Status == store.OAuthRevoked || old.Status == store.OAuthRemoved:
+				// Re-consent after a revoke reuses the grant id.
+				newGrants = append(newGrants, grantChange{g: row, scopes: row.Scopes, why: "granted again"})
+			default:
+				// A widened consent keeps its id: compare the scope sets.
+				if added := addedScopes(old.Scopes, row.Scopes); len(added) > 0 {
+					newGrants = append(newGrants, grantChange{g: row, scopes: added, why: "widened"})
+				}
 			}
 			pr.Grants++
 		}
-		n, err := track(tx, app, &a, newGrants, now, actor)
+		n, err := track(tx, app, &a, newGrants, now, actor, baseline{existed: existed, since: prevSync})
 		if err != nil {
 			return pr, err
 		}

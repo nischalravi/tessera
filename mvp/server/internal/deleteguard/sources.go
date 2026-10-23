@@ -210,6 +210,14 @@ func SetSource(tx *store.TenantTx, p SourcePolicy, by *string, now time.Time) er
 		FeedEmptyCheck: p.FeedEmptyCheck, UpdatedBy: by}, now)
 }
 
+// SetSourceApproved records that the source's override of the category was approved by two admins
+// as looser than the category's setting at that time (false clears it). Admit exempts an override
+// from the category's tenant-wide budget only when this holds (#494): the judgement is made when the
+// change is approved, not from whatever the category is later set to.
+func SetSourceApproved(tx *store.TenantTx, ref SourceRef, category string, approved bool, by *string, now time.Time) error {
+	return tx.SetDeletionSourceApproved(ref.Kind, ref.ID, category, approved, by, now)
+}
+
 // FeedChecksWith says why a feed looks broken under f: reported as a partial or failed read (partial
 // is the reason, "" if not), empty (when f.EmptyCheck), or shorter than the last good run by more than
 // f.DropPercent. With the empty check off an empty feed is judged by the percent alone.

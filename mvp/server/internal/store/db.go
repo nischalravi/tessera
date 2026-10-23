@@ -153,6 +153,8 @@ var tables = []string{
 	"deletion_holds", "deletion_hold_items",
 	// per-source settings (schema/0690_deletion_guard_sources.sql)
 	"deletion_guard_source_policies", "deletion_guard_source_state", "deletion_guard_source_ledger",
+	// two-admin approval of an override (schema/0730_deletion_guard_source_approvals.sql)
+	"deletion_guard_source_approvals",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)

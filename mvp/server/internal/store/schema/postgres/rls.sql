@@ -2207,3 +2207,10 @@ DROP POLICY IF EXISTS tenant_isolation ON mcp_resource_bindings;
 CREATE POLICY tenant_isolation ON mcp_resource_bindings
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE deletion_guard_source_approvals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deletion_guard_source_approvals FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON deletion_guard_source_approvals;
+CREATE POLICY tenant_isolation ON deletion_guard_source_approvals
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
