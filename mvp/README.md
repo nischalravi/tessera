@@ -4408,6 +4408,40 @@ dialect, schema-parity, DSN and `gen-rls` tests need no server and always run). 
 accepts a different numeric `id`/`edge_id` there, see above). CI should run this with a Postgres 16
 service container and `TESSERA_REQUIRE_PG_TESTS=1`.
 
+### Where the KEK comes from
+
+Exactly one of three sources (setting more than one is refused; prod requires one):
+
+- `TESSERA_KEK`: the base64 of 32 bytes in the environment.
+- `TESSERA_KEK_FILE`: a file holding that base64, for example a Kubernetes Secret volume or a CSI-mounted secret.
+  The file must be a regular file with **no access for others and no group write** (`0600`, `0400`, `0440` or
+  `0640`; a Kubernetes secret volume is `0440` with `fsGroup`) and must be owned by the process's user or root.
+  Anything world-readable, group-writable or owned by another user is refused.
+- `TESSERA_KEK_WRAPPED` + `TESSERA_KEK_KMS`: the KEK wrapped by a cloud key service, so no plaintext KEK is in the
+  deployment at all. The server unwraps it **once at start** with its workload identity (see "Cloud object stores
+  and workload identity" for how credentials are found) and then behaves exactly as with `TESSERA_KEK`. A failed
+  unwrap stops the start (it never falls back to a generated dev KEK). The prod guard rails apply as before.
+
+| `TESSERA_KEK_KMS` | Operation | Key type |
+| --- | --- | --- |
+| `aws:arn:aws:kms:<region>:<account>:key/<id>` (or `alias/<name>`) | KMS `Encrypt`/`Decrypt`, SigV4, encryption context `purpose=tessera-kek` | symmetric |
+| `azure:https://<vault>.vault.azure.net/keys/<name>/<version>` (also managed HSM) | Key Vault `wrapkey`/`unwrapkey`, `RSA-OAEP-256`, token for `https://vault.azure.net` | RSA |
+| `gcp:projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>` | Cloud KMS `encrypt`/`decrypt`, additional authenticated data `tessera-kek` | symmetric |
+
+Create the wrapped value once, from a machine that may use the key:
+
+```sh
+# a new random KEK that never appears in clear (only the key service can open the result)
+tessera admin wrap-kek -kms gcp:projects/p/locations/europe-west1/keyRings/tessera/cryptoKeys/kek -generate
+# or wrap an existing KEK (the base64 of 32 bytes on stdin), for example to move off TESSERA_KEK
+printf '%s' "$TESSERA_KEK" | tessera admin wrap-kek -kms aws:arn:aws:kms:eu-west-1:111122223333:key/<id>
+```
+
+It prints the base64 ciphertext for `TESSERA_KEK_WRAPPED` and checks it by unwrapping it. The server's identity needs
+only decrypt (`kms:Decrypt`, Key Vault `unwrapKey`, `cloudkms.cryptoKeyVersions.useToDecrypt`); the operator running
+`wrap-kek` needs encrypt. Keep the wrapped value in escrow: the KEK is not in backups, and losing both the wrapped
+value and the key service means the sealed data cannot be opened. Tests use fake provider servers; no real cloud calls.
+
 ### Cloud object stores and workload identity
 
 `TESSERA_ARCHIVE_URL`, `TESSERA_BACKUP_URL` and `TESSERA_AUDIT_ANCHOR` accept object-store URLs (standard library
@@ -5578,7 +5612,7 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   `-addr`. `serve` and `seed` both need an explicit `TESSERA_ENV` (`run.sh` exports `dev`).
 * Keys: `seed` and `serve` run the ensure-keys step (one active and one next ES256 key per tenant
   and purpose, the platform Ed25519 key, daily rotation). Private keys are stored only sealed
-  under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). Sealed
+  under the KEK (`TESSERA_KEK`, `TESSERA_KEK_FILE` or a cloud-wrapped KEK, base64 of 32 bytes; see "Where the KEK comes from"). Sealed
   values are AES-256-GCM under `HKDF(KEK, "tessera/seal/v1")` (format version 2); version 1
   values (the raw KEK, before #127) still open and are re-sealed lazily on write. In dev a KEK is
   generated at `server/var/dev-kek` (temp file, then linked into place, never overwritten); if it

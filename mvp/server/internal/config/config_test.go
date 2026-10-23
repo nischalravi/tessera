@@ -1,7 +1,9 @@
 package config_test
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/kekwrap"
 )
 
 func env(m map[string]string) func(string) string {
@@ -553,11 +556,23 @@ func TestKEKFile(t *testing.T) {
 	if _, err := c.Sealer(""); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(path, 0o640); err != nil {
-		t.Fatal(err)
+	// a Kubernetes secret volume is 0440 (or 0640) with the pod's fsGroup: the group may read it
+	for _, mode := range []os.FileMode{0o440, 0o640, 0o400} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.Load(env(with(safeProd(), "TESSERA_KEK", "<unset>", "TESSERA_KEK_FILE", path))); err != nil {
+			t.Errorf("prod refused a KEK file with mode %04o owned by this process: %v", mode, err)
+		}
 	}
-	if _, err := config.Load(env(with(safeProd(), "TESSERA_KEK", "<unset>", "TESSERA_KEK_FILE", path))); err == nil {
-		t.Error("prod accepted a group-readable KEK file")
+	// never: any access for others, or write access for the group
+	for _, mode := range []os.FileMode{0o604, 0o644, 0o602, 0o660, 0o620, 0o666, 0o404} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.Load(env(with(safeProd(), "TESSERA_KEK", "<unset>", "TESSERA_KEK_FILE", path))); err == nil {
+			t.Errorf("prod accepted a KEK file with mode %04o", mode)
+		}
 	}
 }
 
@@ -910,4 +925,117 @@ func TestObjectStoreURLs(t *testing.T) {
 	ok("TESSERA_BACKUP_DIR", "/backups", "TESSERA_BACKUP_URL", "s3://tessera-backups/db")
 	bad("needs TESSERA_BACKUP_DIR", "TESSERA_BACKUP_URL", "s3://tessera-backups/db")
 	bad("must be an s3://, azure:// or gs://", "TESSERA_BACKUP_DIR", "/backups", "TESSERA_BACKUP_URL", "https://x.example.com/b")
+}
+
+// A KEK file owned by someone else is refused even when its mode is fine:
+// that user could replace it.
+func TestKEKFileOwner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kek")
+	if err := os.WriteFile(path, []byte(testKEK+"\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(path, 12345, -1); err != nil {
+		t.Skip("cannot chown (not root, or not unix): ", err)
+	}
+	if os.Geteuid() == 12345 {
+		t.Skip("running as the test uid")
+	}
+	_, err := config.Load(env(with(safeProd(), "TESSERA_KEK", "<unset>", "TESSERA_KEK_FILE", path)))
+	if err == nil || !strings.Contains(err.Error(), "owned by uid 12345") {
+		t.Fatalf("a KEK file owned by another user: %v", err)
+	}
+}
+
+const wrappedKEK = "AQIDBAUGBwgJCgsMDQ4PEA==" // any base64: the ciphertext is opaque to config
+
+func TestWrappedKEK(t *testing.T) {
+	kms := "aws:arn:aws:kms:eu-west-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+	prod := with(safeProd(), "TESSERA_KEK", "<unset>")
+	c, err := config.Load(env(with(prod, "TESSERA_KEK_WRAPPED", wrappedKEK, "TESSERA_KEK_KMS", kms)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.KEKWrapped() {
+		t.Fatal("not marked wrapped")
+	}
+	if _, err := c.Sealer(""); err == nil || !strings.Contains(err.Error(), "ResolveKEK") {
+		t.Fatalf("Sealer before ResolveKEK (a dev KEK must never be generated): %v", err)
+	}
+	if strings.Contains(fmt.Sprint(c)+fmt.Sprintf("%+v", c), wrappedKEK) {
+		t.Error("the wrapped key is printed")
+	}
+	good := bytesOf(0x42)
+	var gotRef string
+	if err := c.ResolveKEK(context.Background(), func(_ context.Context, ref kekwrap.Ref, w []byte) ([]byte, error) {
+		gotRef = ref.String()
+		return good, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gotRef != kms || c.KEKWrapped() {
+		t.Fatalf("ref %q wrapped %v", gotRef, c.KEKWrapped())
+	}
+	if _, err := c.Sealer(""); err != nil {
+		t.Fatalf("Sealer after ResolveKEK: %v", err)
+	}
+	// ResolveKEK is a no-op for an ordinary KEK and propagates provider errors
+	plain, _ := config.Load(env(safeProd()))
+	if err := plain.ResolveKEK(context.Background(), func(context.Context, kekwrap.Ref, []byte) ([]byte, error) {
+		t.Error("unwrap called for a plain KEK")
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c2, _ := config.Load(env(with(prod, "TESSERA_KEK_WRAPPED", wrappedKEK, "TESSERA_KEK_KMS", kms)))
+	if err := c2.ResolveKEK(context.Background(), func(context.Context, kekwrap.Ref, []byte) ([]byte, error) {
+		return nil, errors.New("denied")
+	}); err == nil {
+		t.Fatal("a failed unwrap was ignored")
+	}
+	if err := c2.ResolveKEK(context.Background(), func(context.Context, kekwrap.Ref, []byte) ([]byte, error) {
+		return []byte("short"), nil
+	}); err == nil {
+		t.Fatal("a short unwrapped key was accepted")
+	}
+}
+
+func TestWrappedKEKValidation(t *testing.T) {
+	kms := "gcp:projects/p/locations/global/keyRings/r/cryptoKeys/k"
+	prod := with(safeProd(), "TESSERA_KEK", "<unset>")
+	for _, tc := range []struct {
+		name string
+		kv   []string
+		want string
+	}{
+		{"wrapped without kms", []string{"TESSERA_KEK_WRAPPED", wrappedKEK}, "must be set together"},
+		{"kms without wrapped", []string{"TESSERA_KEK_KMS", kms}, "must be set together"},
+		{"not base64", []string{"TESSERA_KEK_WRAPPED", "!!!", "TESSERA_KEK_KMS", kms}, "not base64"},
+		{"bad provider", []string{"TESSERA_KEK_WRAPPED", wrappedKEK, "TESSERA_KEK_KMS", "vault:x"}, "unknown KMS provider"},
+		{"bad arn", []string{"TESSERA_KEK_WRAPPED", wrappedKEK, "TESSERA_KEK_KMS", "aws:arn:aws:s3:::bucket"}, "KMS key or alias ARN"},
+		{"azure not a vault", []string{"TESSERA_KEK_WRAPPED", wrappedKEK, "TESSERA_KEK_KMS", "azure:https://evil.example.com/keys/k/v"}, "vault host"},
+		{"azure http", []string{"TESSERA_KEK_WRAPPED", wrappedKEK, "TESSERA_KEK_KMS", "azure:http://v.vault.azure.net/keys/k/v"}, "azure:"},
+		{"both KEK and wrapped", []string{"TESSERA_KEK", testKEK, "TESSERA_KEK_WRAPPED", wrappedKEK, "TESSERA_KEK_KMS", kms}, "only one of"},
+	} {
+		_, err := config.Load(env(with(prod, tc.kv...)))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", tc.name, err, tc.want)
+		}
+	}
+	for _, k := range []string{kms, "azure:https://myvault.vault.azure.net/keys/tessera-kek/0123456789abcdef", "azure:https://myvault.vault.azure.net/keys/tessera-kek"} {
+		if _, err := config.Load(env(with(prod, "TESSERA_KEK_WRAPPED", wrappedKEK, "TESSERA_KEK_KMS", k))); err != nil {
+			t.Errorf("%s: %v", k, err)
+		}
+	}
+	// prod still needs some KEK
+	if _, err := config.Load(env(prod)); err == nil || !strings.Contains(err.Error(), "TESSERA_KEK_WRAPPED") {
+		t.Errorf("prod without a KEK: %v", err)
+	}
+}
+
+func bytesOf(b byte) []byte {
+	out := make([]byte, 32)
+	for i := range out {
+		out[i] = b
+	}
+	return out
 }

@@ -16,6 +16,7 @@
 package config
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -32,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/kekwrap"
 	"github.com/nischalravi/tessera/mvp/server/internal/objstore"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -70,6 +72,7 @@ type Config struct {
 	DBApp                 string // TESSERA_DB_APP: the application login's postgres:// DSN for request traffic (carries a password: never log it)
 	DBAllowPrivilegedApp  bool   // TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP: let the request pool be a privileged login (dev only)
 	KEKFile               string // TESSERA_KEK_FILE, when set
+	KEKKMS                string // TESSERA_KEK_KMS, when the KEK is wrapped by a cloud key service
 	CookieSecure          bool
 	CORSOrigins           []string
 	TrustedProxies        []netip.Prefix
@@ -210,7 +213,9 @@ type Config struct {
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
 
-	kek *secretKey // decoded TESSERA_KEK or TESSERA_KEK_FILE; nil means "dev auto-generated"
+	kekRef     kekwrap.Ref // TESSERA_KEK_KMS, parsed
+	kekWrapped []byte      // TESSERA_KEK_WRAPPED, decoded; cleared once unwrapped
+	kek        *secretKey  // decoded TESSERA_KEK or TESSERA_KEK_FILE; nil means "dev auto-generated"
 	// outbound is the validated environment and loopback exception, set
 	// only by Load. safehttp.ForConfig reads it (Outbound), so neither a
 	// hand-built Config nor one whose exported fields were edited after
@@ -511,9 +516,28 @@ func Load(getenv func(string) string) (*Config, error) {
 	// KEK: TESSERA_KEK (base64 of 32 bytes) or TESSERA_KEK_FILE (a file
 	// holding that base64), never both.
 	inline, file := strings.TrimSpace(getenv("TESSERA_KEK")), strings.TrimSpace(getenv("TESSERA_KEK_FILE"))
+	wrapped, kms := strings.TrimSpace(getenv("TESSERA_KEK_WRAPPED")), strings.TrimSpace(getenv("TESSERA_KEK_KMS"))
 	switch {
 	case inline != "" && file != "":
 		bad("set only one of TESSERA_KEK and TESSERA_KEK_FILE")
+	case (inline != "" || file != "") && (wrapped != "" || kms != ""):
+		bad("set only one of TESSERA_KEK, TESSERA_KEK_FILE and TESSERA_KEK_WRAPPED with TESSERA_KEK_KMS")
+	case wrapped != "" || kms != "":
+		// A KEK wrapped by a cloud key service: validated here, unwrapped once
+		// at start by ResolveKEK (Load itself makes no network call).
+		switch ref, err := kekwrap.ParseRef(kms); {
+		case wrapped == "" || kms == "":
+			bad("TESSERA_KEK_WRAPPED and TESSERA_KEK_KMS must be set together")
+		case err != nil:
+			bad("TESSERA_KEK_KMS: %v", err)
+		default:
+			w, derr := base64.StdEncoding.DecodeString(wrapped)
+			if derr != nil || len(w) == 0 || len(w) > 8192 {
+				bad("TESSERA_KEK_WRAPPED: not base64 of a wrapped key (make it with `tessera admin wrap-kek`)")
+			} else {
+				c.KEKKMS, c.kekRef, c.kekWrapped = kms, ref, w
+			}
+		}
 	case inline != "":
 		k, err := decodeKEK(inline)
 		if err != nil {
@@ -530,7 +554,7 @@ func Load(getenv func(string) string) (*Config, error) {
 			c.kek = &secretKey{k}
 		}
 	case prod:
-		bad("a KEK is required with TESSERA_ENV=prod (set TESSERA_KEK_FILE or TESSERA_KEK)")
+		bad("a KEK is required with TESSERA_ENV=prod (set TESSERA_KEK_FILE, TESSERA_KEK, or TESSERA_KEK_WRAPPED with TESSERA_KEK_KMS)")
 	}
 
 	if prod {
@@ -796,6 +820,8 @@ func (c *Config) kekSource() string {
 	switch {
 	case c.KEKFile != "":
 		return "file:" + c.KEKFile + " (REDACTED)"
+	case c.KEKKMS != "":
+		return "kms:" + c.KEKKMS + " (REDACTED)"
 	case c.kek != nil:
 		return "env (REDACTED)"
 	}
@@ -907,12 +933,39 @@ func DevMailPath(dbPath string) string {
 	return filepath.Join(localDir(dbPath), "var", "dev-mail.jsonl")
 }
 
+// KEKWrapped reports whether the KEK is a wrapped one that ResolveKEK must
+// unwrap before Sealer can be used.
+func (c *Config) KEKWrapped() bool { return c.kek == nil && len(c.kekWrapped) > 0 }
+
+// ResolveKEK unwraps TESSERA_KEK_WRAPPED with the cloud key service named by
+// TESSERA_KEK_KMS, through unwrap (cmd/tessera passes kekwrap.Unwrap bound to
+// the safehttp client and the workload identity). It does nothing when the KEK
+// is not wrapped. After it, the configuration behaves exactly as with
+// TESSERA_KEK. The wrapped value is dropped once opened.
+func (c *Config) ResolveKEK(ctx context.Context, unwrap func(ctx context.Context, ref kekwrap.Ref, wrapped []byte) ([]byte, error)) error {
+	if !c.KEKWrapped() {
+		return nil
+	}
+	k, err := unwrap(ctx, c.kekRef, c.kekWrapped)
+	if err != nil {
+		return err
+	}
+	if len(k) != seal.KeySize {
+		return fmt.Errorf("config: the unwrapped KEK is %d bytes, want %d", len(k), seal.KeySize)
+	}
+	c.kek, c.kekWrapped = &secretKey{k}, nil
+	return nil
+}
+
 // Sealer returns the KEK sealer. With no KEK configured (dev only; Load
 // refuses that in prod) it loads the dev KEK at devKEKPath, generating it
 // with mode 0600 on first use.
 func (c *Config) Sealer(devKEKPath string) (*seal.Sealer, error) {
 	if c.kek != nil {
 		return seal.New(c.kek.b)
+	}
+	if c.KEKWrapped() {
+		return nil, errors.New("config: the KEK is wrapped (TESSERA_KEK_WRAPPED): ResolveKEK must run first")
 	}
 	if c.IsProd() {
 		return nil, errors.New("config: no KEK configured")
@@ -993,8 +1046,16 @@ func readKEKFile(path string) ([]byte, error) {
 	if !fi.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("%s is accessible to other users (mode %04o); chmod 600 it", path, fi.Mode().Perm())
+	// A secret volume (Kubernetes, a CSI driver) is mounted 0440 or 0640
+	// with the pod's fsGroup, so the group may read it. What is never
+	// accepted: any access for others, and write access for the group. The
+	// file must also belong to this process or to root (not to another user
+	// who could replace it).
+	if perm := fi.Mode().Perm(); perm&0o007 != 0 || perm&0o020 != 0 {
+		return nil, fmt.Errorf("%s is accessible to other users (mode %04o); chmod 600 it (a mounted secret volume may be 0440 or 0640)", path, perm)
+	}
+	if err := checkKEKOwner(fi, path); err != nil {
+		return nil, err
 	}
 	b, err := os.ReadFile(path) // #nosec G304 -- operator-chosen KEK path
 	if err != nil {

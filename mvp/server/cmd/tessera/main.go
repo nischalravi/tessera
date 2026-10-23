@@ -31,6 +31,9 @@
 //	                      must be empty in prod)
 //	TESSERA_KEK / TESSERA_KEK_FILE  the key-encryption key (base64 of 32 bytes) that seals
 //	                      private keys; in dev it is generated at var/dev-kek next to the database
+//	TESSERA_KEK_WRAPPED / TESSERA_KEK_KMS  instead of a plaintext KEK: the KEK wrapped by AWS KMS, Azure Key
+//	                      Vault or Google Cloud KMS, unwrapped once at start with the workload identity
+//	                      (make it with `tessera admin wrap-kek`; see mvp/README.md)
 //	(internal/config lists every setting and the production guard rails that
 //	refuse to start with unsafe ones)
 //	TESSERA_METRICS_ADDR  host:port of the internal /metrics listener (separate from the API
@@ -231,7 +234,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("TESSERA_COOKIE_SECURE=false is allowed only with a loopback listen address (got -addr %s)", o.addr)
 	}
 	clock := cfg.Clock() // TESSERA_NOW, which config refuses in prod
-	sealer, err := cfg.Sealer(config.DevKEKPath(o.db))
+	sealer, err := loadSealer(ctx, cfg, config.DevKEKPath(o.db))
 	if err != nil {
 		return err
 	}
