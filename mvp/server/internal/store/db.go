@@ -207,6 +207,8 @@ var tables = []string{
 	"siem_sinks", "siem_dead_letters",
 	// certificates and rotation state, tenant branding (schema/0410_certificates.sql, 0411_branding.sql)
 	"tenant_certificates", "tenant_branding",
+	// label settings and identity rules (schema/0765_tenant_label_settings.sql, 0766_identity_rules.sql)
+	"tenant_label_settings", "identity_rules",
 	// alerting (schema/0209_alerts.sql)
 	"alert_rule_settings", "alerts", "alert_channels", "alert_deliveries", "alert_cursors",
 	// identity disable / enable (schema/0310_identity_disables.sql)

@@ -158,6 +158,7 @@ type claimed struct {
 	n       *store.Notification
 	attempt int    // the attempt number, counted by the claim
 	brand   string // the tenant's product name (Admin > Branding), "" for the default
+	logo    *emailLogo
 }
 
 type outcome struct {
@@ -231,13 +232,17 @@ func (d *Dispatcher) Tenant(ctx context.Context, t tenancy.ID) (Stats, error) {
 		if err != nil {
 			return err
 		}
+		logo, err := d.emailLogo(tx)
+		if err != nil {
+			return err
+		}
 		for _, n := range due {
 			if err := tx.ClaimNotification(n.ID, n.Attempts, now.Add(d.Lease)); errors.Is(err, store.ErrNotFound) {
 				continue // another dispatcher took it
 			} else if err != nil {
 				return err
 			}
-			claims = append(claims, claimed{n, n.Attempts + 1, brand})
+			claims = append(claims, claimed{n, n.Attempts + 1, brand, logo})
 			if d.Sender != nil && deref(n.Email) != "" {
 				if err := d.markSending(tx, n, now); err != nil {
 					return err
@@ -356,6 +361,9 @@ func (d *Dispatcher) send(ctx context.Context, c claimed) outcome {
 		body = c.n.Body + "\n\n" + secret + "\n\n--\nIf you were not expecting this message, ignore it: nothing happens until the link or code is used."
 	}
 	mail := Email{ID: c.n.ID, To: email, Subject: "[" + product + "] " + c.n.Subject, Body: body}
+	if c.logo != nil {
+		mail.HTML = c.logo.html(product, body)
+	}
 	var err error
 	if rec, ok := d.Sender.(RecordingSender); ok {
 		o.att, err = rec.SendRecorded(ctx, mail)

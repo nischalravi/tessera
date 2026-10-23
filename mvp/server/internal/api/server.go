@@ -512,6 +512,7 @@ func New(cfg Config) *Server {
 	s.registerSiemRoutes()
 	s.registerCertificateRoutes()
 	s.registerBrandingRoutes()
+	s.registerLabelRoutes()
 	s.registerVmsRoutes()
 	s.registerIdentityRulesRoutes()
 	s.registerAlertRoutes()

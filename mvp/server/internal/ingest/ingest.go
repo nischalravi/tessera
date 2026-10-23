@@ -12,12 +12,14 @@
 package ingest
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/idrules"
 	"github.com/nischalravi/tessera/mvp/server/internal/mfa"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -37,12 +39,18 @@ type Resolver struct {
 	// pins are reviewers' account decisions (account_links), keyed by
 	// system and external id; sync never overrides them.
 	pins map[key]*store.AccountLink
+	// order is the tenant's correlation order (Admin > Identity rules): the keys Identity tries, first to last.
+	order []string
 }
 
 // NewResolver loads the current id maps.
 func NewResolver(c *store.TenantTx) (*Resolver, error) {
+	rules, _, err := idrules.Load(c)
+	if err != nil {
+		return nil, err
+	}
 	r := &Resolver{c: c, identityByXID: map[string]int64{}, identityByEmail: map[string]int64{}, ids: map[key]int64{},
-		pins: map[key]*store.AccountLink{}}
+		pins: map[key]*store.AccountLink{}, order: rules.CorrelationOrder}
 	return r, r.Refresh()
 }
 
@@ -105,19 +113,22 @@ func (r *Resolver) Refresh() error {
 	return nil
 }
 
-// Identity resolves an identity reference by external id, then email.
+// Identity resolves an identity reference by the tenant's correlation order: external id, then email unless the tenant
+// changed it (Admin > Identity rules).
 func (r *Resolver) Identity(ref *connectors.IdentityRef) *int64 {
 	if ref == nil {
 		return nil
 	}
-	if ref.ExternalID != "" {
-		if id, ok := r.identityByXID[ref.ExternalID]; ok {
-			return r.live(id)
-		}
-	}
-	if ref.Email != "" {
-		if id, ok := r.identityByEmail[strings.ToLower(ref.Email)]; ok {
-			return r.live(id)
+	for _, k := range r.order {
+		switch {
+		case k == idrules.KeyExternalID && ref.ExternalID != "":
+			if id, ok := r.identityByXID[ref.ExternalID]; ok {
+				return r.live(id)
+			}
+		case k == idrules.KeyEmail && ref.Email != "":
+			if id, ok := r.identityByEmail[strings.ToLower(ref.Email)]; ok {
+				return r.live(id)
+			}
 		}
 	}
 	return nil
@@ -203,6 +214,34 @@ func Import(c *store.TenantTx, now time.Time, res *connectors.DiscoveryResult) (
 	return discovery(c, now, []*connectors.DiscoveryResult{res}, false, false)
 }
 
+// keepAuthoritative applies the tenant's authoritative source per attribute (Admin > Identity rules): when a system other
+// than the configured one reports a person already known, the stored value of that attribute is kept. A person not known
+// yet takes whatever the first source says; the authoritative source overwrites it when it reports.
+func keepAuthoritative(c *store.TenantTx, rules idrules.Rules, system string, id *store.Identity) error {
+	if len(rules.Authoritative) == 0 {
+		return nil
+	}
+	cur, err := c.IdentityByExternalID(id.ExternalID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if src, ok := rules.Authoritative["name"]; ok && src != system {
+		id.Name = cur.Name
+	}
+	if src, ok := rules.Authoritative["email"]; ok && src != system {
+		id.Email = cur.Email
+	}
+	if src, ok := rules.Authoritative["department"]; ok && src != system {
+		id.Department = cur.Department
+	}
+	if src, ok := rules.Authoritative["title"]; ok && src != system {
+		id.Title = cur.Title
+	}
+	return nil
+}
+
 func discovery(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult, pruneEdges, delegations bool) (DiscoveryStats, error) {
 	var st DiscoveryStats
 	// the deletion guard (internal/deleteguard): what would end more active identities or accounts
@@ -212,6 +251,10 @@ func discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 		return st, err
 	}
 	st.HeldIdentities, st.HeldAccounts = len(hold.identities), len(hold.accounts)
+	rules, _, err := idrules.Load(c)
+	if err != nil {
+		return st, err
+	}
 	// 1. identities (two passes so manager/owner refs resolve)
 	for _, r := range results {
 		for _, rec := range r.Identities {
@@ -219,9 +262,13 @@ func discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 			if hold.identities[rec.ExternalID] {
 				status, ended = "active", nil
 			}
-			if err := c.UpsertIdentity(&store.Identity{ExternalID: rec.ExternalID, Name: rec.Name, Email: rec.Email,
+			id := &store.Identity{ExternalID: rec.ExternalID, Name: rec.Name, Email: rec.Email,
 				Type: rec.Type, Department: rec.Department, Title: rec.Title, Status: status,
-				Description: rec.Description, HiredAt: rec.HiredAt, TerminatedAt: ended, CreatedAt: now}); err != nil {
+				Description: rec.Description, HiredAt: rec.HiredAt, TerminatedAt: ended, CreatedAt: now}
+			if err := keepAuthoritative(c, rules, r.System, id); err != nil {
+				return st, err
+			}
+			if err := c.UpsertIdentity(id); err != nil {
 				return st, err
 			}
 			st.Identities++

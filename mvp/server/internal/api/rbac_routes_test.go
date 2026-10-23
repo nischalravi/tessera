@@ -76,6 +76,9 @@ POST   /api/admin/certificates/{certificate_id}/retire  connections.manage  STEP
 GET    /api/admin/branding                           admin.read      -  # Admin > Branding
 PUT    /api/admin/branding                           email.manage    STEP_UP_POLICY
 GET    /api/admin/identity-rules                     graph.read      -  # Admin > Identity rules
+PUT    /api/admin/identity-rules                     matching.configure STEP_UP_POLICY  # Admin > Identity rules
+GET    /api/admin/labels                             admin.read      -  # Admin > Branding & labels
+PUT    /api/admin/labels                             email.manage    STEP_UP_POLICY  # Admin > Branding & labels
 GET    /api/siem/sinks/{sink_id}/dead-letters        siem.read       -  # issue #169
 GET    /api/alerts                                   alerts.read     -  # issue #168
 GET    /api/alerts/summary                           alerts.read     -  # issue #168
