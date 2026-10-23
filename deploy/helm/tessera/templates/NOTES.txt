@@ -1,0 +1,5 @@
+Tessera is deploying to {{ .Values.config.publicUrl }}.
+
+First install on an empty database: create the first tenant, then sign in through its IdP.
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "tessera.fullname" . }} -c api -- /usr/local/bin/tessera admin create-tenant -slug acme -name "Acme Corp"
+(the binary runs directly, no shell is needed).

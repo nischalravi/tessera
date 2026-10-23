@@ -1,0 +1,79 @@
+# Azure AKS: nginx or Application Gateway ingress, Azure Workload Identity, Azure Database for PostgreSQL
+# Flexible Server, Key Vault via the CSI driver (azure provider).
+image:
+  api: { repository: exampleacr.azurecr.io/tessera-api, tag: "v0.1.0" }
+  ui: { repository: exampleacr.azurecr.io/tessera-ui, tag: "v0.1.0" }
+
+config:
+  publicUrl: https://tessera.example.com
+  # TESSERA_AUDIT_ANCHOR must be an s3:// URL in prod, even on Azure (see docs/deploy/README.md, "Audit anchor").
+  auditAnchor: s3://example-tessera-anchors/prod
+  awsRegion: us-east-1
+  # ingress-nginx pods live in the pod CIDR of the cluster
+  trustedProxies: ["127.0.0.1/32", "10.244.0.0/16"]
+  extraEnv: {}
+
+serviceAccount:
+  annotations:
+    azure.workload.identity/client-id: 00000000-0000-0000-0000-000000000000
+podLabels:
+  azure.workload.identity/use: "true"
+automountServiceAccountToken: true
+
+extraEnv:   # AWS credentials for the S3 anchor from Key Vault-synced keys (a scoped IAM user), see docs
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom: { secretKeyRef: { name: tessera-env, key: AWS_ACCESS_KEY_ID } }
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom: { secretKeyRef: { name: tessera-env, key: AWS_SECRET_ACCESS_KEY } }
+
+csi:
+  enabled: true
+  provider: azure
+  syncedSecretName: tessera-env
+  parameters:
+    usePodIdentity: "false"
+    clientID: 00000000-0000-0000-0000-000000000000     # the workload identity client id
+    keyvaultName: example-tessera-kv
+    tenantId: 00000000-0000-0000-0000-000000000000
+    objects: |
+      array:
+        - |
+          objectName: db-owner-dsn
+          objectType: secret
+        - |
+          objectName: db-app-dsn
+          objectType: secret
+        - |
+          objectName: kek
+          objectType: secret
+        - |
+          objectName: aws-access-key-id
+          objectType: secret
+        - |
+          objectName: aws-secret-access-key
+          objectType: secret
+  objects:
+    - { objectName: db-owner-dsn, key: TESSERA_DB }
+    - { objectName: db-app-dsn, key: TESSERA_DB_APP }
+    - { objectName: kek, key: TESSERA_KEK }
+    - { objectName: aws-access-key-id, key: AWS_ACCESS_KEY_ID }
+    - { objectName: aws-secret-access-key, key: AWS_SECRET_ACCESS_KEY }
+migration:
+  enabled: false
+
+database:
+  caConfigMap: azure-pg-ca   # DigiCert Global Root G2 + Microsoft RSA Root CA 2017 bundle, key ca.crt
+
+ingress:
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls: { enabled: true, secretName: tessera-tls }
+
+networkPolicy:
+  ingressFrom:
+    - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+  databaseCIDRs: ["10.1.4.0/24"]   # the delegated PostgreSQL subnet
+
+metrics:
+  serviceMonitor: { enabled: true, labels: { release: kube-prometheus-stack } }
