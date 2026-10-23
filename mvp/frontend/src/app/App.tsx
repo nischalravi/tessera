@@ -8,6 +8,7 @@ import { PaletteProvider } from "./CommandPalette";
 import { PersonaProvider } from "./persona";
 import { Shell } from "./Shell";
 import { PrefsGate } from "./PrefsGate";
+import { RouteErrorBoundary } from "./RouteErrorBoundary";
 import { ThemeProvider } from "./theme";
 
 /**
@@ -182,6 +183,7 @@ export default function App() {
             <PaletteProvider>
               <Shell>
                 <AdminBanner />
+                <RouteErrorBoundary>
                 <Suspense fallback={<PageSkeleton />}>
                   <Routes>
                     <Route path="/" element={<Home />} />
@@ -300,6 +302,7 @@ export default function App() {
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>
                 </Suspense>
+                </RouteErrorBoundary>
               </Shell>
             </PaletteProvider>
           </PersonaProvider>
