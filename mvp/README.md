@@ -2473,6 +2473,34 @@ owner changes).
   delete that really deletes, and switches for refusing, ignoring a delete and failing reads); the reader,
   sync, revoke and four-eyes tests run them through a real safehttp client. The Salesforce `OauthToken`
   query is checked against the fake only, not a live org.
+
+### GitHub and CI token inventory (issue #476)
+
+Stolen GitHub CLI OAuth tokens published a malicious LiteLLM release (21 Oct 2026), and GhostAction stole CI
+secrets, so the credentials non-human work runs on need an owner and an age. Protection → **GitHub & CI tokens**
+lists, for the organization of the `github` connection's containment credential (the same token, base URL and
+safehttp client as the OAuth app inventory): fine-grained personal access tokens the organization approved
+(`GET /orgs/{org}/personal-access-tokens`), classic PATs and OAuth app tokens, the GitHub CLI among them
+(`credential-authorizations`, which needs SAML SSO: without it GitHub lists none and the sync notes it), and the
+organization's Actions secrets (`actions/secrets`). Repository and environment secrets are not read.
+
+- **Metadata only.** Names, owner login, scopes or permissions, dates and visibility. GitHub never returns a token
+  or secret value, and nothing that could identify one (the "last eight" characters, fingerprints) is decoded
+  or stored. Every call is a GET through `internal/safehttp`. The reader is `internal/ghtokens`; rows are in
+  `github_tokens` (schema `0710`, with a Postgres variant and row-level security).
+- **Risk.** Each credential gets age (days since the last rotation, else since creation), a score of 0-100 and flags:
+  `stale_secret` (90 days or more), `no_expiry` (a PAT that never expires), `expired`, `unused` (last use 90 days or
+  more ago; unknown is not unused), `high_risk_scope` (a high or critical scope from the OAuth catalog, for
+  example `repo`, `workflow`, `contents:write`), `org_wide_secret` (an Actions secret visible to all repositories),
+  `cli_token`, `classic_pat`, and the owner flags `orphaned` (the owner's login matches no GitHub account of an
+  identity) and `owner_left` (the identity is not active), named as in the machine identity inventory.
+- **API.** `GET /api/github-tokens` (`graph.read`) answers `tokens`, a `summary` and the thresholds;
+  `POST /api/github-tokens/sync` (`oauthapps.manage`) refreshes now. The hourly OAuth sync job also refreshes it.
+  A failed read leaves the stored inventory untouched (`ghtokens.sync_failed`); a credential a full read no longer
+  lists is marked removed. Audit events: `ghtokens.synced`, `ghtokens.sync_failed`.
+- **Tests.** `internal/ghtokens` runs the reader and sync against `oauthfake.GitHub` (which now also serves
+  fine-grained PATs, Actions secrets, credential titles and expiry, and token fields the reader must never keep);
+  the store has isolation tests for `github_tokens`. Not checked against a live GitHub organization.
 - **Dev fakes in `./run.sh` (issue #417).** `./run.sh` sets `TESSERA_DEV_OAUTH_FAKE_URL`
   (`http://127.0.0.1:<API_PORT+2000>`; `OAUTH_FAKE_PORT` changes the port, `OAUTH_FAKE=0` turns it off) and
   `tessera serve` serves the four fakes there (`/google`, `/entra`, `/salesforce`, `/github`), preloaded with

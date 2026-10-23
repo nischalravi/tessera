@@ -4852,6 +4852,30 @@ export const oauthApps = {
     api(`/oauth-apps/${encodeURIComponent(id)}/changes/${encodeURIComponent(changeId)}/resolve`, { note }),
 };
 
+// ---- GitHub and CI tokens (issue #476): metadata only, GitHub never returns a token or secret value
+
+export type GitHubTokenKind = "classic_pat" | "fine_grained_pat" | "oauth_app_token" | "actions_secret";
+
+export interface GitHubToken {
+  id: string; kind: GitHubTokenKind; name: string; owner_login: string;
+  owner: { id: number; name: string; status: string } | null;
+  scopes: string[]; visibility?: string;
+  created_at: string | null; last_rotated_at: string | null; expires_at: string | null; last_used_at: string | null;
+  /** Days since the last rotation, else since creation or authorization. */
+  age_days: number; flags: string[]; risk: number; status: string; last_seen: string;
+}
+
+export interface GitHubTokenList {
+  tokens: GitHubToken[];
+  summary: { total: number; by_kind: Record<string, number> | null; stale: number; risky: number; no_owner: number };
+  stale_days: number; unused_days: number;
+}
+
+export const githubTokens = {
+  listPath: "/github-tokens",
+  sync: () => api<{ status: "ok" | "failed" | "skipped"; tokens: number; error?: string; notes?: string[] }>("/github-tokens/sync", {}),
+};
+
 // ------------------------------------------------------------ deletion threshold guard (internal/deleteguard)
 
 export type DeletionCategory = "groups" | "folders" | "group_members" | "accounts" | "identities";
