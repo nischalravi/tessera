@@ -34,10 +34,17 @@ type APIClient struct {
 	AllowedScopes           []string
 	Roles                   []string
 	OwnerUserID             *uuid.UUID
-	Status                  string // active | disabled
-	CreatedAt               time.Time
-	LastUsedAt              *time.Time
+	// ApprovedBy is who vouched for the client's permissions (issue #522): a user id (the admin who created it or last
+	// rotated its keys: its permissions must still cover the client's), ApprovedByOperator (made with the CLI), or
+	// empty (made before this was recorded: the owner's permissions are compared instead).
+	ApprovedBy string
+	Status     string // active | disabled
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
 }
+
+// ApprovedByOperator marks a client made with `tessera admin add-client`: the operator, not a tenant user, vouched for it.
+const ApprovedByOperator = "operator"
 
 // Device grant states.
 const (

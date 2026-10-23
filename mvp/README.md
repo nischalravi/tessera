@@ -511,7 +511,7 @@ and `tessera worker` runs them with no HTTP API and no listener, over the same d
   `connectors.sync_queued`); without `async` the call is as before. `TESSERA_CONNECTOR_SYNC_SCHEDULE`
   (`@every 15m` or five cron fields) schedules it for every tenant; unset, syncs run on demand only.
   A tenant also sets its own schedule (issue #498): `PUT /api/connectors/sync-schedule {delta_every_minutes, full_every_hours}`
-  (`connections.manage` with step-up; 0 is off, delta 5 to 1440 minutes, full 1 to 720 hours; audited as `connectors.schedule_updated`; turning both off sets `all_syncs_off` and raises the `schedule_paused` alert, issue #512)
+  (`connections.manage` with step-up; 0 is off, delta 5 to 1440 minutes, full 1 to 720 hours; audited as `connectors.schedule_updated`; turning both off, or no delta sync with a full sync every 168 h or more ("effectively off"), sets `all_syncs_off` and raises the `schedule_paused` alert, issues #512 and #521)
   stores two rows in the tenant's `queue_schedules` (`connector_sync.delta`, payload `{"mode":"incremental"}`, and
   `connector_sync.full`, `{"mode":"full"}`), which the queue fires as `connector_sync` jobs like any other schedule, so they run
   wherever a worker runs that kind and appear under Jobs. `GET /api/connectors/sync-status` (`connections.read`) returns the
@@ -667,13 +667,13 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET /api/connectors/sync-status` · `PUT /api/connectors/sync-schedule` (see "Durable job queue") · `GET|POST /api/ssf/transmitters` · `GET|PUT|DELETE /api/ssf/transmitters/{id}` · `POST /api/ssf/transmitters/{id}/verify` ·
 `GET /api/ssf/events` · `POST /public/t/{slug}/ssf/{transmitter_id}/events` (SSF push, see "Shared Signals receiver") ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
-`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it) · `POST /api/siem/sinks/{id}/rewind {seq}` ·
+`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it; **moving to another origin is a two-admin change** `siem.sink.target` (issue #520), see Log streaming; omitted fields keep their value, `include_http` included) · `POST /api/siem/sinks/{id}/rewind {seq}` (step-up, issue #520) ·
 `POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` (a sink's `kind` is `syslog`, `webhook` or `s3`; `event_filter`, `region` and `access_key_id` are in the body and the view; narrowing `event_filter` is refused with 409 `two_admin_change_required`, see "Event filter") ·
 `GET|POST /api/admin/certificates` · `POST /api/admin/certificates/generate {connection_id}` · `POST /api/admin/certificates/{id}/promote|retire` ·
 `GET|PUT /api/admin/branding` · `GET /api/auth/branding?tenant=` · `GET /api/auth/branding/logo?tenant=` (the last two are public, see "Certificates, branding and identity rules") ·
 `GET|PUT /api/admin/identity-rules` · `GET|PUT /api/admin/labels` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
-`POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
+`POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` (step-up; loosening a security rule is a two-admin `alerts.rule.loosen` change, issue #521) ·
 `GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
 `GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
 `POST /api/ownership/bulk` ·
@@ -901,6 +901,7 @@ The pull export (`/api/audit/export`) stays available.
     - The target is the bucket URL with an optional key prefix (path style or virtual hosted), `region` is the signing region, `access_key_id` is stored in the clear and the secret access key is the sink's sealed `token`.
     - Requests are signed with AWS Signature Version 4 (stdlib, checked against the AWS documentation vector) and go through `internal/safehttp`. Give the key `s3:PutObject` on the prefix only.
 - **Event filter (issue #498):** a sink can receive only some audit actions. `event_filter` is a list of actions (`grant.revoke`) or prefixes ending in `.*` (`auth.*`), `*` for all, empty for everything. A sink still needs `include_http` for `http.request`. Filtered-out events advance the cursor, but **Behind** still counts them (it is the distance to the ledger head). **Narrowing is a two-admin change (issue #511):** `PUT /api/siem/sinks/{id}` refuses a narrower filter (from empty or `*` to a list, or dropping an entry) with 409 `two_admin_change_required`; submit an admin change request `POST /api/admin/change-requests {"type":"siem.sink.filter","payload":{"sink_id","event_filter"}}` and a different admin approves it. Widening or clearing stays single-admin. Some actions reach every sink whatever its filter says: `siem.*`, `audit.*`, `admin.change.*`, `auth.break_glass*`, `breakglass.*`, `auth.step_up.*`, `auth.role.*`, `stepup.*` and `deletion_guard.*`, so a sink always learns that its own configuration changed (`siem.sink.filter_changed` records the old and new filter).
+- **Retargeting and `include_http` (issue #520):** `PUT /api/siem/sinks/{id}` is a partial update: an omitted field keeps its value (a rename no longer turns `include_http` off). Turning `include_http` from true to false drops every `http.request` event, so like a narrowing filter it is refused with 409 `two_admin_change_required` and goes through `siem.sink.filter` (payload `{sink_id, event_filter?, include_http?}`, at least one). Moving a sink to another **origin** (scheme, host, port; syslog host:port) is refused the same way and needs an admin change request `{"type":"siem.sink.target","payload":{"sink_id","target"}}` approved by a different admin. The request and its approval (`admin.change.*`) reach the old destination while it is still the target. Applying it clears the sealed token (it never follows a sink to another origin), disables the sink and audits `siem.sink.retargeted` (`previous_origin`, `origin`, `change_id`); an admin then `PUT`s the new token with `enabled: true`. `POST /api/siem/sinks/{id}/rewind` needs a step-up like the other sink writes.
 - **Formats:**
   - `json` is the export record. It carries `hash` and `prev_hash`, so the SIEM can recompute the chain.
   - `ocsf` is OCSF 1.3: Authentication (3002) for sign-in and sign-out, Account Change (3001) for role grants and revokes and user disables, and API Activity (6003) for everything else.
@@ -1199,10 +1200,14 @@ the way the old sweepers did (active tenant list), then works each one in its ow
   in the same transaction; repeating the state it already has changes and audits nothing. Admin → Jobs → Queue
   shows paused schedules and a Pause / Resume button on each. **Security schedules** (`protected: true` in the list:
   `containment_retries`, `sweep_lifecycle`, `sweep_sod_mitigations`, `sweep_admin_changes`, `certificate_expiry`,
-  `drift_sweep`, `connector_sync.delta`, `connector_sync.full`; issue #512) cannot be paused for good: the pause needs a
+  `drift_sweep`, `ssf_poll`, `vms_sync`, `guest_lifecycle`, `oauth_sync`, `jit_sweep`, `sweep_requests`,
+  `connector_sync.delta`, `connector_sync.full`; issues #512 and #521) cannot be paused for good: the pause needs a
   `reason`, takes `resume_after_hours` (1 to 24, default 24), shows `paused_until`, resumes by itself (audited
   `queue.schedule_resumed` with `automatic: true`) and raises the `schedule_paused` alert (high). Other schedules stay
-  paused until resumed.
+  paused until resumed. A protected schedule found paused with no end after an upgrade (paused before #512)
+  gets a 24 h end when the process first sees the tenant: audited `queue.schedule_paused` with `protected` and
+  `migrated`, which raises the alert (issue #522). The connector sync schedules are left out: they are turned off
+  with `sync-schedule`.
 * **Schedules.** Specs are `@every 30s` or 5-field cron (UTC). A worker that finds a schedule due moves
   `next_run_at` and enqueues the job (key `schedule:name:window`) in one transaction, so a window runs
   once however many workers poll; after downtime it fires once, not per missed window. Schedules are
@@ -2368,7 +2373,7 @@ reports, a fresh phishing-resistant sign-in. Each change is audited in the same 
   `message/delivery-status` part, at most 256 KiB) that the relay mails to the envelope sender, with its real
   `Content-Type` (`multipart/report`, `message/delivery-status` or `message/rfc822`; `application/json` still works;
   `text/plain` is refused because a cross-site form can send it); whatever collects that mailbox calls it with a machine
-  client holding the narrow `tessera:email-dsn` scope (the `email.dsn` permission, which needs no role; tenant admins hold it too). Each recipient block is matched to the email
+  client holding the narrow `tessera:email-dsn` scope (the `email.dsn` permission; tenant admins hold it too). A UI- or API-created client still needs one role (`viewer`, `operator` or `auditor`; without one, 422 `invalid_roles`): the scope narrows what the role can do, so `tessera:email-dsn` with `viewer` can call that endpoint and nothing else. Each recipient block is matched to the email
   Tessera sent through the `Message-ID` it set (the notification's id; Postfix's `X-Postfix-Queue-ID` is the fallback) and
   the recipient must be the message's. `Action: failed` with a `5.x.x` status is a **hard bounce**: the message becomes
   `bounced`, the report is added to its attempts, and the address is suppressed. `delayed` and a soft failure are recorded
@@ -4057,6 +4062,25 @@ the 500 rows on screen. Opening an event shows how its actor signed in (the `aut
 level, phishing-resistant or not, `acr`, authentication time) and builds its inclusion proof for an
 evidence pack (`?path=true`, downloaded as JSON).
 
+#### Azure and Google Cloud anchors
+
+Outside AWS the anchor goes to the cloud's own write-once storage, with the workload identity as credentials
+(see "Cloud object stores and workload identity"). Prod accepts any of the three.
+
+- `TESSERA_AUDIT_ANCHOR=azure://account/container/prefix`: one create-only blob per checkpoint
+  (`If-None-Match: *`), `prefix/<tenant id>/<seq>.jws`. Each blob is written with a locked version-level
+  immutability policy of 7 years (`x-ms-immutability-policy-mode: Locked`), so the container needs
+  **version-level immutability support** enabled. With `?worm=container` no per-blob policy is sent and the
+  container's own time-based retention policy (locked) is relied on instead. Tessera cannot read the
+  container's policy through the data plane, so for Azure it is the operator's job to lock it.
+- `TESSERA_AUDIT_ANCHOR=gs://bucket/prefix`: one create-only object per checkpoint (`ifGenerationMatch=0`).
+  The bucket needs a **locked retention policy** (`gcloud storage buckets update gs://bucket --retention-period=7y
+  --lock-retention-period`); before the first anchor Tessera reads the bucket and refuses to anchor into one
+  without it (a service account that may not read the bucket metadata is let through).
+
+`anchor_ref` is `<url>/<key>?versionId=<generation or version>`. Verification of non-file anchors is as for S3
+(`tessera audit verify` reads the anchor source you give it).
+
 #### S3 Object Lock anchor
 
 `TESSERA_AUDIT_ANCHOR=s3://bucket/prefix` writes one object per checkpoint, `prefix/<tenant id>/<seq>.jws`
@@ -4097,7 +4121,7 @@ change request is a 422 below one. A floor raised later lifts a stored lower val
 It needs a step-up from the requester and from a second admin who approves the payload hash, has no cooling-off,
 and is audited with `admin.change.*` and `retention.updated` in the transaction that applies it.
 
-**Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL` (an http(s) object
+**Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL`: `s3://bucket/prefix`, `azure://account/container/prefix` or `gs://bucket/prefix` (workload identity, no token; see "Cloud object stores and workload identity"), or an http(s) object
 store, PUT and GET of `<base>/<tenant>/<class>/<segment>.seg`, always through `internal/safehttp`; https in prod),
 authenticated with a bearer token (`TESSERA_ARCHIVE_TOKEN_SEALED`: the base64 of the token sealed under the KEK;
 make it with `printf '%s\n' "$TOKEN" | tessera archive seal-token`; prod refuses an archive URL without it),
@@ -4288,12 +4312,23 @@ under them (an approved held loader run is an approved override and is not count
 
 ## Operational monitoring (issue #303)
 
-`GET /livez` and `GET /readyz` (API listener, unauthenticated, constant-shape JSON, not audited) are the orchestrator probes. `GET /metrics` (Prometheus text) is served only on the separate internal listener `TESSERA_METRICS_ADDR` (dev default `127.0.0.1:9464`, `run.sh` uses `API_PORT+1000`; off in prod unless set to a loopback or private IP; `off` disables). `GET /api/admin/platform-health` (admin.read) backs Admin -> Platform health. `TESSERA_READY_MAX_LOOP_LAG_SECONDS` (default 300) is the loop-lag threshold of `/readyz`. Metrics, SLOs and alert rules: `docs/operations/slo.md`, `deploy/prometheus/tessera-rules.yml`.
+`GET /livez` and `GET /readyz` (API listener, unauthenticated, constant-shape JSON, not audited) are the orchestrator probes. `GET /metrics` (Prometheus text) is served only on the separate internal listener `TESSERA_METRICS_ADDR` (dev default `127.0.0.1:9464`, `run.sh` uses `API_PORT+1000`; off in prod unless set to a loopback or private IP; `off` disables). `GET /api/admin/platform-health` (admin.read) backs Admin -> Platform health. `TESSERA_READY_MAX_LOOP_LAG_SECONDS` (default 300) is the loop-lag threshold of `/readyz`. `/readyz` reports six checks (`database`, `schema`, `audit_chain`, `kek`, `loops`, `draining`): `schema` fails while the database is older than this binary (missing tables, or on Postgres a lower goose migration than the binary embeds; a newer schema is fine), and `draining` fails from SIGTERM until exit. `/livez` never depends on the database.
+
+**Shutdown and logs.** On SIGTERM or SIGINT the server fails `/readyz` first, waits `TESSERA_SHUTDOWN_DRAIN_DELAY` (default 0, max 2m; set a few seconds behind a load balancer), stops accepting, drains in-flight requests and stops the background loops, all within `TESSERA_SHUTDOWN_GRACE` (a Go duration or seconds; default 25s, 1s to 10m; keep it under the platform's termination grace period, for example Kubernetes' 30s). Loops that have not returned by then are logged and abandoned. `TESSERA_LOG_FORMAT=json|text`: JSON lines on stdout is the default in prod and test, human-readable text on stderr in dev. All configuration comes from environment variables and files.
+
+**More than one replica (Postgres).** Every background loop (review scheduler, provisioning push, key rotation, audit checkpointer, readiness scheduler, SIEM, alerts, backups, the group engine, history, rules, attestation, deprovisioning, reports, loaders, provisioning, sinks, secret rotation, notifications) runs on one replica at a time. Each takes a Postgres session-level advisory lock (`tessera/leader/<loop>`); the others stand by and retry every 5 s, and a replica that dies loses its locks with its database session. `/readyz` adds `"leaders":{"siem":"leader",...}`, `/metrics` has `tessera_loop_leader{loop}`, Admin -> Platform health lists them. The job queue is leased per job and needs no election. SQLite is single-process: no election, nothing changes. In-memory state per replica (rate limits and small caches) is listed in `docs/design/ha-postgres.md`. Metrics, SLOs and alert rules: `docs/operations/slo.md`, `deploy/prometheus/tessera-rules.yml`.
 
 ```bash
 curl -s http://127.0.0.1:9000/metrics | head      # with API_PORT=8000
 curl -s http://127.0.0.1:8000/readyz
 ```
+
+## Deploying to a cloud
+
+Container images, Docker Compose (one VM), a Helm chart (EKS, AKS, GKE, OpenShift), ECS Fargate / Container Apps /
+Cloud Run manifests and Terraform reference modules for AWS, Azure and GCP are under `deploy/`. Start with
+[docs/deploy/README.md](../docs/deploy/README.md): which option to pick, the production environment variables,
+TLS and proxy settings per cloud, KEK handling, backups and upgrades.
 
 ## Postgres
 
@@ -4381,6 +4416,64 @@ dialect, schema-parity, DSN and `gen-rls` tests need no server and always run). 
 `internal/store/storetest`, `testkit` and the API parity replay run on Postgres (the parity replay
 accepts a different numeric `id`/`edge_id` there, see above). CI should run this with a Postgres 16
 service container and `TESSERA_REQUIRE_PG_TESTS=1`.
+
+### Where the KEK comes from
+
+Exactly one of three sources (setting more than one is refused; prod requires one):
+
+- `TESSERA_KEK`: the base64 of 32 bytes in the environment.
+- `TESSERA_KEK_FILE`: a file holding that base64, for example a Kubernetes Secret volume or a CSI-mounted secret.
+  The file must be a regular file with **no access for others and no group write** (`0600`, `0400`, `0440` or
+  `0640`; a Kubernetes secret volume is `0440` with `fsGroup`) and must be owned by the process's user or root.
+  Anything world-readable, group-writable or owned by another user is refused.
+- `TESSERA_KEK_WRAPPED` + `TESSERA_KEK_KMS`: the KEK wrapped by a cloud key service, so no plaintext KEK is in the
+  deployment at all. The server unwraps it **once at start** with its workload identity (see "Cloud object stores
+  and workload identity" for how credentials are found) and then behaves exactly as with `TESSERA_KEK`. A failed
+  unwrap stops the start (it never falls back to a generated dev KEK). The prod guard rails apply as before.
+
+| `TESSERA_KEK_KMS` | Operation | Key type |
+| --- | --- | --- |
+| `aws:arn:aws:kms:<region>:<account>:key/<id>` (or `alias/<name>`) | KMS `Encrypt`/`Decrypt`, SigV4, encryption context `purpose=tessera-kek` | symmetric |
+| `azure:https://<vault>.vault.azure.net/keys/<name>/<version>` (also managed HSM) | Key Vault `wrapkey`/`unwrapkey`, `RSA-OAEP-256`, token for `https://vault.azure.net` | RSA |
+| `gcp:projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>` | Cloud KMS `encrypt`/`decrypt`, additional authenticated data `tessera-kek` | symmetric |
+
+Create the wrapped value once, from a machine that may use the key:
+
+```sh
+# a new random KEK that never appears in clear (only the key service can open the result)
+tessera admin wrap-kek -kms gcp:projects/p/locations/europe-west1/keyRings/tessera/cryptoKeys/kek -generate
+# or wrap an existing KEK (the base64 of 32 bytes on stdin), for example to move off TESSERA_KEK
+printf '%s' "$TESSERA_KEK" | tessera admin wrap-kek -kms aws:arn:aws:kms:eu-west-1:111122223333:key/<id>
+```
+
+It prints the base64 ciphertext for `TESSERA_KEK_WRAPPED` and checks it by unwrapping it. The server's identity needs
+only decrypt (`kms:Decrypt`, Key Vault `unwrapKey`, `cloudkms.cryptoKeyVersions.useToDecrypt`); the operator running
+`wrap-kek` needs encrypt. Keep the wrapped value in escrow: the KEK is not in backups, and losing both the wrapped
+value and the key service means the sealed data cannot be opened. Tests use fake provider servers; no real cloud calls.
+
+### Cloud object stores and workload identity
+
+`TESSERA_ARCHIVE_URL`, `TESSERA_BACKUP_URL` and `TESSERA_AUDIT_ANCHOR` accept object-store URLs (standard library
+only; `internal/objstore`, S3 requests signed with `internal/aws/sigv4`, every call through `internal/safehttp`):
+
+| URL | Options (query) | Credentials, first match wins |
+| --- | --- | --- |
+| `s3://bucket/prefix` | `region=` (else `AWS_REGION` or the instance region), `endpoint=https://…` (S3-compatible stores, path style) | `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`; web identity (`AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`, EKS IRSA, STS call); ECS container credentials; EC2 role through IMDSv2 (never IMDSv1) |
+| `azure://account/container/prefix` | `endpoint=`, `worm=version\|container` (anchors) | `AZURE_STORAGE_SAS_TOKEN` (a secret: mount it from a Secret); AKS workload identity (`AZURE_FEDERATED_TOKEN_FILE`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`); managed identity (`AZURE_CLIENT_ID` picks a user-assigned one) |
+| `gs://bucket/prefix` | `endpoint=` | service-account key file (`GOOGLE_APPLICATION_CREDENTIALS`, `service_account` type only); the metadata server (GKE workload identity, GCE) |
+
+Objects are write-once (`If-None-Match: *` / `ifGenerationMatch=0`); archive segments are read back and compared
+after every write. `TESSERA_ARCHIVE_TOKEN_SEALED` applies to http(s) stores only and is refused with these URLs.
+`TESSERA_BACKUP_URL` (with `TESSERA_BACKUP_DIR`) also copies each scheduled backup, under `backups/<file>`; the
+file is already sealed under the KEK, is read into memory and is limited to 1 GiB (SQLite backups only: **Postgres
+backups stay `pg_dump` or the provider's snapshots and point-in-time recovery**, as above).
+
+**Metadata services.** The link-local metadata addresses are blocked for every safehttp client (SSRF). The
+credential fetches use `safehttp.MetadataClient`, an exception that is as narrow as it can be: plain http to
+exactly `169.254.169.254`, `169.254.170.2` and `[fd00:ec2::254]` on port 80, no DNS, no redirects, 64 KiB
+responses, 3 s. Only `internal/cloudcred` uses it, with URLs fixed in code (an architecture test pins the
+single caller); no setting, tenant, request or stored URL can reach it. On EKS, IMDSv2 normally needs a hop limit of 2 for
+pods; IRSA avoids the question. Credentials are cached in memory until five minutes before they expire and never logged.
 
 ### Backup and restore
 
@@ -5209,7 +5302,7 @@ A disabled client, or one whose roles or scopes are narrowed, is cut off on the 
 | `POST /t/{slug}/oauth/token` | also `client_credentials`: `client_assertion_type`, `client_assertion`, optional `scope`; DPoP proof and nonce when the client requires DPoP |
 | `POST /t/{slug}/oauth/introspect` | RFC 7662: the same client authentication (`aud` = the introspect URL) for a client registered with the `tessera:introspect` scope; `{"active": false}` for anything that is not an active token of this tenant (expired, revoked session, other tenant, malformed) |
 | `GET /api/admin/api-clients` · `/{client_id}` | `admin.read`: the tenant's clients with their public keys (kid, alg, thumbprint), roles, scopes, owner, last use (when it last got a token) |
-| `POST /api/admin/api-clients` | issue #498: create a machine client `{name, owner (id or e-mail of an active user), scopes, roles, dpop_required, jwks}`; scopes are `tessera:read|write|audit|introspect|email-dsn` (never `tessera:admin`; `tessera:email-dsn` grants only `email.dsn`, for the bounce-mailbox collector), roles `viewer|operator|auditor`, `jwks` public keys only (`invalid_jwks`); needs `admin.change.request` and a step-up of 5 minutes, audited as `oauth.client.created`. **A client cannot exceed its creator (issue #509):** the client's effective permissions (role permissions ∩ scope permissions) must all be held by the creating admin now, else 403 `exceeds_creator` naming the missing ones; a tenant admin, who has no data-plane permission, can therefore not create an `operator` + `tessera:write` client, while an admin who also holds `operator` can. Rotating keys applies the same check |
+| `POST /api/admin/api-clients` | issue #498: create a machine client `{name, owner (id or e-mail of an active user), scopes, roles, dpop_required, jwks}`; scopes are `tessera:read|write|audit|introspect|email-dsn` (never `tessera:admin`; `tessera:email-dsn` grants only `email.dsn`, for the bounce-mailbox collector), roles `viewer|operator|auditor`, `jwks` public keys only (`invalid_jwks`); needs `admin.change.request` and a step-up of 5 minutes, audited as `oauth.client.created`. **A client cannot exceed its creator (issue #509):** the client's effective permissions (role permissions ∩ scope permissions) must all be held by the creating admin now, else 403 `exceeds_creator` naming the missing ones; a tenant admin, who has no data-plane permission, can therefore not create an `operator` + `tessera:write` client, while an admin who also holds `operator` can. Rotating keys applies the same check. **A client cannot exceed its owner either (issue #522):** the owner must hold the client's effective permissions (403 `exceeds_owner` at creation), and the token endpoint answers `unauthorized_client` (audited `oauth.token.refused`, reason `exceeds_owner`) and an already issued token stops working (`client_exceeds_owner`) when the owner lacks one, which covers clients made before #509 and owners who lost a role or left. `tessera admin list-overprivileged-clients -tenant slug` lists them; give the owner the role, or revoke the client and create it again. A client needs at least one role even with only `tessera:email-dsn`, else 422 `invalid_roles` |
 | `POST /api/admin/api-clients/{client_id}/keys` | rotate the keys `{jwks, mode}`: `add` keeps the current keys during the overlap (a repeated `kid` is refused), `replace` leaves only the new set; audited as `oauth.client.keys_rotated` |
 | `POST /api/admin/api-clients/{client_id}/revoke` | disable the client (409 when already revoked): no new token, and its tokens stop on the next request; audited as `oauth.client.revoked`. The first-party CLI client and another tenant's client are 404 |
 
@@ -5528,7 +5621,7 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   `-addr`. `serve` and `seed` both need an explicit `TESSERA_ENV` (`run.sh` exports `dev`).
 * Keys: `seed` and `serve` run the ensure-keys step (one active and one next ES256 key per tenant
   and purpose, the platform Ed25519 key, daily rotation). Private keys are stored only sealed
-  under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). Sealed
+  under the KEK (`TESSERA_KEK`, `TESSERA_KEK_FILE` or a cloud-wrapped KEK, base64 of 32 bytes; see "Where the KEK comes from"). Sealed
   values are AES-256-GCM under `HKDF(KEK, "tessera/seal/v1")` (format version 2); version 1
   values (the raw KEK, before #127) still open and are re-sealed lazily on write. In dev a KEK is
   generated at `server/var/dev-kek` (temp file, then linked into place, never overwritten); if it

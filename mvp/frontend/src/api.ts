@@ -4260,7 +4260,8 @@ export const queue = {
   /** Puts a dead job back in the queue with a fresh attempt budget (step-up, audited). */
   retry: (id: string) => api<QueueJob>(`/queue/jobs/${encodeURIComponent(id)}/retry`, {}),
   /** Stops a recurring job from firing (step-up, audited). Work already queued or running finishes. */
-  pauseSchedule: (name: string, reason?: string) => api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/pause`, reason ? { reason } : {}),
+  pauseSchedule: (name: string, reason?: string, resumeAfterHours?: number) =>
+    api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/pause`, { ...(reason ? { reason } : {}), ...(resumeAfterHours ? { resume_after_hours: resumeAfterHours } : {}) }),
   /** Lets a paused schedule fire again: once if it came due while paused, then on its cadence. */
   resumeSchedule: (name: string) => api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/resume`, {}),
 };
@@ -4302,7 +4303,8 @@ export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rej
 export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
   | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
-  | "groups.loader.save" | "retention.update" | "deletion_guard.update" | "siem.sink.filter";
+  | "groups.loader.save" | "retention.update" | "deletion_guard.update" | "siem.sink.filter"
+  | "siem.sink.target" | "alerts.rule.loosen";
 
 export interface AdminPersonRef { id: string; display_name: string }
 

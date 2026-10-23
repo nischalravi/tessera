@@ -40,12 +40,15 @@ type machine struct {
 }
 
 type machineOpts struct {
-	slug     string // default slugA
-	scopes   []string
-	roles    []string
-	noDPoP   bool // dpop_required = false
-	ed25519  bool
-	disabled bool
+	slug       string // default slugA
+	scopes     []string
+	roles      []string
+	noDPoP     bool // dpop_required = false
+	ed25519    bool
+	disabled   bool
+	ownerRoles []auth.Role // the owner's roles (default viewer)
+	legacy     bool        // no approver on record (made before issue #522): the owner is compared
+	approver   string      // the user id that vouched for it (default: the operator)
 }
 
 func (m *machine) publicJWK() jose.JSONWebKey {
@@ -83,7 +86,13 @@ func (h *harness) addMachine(o machineOpts) *machine {
 	}
 	m := &machine{slug: o.slug, kid: "k1", clientID: "tsc_" + strings.ToLower(uuid.NewString()[:12])}
 	m.key, m.alg = newMachineKey(h.tb, o.ed25519)
-	owner := h.login(o.slug, "owner-"+m.clientID+"@example.test", viewer, authtest.Phr)
+	if o.ownerRoles == nil {
+		o.ownerRoles = viewer
+	}
+	if o.approver == "" && !o.legacy {
+		o.approver = store.ApprovedByOperator
+	}
+	owner := h.login(o.slug, "owner-"+m.clientID+"@example.test", o.ownerRoles, authtest.Phr)
 	set, raw, err := ParseClientJWKS(mustJSON(h.tb, jose.JSONWebKeySet{Keys: []jose.JSONWebKey{m.publicJWK()}}))
 	if err != nil || len(set.Keys) != 1 {
 		h.tb.Fatalf("ParseClientJWKS: %v", err)
@@ -94,7 +103,7 @@ func (h *harness) addMachine(o machineOpts) *machine {
 	}
 	c := &store.APIClient{ClientID: m.clientID, Name: "ETL job", Kind: store.ClientMachine,
 		GrantTypes: []string{GrantClientCredentials}, TokenEndpointAuthMethod: "private_key_jwt", JWKS: raw,
-		DPoPRequired: !o.noDPoP, AllowedScopes: o.scopes, Roles: o.roles, OwnerUserID: &owner.UserID, Status: status,
+		DPoPRequired: !o.noDPoP, AllowedScopes: o.scopes, Roles: o.roles, OwnerUserID: &owner.UserID, ApprovedBy: o.approver, Status: status,
 		CreatedAt: h.clock.Now()}
 	h.mutateTenant(o.slug, func(tx *store.TenantTx) error { return tx.InsertAPIClient(c) })
 	m.rowID = c.ID
@@ -1063,4 +1072,58 @@ func FuzzParseClientAssertion(f *testing.F) {
 			t.Fatalf("accepted claims that break a rule: %+v", c)
 		}
 	})
+}
+
+// TestClientCredentials_ExceedsApprover (issue #522): a client that holds permissions the person who vouched for it
+// lacks (made before the creator check, or the approver lost a role) gets no token, and a token it already holds
+// stops working.
+func TestClientCredentials_ExceedsApprover(t *testing.T) {
+	h := newHarness(t)
+	ops := []string{"operator"}
+	write := []string{"tessera:write"}
+	refused := func(m *machine, why string) {
+		t.Helper()
+		r := h.ccReq(m, h.assertion(m, asrt{}), ccOpts{dpopKey: newKey(t)})
+		if r.Status != 400 || r.str("error") != "unauthorized_client" {
+			t.Errorf("%s: %d %s", why, r.Status, r.Raw)
+		}
+	}
+	// no approver on record, a viewer owner: the client is an operator with the write scope
+	refused(h.addMachine(machineOpts{roles: ops, scopes: write, legacy: true}), "a legacy over-privileged client")
+	if evs := h.auditEvents(slugA, "oauth.token.refused"); len(evs) != 1 || !strings.Contains(string(evs[0].Detail), "exceeds_approver") {
+		t.Errorf("refusal events: %+v", evs)
+	}
+	if evs := h.auditEvents(slugA, "oauth.token.issued"); len(evs) != 0 {
+		t.Errorf("a token was issued: %+v", evs)
+	}
+	// a legacy client whose owner holds the roles is fine
+	legacyOK := h.addMachine(machineOpts{roles: ops, scopes: write, legacy: true, ownerRoles: []auth.Role{auth.RoleOperator}})
+	tokensOf(t, h.ccReq(legacyOK, h.assertion(legacyOK, asrt{}), ccOpts{dpopKey: newKey(t)}))
+	// an approver who holds the roles; the token stops working when they lose them, and no new one is issued
+	approver := h.login(slugA, "approver@example.test", []auth.Role{auth.RoleOperator}, authtest.Phr)
+	m := h.addMachine(machineOpts{roles: ops, scopes: write, approver: approver.UserID.String()})
+	k := newKey(t)
+	tok := tokensOf(t, h.ccReq(m, h.assertion(m, asrt{}), ccOpts{dpopKey: k}))
+	if w := h.whoamiReq(k, tok.Access); w.Status != 200 {
+		t.Fatalf("whoami with an operator approver: %d %s", w.Status, w.Raw)
+	}
+	h.mutateTenant(slugA, func(tx *store.TenantTx) error {
+		as, err := tx.RoleAssignments(approver.UserID)
+		if err != nil {
+			return err
+		}
+		for _, a := range as {
+			if err := tx.DeleteRoleAssignment(a.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if w := h.whoamiReq(k, tok.Access); w.Status != 401 {
+		t.Errorf("whoami after the approver lost the role: %d %s", w.Status, w.Raw)
+	}
+	refused(m, "a new token after the approver lost the role")
+	// a client made with the CLI is the operator's call
+	cli := h.addMachine(machineOpts{roles: ops, scopes: write})
+	tokensOf(t, h.ccReq(cli, h.assertion(cli, asrt{}), ccOpts{dpopKey: newKey(t)}))
 }

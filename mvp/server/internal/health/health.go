@@ -11,8 +11,10 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/leader"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -23,11 +25,13 @@ import (
 const (
 	CheckDatabase   = "database"
 	CheckAuditChain = "audit_chain"
+	CheckSchema     = "schema"
 	CheckKEK        = "kek"
 	CheckLoops      = "loops"
+	CheckDraining   = "draining" // fails from SIGTERM until exit, so a load balancer stops sending traffic
 )
 
-var checkNames = []string{CheckDatabase, CheckAuditChain, CheckKEK, CheckLoops}
+var checkNames = []string{CheckDatabase, CheckSchema, CheckAuditChain, CheckKEK, CheckLoops, CheckDraining}
 
 // DefaultMaxLoopLag is how long a gated loop may go without a success before
 // /readyz fails (TESSERA_READY_MAX_LOOP_LAG_SECONDS). The loops run every 15
@@ -50,7 +54,14 @@ type Checker struct {
 
 	// Database, AuditChain and KEK probe one dependency each; nil means the
 	// default probe over DB and Sealer.
-	Database, AuditChain, KEK func(ctx context.Context) error
+	Database, Schema, AuditChain, KEK func(ctx context.Context) error
+
+	// Leaders reports which background loops this replica leads (nil: not
+	// elected, a single process). Loop names are not secret; /readyz lists
+	// them as "leader" or "standby" so an operator can see the split.
+	Leaders func() []leader.Status
+
+	draining atomic.Bool
 
 	now func() time.Time
 	mu  sync.Mutex
@@ -73,10 +84,13 @@ func New(db *store.DB, sealer *seal.Sealer, loops *obs.Loops, maxLag time.Durati
 }
 
 // Result is one readiness evaluation. Its JSON shape is constant: the same
-// four keys under "checks", each "ok" or "fail".
+// keys under "checks", each "ok" or "fail".
 type Result struct {
 	Status string            `json:"status"` // "ok" or "unavailable"
 	Checks map[string]string `json:"checks"`
+	// Leaders is "leader" or "standby" per elected loop; absent without
+	// leader election (SQLite). It never changes the status: a standby is healthy.
+	Leaders map[string]string `json:"leaders,omitempty"`
 }
 
 // Ready reports whether every check passed.
@@ -92,6 +106,37 @@ func Live() map[string]string { return map[string]string{"status": "ok"} }
 // Ready runs the checks (a result is reused for two seconds) and refreshes
 // the tessera_readiness_check_ok gauges.
 func (c *Checker) Ready(ctx context.Context) Result {
+	res := c.evaluate(ctx)
+	if c.Leaders != nil {
+		if st := c.Leaders(); len(st) > 0 {
+			res.Leaders = make(map[string]string, len(st))
+			for _, l := range st {
+				res.Leaders[l.Loop] = "standby"
+				if l.Leader {
+					res.Leaders[l.Loop] = "leader"
+				}
+			}
+		}
+	}
+	if c.draining.Load() {
+		// not cached: a load balancer must see the drain at once
+		out := Result{Status: "unavailable", Checks: make(map[string]string, len(res.Checks))}
+		for k, v := range res.Checks {
+			out.Checks[k] = v
+		}
+		out.Checks[CheckDraining] = "fail"
+		obs.ReadyCheck.Set(0, CheckDraining)
+		return out
+	}
+	obs.ReadyCheck.Set(1, CheckDraining)
+	return res
+}
+
+// SetDraining makes /readyz fail (the process received SIGTERM and is
+// shutting down). /livez is unaffected.
+func (c *Checker) SetDraining() { c.draining.Store(true) }
+
+func (c *Checker) evaluate(ctx context.Context) Result {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.at.IsZero() && c.now().Sub(c.at) < cacheTTL {
@@ -113,9 +158,11 @@ func (c *Checker) Ready(ctx context.Context) Result {
 		obs.ReadyCheck.Set(1, name)
 	}
 	run(CheckDatabase, c.probe(c.Database, c.pingDB))
+	run(CheckSchema, c.probe(c.Schema, c.schemaCurrent))
 	run(CheckAuditChain, c.probe(c.AuditChain, c.readChainHead))
 	run(CheckKEK, c.probe(c.KEK, c.openKEK))
 	run(CheckLoops, c.loopsFresh)
+	res.Checks[CheckDraining] = "ok"
 	c.at, c.res = c.now(), res
 	return res
 }
@@ -145,6 +192,13 @@ func (c *Checker) pingDB(ctx context.Context) error {
 		_, err := s.ActiveTenants()
 		return err
 	})
+}
+
+func (c *Checker) schemaCurrent(ctx context.Context) error {
+	if c.DB == nil {
+		return errors.New("no database")
+	}
+	return c.DB.SchemaCurrent(ctx)
 }
 
 // readChainHead reads the _platform chain head: the ledger's own table is

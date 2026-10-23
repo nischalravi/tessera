@@ -24,7 +24,8 @@ func TestCredentialRebindAPI(t *testing.T) {
 		t.Fatalf("create sink: %d %s", rec.Code, rec.Body)
 	}
 	move := `{"name":"Splunk","format":"json","flavor":"hec","target":"https://evil.example/collector"}`
-	if rec := siemDo(h, admin, "PUT", "/api/siem/sinks/"+v.ID, move); rec.Code != 422 || !strings.Contains(rec.Body.String(), `"credential_required"`) {
+	// moving the sink to another origin is a two-admin change since issue #520 (siem.sink.target, which clears the token)
+	if rec := siemDo(h, admin, "PUT", "/api/siem/sinks/"+v.ID, move); rec.Code != 409 || !strings.Contains(rec.Body.String(), `"two_admin_change_required"`) {
 		t.Errorf("sink origin change: %d %s", rec.Code, rec.Body)
 	}
 	if rec := siemDo(h, admin, "PUT", "/api/siem/sinks/"+v.ID, `{"name":"Splunk","format":"json","flavor":"hec","target":"https://splunk-a.example/services/collector/event"}`); rec.Code != 200 {

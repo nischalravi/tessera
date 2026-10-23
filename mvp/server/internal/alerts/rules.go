@@ -151,7 +151,7 @@ var Rules = []*Rule{
 	},
 	{
 		ID: "schedule_paused", Name: "Security schedule paused", Kind: "event", Severity: "high", Threshold: 1, Window: time.Hour,
-		Description: "A background security schedule (containment retries, lifecycle, SoD mitigation, admin change, drift or certificate sweeps, connector syncs) was paused, or every connector sync was turned off (#512).",
+		Description: "A background security schedule (containment retries, lifecycle, SoD mitigation, admin change, drift or certificate sweeps, SSF, contractor feed, guest, OAuth, JIT and request sweeps, connector syncs) was paused, or every connector sync was turned off or left to run less than weekly (#512, #521).",
 		Match: func(e *store.AuditEvent) (Hit, bool) {
 			d := detailOf(e)
 			switch e.Action {
@@ -399,4 +399,35 @@ func targetOf(e *store.AuditEvent, d map[string]any) string {
 		return *e.TargetID
 	}
 	return actorOf(e)
+}
+
+// securityRules are the rules whose silence hides tampering or the loss of a control: someone who wants to act
+// unseen would loosen them first. Loosening one needs a step-up and a second admin (alerts.rule.loosen, issues
+// #512 and #521), through the API and the configuration import alike.
+var securityRules = map[string]bool{"break_glass_used": true, "admin_role_granted": true, "mfa_bypass": true, "deletion_held": true,
+	"schedule_paused": true, "provisioning_failed": true, "provision_failed": true, "provision_mismatch": true, "queue_job_dead": true,
+	"oauth_app_change": true, "audit_anchor_failed": true}
+
+// IsSecurityRule reports whether loosening this rule takes two admins.
+func IsSecurityRule(id string) bool { return securityRules[id] }
+
+// Loosens reports whether next makes the rule fire less often or not at all: disabled, a lower severity, a higher
+// threshold or a shorter window.
+func Loosens(cur Effective, next RuleSpec) bool {
+	return (cur.Enabled && !next.Enabled) || SeverityRank(next.Severity) < SeverityRank(cur.Severity) ||
+		next.Threshold > cur.Threshold || time.Duration(next.WindowMinutes)*time.Minute < cur.Window
+}
+
+// EffectiveRule is one built-in rule with the tenant's settings applied, or nil for an unknown id.
+func EffectiveRule(tx *store.TenantTx, id string) (*Effective, error) {
+	rs, err := EffectiveRules(tx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rs {
+		if rs[i].ID == id {
+			return &rs[i], nil
+		}
+	}
+	return nil, nil
 }

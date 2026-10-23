@@ -230,7 +230,7 @@ func TestQueueSchedulePauseResume(t *testing.T) {
 	auditor := signIn(t, f.DB, f.A.ID, authtest.User{Email: "au@a.example", Roles: []auth.Role{auth.RoleAuditor}}, authtest.Phr, storetest.Now)
 	adminB := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ta@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
 
-	name := jobs.SweepRequests
+	name := jobs.Maintenance
 	pause, resume := "/api/queue/schedules/"+name+"/pause", "/api/queue/schedules/"+name+"/resume"
 	state := func(sess authtest.Login, tenant string) queueScheduleView {
 		t.Helper()

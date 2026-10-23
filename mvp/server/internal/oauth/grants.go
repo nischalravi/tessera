@@ -554,6 +554,18 @@ func (s *Service) clientCredentialsGrant(r *http.Request, t store.Tenant, client
 				audit.At(now), audit.Outcome(store.OutcomeDenied), audit.Target("api_client", client.ID.String()))
 			return err
 		}
+		// a client that holds permissions its approver lacks gets no token until an admin re-approves it (re-keys it,
+		// which checks the creator, or the approver gets the role back): issue #522
+		if missing, err := auth.ClientExceedsApprover(tx, client, strings.Fields(scope), now); err != nil {
+			return err
+		} else if len(missing) > 0 {
+			res = fail("unauthorized_client", "the client holds permissions the person who approved it lacks; an admin must re-approve it")
+			_, err := audit.Record(ctx, tx, "oauth.token.refused", ojson.Object{{Key: "grant", Value: GrantClientCredentials},
+				{Key: "client_id", Value: client.ClientID}, {Key: "reason", Value: "exceeds_approver"},
+				{Key: "missing", Value: anyStrings(missing)}},
+				audit.At(now), audit.Outcome(store.OutcomeDenied), audit.Target("api_client", client.ID.String()))
+			return err
+		}
 		at, ttl, err := s.mintAccessToken(mintInput{Slug: t.Slug, Machine: true, ClientRowID: client.ID, ClientID: client.ClientID,
 			Scope: scope, JKT: jkt, Now: now, SigningTx: tx})
 		if err != nil {
@@ -617,4 +629,12 @@ func (s *Service) clientAuthRefused(r *http.Request, t store.Tenant, client *sto
 		return err
 	})
 	return clientAuthFailed(), err
+}
+
+func anyStrings(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }

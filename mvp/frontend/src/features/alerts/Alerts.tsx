@@ -5,6 +5,8 @@ import {
   ALERT_SEVERITIES, AlertChannel, AlertChannelInput, AlertRow, AlertRule, AlertSeverity, alertsApi, fmtDate, relTime, severityTone, useApi,
 } from "../../api";
 import { useSession } from "../../app/auth";
+import { TwoAdminDialog } from "../admin/TwoAdminDialog";
+import { alertLoosenPayload, twoAdminType } from "../admin/twoAdmin";
 import {
   Badge, Button, Callout, Column, CommandBar, DataTable, Drawer, EmptyState, Loading, Page, SidePanel, Tabs, useConfirm, useToast,
 } from "../../components";
@@ -213,19 +215,27 @@ function RuleForm({ rule, onClose, onSaved }: { rule: AlertRule; onClose: () => 
   const toast = useToast();
   const [f, setF] = useState({ enabled: rule.enabled, severity: rule.severity, threshold: String(rule.threshold), window: String(rule.window_minutes) });
   const [error, setError] = useState<string | null>(null);
+  const [ask, setAsk] = useState(false);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
+    const spec = { enabled: f.enabled, severity: f.severity, threshold: Number(f.threshold), window_minutes: Number(f.window) };
     try {
-      await alertsApi.setRule(rule.id, { enabled: f.enabled, severity: f.severity, threshold: Number(f.threshold), window_minutes: Number(f.window) });
+      await alertsApi.setRule(rule.id, spec);
       toast(`${rule.name} saved`);
       onSaved();
     } catch (err: any) {
+      if (twoAdminType(err) === "alerts.rule.loosen") { setAsk(true); return; }
       setError(String(err.message ?? err));
     }
   };
   return (
     <Drawer title={rule.name} sub={rule.description} onClose={onClose}>
+      {ask && (
+        <TwoAdminDialog type="alerts.rule.loosen" onClose={() => setAsk(false)}
+          payload={alertLoosenPayload(rule.id, { enabled: f.enabled, severity: f.severity, threshold: Number(f.threshold), window_minutes: Number(f.window) })}
+          what={`${rule.name} is a security rule: it may be the only control watching what it covers. Switching it off, lowering its severity, raising its threshold or shortening its window must be approved by a second admin.`} />
+      )}
       <form className="stack" onSubmit={submit}>
         <label className="row tight small"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Enabled</label>
         <label className="field">Severity

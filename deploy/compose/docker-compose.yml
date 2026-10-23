@@ -1,0 +1,160 @@
+# Tessera on one VM: UI (nginx) + API + Postgres 16, optionally Caddy for automatic TLS.
+#
+#   cp .env.example .env && ./scripts/init-secrets.sh        # fill in .env first
+#   docker compose up -d                                       # API + UI + Postgres, UI on 127.0.0.1:8080
+#   docker compose --profile tls up -d                         # also Caddy on :80/:443 (needs TESSERA_DOMAIN)
+#   docker compose run --rm api admin create-tenant -slug acme -name "Acme Corp"
+#
+# Settings satisfy the TESSERA_ENV=prod guard rails (mvp/README.md, "Server hardening"): https public URL,
+# no dev IdP/CORS, a KEK, two Postgres logins over TLS, an S3 audit anchor, trusted proxies <= /8.
+# Reference for a single VM, not a high-availability setup (one API replica, one database).
+
+name: tessera
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging:
+    driver: local
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  # One-shot: prepares the Postgres TLS certificate and installs the KEK with the owner and mode the API
+  # requires (uid 65532, 0600). Safe to re-run; never overwrites an existing certificate.
+  init:
+    image: alpine/openssl:latest
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        if [ ! -s /pgcerts/server.key ]; then
+          openssl req -new -x509 -days 3650 -nodes -newkey rsa:3072 -subj "/CN=db" \
+            -addext "subjectAltName=DNS:db" -keyout /pgcerts/server.key -out /pgcerts/server.crt
+        fi
+        chown 70:70 /pgcerts/server.key /pgcerts/server.crt && chmod 0600 /pgcerts/server.key
+        install -m 0600 -o 65532 -g 65532 /run/secrets/tessera_kek /kek/kek
+    volumes: [pgcerts:/pgcerts, kek:/kek]
+    secrets: [tessera_kek]
+    restart: "no"
+    user: root
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+
+  db:
+    image: postgres:16-alpine
+    <<: *hardened
+    depends_on: { init: { condition: service_completed_successfully } }
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/pgcerts/server.crt
+      - -c
+      - ssl_key_file=/pgcerts/server.key
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - password_encryption=scram-sha-256
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_DB: tessera
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      TESSERA_OWNER_PASSWORD: ${TESSERA_OWNER_PASSWORD:?set TESSERA_OWNER_PASSWORD}
+      TESSERA_APP_PASSWORD: ${TESSERA_APP_PASSWORD:?set TESSERA_APP_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - pgcerts:/pgcerts:ro
+      - ./postgres/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    tmpfs: ["/tmp", "/run/postgresql"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tessera"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Postgres needs CHOWN/SETUID/SETGID/DAC_OVERRIDE/FOWNER while the entrypoint prepares the data dir.
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    # postgres writes inside its data directory and the tmpfs mounts only.
+
+  api:
+    image: ${TESSERA_API_IMAGE:-tessera-api:latest}
+    build: { context: ../.., dockerfile: deploy/docker/Dockerfile, target: api }
+    <<: *hardened
+    depends_on:
+      init: { condition: service_completed_successfully }
+      db: { condition: service_healthy }
+    command: ["serve", "-addr", "0.0.0.0:8000"]
+    environment:
+      TESSERA_ENV: prod
+      TESSERA_PUBLIC_URL: ${TESSERA_PUBLIC_URL:?set TESSERA_PUBLIC_URL (https://...)}
+      TESSERA_COOKIE_SECURE: "true"
+      # Owner login: migrations, operator commands. Request login: tessera_app (no BYPASSRLS, owns nothing).
+      TESSERA_DB: postgres://tessera_owner:${TESSERA_OWNER_PASSWORD}@db:5432/tessera?sslmode=require
+      TESSERA_DB_APP: postgres://tessera_app:${TESSERA_APP_PASSWORD}@db:5432/tessera?sslmode=require
+      TESSERA_KEK_FILE: /run/kek/kek
+      # Hops allowed to set X-Forwarded-For: the compose network (nginx, Caddy). Widest allowed in prod is /8.
+      TESSERA_TRUSTED_PROXIES: ${TESSERA_TRUSTED_PROXIES:-172.16.0.0/12}
+      TESSERA_AUDIT_ANCHOR: ${TESSERA_AUDIT_ANCHOR:?set TESSERA_AUDIT_ANCHOR (s3://bucket/prefix, Object Lock)}
+      AWS_REGION: ${AWS_REGION:?set AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # /metrics stays off the public listener; reachable on the compose network only.
+      TESSERA_METRICS_ADDR: ${TESSERA_METRICS_ADDR:-0.0.0.0:9464}
+      TESSERA_METRICS_ALLOW_WILDCARD: "true"
+    volumes:
+      - kek:/run/kek:ro
+      - tessera-data:/var/lib/tessera
+    tmpfs: ["/tmp"]
+    expose: ["8000", "9464"]
+    # No HEALTHCHECK in the distroless image; the ui service probes the API through nginx (see below).
+
+  ui:
+    image: ${TESSERA_UI_IMAGE:-tessera-ui:latest}
+    build: { context: ../.., dockerfile: deploy/docker/Dockerfile, target: ui }
+    <<: *hardened
+    depends_on: { api: { condition: service_started } }
+    environment:
+      API_UPSTREAM: api:8000
+    tmpfs: ["/tmp"]
+    # Published on loopback only; put Caddy (profile "tls") or your own TLS terminator in front.
+    ports: ["127.0.0.1:${UI_PORT:-8080}:8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  # Optional TLS terminator with automatic Let's Encrypt certificates. Needs a public DNS name pointing at
+  # this VM and ports 80/443 open.
+  caddy:
+    profiles: ["tls"]
+    image: caddy:2-alpine
+    <<: *hardened
+    depends_on: { ui: { condition: service_healthy } }
+    environment:
+      TESSERA_DOMAIN: ${TESSERA_DOMAIN:?set TESSERA_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    tmpfs: ["/tmp"]
+    cap_add: [NET_BIND_SERVICE]
+
+secrets:
+  tessera_kek:
+    file: ${TESSERA_KEK_SECRET_FILE:-./secrets/kek}
+
+volumes:
+  pgdata:
+  pgcerts:
+  kek:
+  tessera-data:
+  caddy-data:
+  caddy-config:

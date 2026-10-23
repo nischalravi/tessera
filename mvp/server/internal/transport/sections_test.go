@@ -55,7 +55,7 @@ func (e *env) seedSections(t *testing.T) {
 			WindowMinutes: 30, UpdatedAt: t0}); err != nil {
 			return err
 		}
-		if err := tx.PutAlertRuleSetting(&store.AlertRuleSetting{RuleID: "mfa_bypass", Enabled: false, Severity: "high", Threshold: 1,
+		if err := tx.PutAlertRuleSetting(&store.AlertRuleSetting{RuleID: "signin_failures", Enabled: false, Severity: "high", Threshold: 1,
 			WindowMinutes: 60, UpdatedAt: t0}); err != nil {
 			return err
 		}
@@ -92,7 +92,7 @@ func TestSections_ExportCarriesNoSecretsOrPeople(t *testing.T) {
 	if !b.SiemSinks[0].NeedsSecret {
 		t.Error("a sink with a token should say the target needs one")
 	}
-	if got := b.AlertRules[0].ID; got != "mfa_bypass" { // the rules' display order, not alphabetical
+	if got := b.AlertRules[0].ID; got != "signin_failures" { // the rules' display order, not alphabetical
 		t.Errorf("rules not in a stable order: %s", got)
 	}
 }
@@ -107,7 +107,7 @@ func TestSections_RoundTrip(t *testing.T) {
 	want := map[string]string{
 		"catalog_items/okta:Engineering": Add, "catalog_items/okta:Admins": Add,
 		"review_schedules/Quarterly privileged review": Add,
-		"alert_rules/access_drift":                     Change, "alert_rules/mfa_bypass": Change,
+		"alert_rules/access_drift":                     Change, "alert_rules/signin_failures": Change,
 		"siem_sinks/Splunk": Add,
 	}
 	got := actions(p)
@@ -117,7 +117,7 @@ func TestSections_RoundTrip(t *testing.T) {
 		}
 	}
 	for _, it := range p.Items {
-		if it.Section == SecAlertRules && it.Name == "mfa_bypass" && !strings.Contains(strings.Join(it.Notes, " "), "loosens") {
+		if it.Section == SecAlertRules && it.Name == "signin_failures" && !strings.Contains(strings.Join(it.Notes, " "), "loosens") {
 			t.Errorf("disabling a rule is not flagged: %+v", it)
 		}
 	}
@@ -230,7 +230,7 @@ func TestSections_RefusalsAreManual(t *testing.T) {
 		ReviewSchedule{Name: "Escalating", UnusedDays: 60, DurationDays: 14, ReminderDays: 3, CloseOut: "escalate", EscalationDays: 7, Recurrence: "annual"},
 		ReviewSchedule{Name: "Bad", UnusedDays: 0, DurationDays: 14, CloseOut: "revoke", EscalationDays: 7, Recurrence: "annual"})
 	b.AlertRules = append(b.AlertRules, AlertRule{ID: "no_such_rule", Enabled: true, Severity: "high", Threshold: 1, WindowMinutes: 5},
-		AlertRule{ID: "mfa_bypass", Enabled: true, Severity: "urgent", Threshold: 1, WindowMinutes: 5})
+		AlertRule{ID: "signin_failures", Enabled: true, Severity: "urgent", Threshold: 1, WindowMinutes: 5})
 	b.SiemSinks = append(b.SiemSinks, SiemSink{Name: "Bad sink", Kind: "webhook", Format: "json", Target: "http://plain.example", Flavor: "json"})
 	plan := planOf(t, e, b)
 	for _, name := range []string{"catalog_items/okta:Ghost", "catalog_items/okta:Engineering", "review_schedules/Escalating", "review_schedules/Bad",
@@ -248,7 +248,7 @@ func TestSections_RefusalsAreManual(t *testing.T) {
 	// a repeated rule id is refused the second time only
 	manual := 0
 	for _, it := range plan.Items {
-		if it.Section == SecAlertRules && it.Name == "mfa_bypass" && it.Action == Manual {
+		if it.Section == SecAlertRules && it.Name == "signin_failures" && it.Action == Manual {
 			manual++
 		}
 	}

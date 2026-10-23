@@ -14,20 +14,22 @@ import (
 // ---------------------------------------------------------------- api_clients
 
 const clientCols = `c.id, c.tenant_id, c.client_id, c.name, c.kind, c.grant_types, c.token_endpoint_auth_method, c.jwks,
-	c.dpop_required, c.allowed_scopes, c.roles, c.owner_user_id, c.status, c.created_at, c.last_used_at`
+	c.dpop_required, c.allowed_scopes, c.roles, c.owner_user_id, c.status, c.created_at, c.last_used_at, c.approved_by`
 
 var (
 	clientsInsert = tq("api_clients.insert", `
 		INSERT INTO api_clients (id, tenant_id, client_id, name, kind, grant_types, token_endpoint_auth_method, jwks,
-			dpop_required, allowed_scopes, roles, owner_user_id, status, created_at)
+			dpop_required, allowed_scopes, roles, owner_user_id, status, created_at, approved_by)
 		VALUES (@id, @tenant, @client_id, @name, @kind, @grant_types, @token_endpoint_auth_method, @jwks,
-			@dpop_required, @allowed_scopes, @roles, @owner_user_id, @status, @created_at)`)
+			@dpop_required, @allowed_scopes, @roles, @owner_user_id, @status, @created_at, @approved_by)`)
 	clientsByClientID = tq("api_clients.by_client_id", `
 		SELECT `+clientCols+` FROM api_clients c WHERE c.tenant_id = @tenant AND c.client_id = @client_id`)
 	clientsList = tq("api_clients.list", `
 		SELECT `+clientCols+` FROM api_clients c WHERE c.tenant_id = @tenant ORDER BY c.created_at, c.rowid`)
 	clientsSetKeys = tq("api_clients.set_keys", `
 		UPDATE api_clients SET jwks = @jwks WHERE tenant_id = @tenant AND client_id = @client_id AND kind = 'machine'`)
+	clientsSetApprover = tq("api_clients.set_approver", `
+		UPDATE api_clients SET approved_by = @approved_by WHERE tenant_id = @tenant AND client_id = @client_id AND kind = 'machine'`)
 	clientsSetStatus = tq("api_clients.set_status", `
 		UPDATE api_clients SET status = @status WHERE tenant_id = @tenant AND client_id = @client_id AND kind = 'machine'`)
 	clientsTouch = tq("api_clients.touch", `
@@ -40,7 +42,7 @@ func scanClient(s scanner) (*APIClient, error) {
 	var jwks, owner, lastUsed sql.NullString
 	var dpop int
 	if err := s.Scan(&id, &tid, &x.ClientID, &x.Name, &x.Kind, &grants, &x.TokenEndpointAuthMethod, &jwks, &dpop, &scopes,
-		&roles, &owner, &x.Status, &created, &lastUsed); err != nil {
+		&roles, &owner, &x.Status, &created, &lastUsed, &x.ApprovedBy); err != nil {
 		return nil, err
 	}
 	var err error
@@ -109,7 +111,7 @@ func (tx *TenantTx) InsertAPIClient(x *APIClient) error {
 		sql.Named("token_endpoint_auth_method", x.TokenEndpointAuthMethod), sql.Named("jwks", jwks),
 		sql.Named("dpop_required", B(x.DPoPRequired)), sql.Named("allowed_scopes", scopes), sql.Named("roles", roles),
 		sql.Named("owner_user_id", uuidOrNil(x.OwnerUserID)), sql.Named("status", x.Status),
-		sql.Named("created_at", RT(x.CreatedAt)))
+		sql.Named("created_at", RT(x.CreatedAt)), sql.Named("approved_by", x.ApprovedBy))
 	if isUnique(err) {
 		return ErrDuplicate
 	}
@@ -128,6 +130,11 @@ func (tx *TenantTx) APIClients() ([]*APIClient, error) { return collect(tx, scan
 // (ErrNotFound for another tenant's client, a missing one and the first-party CLI client).
 func (tx *TenantTx) SetAPIClientKeys(clientID string, jwks []byte) error {
 	return tx.execOne(clientsSetKeys, sql.Named("jwks", string(jwks)), sql.Named("client_id", clientID))
+}
+
+// SetAPIClientApprover records who vouched for the machine client's permissions now (ErrNotFound as for SetAPIClientKeys).
+func (tx *TenantTx) SetAPIClientApprover(clientID, approvedBy string) error {
+	return tx.execOne(clientsSetApprover, sql.Named("approved_by", approvedBy), sql.Named("client_id", clientID))
 }
 
 // SetAPIClientStatus enables or disables this tenant's machine client (ErrNotFound as for SetAPIClientKeys). A

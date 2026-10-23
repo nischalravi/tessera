@@ -83,7 +83,7 @@ func backupCmd(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if sub == "list" {
 		return backupList(*dir, stdout)
 	}
-	sealer, err := cfg.Sealer(config.DevKEKPath(*db))
+	sealer, err := loadSealer(ctx, cfg, config.DevKEKPath(*db))
 	if err != nil {
 		return err
 	}
@@ -161,6 +161,12 @@ func createBackup(ctx context.Context, st *store.DB, sealer *seal.Sealer, cfg *c
 			return c, err
 		}
 		detail = append(detail, ojson.KV{Key: "uploaded", Value: true})
+	}
+	if cfg.BackupURL != "" {
+		if err := copyBackupToObjectStore(ctx, cfg, c.Path); err != nil {
+			return c, err
+		}
+		detail = append(detail, ojson.KV{Key: "copied_to_object_store", Value: true})
 	}
 	if err := backup.RecordEvent(ctx, st, "platform.backup.created", detail); err != nil {
 		return c, err
