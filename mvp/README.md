@@ -4295,6 +4295,13 @@ curl -s http://127.0.0.1:9000/metrics | head      # with API_PORT=8000
 curl -s http://127.0.0.1:8000/readyz
 ```
 
+## Deploying to a cloud
+
+Container images, Docker Compose (one VM), a Helm chart (EKS, AKS, GKE, OpenShift), ECS Fargate / Container Apps /
+Cloud Run manifests and Terraform reference modules for AWS, Azure and GCP are under `deploy/`. Start with
+[docs/deploy/README.md](../docs/deploy/README.md): which option to pick, the production environment variables,
+TLS and proxy settings per cloud, KEK handling, backups and upgrades.
+
 ## Postgres
 
 SQLite stays the default and is unchanged. Set `TESSERA_DB` (or `-db`) to a Postgres DSN to use Postgres
