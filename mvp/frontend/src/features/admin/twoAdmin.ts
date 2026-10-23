@@ -2,9 +2,9 @@
 // become the payload of an admin change request. Pure helpers, no React, so `npm test` covers the mapping.
 
 /** The change types a 409 two_admin_change_required can name. */
-export type TwoAdminType = "siem.sink.filter" | "siem.sink.target" | "alerts.rule.loosen";
+export type TwoAdminType = "siem.sink.filter" | "siem.sink.target" | "alerts.rule.loosen" | "breach.item.attest";
 
-const TYPES: readonly string[] = ["siem.sink.filter", "siem.sink.target", "alerts.rule.loosen"];
+const TYPES: readonly string[] = ["siem.sink.filter", "siem.sink.target", "alerts.rule.loosen", "breach.item.attest"];
 
 /** The change type to file when `err` is the API's 409 two_admin_change_required, else null. */
 export function twoAdminType(err: unknown): TwoAdminType | null {
@@ -33,6 +33,9 @@ export function siemFilterPayload(
 /** siem.sink.target: the new destination, as typed. */
 export const siemTargetPayload = (sinkId: string, target: string) => ({ sink_id: sinkId, target: target.trim() });
 
+/** breach.item.attest: the plan, the item and what the person did (the server checks all three). */
+export const breachAttestPayload = (planId: string, itemId: string, note: string) => ({ plan_id: planId, item_id: itemId, note: note.trim() });
+
 /** alerts.rule.loosen: the full rule the form holds (the server compares it with the current one). */
 export function alertLoosenPayload(ruleId: string, f: { enabled: boolean; severity: string; threshold: number; window_minutes: number }) {
   return { rule_id: ruleId, enabled: f.enabled, severity: f.severity, threshold: f.threshold, window_minutes: f.window_minutes };
@@ -43,6 +46,7 @@ export const TWO_ADMIN_TITLE: Record<TwoAdminType, string> = {
   "siem.sink.filter": "Narrowing what this sink receives needs a second admin",
   "siem.sink.target": "Moving this sink to another destination needs a second admin",
   "alerts.rule.loosen": "Loosening a security alert rule needs a second admin",
+  "breach.item.attest": "Attesting a breach item needs a second admin",
 };
 
 /** The pause length for a protected schedule: a whole number of hours, 1 to 24. NaN when the text is not one. */

@@ -292,40 +292,79 @@ type RevokeResult struct {
 	Detail string
 }
 
-// Attest records that a person did a manual item. The note says what was done.
-func (s *Service) Attest(tx *store.TenantTx, planID, itemID, note, actor string, now time.Time) (*View, error) {
+// ChangeType is the admin change that attests a manual item (issue #538): one admin
+// requests it, a different admin approves it, and only then does the item close.
+const ChangeType = "breach.item.attest"
+
+// CheckAttest validates an attestation of one manual item: the note, the plan running, the item manual and not
+// already verified. It writes nothing.
+func (s *Service) CheckAttest(tx *store.TenantTx, planID, itemID, note string) (*store.BreachPlan, *store.BreachItem, error) {
 	p, err := s.plan(tx, planID)
+	if err != nil {
+		return nil, nil, err
+	}
+	note = strings.TrimSpace(note)
+	if len(note) < 10 || len(note) > 500 {
+		return nil, nil, refuse(http.StatusUnprocessableEntity, "note_required", "note must say what was done (10 to 500 characters)")
+	}
+	if p.Status != store.BreachRunning {
+		return nil, nil, refuse(http.StatusConflict, "plan_not_running", "start the plan before attesting its items")
+	}
+	it, err := tx.BreachItem(planID, itemID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil, refuse(http.StatusNotFound, "not_found", "no such item in this plan")
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if it.Action != store.BreachActionManual {
+		return nil, nil, refuse(http.StatusConflict, "not_manual", "only manual items are attested; this one is verified by a re-read")
+	}
+	if it.State == store.BreachVerified {
+		return nil, nil, refuse(http.StatusConflict, "already_verified", "a re-read already verified this item")
+	}
+	return p, it, nil
+}
+
+// AwaitAttest marks the item in progress while its attestation request waits for a second admin. It runs in the
+// transaction that files the request. One open request per item.
+func (s *Service) AwaitAttest(tx *store.TenantTx, planID, itemID, note, changeID string, now time.Time) error {
+	_, it, err := s.CheckAttest(tx, planID, itemID, note)
+	if err != nil {
+		return err
+	}
+	open, err := tx.OpenAdminChanges()
+	if err != nil {
+		return err
+	}
+	for _, c := range open {
+		if c.Type == ChangeType && c.TargetID == itemID && c.ID.String() != changeID {
+			return refuse(http.StatusConflict, "attest_pending", "an attestation of this item already waits for a second admin")
+		}
+	}
+	if it.State == store.BreachAttested {
+		return nil
+	}
+	return tx.SetBreachItemState(it.ID, store.BreachInProgress, "attestation requested; a second admin must approve it", nil, nil, now)
+}
+
+// AttestApproved records that a person did a manual item, once a second admin approved the attestation. The note
+// says what was done; requester and approver are both named on the item, in the ledger and in the evidence.
+func (s *Service) AttestApproved(tx *store.TenantTx, planID, itemID, note, requester, approver, changeID string, now time.Time) (*View, error) {
+	p, it, err := s.CheckAttest(tx, planID, itemID, note)
 	if err != nil {
 		return nil, err
 	}
 	note = strings.TrimSpace(note)
-	if len(note) < 10 || len(note) > 500 {
-		return nil, refuse(http.StatusUnprocessableEntity, "note_required", "note must say what was done (10 to 500 characters)")
-	}
-	if p.Status != store.BreachRunning {
-		return nil, refuse(http.StatusConflict, "plan_not_running", "start the plan before attesting its items")
-	}
-	it, err := tx.BreachItem(planID, itemID)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, refuse(http.StatusNotFound, "not_found", "no such item in this plan")
-	}
-	if err != nil {
+	if err := tx.AttestBreachItem(it.ID, requester+", approved by "+approver, note, now); err != nil {
 		return nil, err
 	}
-	if it.Action != store.BreachActionManual {
-		return nil, refuse(http.StatusConflict, "not_manual", "only manual items are attested; this one is verified by a re-read")
-	}
-	if it.State == store.BreachVerified {
-		return nil, refuse(http.StatusConflict, "already_verified", "a re-read already verified this item")
-	}
-	if err := tx.AttestBreachItem(it.ID, actor, note, now); err != nil {
+	if err := tx.Audit(now, approver, "breach.item.attested", ojson.Object{{Key: "plan_id", Value: p.ID}, {Key: "item_id", Value: it.ID},
+		{Key: "kind", Value: it.Kind}, {Key: "label", Value: it.Label}, {Key: "note", Value: note},
+		{Key: "requested_by", Value: requester}, {Key: "approved_by", Value: approver}, {Key: "change_id", Value: changeID}}); err != nil {
 		return nil, err
 	}
-	if err := tx.Audit(now, actor, "breach.item.attested", ojson.Object{{Key: "plan_id", Value: p.ID}, {Key: "item_id", Value: it.ID},
-		{Key: "kind", Value: it.Kind}, {Key: "label", Value: it.Label}, {Key: "note", Value: note}}); err != nil {
-		return nil, err
-	}
-	return s.verify(tx, p, actor, now, false)
+	return s.verify(tx, p, approver, now, false)
 }
 
 // Verify re-reads every item that is not yet verified or attested, and

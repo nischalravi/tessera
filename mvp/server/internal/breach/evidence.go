@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -42,6 +44,55 @@ type Body struct {
 	Report       Report                `json:"report"`
 	RotationRun  *RotationRunEvidence  `json:"rotation_run"`
 	RotationJobs []RotationJobEvidence `json:"rotation_jobs"`
+	// Attestations are the two-admin requests that attested manual items (issue #538), whatever became of them.
+	Attestations []AttestationEvidence `json:"attestations"`
+}
+
+// AttestationEvidence is one attestation request: who asked, who approved (empty until a second admin does) and
+// what became of it. The ledger holds the same events.
+type AttestationEvidence struct {
+	ChangeID    string     `json:"change_id"`
+	ItemID      string     `json:"item_id"`
+	Status      string     `json:"status"`
+	RequestedBy string     `json:"requested_by"`
+	RequestedAt time.Time  `json:"requested_at"`
+	ApprovedBy  string     `json:"approved_by"`
+	ApprovedAt  *time.Time `json:"approved_at"`
+	AppliedAt   *time.Time `json:"applied_at"`
+	PayloadHash string     `json:"payload_hash"`
+}
+
+// attestationEvidence lists the plan's attestation requests, oldest first, naming both admins.
+func attestationEvidence(tx *store.TenantTx, planID string) ([]AttestationEvidence, error) {
+	changes, err := tx.AdminChanges()
+	if err != nil {
+		return nil, err
+	}
+	out := []AttestationEvidence{}
+	for i := len(changes) - 1; i >= 0; i-- { // AdminChanges is newest first
+		c := changes[i]
+		var pl struct {
+			PlanID string `json:"plan_id"`
+		}
+		if c.Type != ChangeType || json.Unmarshal(c.Payload, &pl) != nil || pl.PlanID != planID {
+			continue
+		}
+		e := AttestationEvidence{ChangeID: c.ID.String(), ItemID: c.TargetID, Status: c.Status, RequestedBy: UserName(tx, c.RequestedBy),
+			RequestedAt: c.RequestedAt, ApprovedAt: c.ApprovedAt, AppliedAt: c.AppliedAt, PayloadHash: c.PayloadHash}
+		if c.ApprovedBy != nil {
+			e.ApprovedBy = UserName(tx, *c.ApprovedBy)
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// UserName is the display name of a tenant user, or the id when it has none.
+func UserName(tx *store.TenantTx, id uuid.UUID) string {
+	if u, err := tx.PlatformUser(id); err == nil && u.DisplayName != "" {
+		return u.DisplayName
+	}
+	return id.String()
 }
 
 // PlanEvidence is the plan's own record.
@@ -78,7 +129,7 @@ func (s *Service) Evidence(tx *store.TenantTx, id string, now time.Time) (*Evide
 	if err != nil {
 		return nil, err
 	}
-	b := Body{Report: v.Report, RotationJobs: []RotationJobEvidence{},
+	b := Body{Report: v.Report, RotationJobs: []RotationJobEvidence{}, Attestations: []AttestationEvidence{},
 		Plan: PlanEvidence{ID: p.ID, Vendor: p.Vendor, Reason: p.Reason, Status: p.Status, CreatedBy: p.CreatedBy, CreatedAt: p.CreatedAt,
 			StartedBy: p.StartedBy, StartedAt: p.StartedAt, CompletedAt: p.CompletedAt}}
 	if p.BulkID != nil {
@@ -99,6 +150,9 @@ func (s *Service) Evidence(tx *store.TenantTx, id string, now time.Time) (*Evide
 			}
 			b.RotationJobs = append(b.RotationJobs, je)
 		}
+	}
+	if b.Attestations, err = attestationEvidence(tx, p.ID); err != nil {
+		return nil, err
 	}
 	raw, err := json.Marshal(b)
 	if err != nil {

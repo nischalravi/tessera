@@ -4304,7 +4304,7 @@ export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
   | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
   | "groups.loader.save" | "retention.update" | "deletion_guard.update" | "siem.sink.filter"
-  | "siem.sink.target" | "alerts.rule.loosen";
+  | "siem.sink.target" | "alerts.rule.loosen" | "breach.item.attest";
 
 export interface AdminPersonRef { id: string; display_name: string }
 

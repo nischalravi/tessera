@@ -9,6 +9,8 @@ import { Download, PlayCircle, RefreshCw, ShieldAlert } from "lucide-react";
 import { ApiError, BreachCandidate, BreachInventory, BreachItem, BreachItemState, BreachPlan, BreachPlanSummary, breach, fmtDate, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { Badge, Button, Callout, EmptyState, Loading, Page, SidePanel, Tone, useSelected, useToast } from "../../components";
+import { TwoAdminDialog } from "../admin/TwoAdminDialog";
+import { breachAttestPayload, twoAdminType } from "../admin/twoAdmin";
 import { RotationTabs } from "./shared";
 
 const KIND: Record<string, string> = { secret: "Secret", oauth_grant: "OAuth grant", github_token: "GitHub token", service_account: "Service account" };
@@ -44,6 +46,9 @@ function ItemRow({ planId, item, running, canChange, onChanged }: { planId: stri
   const [note, setNote] = useState("");
   const [open, setOpen] = useState(false);
   const toast = useToast();
+  const [ask, setAsk] = useState(false);
+  // Attesting needs a second admin (issue #538): the API checks the note and answers 409 two_admin_change_required,
+  // and the existing two-admin dialog files the request. The item shows In progress until a different admin approves.
   const attest = async (e: FormEvent) => {
     e.preventDefault();
     try {
@@ -52,9 +57,11 @@ function ItemRow({ planId, item, running, canChange, onChanged }: { planId: stri
       setOpen(false);
       onChanged();
     } catch (err) {
+      if (twoAdminType(err) === "breach.item.attest") { setAsk(true); return; }
       toast(msg(err), { kind: "error" });
     }
   };
+  const closeAsk = () => { setAsk(false); setOpen(false); setNote(""); onChanged(); };
   const s = STATE[item.state];
   return (
     <tr>
@@ -62,13 +69,17 @@ function ItemRow({ planId, item, running, canChange, onChanged }: { planId: stri
         {item.label}
         {item.detail && <div className="small muted">{item.detail}</div>}
         {item.attested_by && <div className="small muted">Attested by {item.attested_by}: {item.attested_note}</div>}
+        {ask && (
+          <TwoAdminDialog type="breach.item.attest" onClose={closeAsk} payload={breachAttestPayload(planId, item.id, note)}
+            what={`Attesting "${item.label}" says a person did it by hand, which closes the item without a re-read. A second admin must review what you wrote and approve it. Until then the item stays in progress.`} />
+        )}
         {open && (
           <form className="stack-sm" onSubmit={attest} aria-label={`Attest ${item.label}`}>
             <label className="field">What was done (at least 10 characters)
               <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
             </label>
             <div className="row tight">
-              <Button type="submit" size="sm" variant="primary" disabled={note.trim().length < 10}>Confirm it was done</Button>
+              <Button type="submit" size="sm" variant="primary" disabled={note.trim().length < 10}>Request attestation</Button>
               <Button type="button" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
             </div>
           </form>

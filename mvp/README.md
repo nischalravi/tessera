@@ -267,14 +267,19 @@ call, provider re-read, four-eyes rule kept: the plan stays running until a seco
 re-reads everything. `POST .../verify` re-reads again: a secret is verified when its rotation job reached
 `verified` (the old credential re-read as disabled), a grant when its record is revoked or removed, a token or
 service account when it is gone or disabled. What no API can do (GitHub PATs, service accounts) stays open until
-a re-read shows it done or a person attests it (`POST .../items/{item}/attest {note}`); a failed item is never
-attestable. The plan completes only when nothing is open. `GET /api/breach/plans[/{id}]` return the plans and
+a re-read shows it done or a person attests it. Attesting takes two admins (issue #538):
+`POST .../items/{item}/attest {note}` checks the note and answers 409 `two_admin_change_required`
+(`change_type: breach.item.attest`); the UI then opens the two-admin dialog, which files that change request
+(`POST /api/admin/change-requests`, payload `{plan_id, item_id, note}`). The item shows *In progress* until a different
+admin approves it (the requester gets 403 `self_approval_refused`); the approval closes the item, with both admins named
+on it, in the `breach.item.attested` event (same transaction) and in the evidence export (`attestations`). A tenant with
+fewer than two active admins cannot attest (`bootstrap_restricted`). A failed item is never attestable. The plan completes only when nothing is open. `GET /api/breach/plans[/{id}]` return the plans and
 the completion report; `GET /api/breach/plans/{id}/evidence` (`audit.read`) downloads the hashed JSON export
 (plan, report, rotation run and jobs with their verification). Reading needs `graph.read`; changing needs
 `secrets.rotate` (policy admin) and a fresh phishing-resistant sign-in, and running a plan with OAuth grants also
 needs `oauthapps.revoke`. Audit events in the changing transaction: `breach.plan.created|started|verified|completed`
 and `breach.item.attested`, next to the rotation and OAuth events of the work. Tables `breach_plans` and
-`breach_items` (schema 0800) hold references and labels only, never secret material.
+`breach_items` (schema 0800; 0820 widens the change-request type list on Postgres) hold references and labels only, never secret material.
 
 **Owner notifications** go through `rotation.Notifier` (`internal/rotation/notify.go`): `Notify(ctx, tx,
 Notification)` runs in the tenant transaction that records the change, must not do network I/O, and an error
@@ -743,7 +748,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `POST /api/rotation/jobs/{id}/retry|cancel` · `POST /api/rotation/bulk/plan {system}` ·
 `GET|POST /api/rotation/bulk` · `GET /api/rotation/bulk/{id}` ·
 `POST /api/breach/inventory {vendor}` · `GET|POST /api/breach/plans` · `GET /api/breach/plans/{id}[/evidence]` ·
-`POST /api/breach/plans/{id}/run|verify` · `POST /api/breach/plans/{id}/items/{item}/attest {note}` ·
+`POST /api/breach/plans/{id}/run|verify` · `POST /api/breach/plans/{id}/items/{item}/attest {note}` (409 `two_admin_change_required`: a second admin approves a `breach.item.attest` change) ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` (pin and release need two admins with `identities.correlate`, #376: the first

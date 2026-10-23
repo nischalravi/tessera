@@ -14,6 +14,13 @@ const api = await import("../src/api.ts");
 
 const sink = { id: "s1", event_filter: ["auth.*", "grant.revoke"], include_http: true };
 
+test("breach.item.attest is a two-admin type and its payload names plan, item and a trimmed note (issue #538)", () => {
+  const e = new api.ApiError("x", 409, { error: "two_admin_change_required", change_type: "breach.item.attest" });
+  assert.equal(t.twoAdminType(e), "breach.item.attest");
+  assert.deepEqual(t.breachAttestPayload("p1", "i1", "  revoked it  "), { plan_id: "p1", item_id: "i1", note: "revoked it" });
+  assert.ok(t.TWO_ADMIN_TITLE["breach.item.attest"].includes("second admin"));
+});
+
 test("twoAdminType reads the 409 and nothing else", () => {
   const e = new api.ApiError("x", 409, { error: "two_admin_change_required", message: "m", change_type: "siem.sink.target" });
   assert.equal(t.twoAdminType(e), "siem.sink.target");
