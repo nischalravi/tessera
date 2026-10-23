@@ -23,6 +23,10 @@ var (
 		"Duration of loop runs in seconds.", []float64{0.01, 0.05, 0.25, 1, 5, 30, 120}, "loop")
 )
 
+// LoopLeader is 1 while this replica holds the loop's leader lease (internal/leader), else 0.
+var LoopLeader = Default.NewGauge("tessera_loop_leader",
+	"1 when this replica leads the loop (holds its Postgres advisory-lock lease), 0 when it stands by.", "loop")
+
 // LoopState is one loop's status.
 type LoopState struct {
 	Name       string
@@ -79,6 +83,16 @@ func (l *Loops) Register(name string, interval time.Duration, gated bool) {
 	l.loops[name] = &LoopState{Name: name, Interval: interval, Gated: gated, Registered: l.now()}
 	l.mu.Unlock()
 	loopInterval.Set(interval.Seconds(), name)
+}
+
+// Unregister drops loops from the tracker (a replica that stopped leading
+// them must not report them as lagging).
+func (l *Loops) Unregister(names ...string) {
+	l.mu.Lock()
+	for _, n := range names {
+		delete(l.loops, n)
+	}
+	l.mu.Unlock()
 }
 
 // Done records the end of a run that began at start; err nil is a success.

@@ -73,7 +73,7 @@ func TestProbes_Shape(t *testing.T) {
 		t.Errorf("livez: %q %v", rec.Body, rec.Header())
 	}
 	rec = serve(e.h, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	if rec.Body.String() != `{"status":"ok","checks":{"audit_chain":"ok","database":"ok","kek":"ok","loops":"ok"}}` {
+	if rec.Body.String() != `{"status":"ok","checks":{"audit_chain":"ok","database":"ok","draining":"ok","kek":"ok","loops":"ok","schema":"ok"}}` {
 		t.Errorf("readyz: %q", rec.Body)
 	}
 	if rec = serve(e.h, httptest.NewRequest(http.MethodHead, "/readyz", nil)); rec.Code != http.StatusOK || rec.Body.Len() != 0 {
@@ -88,7 +88,7 @@ func TestProbes_Shape(t *testing.T) {
 		Checks map[string]string `json:"checks"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil || rec.Code != http.StatusServiceUnavailable ||
-		v.Status != "unavailable" || v.Checks["kek"] != "fail" || len(v.Checks) != 4 {
+		v.Status != "unavailable" || v.Checks["kek"] != "fail" || len(v.Checks) != 6 {
 		t.Errorf("readyz without KEK: %d %s", rec.Code, rec.Body)
 	}
 }

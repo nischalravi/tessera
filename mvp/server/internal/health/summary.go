@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/leader"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 )
 
@@ -22,6 +23,7 @@ type Summary struct {
 	Logins      []LoginSummary   `json:"logins"`
 	Connectors  []ConnectorStats `json:"connectors"`
 	MaxLoopLag  int              `json:"max_loop_lag_seconds"`
+	Leaders     []leader.Status  `json:"leaders"` // this replica's loop leases (empty without election)
 }
 
 // CheckSummary is one /readyz check.
@@ -105,6 +107,10 @@ func (c *Checker) Summary(ctx context.Context) Summary {
 		Checks: []CheckSummary{}, Loops: []LoopSummary{}, Logins: []LoginSummary{}, Connectors: []ConnectorStats{}}
 	if !res.Ready() {
 		s.Status = "degraded"
+	}
+	s.Leaders = []leader.Status{}
+	if c.Leaders != nil {
+		s.Leaders = append(s.Leaders, c.Leaders()...)
 	}
 	for _, n := range checkNames {
 		s.Checks = append(s.Checks, CheckSummary{Name: n, OK: res.OK(n)})

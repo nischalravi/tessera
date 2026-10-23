@@ -197,6 +197,18 @@ type Config struct {
 	// ReadyMaxLoopLagSeconds is how long a background loop may go without a
 	// success before /readyz fails (TESSERA_READY_MAX_LOOP_LAG_SECONDS).
 	ReadyMaxLoopLagSeconds int
+	// ShutdownGrace is TESSERA_SHUTDOWN_GRACE (a Go duration such as 25s, or
+	// whole seconds; default 25s, between 1s and 10m): after SIGTERM the server
+	// stops accepting, drains in-flight requests and stops its loops within
+	// this time. Keep it below the platform's termination grace period.
+	ShutdownGrace time.Duration
+	// ShutdownDrainDelay is TESSERA_SHUTDOWN_DRAIN_DELAY (same syntax; default
+	// 0, at most 2m): how long /readyz reports "unavailable" before the
+	// listener stops accepting, so a load balancer stops sending traffic first.
+	ShutdownDrainDelay time.Duration
+	// LogFormat is TESSERA_LOG_FORMAT: "json" (the default in prod and test) or
+	// "text" (the dev default). json goes to stdout, text to stderr.
+	LogFormat string
 	// LoaderDataDir is TESSERA_LOADER_DATA_DIR: the directory the SQLite files
 	// and CSV files of group loaders live in, one subdirectory per tenant
 	// (<dir>/<tenant id>/; design groups-grouper-parity.md §9.1). Empty (the default) turns file sources off. It must be absolute and
@@ -446,6 +458,15 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.SoDMaxMitigationDays = integer("TESSERA_SOD_MAX_MITIGATION_DAYS", 365, 1, 3650)
 	c.SoDWarnDays = integer("TESSERA_SOD_WARN_DAYS", 14, 1, 365)
 	c.Mail = loadMail(getenv, prod, integer, bad)
+	c.ShutdownGrace = loadDuration(getenv, "TESSERA_SHUTDOWN_GRACE", 25*time.Second, time.Second, 10*time.Minute, bad)
+	c.ShutdownDrainDelay = loadDuration(getenv, "TESSERA_SHUTDOWN_DRAIN_DELAY", 0, 0, 2*time.Minute, bad)
+	c.LogFormat = strings.ToLower(str("TESSERA_LOG_FORMAT", "text", "json"))
+	if c.Env == Test && strings.TrimSpace(getenv("TESSERA_LOG_FORMAT")) == "" {
+		c.LogFormat = "json"
+	}
+	if c.LogFormat != "json" && c.LogFormat != "text" {
+		bad("TESSERA_LOG_FORMAT: %q is not json or text", c.LogFormat)
+	}
 	c.ReadyMaxLoopLagSeconds = integer("TESSERA_READY_MAX_LOOP_LAG_SECONDS", 300, 30, 86400)
 	c.MetricsAddr, c.MetricsAddrDefault = loadMetricsAddr(getenv, prod, boolean("TESSERA_METRICS_ALLOW_WILDCARD", false, false), bad)
 	c.WorkerMetricsAllowPublic = boolean("TESSERA_WORKER_METRICS_ALLOW_PUBLIC", false, false)
@@ -1122,4 +1143,27 @@ func corsOrigins(v, uiPort string, prod bool) []string {
 		uiPort = "5173"
 	}
 	return []string{"http://localhost:" + uiPort, "http://127.0.0.1:" + uiPort}
+}
+
+// loadDuration reads a duration setting: a Go duration ("25s", "1m") or whole
+// seconds, between min and max.
+func loadDuration(getenv func(string) string, key string, def, min, max time.Duration, bad func(string, ...any)) time.Duration {
+	v := strings.TrimSpace(getenv(key))
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		n, nerr := strconv.Atoi(v)
+		if nerr != nil {
+			bad("%s: %q is not a duration (for example 25s)", key, v)
+			return def
+		}
+		d = time.Duration(n) * time.Second
+	}
+	if d < min || d > max {
+		bad("%s: %s is outside %s to %s", key, d, min, max)
+		return def
+	}
+	return d
 }
