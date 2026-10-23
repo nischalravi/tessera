@@ -152,3 +152,56 @@ func TestSiemAPI_CrossTenant(t *testing.T) {
 		t.Error("tenant A changed")
 	}
 }
+
+// TestSiemAPI_S3AndEventFilter: an S3 sink keeps its region and access key id, seals the secret access key and
+// never returns it; an event filter is normalised, validated and kept when an edit leaves it out.
+func TestSiemAPI_S3AndEventFilter(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := siemServer(t, f, &okSender{})
+	admin := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ta@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	const secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	body := `{"name":"Bucket","kind":"s3","format":"json","target":"https://s3.eu-west-1.amazonaws.com/audit/tessera?x=1","region":"eu-west-1",` +
+		`"access_key_id":"AKIAIOSFODNN7EXAMPLE","token":"` + secret + `"}`
+	if rec := siemDo(h, admin, "POST", "/api/siem/sinks", body); rec.Code != 422 || !strings.Contains(rec.Body.String(), "invalid_target") {
+		t.Errorf("a bucket URL with a query: %d %s", rec.Code, rec.Body)
+	}
+	body = strings.Replace(body, "?x=1", "", 1)
+	if rec := siemDo(h, admin, "POST", "/api/siem/sinks", strings.Replace(body, `"token":"`+secret+`"`, `"token":""`, 1)); rec.Code != 422 || !strings.Contains(rec.Body.String(), "token_required") {
+		t.Errorf("an S3 sink without its secret: %d %s", rec.Code, rec.Body)
+	}
+	if rec := siemDo(h, admin, "POST", "/api/siem/sinks", strings.Replace(body, `"region":"eu-west-1"`, `"region":""`, 1)); rec.Code != 422 || !strings.Contains(rec.Body.String(), "invalid_region") {
+		t.Errorf("an S3 sink without a region: %d %s", rec.Code, rec.Body)
+	}
+	if rec := siemDo(h, admin, "POST", "/api/siem/sinks", strings.Replace(body, `"format":"json"`, `"format":"json","event_filter":["auth login"]`, 1)); rec.Code != 422 || !strings.Contains(rec.Body.String(), "invalid_filter") {
+		t.Errorf("a bad filter: %d %s", rec.Code, rec.Body)
+	}
+	rec := siemDo(h, admin, "POST", "/api/siem/sinks", strings.Replace(body, `"format":"json"`, `"format":"json","event_filter":["Auth.*","grant.revoke","auth.*"]`, 1))
+	if rec.Code != 201 || strings.Contains(rec.Body.String(), secret) || !strings.Contains(rec.Body.String(), `"event_filter":["auth.*","grant.revoke"]`) ||
+		!strings.Contains(rec.Body.String(), `"region":"eu-west-1"`) || !strings.Contains(rec.Body.String(), `"access_key_id":"AKIAIOSFODNN7EXAMPLE"`) ||
+		!strings.Contains(rec.Body.String(), `"has_token":true`) {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	var v sinkView
+	_ = json.Unmarshal(rec.Body.Bytes(), &v)
+	// an edit that leaves the filter out keeps it; [] clears it
+	if rec := siemDo(h, admin, "PUT", "/api/siem/sinks/"+v.ID, `{"name":"Bucket 2"}`); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"event_filter":["auth.*","grant.revoke"]`) {
+		t.Errorf("update keeps the filter: %d %s", rec.Code, rec.Body)
+	}
+	if rec := siemDo(h, admin, "PUT", "/api/siem/sinks/"+v.ID, `{"name":"Bucket 2","event_filter":[]}`); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"event_filter":[]`) {
+		t.Errorf("update clears the filter: %d %s", rec.Code, rec.Body)
+	}
+	// the secret is sealed and never in the audit log
+	_ = f.DB.ReadTenant(context.Background(), f.B.ID, func(tx *store.TenantTx) error {
+		evs, err := tx.AuditEvents(store.AuditFilter{})
+		for _, e := range evs {
+			if strings.Contains(string(e.Detail), secret) {
+				t.Errorf("secret in the audit log: %s", e.Detail)
+			}
+		}
+		k, err2 := tx.SiemSink(v.ID)
+		if err2 != nil || strings.Contains(string(k.SecretSealed), secret) || len(k.SecretSealed) == 0 {
+			t.Errorf("secret storage: %v", err2)
+		}
+		return err
+	})
+}

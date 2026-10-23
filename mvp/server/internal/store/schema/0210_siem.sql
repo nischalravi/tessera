@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS siem_sinks (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
   name TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('syslog','webhook')),
+  kind TEXT NOT NULL CHECK (kind IN ('syslog','webhook','s3')),
   format TEXT NOT NULL CHECK (format IN ('json','ocsf')),
   target TEXT NOT NULL,
   -- webhook: 'hec' or 'json'; syslog: '' (RFC 5424 over RFC 5425 framing)
@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS siem_sinks (
   ca_pem TEXT,
   secret_sealed BLOB,
   include_http INTEGER NOT NULL DEFAULT 0,
+  -- JSON array of audit actions or prefixes ("grant.revoke", "auth.*"); [] is every event
+  event_filter TEXT NOT NULL DEFAULT '[]',
+  -- s3 sinks: the signing region and the access key id (the secret access key is secret_sealed)
+  region TEXT NOT NULL DEFAULT '',
+  access_key_id TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1,
   cursor_seq INTEGER NOT NULL DEFAULT 0 CHECK (cursor_seq >= 0),
   attempts INTEGER NOT NULL DEFAULT 0,

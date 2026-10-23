@@ -3676,7 +3676,7 @@ export function describeConditions(p: Pick<AccessPolicy, "network_op" | "network
 
 // ------------------------------------------------------------ SIEM sinks (#169)
 
-export type SiemKind = "syslog" | "webhook";
+export type SiemKind = "syslog" | "webhook" | "s3";
 export type SiemFormat = "json" | "ocsf";
 export type SiemFlavor = "hec" | "json" | "";
 
@@ -3685,12 +3685,17 @@ export interface SiemSink {
   name: string;
   kind: SiemKind;
   format: SiemFormat;
-  /** host:port, or the webhook URL without its query string. */
+  /** host:port, the webhook URL without its query string, or the bucket URL with its key prefix. */
   target: string;
   flavor: SiemFlavor;
   has_ca: boolean;
   has_token: boolean;
   include_http: boolean;
+  /** Audit actions or prefixes (grant.revoke, auth.*) this sink receives; empty is every event. */
+  event_filter: string[];
+  /** S3 sinks: the signing region and the access key id (the secret access key is the token and is never returned). */
+  region: string;
+  access_key_id: string;
   enabled: boolean;
   cursor_seq: number;
   head_seq: number;
@@ -3714,9 +3719,13 @@ export interface SiemSinkInput {
   flavor?: SiemFlavor;
   /** Omit on update to keep; "" removes it. */
   ca_pem?: string;
-  /** Omit to keep the stored token; "" removes it. */
+  /** Omit to keep the stored token (for S3, the secret access key); "" removes it. */
   token?: string;
   include_http: boolean;
+  /** Omit on update to keep the current filter; [] is every event. */
+  event_filter?: string[];
+  region?: string;
+  access_key_id?: string;
   enabled: boolean;
   /** Creation only. */
   start?: "now" | "beginning";

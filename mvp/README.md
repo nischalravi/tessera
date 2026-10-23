@@ -660,7 +660,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET /api/ssf/events` · `POST /public/t/{slug}/ssf/{transmitter_id}/events` (SSF push, see "Shared Signals receiver") ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it) · `POST /api/siem/sinks/{id}/rewind {seq}` ·
-`POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
+`POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` (a sink's `kind` is `syslog`, `webhook` or `s3`; `event_filter`, `region` and `access_key_id` are in the body and the view) ·
 `GET|POST /api/admin/certificates` · `POST /api/admin/certificates/generate {connection_id}` · `POST /api/admin/certificates/{id}/promote|retire` ·
 `GET|PUT /api/admin/branding` · `GET /api/auth/branding?tenant=` · `GET /api/auth/branding/logo?tenant=` (the last two are public, see "Certificates, branding and identity rules") ·
 `GET|PUT /api/admin/identity-rules` · `GET|PUT /api/admin/labels` ·
@@ -888,6 +888,11 @@ The pull export (`/api/audit/export`) stays available.
     - Messages are RFC 5424 with octet-counting framing, facility 13 (log audit), and the severity taken from the event's outcome.
     - Each message carries structured data `[tessera@32473 seq=… hash=…]`.
     - The port defaults to 6514. A private CA can be given as PEM.
+  - **S3-compatible bucket** (AWS S3, MinIO, Cloudflare R2; issue #498):
+    - Each batch is one `PUT` of newline-delimited JSON to `<bucket URL>/<tenant>/YYYY/MM/DD/<first seq>-<last seq>.ndjson` (`.ocsf.ndjson` for OCSF). The key comes from the batch's seq range, so a retry replaces its object instead of adding a copy.
+    - The target is the bucket URL with an optional key prefix (path style or virtual hosted), `region` is the signing region, `access_key_id` is stored in the clear and the secret access key is the sink's sealed `token`.
+    - Requests are signed with AWS Signature Version 4 (stdlib, checked against the AWS documentation vector) and go through `internal/safehttp`. Give the key `s3:PutObject` on the prefix only.
+- **Event filter (issue #498):** a sink can receive only some audit actions. `event_filter` is a list of actions (`grant.revoke`) or prefixes ending in `.*` (`auth.*`), `*` for all, empty for everything. A sink still needs `include_http` for `http.request`. Filtered-out events advance the cursor, but **Behind** still counts them (it is the distance to the ledger head).
 - **Formats:**
   - `json` is the export record. It carries `hash` and `prev_hash`, so the SIEM can recompute the chain.
   - `ocsf` is OCSF 1.3: Authentication (3002) for sign-in and sign-out, Account Change (3001) for role grants and revokes and user disables, and API Activity (6003) for everything else.
@@ -911,7 +916,7 @@ The pull export (`/api/audit/export`) stays available.
   - `siem.read`: auditor and tenant_admin, plus the `tessera:audit` scope.
   - `siem.configure`: tenant_admin, plus the `tessera:admin` scope.
 - **UI:** **Admin > Log streaming (SIEM)** lists each sink with its health, delivered count, dead letters, and Test, Replay and Edit actions.
-- **Not yet:** S3-compatible bucket sinks.
+- **Inbound signals from a SIEM** are Shared Signals streams (**Admin > Shared Signals**, `/api/ssf/transmitters`, issue #114); a SIEM that can transmit SSF/CAEP events is added there.
 ### Certificates, branding and identity rules
 
 Three Admin settings pages that were Previews are live (`/admin/certificates`, `/admin/branding`, `/admin/identity-rules`).

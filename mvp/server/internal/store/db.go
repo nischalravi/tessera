@@ -458,6 +458,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	if err := d.upgradeAgentJobs(ctx); err != nil {
 		return err
 	}
+	if err := d.upgradeSiemSinks(ctx); err != nil {
+		return err
+	}
 	if err := d.upgradeUserIDColumns(ctx); err != nil {
 		return err
 	}
