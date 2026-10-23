@@ -9,7 +9,8 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -107,6 +108,9 @@ func (s *Service) sender(t tenancy.ID, k *store.SiemSink, tenant string) (Sender
 	switch k.Kind {
 	case "webhook":
 		return &Webhook{Client: s.HTTP, URL: k.Target, Flavor: k.Flavor, Token: token, Host: tenant, Format: k.Format}, nil
+	case "s3":
+		return &S3{Client: s.HTTP, Target: k.Target, Region: k.Region, AccessKeyID: k.AccessKeyID, Secret: token, Tenant: tenant,
+			Format: k.Format, Now: s.Clock}, nil
 	case "syslog":
 		sl := &Syslog{Addr: k.Target, Hostname: tenant, Loopback: s.Dev, Resolver: s.Resolver}
 		if k.CAPEM != nil && *k.CAPEM != "" {
@@ -203,6 +207,9 @@ func (s *Service) deliverSink(ctx context.Context, t tenancy.ID, slug string, k 
 		batch := make([]Record, 0, len(page))
 		for _, e := range page {
 			if e.Action == "http.request" && !k.IncludeHTTP {
+				continue
+			}
+			if !EventMatches(k.EventFilter, e.Action) {
 				continue
 			}
 			r, err := Encode(k.Format, e, slug)
@@ -320,8 +327,13 @@ type SinkSpec struct {
 	Target      string
 	Flavor      string // webhook: hec | json
 	CAPEM       string
-	Token       *string // nil: keep (update) / none (create); "" clears
+	Token       *string // nil: keep (update) / none (create); "" clears. For s3: the secret access key
 	IncludeHTTP bool
+	// EventFilter limits the sink to some audit actions (see EventMatches); empty: every event.
+	EventFilter []string
+	// s3: the signing region and the access key id (the secret access key is Token).
+	Region      string
+	AccessKeyID string
 	Enabled     bool
 	// Start, on creation: "now" (the current head, the default) or "beginning" (replay the whole ledger).
 	Start string
@@ -329,6 +341,12 @@ type SinkSpec struct {
 
 func (s *SinkSpec) check(dev bool) error {
 	s.Name, s.Target, s.CAPEM = strings.TrimSpace(s.Name), strings.TrimSpace(s.Target), strings.TrimSpace(s.CAPEM)
+	s.Region, s.AccessKeyID = strings.TrimSpace(s.Region), strings.TrimSpace(s.AccessKeyID)
+	f, err := NormalizeFilter(s.EventFilter)
+	if err != nil {
+		return err
+	}
+	s.EventFilter = f
 	if s.Name == "" || len(s.Name) > 100 {
 		return refuse(422, "invalid_name", "the name is 1 to 100 characters")
 	}
@@ -350,7 +368,22 @@ func (s *SinkSpec) check(dev bool) error {
 		if s.Flavor != FlavorHEC && s.Flavor != FlavorJSON {
 			return refuse(422, "invalid_flavor", "flavor is hec (Splunk HTTP Event Collector) or json")
 		}
-		s.CAPEM = ""
+		s.CAPEM, s.Region, s.AccessKeyID = "", "", ""
+	case "s3":
+		u, err := url.Parse(s.Target)
+		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(s.Target) > 2000 {
+			return refuse(422, "invalid_target", "the bucket URL must be an absolute https URL (with an optional key prefix) without credentials or a query")
+		}
+		if u.Scheme != "https" && !(dev && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "::1")) {
+			return refuse(422, "invalid_target", "the bucket URL must use https")
+		}
+		if !regionRe.MatchString(s.Region) {
+			return refuse(422, "invalid_region", "the region is the signing region of the bucket, for example eu-west-1 (us-east-1 for most S3-compatible stores)")
+		}
+		if !accessKeyRe.MatchString(s.AccessKeyID) {
+			return refuse(422, "invalid_access_key", "the access key id is 8 to 128 letters and digits")
+		}
+		s.Flavor, s.CAPEM = "", ""
 	case "syslog":
 		host, port, err := net.SplitHostPort(s.Target)
 		if err != nil {
@@ -364,7 +397,7 @@ func (s *SinkSpec) check(dev bool) error {
 			return refuse(422, "invalid_target", "the syslog collector address is private or reserved")
 		}
 		s.Target = net.JoinHostPort(host, port)
-		s.Flavor = ""
+		s.Flavor, s.Region, s.AccessKeyID = "", "", ""
 		if s.CAPEM != "" {
 			if len(s.CAPEM) > 64<<10 {
 				return refuse(422, "invalid_ca", "the CA bundle is at most 64 KiB")
@@ -374,7 +407,7 @@ func (s *SinkSpec) check(dev bool) error {
 			}
 		}
 	default:
-		return refuse(422, "invalid_kind", "kind is syslog or webhook")
+		return refuse(422, "invalid_kind", "kind is syslog, webhook or s3")
 	}
 	return nil
 }
@@ -400,14 +433,15 @@ func sealToken(tx *store.TenantTx, sealer *seal.Sealer, k *store.SiemSink, token
 
 func sinkAudit(k *store.SiemSink, tokenChanged bool) ojson.Object {
 	target := k.Target
-	if k.Kind == "webhook" {
+	if k.Kind == "webhook" || k.Kind == "s3" {
 		if u, err := url.Parse(k.Target); err == nil {
 			target = u.Scheme + "://" + u.Host
 		}
 	}
 	return ojson.Object{{Key: "sink_id", Value: k.ID}, {Key: "name", Value: k.Name}, {Key: "kind", Value: k.Kind},
 		{Key: "format", Value: k.Format}, {Key: "target", Value: target}, {Key: "enabled", Value: k.Enabled},
-		{Key: "include_http", Value: k.IncludeHTTP}, {Key: "token_changed", Value: tokenChanged}, {Key: "cursor_seq", Value: k.CursorSeq}}
+		{Key: "include_http", Value: k.IncludeHTTP}, {Key: "event_filter", Value: stringsAny(k.EventFilter)}, {Key: "region", Value: k.Region},
+		{Key: "access_key_id", Value: k.AccessKeyID}, {Key: "token_changed", Value: tokenChanged}, {Key: "cursor_seq", Value: k.CursorSeq}}
 }
 
 // CreateSink adds a sink.
@@ -418,8 +452,12 @@ func CreateSink(tx *store.TenantTx, sealer *seal.Sealer, s SinkSpec, dev bool, b
 	if s.Kind == "webhook" && s.Flavor == FlavorHEC && (s.Token == nil || *s.Token == "") {
 		return nil, refuse(422, "token_required", "Splunk HEC needs its token")
 	}
+	if s.Kind == "s3" && (s.Token == nil || *s.Token == "") {
+		return nil, refuse(422, "token_required", "an S3 sink needs its secret access key")
+	}
 	k := &store.SiemSink{ID: uuid.NewString(), Name: s.Name, Kind: s.Kind, Format: s.Format, Target: s.Target, Flavor: s.Flavor,
-		IncludeHTTP: s.IncludeHTTP, Enabled: s.Enabled, CreatedBy: &by.UserID, CreatedAt: now, UpdatedAt: now}
+		IncludeHTTP: s.IncludeHTTP, EventFilter: s.EventFilter, Region: s.Region, AccessKeyID: s.AccessKeyID, Enabled: s.Enabled,
+		CreatedBy: &by.UserID, CreatedAt: now, UpdatedAt: now}
 	if s.CAPEM != "" {
 		k.CAPEM = &s.CAPEM
 	}
@@ -471,8 +509,13 @@ func UpdateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, 
 		return nil, refuse(422, "credential_required",
 			"changing the sink's origin (scheme, host, port) needs a new token; the stored token does not move with it")
 	}
+	// The secret access key is bound to the key id as well as the origin: a new id needs a new secret.
+	if s.Kind == "s3" && s.AccessKeyID != k.AccessKeyID && s.Token == nil && len(k.SecretSealed) > 0 {
+		return nil, refuse(422, "credential_required", "changing the access key id needs its secret access key")
+	}
 	k.Name, k.Format, k.Target, k.Flavor, k.IncludeHTTP, k.Enabled, k.UpdatedAt = s.Name, s.Format, s.Target, s.Flavor,
 		s.IncludeHTTP, s.Enabled, now
+	k.EventFilter, k.Region, k.AccessKeyID = s.EventFilter, s.Region, s.AccessKeyID
 	k.CAPEM = nil
 	if s.CAPEM != "" {
 		k.CAPEM = &s.CAPEM
@@ -482,6 +525,9 @@ func UpdateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, 
 	}
 	if k.Kind == "webhook" && k.Flavor == FlavorHEC && len(k.SecretSealed) == 0 {
 		return nil, refuse(422, "token_required", "Splunk HEC needs its token")
+	}
+	if k.Kind == "s3" && len(k.SecretSealed) == 0 {
+		return nil, refuse(422, "token_required", "an S3 sink needs its secret access key")
 	}
 	if err := tx.UpdateSiemSink(k); err != nil {
 		return nil, err
@@ -550,6 +596,62 @@ func (s *Service) TestSink(ctx context.Context, t tenancy.ID, slug string, k *st
 
 // Kinds and formats, for the API.
 var (
-	Kinds   = []string{"syslog", "webhook"}
+	Kinds   = []string{"syslog", "webhook", "s3"}
 	Flavors = []string{FlavorHEC, FlavorJSON}
 )
+
+var (
+	regionRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,30}$`)
+	accessKeyRe = regexp.MustCompile(`^[A-Za-z0-9]{8,128}$`)
+	filterRe    = regexp.MustCompile(`^(\*|[a-z0-9_]+(\.[a-z0-9_]+)*(\.\*)?)$`)
+)
+
+// MaxFilterEntries is the most patterns a sink's event filter holds.
+const MaxFilterEntries = 50
+
+// NormalizeFilter trims, lower-cases and de-duplicates an event filter and
+// refuses what is not an audit action or a prefix pattern.
+func NormalizeFilter(in []string) ([]string, error) {
+	out := []string{}
+	for _, e := range in {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" || slices.Contains(out, e) {
+			continue
+		}
+		if len(e) > 100 || !filterRe.MatchString(e) {
+			return nil, refuse(422, "invalid_filter", "an event filter entry is an audit action such as grant.revoke, or a prefix such as auth.*; %q is neither", e)
+		}
+		out = append(out, e)
+	}
+	if len(out) > MaxFilterEntries {
+		return nil, refuse(422, "invalid_filter", "an event filter has at most %d entries", MaxFilterEntries)
+	}
+	return out, nil
+}
+
+// EventMatches reports whether a sink with this filter receives an event with
+// this audit action. An empty filter receives everything. "*" matches every
+// action, "auth.*" every action that starts with "auth.", anything else only
+// that action. (A sink still needs include_http to receive http.request.)
+func EventMatches(filter []string, action string) bool {
+	if len(filter) == 0 {
+		return true
+	}
+	for _, f := range filter {
+		switch {
+		case f == "*" || f == action:
+			return true
+		case strings.HasSuffix(f, ".*") && strings.HasPrefix(action, strings.TrimSuffix(f, "*")):
+			return true
+		}
+	}
+	return false
+}
+
+func stringsAny(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
+}

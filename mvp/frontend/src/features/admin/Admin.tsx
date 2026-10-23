@@ -180,13 +180,15 @@ export function AdminSectionPage() {
     <Page title={s.title} badge={s.live ? undefined : <PreviewBadge />} crumbs={s.id === "connections" ? [["Settings"], [s.title]] : [["Settings"], ["Admin", "/admin"], [s.title]]} sub={s.summary}>
       <div className="stack">
         {Live && <Live />}
-        <div className="card stack-sm">
-          <h2 className="row tight"><Icon name={s.icon} size={16} /> {s.live ? "Coming next on this page" : "What this page will do"}</h2>
-          <ul className="small" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
-            {s.will.map((w) => <li key={w}>{w}</li>)}
-          </ul>
-          {!s.live && <Callout tone="neutral">This is a Preview. Nothing here is saved yet: the settings API is part of a later phase.</Callout>}
-        </div>
+        {s.will.length > 0 && (
+          <div className="card stack-sm">
+            <h2 className="row tight"><Icon name={s.icon} size={16} /> {s.live ? "Coming next on this page" : "What this page will do"}</h2>
+            <ul className="small" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
+              {s.will.map((w) => <li key={w}>{w}</li>)}
+            </ul>
+            {!s.live && <Callout tone="neutral">This is a Preview. Nothing here is saved yet: the settings API is part of a later phase.</Callout>}
+          </div>
+        )}
       </div>
     </Page>
   );
