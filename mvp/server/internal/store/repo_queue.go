@@ -127,6 +127,15 @@ var (
 		VALUES (@id, @tenant, @name, @kind, @payload, @spec, 1, @max_attempts, @next_run_at, @now, @now)
 		ON CONFLICT (tenant_id, name) DO UPDATE SET kind = excluded.kind, payload = excluded.payload,
 			spec = excluded.spec, max_attempts = excluded.max_attempts, updated_at = @now`)
+	// The tenant sets this one itself (a sync schedule): unlike ensure it also takes the enabled flag and the next
+	// due time, and a new spec starts counting from then.
+	queueScheduleSet = tq("queue_schedules.set", `
+		INSERT INTO queue_schedules (id, tenant_id, name, kind, payload, spec, enabled, max_attempts, next_run_at,
+			created_at, updated_at)
+		VALUES (@id, @tenant, @name, @kind, @payload, @spec, @enabled, @max_attempts, @next_run_at, @now, @now)
+		ON CONFLICT (tenant_id, name) DO UPDATE SET kind = excluded.kind, payload = excluded.payload,
+			spec = excluded.spec, enabled = excluded.enabled, max_attempts = excluded.max_attempts,
+			next_run_at = excluded.next_run_at, updated_at = @now`)
 	queueScheduleGet = tq("queue_schedules.get", `
 		SELECT `+queueScheduleCols+` FROM queue_schedules s WHERE s.tenant_id = @tenant AND s.name = @name`)
 	queueScheduleList = tq("queue_schedules.list", `
@@ -338,6 +347,21 @@ func (tx *TenantTx) EnsureQueueSchedule(s *QueueSchedule, now time.Time) error {
 	_, err := tx.exec(queueScheduleEnsure, sql.Named("id", NewID()), sql.Named("name", s.Name), sql.Named("kind", s.Kind),
 		sql.Named("payload", s.Payload), sql.Named("spec", s.Spec), sql.Named("max_attempts", s.MaxAttempts),
 		sql.Named("next_run_at", RT(s.NextRunAt)), sql.Named("now", RT(now)))
+	return err
+}
+
+// SetQueueSchedule creates or replaces the named schedule as the tenant configured it: kind, payload, spec,
+// attempt budget, the enabled flag, and the next time it is due (NextRunAt).
+func (tx *TenantTx) SetQueueSchedule(s *QueueSchedule, now time.Time) error {
+	if s.Payload == "" {
+		s.Payload = "{}"
+	}
+	if s.MaxAttempts <= 0 {
+		s.MaxAttempts = 5
+	}
+	_, err := tx.exec(queueScheduleSet, sql.Named("id", NewID()), sql.Named("name", s.Name), sql.Named("kind", s.Kind),
+		sql.Named("payload", s.Payload), sql.Named("spec", s.Spec), sql.Named("enabled", B(s.Enabled)),
+		sql.Named("max_attempts", s.MaxAttempts), sql.Named("next_run_at", RT(s.NextRunAt)), sql.Named("now", RT(now)))
 	return err
 }
 

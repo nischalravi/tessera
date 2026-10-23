@@ -523,6 +523,26 @@ export interface ResourceRow {
 
 export interface ConnectorRow { system: string; name: string; type: string; accounts: number; groups: number; resources: number; permissions: number }
 
+/** GET /api/connectors/sync-status: the sync schedule of the tenant, its last sync run and, per connector, the record counts and last sync. */
+export interface ConnectorSyncStatus {
+  schedule: {
+    /** 0 is off. */
+    delta_every_minutes: number; full_every_hours: number;
+    next_delta_at: string | null; next_full_at: string | null; last_delta_queued_at: string | null; last_full_queued_at: string | null;
+  };
+  last_run: { status: "running" | "succeeded" | "failed"; trigger: string; started_at: string; finished_at: string | null } | null;
+  connectors: (ConnectorRow & {
+    /** When the connector's checkpoint last moved; null for a connector that keeps none. */
+    last_sync_at: string | null; last_full_sync_at: string | null;
+  })[];
+}
+
+export const connectorSchedule = {
+  /** delta_every_minutes: 0 or 5 to 1440; full_every_hours: 0 or 1 to 720. 0 turns that schedule off. */
+  put: (delta_every_minutes: number, full_every_hours: number) =>
+    api<ConnectorSyncStatus["schedule"]>("/connectors/sync-schedule", { delta_every_minutes, full_every_hours }, "PUT"),
+};
+
 export interface AccountRow {
   id: number;
   system: string;
@@ -4182,7 +4202,29 @@ export interface PlatformHealth {
   connectors: { connector: string; op: string; calls: number; errors: number }[];
 }
 
-export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }
+/** A tenant's OAuth client (GET /api/admin/api-clients): its public keys only, never a secret. */
+export interface ApiClient {
+  client_id: string; name: string; kind: "machine" | "first_party_cli"; status: "active" | "disabled"; grant_types: string[];
+  token_endpoint_auth_method: string; dpop_required: boolean; allowed_scopes: string[]; roles: string[];
+  /** The platform user accountable for the client; null for the first-party CLI. */
+  owner_user_id: string | null;
+  keys: { kid: string; alg: string; jkt: string }[];
+  created_at: string; last_used_at: string | null;
+}
+
+/** The scopes and roles a machine client can be given: never the admin scope or an admin role. */
+export const MACHINE_SCOPES = ["tessera:read", "tessera:write", "tessera:audit", "tessera:introspect"] as const;
+export const MACHINE_ROLES = ["viewer", "operator", "auditor"] as const;
+
+export interface ApiClientInput { name: string; owner: string; scopes: string[]; roles: string[]; dpop_required: boolean; jwks: unknown }
+
+/** Changes need a fresh passkey sign-in, and a key set is public keys only. */
+export const apiClients = {
+  create: (b: ApiClientInput) => api<ApiClient>("/admin/api-clients", b),
+  /** add keeps the current keys during an overlap; replace leaves only these. */
+  keys: (clientId: string, mode: "add" | "replace", jwks: unknown) => api<ApiClient>(`/admin/api-clients/${encodeURIComponent(clientId)}/keys`, { mode, jwks }),
+  revoke: (clientId: string) => api<ApiClient>(`/admin/api-clients/${encodeURIComponent(clientId)}/revoke`, {}),
+};
 
 // ------------------------------------------------------------ log retention and the archive (issue #298)
 
