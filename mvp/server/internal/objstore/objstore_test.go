@@ -246,6 +246,52 @@ func TestAzure_ManagedIdentityBearer(t *testing.T) {
 	}
 }
 
+func TestAzure_ContainerRetentionCheck(t *testing.T) {
+	policy, status, gets := "", http.StatusOK, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/cont" || r.URL.Query().Get("restype") != "container" || r.Header.Get("Authorization") != "Bearer az-token" {
+			http.Error(w, "unexpected request", 400)
+			return
+		}
+		gets++
+		if policy != "" {
+			w.Header().Set("x-ms-has-immutability-policy", policy)
+		}
+		w.WriteHeader(status)
+	}))
+	defer srv.Close()
+	imds := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"access_token":"az-token","expires_in":"3600"}`)
+	}))
+	defer imds.Close()
+	az := &cloudcred.Azure{Meta: safehttp.NewMetadataClientForTest(t, imds.Listener.Addr().String())}
+	for _, c := range []struct {
+		name, q, policy string
+		status          int
+		wantErr         bool
+	}{
+		{"no header", "&worm=container", "", 200, true},
+		{"policy false", "&worm=container", "false", 200, true},
+		{"policy true", "&worm=container", "true", 200, false},
+		{"forbidden", "&worm=container", "", 403, true},
+		{"missing container", "&worm=container", "", 404, true},
+		{"version mode checks nothing", "", "", 200, false},
+	} {
+		policy, status, gets = c.policy, c.status, 0
+		st, err := objstore.Open("azure://acct123/cont?endpoint="+url.QueryEscape(srv.URL)+c.q, objstore.Deps{HTTP: devClient(t), Azure: az})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = st.(objstore.Verifier).VerifyRetention(context.Background())
+		if (err != nil) != c.wantErr {
+			t.Errorf("%s: err=%v wantErr=%v", c.name, err, c.wantErr)
+		}
+		if c.q == "" && gets != 0 {
+			t.Errorf("%s: version mode made %d requests", c.name, gets)
+		}
+	}
+}
+
 func TestGCS_PutGetAndRetentionCheck(t *testing.T) {
 	fb := &fakeBucket{}
 	locked := false

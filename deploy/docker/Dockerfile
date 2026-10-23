@@ -6,19 +6,23 @@
 #   docker build -f deploy/docker/Dockerfile --target ui     -t tessera-ui     .
 #   docker build -f deploy/docker/Dockerfile --target devidp -t tessera-devidp .   # development only
 #   docker build -f deploy/docker/Dockerfile --target cli    -t tessera-cli    .
+#   docker build -f deploy/docker/Dockerfile --target init   -t tessera-init   .   # Compose helper
 #
 # Multi-arch: docker buildx build --platform linux/amd64,linux/arm64 ... (the Go stages cross-compile on
-# the build host, so no QEMU is needed for them). Pin the base images by digest in your own registry
-# mirror for fully reproducible builds (--build-arg GO_IMAGE=golang:1.27@sha256:...).
+# the build host, so no QEMU is needed for them). Override a base with --build-arg
+# (for example GO_IMAGE=registry.example/golang:1.27@sha256:...) to build from your own mirror.
 #
 # The Go API does not serve the web UI: the `ui` image serves mvp/frontend/dist with nginx and proxies the
 # API paths (see deploy/docker/nginx/) to the API, so one origin serves both (the UI is same-origin in prod).
 # The dev IdP is its own target and is never part of the `api` image.
 
-ARG GO_IMAGE=golang:1.27-bookworm
-ARG NODE_IMAGE=node:24-bookworm-slim
-ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine
-ARG STATIC_IMAGE=gcr.io/distroless/static-debian12:nonroot
+# Base images are pinned by tag AND digest. Refresh with `docker buildx imagetools inspect <tag>` (Dependabot's
+# docker ecosystem can do it) and keep tag and digest in step.
+ARG GO_IMAGE=golang:1.27-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5
+ARG NODE_IMAGE=node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
+ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0
+ARG STATIC_IMAGE=gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+ARG ALPINE_IMAGE=alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
 
 # ---------------------------------------------------------------- Go build
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS gobuild
@@ -99,6 +103,12 @@ EXPOSE 8001
 ENV TESSERA_ENV=dev
 ENTRYPOINT ["/usr/local/bin/tessera-devidp"]
 
+# ---------------------------------------------------------------- Compose init (openssl, no network at run time)
+# Used by deploy/compose for the Postgres TLS certificate and the KEK install. openssl is installed at build time.
+FROM ${ALPINE_IMAGE} AS init
+RUN apk add --no-cache openssl
+ENTRYPOINT ["/bin/sh", "-ec"]
+
 # ---------------------------------------------------------------- UI (nginx, unprivileged, uid 101)
 FROM ${NGINX_IMAGE} AS ui
 ARG VERSION=dev
@@ -114,10 +124,12 @@ LABEL org.opencontainers.image.title="tessera-ui" \
 COPY deploy/docker/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY deploy/docker/nginx/tessera.conf.template /etc/nginx/templates/tessera.conf.template
 COPY deploy/docker/nginx/tessera-proxy.inc /etc/nginx/tessera-proxy.inc
+COPY deploy/docker/nginx/tessera-headers.inc /etc/nginx/tessera-headers.inc
 COPY --from=uibuild /ui/dist /usr/share/nginx/html
 # Only /tmp needs to be writable (rendered config, pid, temp files): run with a read-only root filesystem
 # and a tmpfs or emptyDir on /tmp.
 ENV API_UPSTREAM=api:8000 \
+    TESSERA_HSTS="max-age=31536000; includeSubDomains" \
     NGINX_ENVSUBST_OUTPUT_DIR=/tmp
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \

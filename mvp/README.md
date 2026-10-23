@@ -4071,8 +4071,10 @@ Outside AWS the anchor goes to the cloud's own write-once storage, with the work
   (`If-None-Match: *`), `prefix/<tenant id>/<seq>.jws`. Each blob is written with a locked version-level
   immutability policy of 7 years (`x-ms-immutability-policy-mode: Locked`), so the container needs
   **version-level immutability support** enabled. With `?worm=container` no per-blob policy is sent and the
-  container's own time-based retention policy (locked) is relied on instead. Tessera cannot read the
-  container's policy through the data plane, so for Azure it is the operator's job to lock it.
+  container's own time-based retention policy (locked) is relied on instead. Before the first anchor Tessera
+  reads the container's properties and refuses to anchor unless `x-ms-has-immutability-policy` is `true`
+  (the anchor identity needs read access to container properties, which `Storage Blob Data Contributor` has).
+  The data plane does not say whether the policy is **locked**, so locking it is still the operator's job.
 - `TESSERA_AUDIT_ANCHOR=gs://bucket/prefix`: one create-only object per checkpoint (`ifGenerationMatch=0`).
   The bucket needs a **locked retention policy** (`gcloud storage buckets update gs://bucket --retention-period=7y
   --lock-retention-period`); before the first anchor Tessera reads the bucket and refuses to anchor into one

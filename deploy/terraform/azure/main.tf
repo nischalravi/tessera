@@ -98,6 +98,47 @@ resource "azurerm_private_dns_zone_virtual_network_link" "pg" {
   virtual_network_id    = azurerm_virtual_network.this.id
 }
 
+# Key Vault is private by default (public access off), so the apps reach it through a private endpoint in the
+# VNet: Container Apps resolves its Key Vault secret references over the VNet, not the trusted-services bypass
+# (which does not apply once public access is disabled).
+resource "azurerm_subnet" "endpoints" {
+  name                 = "snet-endpoints"
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
+  address_prefixes     = [cidrsubnet(var.vnet_cidr, 8, 5)]
+}
+
+resource "azurerm_private_dns_zone" "kv" {
+  name                = "privatelink.vaultcore.azure.net"
+  resource_group_name = azurerm_resource_group.this.name
+  tags                = local.tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "kv" {
+  name                  = "kv"
+  resource_group_name   = azurerm_resource_group.this.name
+  private_dns_zone_name = azurerm_private_dns_zone.kv.name
+  virtual_network_id    = azurerm_virtual_network.this.id
+}
+
+resource "azurerm_private_endpoint" "kv" {
+  name                = "pe-kv-${var.name}"
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
+  subnet_id           = azurerm_subnet.endpoints.id
+  tags                = local.tags
+  private_service_connection {
+    name                           = "kv"
+    private_connection_resource_id = azurerm_key_vault.this.id
+    subresource_names              = ["vault"]
+    is_manual_connection           = false
+  }
+  private_dns_zone_group {
+    name                 = "kv"
+    private_dns_zone_ids = [azurerm_private_dns_zone.kv.id]
+  }
+}
+
 # ---------------------------------------------------------------- database
 # Tessera logs in with passwords (tessera_owner, tessera_app), so password authentication stays on. The
 # administrator password is write-only (administrator_password_wo): it is not stored in Terraform state.
@@ -179,18 +220,21 @@ resource "azurerm_user_assigned_identity" "app" {
 }
 
 resource "azurerm_key_vault" "this" {
-  name                          = "kv-${var.name}-${substr(sha1(azurerm_resource_group.this.id), 0, 6)}"
-  location                      = azurerm_resource_group.this.location
-  resource_group_name           = azurerm_resource_group.this.name
-  tenant_id                     = data.azurerm_client_config.current.tenant_id
-  sku_name                      = "standard"
-  rbac_authorization_enabled    = true
-  purge_protection_enabled      = true
-  soft_delete_retention_days    = 30
-  public_network_access_enabled = true # operators set values from a workstation; narrow with network_acls
+  name                       = "kv-${var.name}-${substr(sha1(azurerm_resource_group.this.id), 0, 6)}"
+  location                   = azurerm_resource_group.this.location
+  resource_group_name        = azurerm_resource_group.this.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "standard"
+  rbac_authorization_enabled = true
+  purge_protection_enabled   = true
+  soft_delete_retention_days = 30
+  # Private by default. Set key_vault_public_network_access = true (and list your IPs in key_vault_allowed_ips)
+  # to set secret values from a workstation; the ACL stays default-deny either way.
+  public_network_access_enabled = var.key_vault_public_network_access
   network_acls {
-    default_action = "Allow"
+    default_action = "Deny"
     bypass         = "AzureServices"
+    ip_rules       = var.key_vault_allowed_ips
   }
   tags = local.tags
 }
@@ -413,5 +457,11 @@ resource "azurerm_container_app" "this" {
     }
   }
 
-  depends_on = [azurerm_role_assignment.app_secrets, azurerm_role_assignment.acr_pull]
+  # the Key Vault secret references resolve through the vault's private endpoint
+  depends_on = [
+    azurerm_role_assignment.app_secrets,
+    azurerm_role_assignment.acr_pull,
+    azurerm_private_endpoint.kv,
+    azurerm_private_dns_zone_virtual_network_link.kv,
+  ]
 }
