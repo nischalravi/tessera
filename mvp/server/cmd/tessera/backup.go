@@ -162,6 +162,12 @@ func createBackup(ctx context.Context, st *store.DB, sealer *seal.Sealer, cfg *c
 		}
 		detail = append(detail, ojson.KV{Key: "uploaded", Value: true})
 	}
+	if cfg.BackupURL != "" {
+		if err := copyBackupToObjectStore(ctx, cfg, c.Path); err != nil {
+			return c, err
+		}
+		detail = append(detail, ojson.KV{Key: "copied_to_object_store", Value: true})
+	}
 	if err := backup.RecordEvent(ctx, st, "platform.backup.created", detail); err != nil {
 		return c, err
 	}

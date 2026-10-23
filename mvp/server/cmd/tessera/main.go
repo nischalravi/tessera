@@ -572,7 +572,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
-	sink, err := audit.NewSink(anchorURL, audit.WithHTTPClient(outbound))
+	objDeps, err := newObjDeps(cfg)
+	if err != nil {
+		return err
+	}
+	sink, err := audit.NewSink(anchorURL, audit.WithHTTPClient(outbound), audit.WithObjectStores(objDeps))
 	if err != nil {
 		return err
 	}
