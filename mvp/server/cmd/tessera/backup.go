@@ -83,7 +83,7 @@ func backupCmd(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if sub == "list" {
 		return backupList(*dir, stdout)
 	}
-	sealer, err := cfg.Sealer(config.DevKEKPath(*db))
+	sealer, err := loadSealer(ctx, cfg, config.DevKEKPath(*db))
 	if err != nil {
 		return err
 	}
