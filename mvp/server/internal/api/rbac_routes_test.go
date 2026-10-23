@@ -618,6 +618,12 @@ PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POL
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
 POST   /api/groups/pit/rebuild                       groups.admin    -  # issue #46
+GET    /api/groups/permissions/effective             groups.admin    -  # issue #62
+GET    /api/groups/permissions/check                 groups.admin    -  # issue #62
+GET    /api/groups/permissions/cedar                 groups.admin    -  # issue #62
+GET    /api/groups/permissions/export                groups.admin    -  # issue #62
+POST   /api/groups/permissions/import                groups.admin    -  # issue #62: also needs the tenant_admin role
+GET    /api/groups/{id}/permissions                  groups.read     -  # issue #62: the role's read privilege
 GET    /api/mfa/posture                              graph.read      -  # issue #109
 POST   /api/groups/{id}/members:batch                groups.write    -  # issue #48: update, or optin / optout for oneself, per operation
 POST   /api/groups:simulate                          groups.write    -  # issue #48: the privileges of the changes it simulates
