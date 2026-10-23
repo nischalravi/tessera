@@ -314,6 +314,9 @@ type DB struct {
 	d     dialect
 	mu    sync.Mutex
 	stmts stmtCache // prepared statements (SQLite only; see stmtFor)
+
+	schemaMu sync.Mutex // SchemaCurrent's remembered pass
+	schemaOK bool
 }
 
 // writeLock serializes writers on SQLite (one writer at a time); Postgres
