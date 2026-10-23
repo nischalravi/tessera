@@ -2207,3 +2207,10 @@ DROP POLICY IF EXISTS tenant_isolation ON mcp_resource_bindings;
 CREATE POLICY tenant_isolation ON mcp_resource_bindings
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE github_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE github_tokens FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON github_tokens;
+CREATE POLICY tenant_isolation ON github_tokens
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

@@ -78,8 +78,13 @@ func (s *Server) registerOAuthAppsRoutes() {
 // queueOAuthSync is the queue handler of the inventory refresh. A tenant with
 // no provider credential leaves no job run.
 func (s *Server) queueOAuthSync(ctx context.Context, j queue.Job) (any, error) {
-	rep, err := s.oauthapps.Sync(audit.WithSystemActor(ctx, oauthSyncActor), s.store, j.Tenant, oauthSyncActor)
+	ctx = audit.WithSystemActor(ctx, oauthSyncActor)
+	rep, err := s.oauthapps.Sync(ctx, s.store, j.Tenant, oauthSyncActor)
 	if err != nil {
+		return nil, err
+	}
+	// the GitHub and CI token inventory (#476) refreshes with the OAuth app inventory; a failure is audited and shown in the UI
+	if _, err := s.ghtokens.Sync(ctx, s.store, j.Tenant, oauthSyncActor); err != nil {
 		return nil, err
 	}
 	if !rep.Changed() {
