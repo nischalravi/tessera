@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -282,5 +285,38 @@ func TestCheckDB(t *testing.T) {
 	fresh := filepath.Join(t.TempDir(), "fresh.db")
 	if err := run(context.Background(), []string{"check-db", "-db", fresh}, &out, &errb); err != nil {
 		t.Errorf("current schema: %v", err)
+	}
+}
+
+func TestNewLogger_Format(t *testing.T) {
+	var out, errb bytes.Buffer
+	newLogger("json", &out, &errb).Info("hello", "k", "v")
+	var rec map[string]any
+	if err := json.Unmarshal(out.Bytes(), &rec); err != nil || rec["msg"] != "hello" || rec["k"] != "v" {
+		t.Fatalf("json log on stdout: %q, %v", out.String(), err)
+	}
+	if errb.Len() != 0 {
+		t.Fatalf("json logging wrote to stderr: %q", errb.String())
+	}
+	out.Reset()
+	newLogger("text", &out, &errb).Info("hello")
+	if out.Len() != 0 || !strings.Contains(errb.String(), "msg=hello") {
+		t.Fatalf("text log: stdout %q stderr %q", out.String(), errb.String())
+	}
+}
+
+func TestWaitLoops_BoundedByGrace(t *testing.T) {
+	done, stuck := make(chan struct{}), make(chan struct{})
+	close(done)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	start := time.Now()
+	waitLoops([]chan struct{}{done, done}, time.Second, logger) // returns at once
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatal("waited for finished loops")
+	}
+	start = time.Now()
+	waitLoops([]chan struct{}{done, stuck}, 50*time.Millisecond, logger)
+	if d := time.Since(start); d < 40*time.Millisecond || d > 2*time.Second {
+		t.Fatalf("a stuck loop held shutdown for %s", d)
 	}
 }

@@ -1039,3 +1039,38 @@ func bytesOf(b byte) []byte {
 	}
 	return out
 }
+
+func TestLoad_ShutdownAndLogFormat(t *testing.T) {
+	c, err := config.Load(env(safeProd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ShutdownGrace != 25*time.Second || c.ShutdownDrainDelay != 0 || c.LogFormat != "json" {
+		t.Errorf("prod defaults: grace %s delay %s format %s", c.ShutdownGrace, c.ShutdownDrainDelay, c.LogFormat)
+	}
+	dev, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev"}))
+	if err != nil || dev.LogFormat != "text" {
+		t.Errorf("dev log format: %v %v", dev, err)
+	}
+	for _, tc := range []struct {
+		k, v  string
+		ok    bool
+		grace time.Duration
+	}{
+		{"TESSERA_SHUTDOWN_GRACE", "40s", true, 40 * time.Second},
+		{"TESSERA_SHUTDOWN_GRACE", "30", true, 30 * time.Second},
+		{"TESSERA_SHUTDOWN_GRACE", "0s", false, 0},
+		{"TESSERA_SHUTDOWN_GRACE", "11m", false, 0},
+		{"TESSERA_SHUTDOWN_GRACE", "soon", false, 0},
+		{"TESSERA_SHUTDOWN_DRAIN_DELAY", "3m", false, 0},
+		{"TESSERA_LOG_FORMAT", "xml", false, 0},
+	} {
+		got, err := config.Load(env(with(safeProd(), tc.k, tc.v)))
+		if (err == nil) != tc.ok {
+			t.Errorf("%s=%s: err %v, want ok=%v", tc.k, tc.v, err, tc.ok)
+		}
+		if tc.ok && got.ShutdownGrace != tc.grace {
+			t.Errorf("%s=%s: grace %s", tc.k, tc.v, got.ShutdownGrace)
+		}
+	}
+}

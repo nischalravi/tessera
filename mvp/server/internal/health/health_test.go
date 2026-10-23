@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/leader"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
@@ -64,7 +65,9 @@ func TestReady_FailsClosedOnEachDependency(t *testing.T) {
 			l.Done("sweeper", *now, errors.New("x")) // a failed run is not a success
 		}, []string{CheckLoops}},
 		{"panicking probe", func(c *Checker, _ *obs.Loops, _ *time.Time) { c.Database = func(context.Context) error { panic("x") } }, []string{CheckDatabase}},
-		{"no database", func(c *Checker, _ *obs.Loops, _ *time.Time) { c.DB = nil }, []string{CheckDatabase, CheckAuditChain}},
+		{"no database", func(c *Checker, _ *obs.Loops, _ *time.Time) { c.DB = nil }, []string{CheckDatabase, CheckSchema, CheckAuditChain}},
+		{"old schema", func(c *Checker, _ *obs.Loops, _ *time.Time) { c.Schema = func(context.Context) error { return boom } }, []string{CheckSchema}},
+		{"draining", func(c *Checker, _ *obs.Loops, _ *time.Time) { c.SetDraining() }, []string{CheckDraining}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,10 +112,10 @@ func TestReady_ShapeIsConstant(t *testing.T) {
 	c2, _, _ := newChecker(t)
 	c2.Database = func(context.Context) error { return errors.New("x") }
 	bad, _ := json.Marshal(c2.Ready(context.Background()))
-	if string(ok) != `{"status":"ok","checks":{"audit_chain":"ok","database":"ok","kek":"ok","loops":"ok"}}` {
+	if string(ok) != `{"status":"ok","checks":{"audit_chain":"ok","database":"ok","draining":"ok","kek":"ok","loops":"ok","schema":"ok"}}` {
 		t.Errorf("ok body: %s", ok)
 	}
-	if string(bad) != `{"status":"unavailable","checks":{"audit_chain":"ok","database":"fail","kek":"ok","loops":"ok"}}` {
+	if string(bad) != `{"status":"unavailable","checks":{"audit_chain":"ok","database":"fail","draining":"ok","kek":"ok","loops":"ok","schema":"ok"}}` {
 		t.Errorf("failing body: %s", bad)
 	}
 }
@@ -137,7 +140,7 @@ func TestReady_CachesBriefly(t *testing.T) {
 func TestSummary_NoSecretsAndShape(t *testing.T) {
 	c, _, now := newChecker(t)
 	s := c.Summary(context.Background())
-	if s.Status != "ok" || len(s.Checks) != 4 || len(s.Loops) != 1 || !s.Loops[0].Healthy || s.Loops[0].LastSuccessAt == nil {
+	if s.Status != "ok" || len(s.Checks) != len(checkNames) || len(s.Loops) != 1 || !s.Loops[0].Healthy || s.Loops[0].LastSuccessAt == nil {
 		t.Fatalf("summary: %+v", s)
 	}
 	b, _ := json.Marshal(s)
@@ -150,5 +153,41 @@ func TestSummary_NoSecretsAndShape(t *testing.T) {
 	*now = now.Add(time.Hour)
 	if s := c.Summary(context.Background()); s.Status != "degraded" {
 		t.Errorf("lagging loops must degrade the summary: %+v", s)
+	}
+}
+
+// A drain is visible at once, even inside the two-second result cache, and
+// does not touch liveness.
+func TestReady_DrainingIsImmediate(t *testing.T) {
+	c, _, _ := newChecker(t)
+	if !c.Ready(context.Background()).Ready() {
+		t.Fatal("not ready before the drain")
+	}
+	c.SetDraining()
+	r := c.Ready(context.Background())
+	if r.Ready() || r.OK(CheckDraining) {
+		t.Fatalf("still ready while draining: %+v", r)
+	}
+	if !r.OK(CheckDatabase) {
+		t.Errorf("a drain must not blame the database: %+v", r)
+	}
+	if Live()["status"] != "ok" {
+		t.Error("liveness changed")
+	}
+}
+
+// A standby replica is healthy and /readyz says who leads what.
+func TestReady_ListsLeaders(t *testing.T) {
+	c, _, _ := newChecker(t)
+	if r := c.Ready(context.Background()); r.Leaders != nil {
+		t.Fatalf("leaders without election: %v", r.Leaders)
+	}
+	c.Leaders = func() []leader.Status { return []leader.Status{{Loop: "siem", Leader: true}, {Loop: "alerts"}} }
+	r := c.Ready(context.Background())
+	if !r.Ready() || r.Leaders["siem"] != "leader" || r.Leaders["alerts"] != "standby" {
+		t.Fatalf("%+v", r)
+	}
+	if s := c.Summary(context.Background()); len(s.Leaders) != 2 {
+		t.Fatalf("summary leaders: %v", s.Leaders)
 	}
 }
