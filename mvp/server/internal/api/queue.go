@@ -70,7 +70,10 @@ func (s *Server) newQueue() *queue.Queue {
 		if k == jobs.SweepDrift {
 			every = driftEvery
 		}
-		obs.DefaultLoops.Register(k, every, true)
+		// On Postgres several replicas share the queue and a job runs on one
+		// of them, so a replica's own sweeper lag says nothing about the
+		// fleet: the loops are reported in /metrics but do not gate /readyz.
+		obs.DefaultLoops.Register(k, every, !s.store.IsPostgres())
 	}
 	q := &queue.Queue{DB: s.store, Clock: func() time.Time { return s.clock() }, Log: s.log.With("component", "queue")}
 	// jit_sweep is also the manual POST /api/jit/sweep: its runs carry the

@@ -317,6 +317,9 @@ type DB struct {
 
 	schemaMu sync.Mutex // SchemaCurrent's remembered pass
 	schemaOK bool
+
+	leaderOnce sync.Once // LeaderLocker
+	leader     *LeaderLocker
 }
 
 // writeLock serializes writers on SQLite (one writer at a time); Postgres
@@ -391,6 +394,9 @@ func open(ctx context.Context, path string, fresh bool, app *AppOptions) (*DB, e
 
 // Close closes the database.
 func (d *DB) Close() error {
+	if d.leader != nil {
+		d.leader.Close()
+	}
 	d.stmts.close()
 	err := d.sql.Close()
 	if d.owner != nil && d.owner != d.sql {

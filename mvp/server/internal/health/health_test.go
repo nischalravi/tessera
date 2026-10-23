@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/leader"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
@@ -172,5 +173,21 @@ func TestReady_DrainingIsImmediate(t *testing.T) {
 	}
 	if Live()["status"] != "ok" {
 		t.Error("liveness changed")
+	}
+}
+
+// A standby replica is healthy and /readyz says who leads what.
+func TestReady_ListsLeaders(t *testing.T) {
+	c, _, _ := newChecker(t)
+	if r := c.Ready(context.Background()); r.Leaders != nil {
+		t.Fatalf("leaders without election: %v", r.Leaders)
+	}
+	c.Leaders = func() []leader.Status { return []leader.Status{{Loop: "siem", Leader: true}, {Loop: "alerts"}} }
+	r := c.Ready(context.Background())
+	if !r.Ready() || r.Leaders["siem"] != "leader" || r.Leaders["alerts"] != "standby" {
+		t.Fatalf("%+v", r)
+	}
+	if s := c.Summary(context.Background()); len(s.Leaders) != 2 {
+		t.Fatalf("summary leaders: %v", s.Leaders)
 	}
 }

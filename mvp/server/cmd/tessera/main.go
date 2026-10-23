@@ -112,6 +112,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
+	"github.com/nischalravi/tessera/mvp/server/internal/leader"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
@@ -700,6 +701,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 			ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 		}
 	}
+	// Background loops run on one replica each (Postgres advisory-lock leases,
+	// internal/leader); on SQLite every loop runs here. The job queue is not
+	// elected: its jobs and schedules are leased in the database.
+	lead := &leader.Elector{Log: logger}
+	if lk := st.LeaderLocker(); lk != nil {
+		lead.Locker = lk
+	}
+	checker.Leaders = lead.Status
 	sweepDone := make(chan struct{})
 	go func() {
 		defer close(sweepDone)
@@ -710,7 +719,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	reviewsDone := make(chan struct{})
 	go func() {
 		defer close(reviewsDone)
-		srv.RunReviewScheduler(ctx, reviewInterval)
+		lead.Run(ctx, "review_scheduler", nil, func(ctx context.Context) { srv.RunReviewScheduler(ctx, reviewInterval) })
 	}()
 	provDone := make(chan struct{})
 	go func() {
@@ -718,39 +727,39 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		if srv.ExternalKind(jobs.ProvisionPush) {
 			return // a tessera worker sends the provisioning operations
 		}
-		srv.RunProvisioning(ctx, provisionInterval)
+		lead.Run(ctx, "provisioning_push", nil, func(ctx context.Context) { srv.RunProvisioning(ctx, provisionInterval) })
 	}()
 	keysDone := make(chan struct{})
 	go func() {
 		defer close(keysDone)
-		runKeyRotation(ctx, st, sealer, clock, logger)
+		lead.Run(ctx, "key_rotation", []string{"key_rotation"}, func(ctx context.Context) { runKeyRotation(ctx, st, sealer, clock, logger) })
 	}()
 	ckptDone := make(chan struct{})
 	go func() {
 		defer close(ckptDone)
-		checkpointer.Loop(ctx, checkpointInterval)
+		lead.Run(ctx, "audit_checkpointer", []string{audit.CheckpointLoopName}, func(ctx context.Context) { checkpointer.Loop(ctx, checkpointInterval) })
 	}()
 	rdyDone := make(chan struct{})
 	go func() {
 		defer close(rdyDone)
-		runReadinessScheduler(ctx, rsvc, st, clock, logger)
+		lead.Run(ctx, "readiness_scheduler", nil, func(ctx context.Context) { runReadinessScheduler(ctx, rsvc, st, clock, logger) })
 	}()
 	siemDone := make(chan struct{})
 	go func() {
 		defer close(siemDone)
-		siemSvc.Run(ctx, siemInterval)
+		lead.Run(ctx, "siem", nil, func(ctx context.Context) { siemSvc.Run(ctx, siemInterval) })
 	}()
 	alertsDone := make(chan struct{})
 	go func() {
 		defer close(alertsDone)
-		alertSvc.Run(ctx, alertsInterval)
+		lead.Run(ctx, "alerts", nil, func(ctx context.Context) { alertSvc.Run(ctx, alertsInterval) })
 	}()
 	backupDone := make(chan struct{})
 	go func() {
 		defer close(backupDone)
 		if cfg.BackupDir != "" {
 			logger.Info("scheduled backups on", "dir", cfg.BackupDir, "every_minutes", cfg.BackupEveryMinutes, "keep", cfg.BackupKeep)
-			runBackups(ctx, st, sealer, cfg, logger)
+			lead.Run(ctx, "backups", nil, func(ctx context.Context) { runBackups(ctx, st, sealer, cfg, logger) })
 		}
 	}()
 	// the groups engine's queue worker, time wheel and nightly verification
@@ -758,49 +767,52 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	groupsRunner := &engine.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}
 	go func() {
 		defer close(groupsDone)
-		groupsRunner.Loop(ctx)
+		lead.Run(ctx, "groups_engine", nil, groupsRunner.Loop)
 	}()
 	// group history: the daily Merkle digest (00:05 UTC), retention and the weekly rebuild check
 	historyDone := make(chan struct{})
 	historyRunner := &pit.Runner{DB: st, Clock: clock, Log: logger, RetentionDays: cfg.GroupsRetentionDays}
 	go func() {
 		defer close(historyDone)
-		historyRunner.Loop(ctx)
+		lead.Run(ctx, "groups_history", nil, historyRunner.Loop)
 	}()
 	// group rules: the rules that react to membership and creation events
 	rulesDone := make(chan struct{})
 	rulesRunner := &rules.Runner{DB: st, Runtime: groupsRules, Clock: clock, Log: logger}
 	go func() {
 		defer close(rulesDone)
-		rulesRunner.Loop(ctx)
+		lead.Run(ctx, "groups_rules", nil, rulesRunner.Loop)
 	}()
 	// group governance: attestation campaigns, deprovisioning and scheduled reports
 	govDone := make(chan struct{})
 	go func() {
 		defer close(govDone)
 		var wg sync.WaitGroup
-		for _, loop := range []func(context.Context){
-			(&attest.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop,
-			(&deprov.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop,
-			(&reports.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop,
+		for _, l := range []struct {
+			name string
+			loop func(context.Context)
+		}{
+			{"groups_attest", (&attest.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop},
+			{"groups_deprov", (&deprov.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop},
+			{"groups_reports", (&reports.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop},
 		} {
 			wg.Add(1)
-			go func(loop func(context.Context)) {
+			go func(name string, loop func(context.Context)) {
 				defer wg.Done()
-				loop(ctx)
-			}(loop)
+				lead.Run(ctx, name, nil, loop)
+			}(l.name, l.loop)
 		}
 		wg.Wait()
 	}()
 	notifyDone := make(chan struct{})
 	go func() {
 		defer close(notifyDone)
-		dispatcher.Loop(ctx, notifyInterval)
+		lead.Run(ctx, "notify", []string{notify.LoopName}, func(ctx context.Context) { dispatcher.Loop(ctx, notifyInterval) })
 	}()
 	rotationDone := make(chan struct{})
 	go func() {
 		defer close(rotationDone)
-		rotationEngine.Loop(ctx, rotationInterval)
+		lead.Run(ctx, "secret_rotation", nil, func(ctx context.Context) { rotationEngine.Loop(ctx, rotationInterval) })
 	}()
 	// group loaders: the scheduler of full and incremental runs (Admin > Jobs)
 	loadersDone := make(chan struct{})
@@ -809,14 +821,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		Directory: loaderDirectory, Log: logger}}
 	go func() {
 		defer close(loadersDone)
-		loadersRunner.Loop(ctx)
+		lead.Run(ctx, "groups_loaders", nil, loadersRunner.Loop)
 	}()
 	// group provisioning: full syncs (daily and on request) and incremental syncs of the group events
 	provisioningDone := make(chan struct{})
 	provisioningRunner := &provisioning.Runner{Svc: provisioningSvc, Clock: clock, Log: logger}
 	go func() {
 		defer close(provisioningDone)
-		provisioningRunner.Loop(ctx)
+		lead.Run(ctx, "groups_provisioning", nil, provisioningRunner.Loop)
 	}()
 	// group event sinks: SQS, SNS, RabbitMQ and Kafka delivery, through the same guarded network access
 	sinksDone := make(chan struct{})
@@ -824,7 +836,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		Clock: clock, Log: logger}
 	go func() {
 		defer close(sinksDone)
-		sinksRunner.Loop(ctx)
+		lead.Run(ctx, "groups_sinks", nil, sinksRunner.Loop)
 	}()
 	loopsDone := func() []chan struct{} {
 		return []chan struct{}{sweepDone, reviewsDone, provDone, keysDone, ckptDone, rdyDone, siemDone, alertsDone, backupDone, groupsDone, historyDone, notifyDone, rotationDone, rulesDone, govDone, loadersDone, provisioningDone, sinksDone}

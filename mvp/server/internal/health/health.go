@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/leader"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -55,6 +56,11 @@ type Checker struct {
 	// default probe over DB and Sealer.
 	Database, Schema, AuditChain, KEK func(ctx context.Context) error
 
+	// Leaders reports which background loops this replica leads (nil: not
+	// elected, a single process). Loop names are not secret; /readyz lists
+	// them as "leader" or "standby" so an operator can see the split.
+	Leaders func() []leader.Status
+
 	draining atomic.Bool
 
 	now func() time.Time
@@ -82,6 +88,9 @@ func New(db *store.DB, sealer *seal.Sealer, loops *obs.Loops, maxLag time.Durati
 type Result struct {
 	Status string            `json:"status"` // "ok" or "unavailable"
 	Checks map[string]string `json:"checks"`
+	// Leaders is "leader" or "standby" per elected loop; absent without
+	// leader election (SQLite). It never changes the status: a standby is healthy.
+	Leaders map[string]string `json:"leaders,omitempty"`
 }
 
 // Ready reports whether every check passed.
@@ -98,6 +107,17 @@ func Live() map[string]string { return map[string]string{"status": "ok"} }
 // the tessera_readiness_check_ok gauges.
 func (c *Checker) Ready(ctx context.Context) Result {
 	res := c.evaluate(ctx)
+	if c.Leaders != nil {
+		if st := c.Leaders(); len(st) > 0 {
+			res.Leaders = make(map[string]string, len(st))
+			for _, l := range st {
+				res.Leaders[l.Loop] = "standby"
+				if l.Leader {
+					res.Leaders[l.Loop] = "leader"
+				}
+			}
+		}
+	}
 	if c.draining.Load() {
 		// not cached: a load balancer must see the drain at once
 		out := Result{Status: "unavailable", Checks: make(map[string]string, len(res.Checks))}
