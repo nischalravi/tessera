@@ -15,7 +15,78 @@ import (
 
 func agentDiscoveryCovered() map[string]bool {
 	return map[string]bool{"AgentProfiles": true, "UpsertAgentProfile": true, "DeleteAgentProfile": true, // TestIsolation_AgentProfiles*
-		"MCPFindings": true, "UpsertMCPFinding": true, "DeleteMCPFinding": true} // TestIsolation_MCPFindings*
+		"MCPFindings": true, "UpsertMCPFinding": true, "DeleteMCPFinding": true, // TestIsolation_MCPFindings*
+		"AgentBlueprints": true, "UpsertAgentBlueprint": true, "DeleteAgentBlueprint": true, // TestIsolation_AgentBlueprints*
+		"AgentLinks": true, "UpsertAgentLink": true, "DeleteAgentLink": true} // TestIsolation_AgentBlueprints*
+}
+
+// Blueprints and links (issue #478): scoped per tenant for the same source and key, and
+// neither can point at another tenant's identity.
+func TestIsolation_AgentBlueprintsScoped(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		me := tn.IDs["alice"]
+		err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			if err := c.UpsertAgentBlueprint(&store.AgentBlueprint{Source: "entra", ExternalID: "bp", Name: "bp-" + tn.Slug,
+				SponsorID: &me}, storetest.Now); err != nil {
+				return err
+			}
+			return c.UpsertAgentLink(&store.AgentLink{Source: "entra", ExternalID: "agent-1", BlueprintID: "bp",
+				ManagerRef: "mgr-" + tn.Slug, ManagerID: &me})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(c *store.TenantTx, slug string) (n int) {
+		bs, _ := c.AgentBlueprints()
+		for _, b := range bs {
+			if b.Source == "entra" {
+				n++
+				if b.Name != "bp-"+slug {
+					t.Errorf("blueprint %q in tenant %s", b.Name, slug)
+				}
+			}
+		}
+		ls, _ := c.AgentLinks()
+		for _, l := range ls {
+			if l.Source == "entra" {
+				n += 10
+				if l.ManagerRef != "mgr-"+slug {
+					t.Errorf("link %q in tenant %s", l.ManagerRef, slug)
+				}
+			}
+		}
+		return n
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if n := count(c, f.B.Slug); n != 11 {
+			t.Errorf("B sees %d, want 11", n)
+		}
+		if err := c.DeleteAgentBlueprint("entra", "bp"); err != nil {
+			return err
+		}
+		return c.DeleteAgentLink("entra", "agent-1")
+	})
+	inA(t, f, func(c *store.TenantTx) error {
+		if n := count(c, f.A.Slug); n != 11 {
+			t.Errorf("A after B's delete sees %d, want 11", n)
+		}
+		return nil
+	})
+	foreign := f.A.IDs["alice"]
+	err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
+		return c.UpsertAgentBlueprint(&store.AgentBlueprint{Source: "entra", ExternalID: "x", Name: "x", SponsorID: &foreign}, storetest.Now)
+	})
+	if err == nil {
+		t.Error("B stored a blueprint sponsored by A's identity")
+	}
+	err = f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
+		return c.UpsertAgentLink(&store.AgentLink{Source: "entra", ExternalID: "x", ManagerID: &foreign})
+	})
+	if err == nil {
+		t.Error("B stored a link managed by A's identity")
+	}
 }
 
 func seedAgentDiscovery(t *testing.T, f *storetest.Fixture) {

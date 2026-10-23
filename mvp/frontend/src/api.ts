@@ -759,6 +759,26 @@ export interface AgentRow {
   violations: string[];
   first_seen_at: string | null;
   last_seen_at: string | null;
+  /** Entra Agent ID: the blueprint the agent was created from (issue #478). */
+  blueprint: { id: string; name: string } | null;
+  /** Its manager, and the manager as the source spells it. Flags carries "no_sponsor" when it has no sponsor at all. */
+  manager: PersonBrief | null;
+  manager_ref: string | null;
+}
+
+/** An Entra Agent ID blueprint, with its sponsor and how many agents use it (issue #478). */
+export interface AgentBlueprint {
+  source: string;
+  id: string;
+  app_id: string | null;
+  name: string;
+  creator: string | null;
+  sponsor: PersonBrief | null;
+  sponsor_ref: string | null;
+  sponsor_status: "active" | "inactive" | "none";
+  agents: number;
+  first_seen_at: string;
+  last_seen_at: string;
 }
 
 /** An MCP server or an agent credential found in source code. Never a secret value. */
@@ -784,6 +804,7 @@ export interface McpFinding {
 }
 
 export const useAIAgents = () => useApi<AgentRow[]>("/ai-agents");
+export const useAgentBlueprints = () => useApi<AgentBlueprint[]>("/ai-agents/blueprints");
 export const useMcpFindings = () => useApi<McpFinding[]>("/ai-agents/mcp-findings");
 
 export interface Policy { id: string; name: string; type: string; severity: string; description: string; enabled: boolean; source: string; violations: number }

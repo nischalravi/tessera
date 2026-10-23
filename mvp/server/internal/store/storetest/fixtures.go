@@ -294,6 +294,14 @@ func seedTenant(tb testing.TB, db *store.DB, id tenancy.ID, slug, sentinel strin
 			Kind: "okta_service_app", CreatorRef: mark("creator"), SponsorRef: mark("sponsor"), SponsorID: &owner}, Now); err != nil {
 			return err
 		}
+		if err := c.UpsertAgentBlueprint(&store.AgentBlueprint{Source: "okta", ExternalID: "bp-1", Name: mark("blueprint"),
+			SponsorRef: mark("bp-sponsor"), SponsorID: &owner}, Now); err != nil {
+			return err
+		}
+		if err := c.UpsertAgentLink(&store.AgentLink{Source: "okta", ExternalID: "helper-bot", BlueprintID: "bp-1",
+			ManagerRef: mark("manager"), ManagerID: &owner}); err != nil {
+			return err
+		}
 		for _, f := range []store.MCPFinding{
 			{Kind: "mcp_server", Location: "mcpServers.docs", Server: mark("docs"), Transport: "http", Target: "docs.example.com"},
 			{Kind: "agent_credential", Location: "mcpServers.docs.env.TOKEN", Server: mark("docs"), SecretType: "github_token",

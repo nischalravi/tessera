@@ -168,6 +168,11 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 	res.AuthMethods, res.AuthSource = c.readAuthMethods(ctx, st)
 	if agentsRead {
 		c.applyAgents(res, agents)
+		blueprints, err := c.readBlueprints(ctx)
+		if err != nil {
+			return nil, err
+		}
+		applyBlueprints(res, blueprints)
 	}
 	c.save(ctx, st, next, start, full)
 	return res, nil

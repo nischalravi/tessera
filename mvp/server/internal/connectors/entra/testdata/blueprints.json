@@ -1,0 +1,6 @@
+{
+  "value": [
+    {"@odata.type": "#microsoft.graph.agentIdentityBlueprint", "id": "bbbbbbbb-0000-4000-8000-000000000001", "appId": "55550000-0000-4000-8000-000000000001", "displayName": "Support Agent Blueprint", "createdByAppId": "11110000-0000-4000-8000-000000000001"},
+    {"@odata.type": "#microsoft.graph.agentIdentityBlueprint", "id": "bbbbbbbb-0000-4000-8000-000000000002", "appId": "55550000-0000-4000-8000-000000000002", "displayName": "Unsponsored Blueprint", "createdByAppId": ""}
+  ]
+}

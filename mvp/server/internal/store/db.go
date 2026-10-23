@@ -270,6 +270,8 @@ var tables = []string{
 	"auth_methods", "auth_method_sources", "account_auth_signals", "mfa_posture_snapshots",
 	// AI agent discovery (schema/0375_agent_discovery.sql)
 	"agent_profiles", "mcp_findings",
+	// Entra Agent ID blueprints and agent relations (schema/0830_agent_blueprints.sql)
+	"agent_blueprints", "agent_links",
 	// MCP resource bindings to an issuer and audience (schema/0700_mcp_resource_bindings.sql)
 	"mcp_resource_bindings",
 	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)

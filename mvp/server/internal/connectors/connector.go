@@ -183,6 +183,23 @@ type AgentRecord struct {
 	// identity. They are never credentials.
 	CreatorRef string
 	SponsorRef string
+	// BlueprintID is the ExternalID of the BlueprintRecord the agent was created
+	// from; Manager and ManagerRef are its manager (issue #478).
+	BlueprintID string
+	Manager     *IdentityRef
+	ManagerRef  string
+}
+
+// BlueprintRecord is an agent blueprint, the template agent identities are
+// created from (Entra Agent ID, issue #478), with its sponsor.
+type BlueprintRecord struct {
+	System     string
+	ExternalID string
+	AppID      string
+	Name       string
+	CreatorRef string
+	Sponsor    *IdentityRef
+	SponsorRef string
 }
 
 // MCPFindingRecord is one finding from scanning source code for MCP server
@@ -249,6 +266,7 @@ type DiscoveryResult struct {
 	// list of both: ingest replaces what it holds for those systems, so an
 	// agent or finding that is gone from the source is gone from Tessera.
 	Agents          []AgentRecord
+	Blueprints      []BlueprintRecord
 	MCPFindings     []MCPFindingRecord
 	AgentSnapshotOf []string
 	// Stats are per-object-class attribute fill counts computed by the

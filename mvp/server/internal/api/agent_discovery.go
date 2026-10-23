@@ -46,6 +46,86 @@ type agentView struct {
 	Violations            []string `json:"violations"`
 	FirstSeenAt           *string  `json:"first_seen_at"`
 	LastSeenAt            *string  `json:"last_seen_at"`
+	// Blueprint (Entra Agent ID) is the template the agent was created from; Manager is its
+	// manager, as Tessera identity when it resolved and as the source spells it otherwise.
+	// Flags carries "no_sponsor" when the agent has no sponsor at all (issue #478).
+	Blueprint  *blueprintRef `json:"blueprint"`
+	Manager    *nhi.Owner    `json:"manager"`
+	ManagerRef *string       `json:"manager_ref"`
+}
+
+type blueprintRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// blueprintView is one row of the agent blueprint inventory.
+type blueprintView struct {
+	Source        string     `json:"source"`
+	ID            string     `json:"id"`
+	AppID         *string    `json:"app_id"`
+	Name          string     `json:"name"`
+	Creator       *string    `json:"creator"`
+	Sponsor       *nhi.Owner `json:"sponsor"`
+	SponsorRef    *string    `json:"sponsor_ref"`
+	SponsorStatus string     `json:"sponsor_status"` // active | inactive | none
+	Agents        int        `json:"agents"`
+	FirstSeenAt   string     `json:"first_seen_at"`
+	LastSeenAt    string     `json:"last_seen_at"`
+}
+
+func ownerOf(people map[int64]*store.Identity, id *int64) *nhi.Owner {
+	if id == nil {
+		return nil
+	}
+	o := people[*id]
+	if o == nil {
+		return nil
+	}
+	return &nhi.Owner{ID: o.ID, Name: o.Name, Status: o.Status, Department: o.Department}
+}
+
+func sponsorStatus(o *nhi.Owner) string {
+	switch {
+	case o == nil:
+		return "none"
+	case o.Status == "active":
+		return "active"
+	}
+	return "inactive"
+}
+
+func (s *Server) listAgentBlueprints(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	c := store.TxFrom(r.Context())
+	people, _, err := c.IdentityMap()
+	if err != nil {
+		return nil, err
+	}
+	bps, err := c.AgentBlueprints()
+	if err != nil {
+		return nil, err
+	}
+	links, err := c.AgentLinks()
+	if err != nil {
+		return nil, err
+	}
+	agents := map[[2]string]int{}
+	for _, l := range links {
+		if l.BlueprintID != "" {
+			agents[[2]string{l.Source, l.BlueprintID}]++
+		}
+	}
+	out := []blueprintView{}
+	for _, b := range bps {
+		sp := ownerOf(people, b.SponsorID)
+		out = append(out, blueprintView{Source: b.Source, ID: b.ExternalID, AppID: nonEmptyPtr(b.AppID), Name: b.Name,
+			Creator: nonEmptyPtr(b.CreatorRef), Sponsor: sp, SponsorRef: nonEmptyPtr(b.SponsorRef), SponsorStatus: sponsorStatus(sp),
+			Agents: agents[[2]string{b.Source, b.ExternalID}], FirstSeenAt: timeutil.ISO(b.FirstSeenAt), LastSeenAt: timeutil.ISO(b.LastSeenAt)})
+	}
+	return out, nil
 }
 
 func (s *Server) listAIAgents(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -67,6 +147,26 @@ func (s *Server) listAIAgents(_ http.ResponseWriter, r *http.Request, p *params)
 	byIdentity := map[int64]*store.AgentProfile{}
 	for _, pr := range profiles {
 		byIdentity[pr.IdentityID] = pr
+	}
+	people, _, err := a.c.IdentityMap()
+	if err != nil {
+		return nil, err
+	}
+	bps, err := a.c.AgentBlueprints()
+	if err != nil {
+		return nil, err
+	}
+	links, err := a.c.AgentLinks()
+	if err != nil {
+		return nil, err
+	}
+	blueprintName := map[[2]string]string{}
+	for _, b := range bps {
+		blueprintName[[2]string{b.Source, b.ExternalID}] = b.Name
+	}
+	linkOf := map[[2]string]*store.AgentLink{}
+	for _, l := range links {
+		linkOf[[2]string{l.Source, l.ExternalID}] = l
 	}
 	viol, err := a.violations()
 	if err != nil {
@@ -100,6 +200,21 @@ func (s *Server) listAIAgents(_ http.ResponseWriter, r *http.Request, p *params)
 			v.Source, v.SourceKind = pr.Source, &pr.Kind
 			v.Creator, v.SponsorRef = nonEmptyPtr(pr.CreatorRef), nonEmptyPtr(pr.SponsorRef)
 			v.FirstSeenAt, v.LastSeenAt = timeutil.ISOPtr(&pr.FirstSeenAt), timeutil.ISOPtr(&pr.LastSeenAt)
+			if l := linkOf[[2]string{pr.Source, pr.ExternalID}]; l != nil {
+				if l.BlueprintID != "" {
+					name := blueprintName[[2]string{pr.Source, l.BlueprintID}]
+					if name == "" {
+						name = l.BlueprintID
+					}
+					v.Blueprint = &blueprintRef{ID: l.BlueprintID, Name: name}
+				}
+				v.Manager, v.ManagerRef = ownerOf(people, l.ManagerID), nonEmptyPtr(l.ManagerRef)
+			}
+		}
+		// No sponsor at all (neither an identity nor a name from the source) is its own flag;
+		// a sponsor who left is "inactive" and is reported by nhi-ownership.
+		if v.SponsorStatus == "none" && v.SponsorRef == nil {
+			v.Flags = append(append([]string{}, v.Flags...), "no_sponsor")
 		}
 		if ps := policiesOf[it.ID]; len(ps) > 0 {
 			sort.Strings(ps)

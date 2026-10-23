@@ -20,7 +20,53 @@ const (
 	agentSupport = "dddddddd-0000-4000-8000-000000000001" // sponsored by an active user
 	agentOrphan  = "dddddddd-0000-4000-8000-000000000002" // no sponsor
 	agentLeft    = "dddddddd-0000-4000-8000-000000000003" // sponsor's account is disabled
+
+	blueprintSupport = "bbbbbbbb-0000-4000-8000-000000000001" // sponsored by Ada
+	blueprintNoOwner = "bbbbbbbb-0000-4000-8000-000000000002" // no sponsor
 )
+
+// Blueprints, the agent-to-blueprint link and the manager (issue #478).
+func TestBlueprintsAndManagerDiscovered(t *testing.T) {
+	f := newFake(t)
+	f.withAgents()
+	res, err := f.connector(agentCfg()).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Blueprints) != 2 {
+		t.Fatalf("blueprints = %+v", res.Blueprints)
+	}
+	b := res.Blueprints[0]
+	if b.ExternalID != blueprintSupport || b.Name != "Support Agent Blueprint" || b.SponsorRef != "ada.fixture@example.com" ||
+		b.Sponsor == nil || b.CreatorRef != "app:11110000-0000-4000-8000-000000000001" {
+		t.Errorf("support blueprint = %+v", b)
+	}
+	if o := res.Blueprints[1]; o.ExternalID != blueprintNoOwner || o.Sponsor != nil || o.SponsorRef != "" {
+		t.Errorf("unsponsored blueprint = %+v", o)
+	}
+	for _, a := range res.Agents {
+		switch a.ExternalID {
+		case agentSupport:
+			if a.BlueprintID != blueprintSupport || a.ManagerRef != "Ben.Sample@Fixture.onmicrosoft.com" || a.Manager == nil {
+				t.Errorf("support agent link = %+v", a)
+			}
+		default:
+			if a.BlueprintID != "" || a.Manager != nil || a.ManagerRef != "" {
+				t.Errorf("agent %s link = %+v, want none", a.ExternalID, a)
+			}
+		}
+	}
+}
+
+func TestBlueprintsUnavailableIsNotAFailure(t *testing.T) {
+	f := newFake(t)
+	f.withAgents()
+	f.status["/beta/applications"] = 403
+	res, err := f.connector(agentCfg()).Discover(context.Background())
+	if err != nil || len(res.Blueprints) != 0 || len(res.Agents) != 3 {
+		t.Errorf("blueprints = %d, agents = %d, err = %v", len(res.Blueprints), len(res.Agents), err)
+	}
+}
 
 // withAgents serves the Agent ID fixtures (Graph beta) next to the directory ones.
 func (f *fake) withAgents() {
@@ -29,6 +75,13 @@ func (f *fake) withAgents() {
 		name := "agent_sponsors_" + string(rune('1'+i)) + ".json"
 		f.body["/beta/servicePrincipals/"+id+"/microsoft.graph.agentIdentity/sponsors"] = string(connsynctest.Fixture(f.t, name, f.srv.URL))
 	}
+	for _, id := range []string{agentOrphan, agentLeft} {
+		f.status["/beta/servicePrincipals/"+id+"/microsoft.graph.agentIdentity/manager"] = 404 // no manager set
+	}
+	f.body["/beta/applications/"+blueprintNoOwner+"/microsoft.graph.agentIdentityBlueprint/sponsors"] = `{"value":[]}`
+	f.body["/beta/servicePrincipals/"+agentSupport+"/microsoft.graph.agentIdentity/manager"] = string(connsynctest.Fixture(f.t, "agent_manager_1.json", f.srv.URL))
+	f.body["/beta/applications/microsoft.graph.agentIdentityBlueprint"] = string(connsynctest.Fixture(f.t, "blueprints.json", f.srv.URL))
+	f.body["/beta/applications/"+blueprintSupport+"/microsoft.graph.agentIdentityBlueprint/sponsors"] = string(connsynctest.Fixture(f.t, "blueprint_sponsors_1.json", f.srv.URL))
 }
 
 func agentCfg() Config {
@@ -189,6 +242,15 @@ func TestAgentsIngestAndOwnershipViolations(t *testing.T) {
 				t.Errorf("support sponsor = %v", p.SponsorID)
 			}
 		}
+		bps, _ := tx.AgentBlueprints()
+		links, _ := tx.AgentLinks()
+		if len(bps) != 2 || bps[0].SponsorID == nil || *bps[0].SponsorID != byXID["EMP-2001"].ID || bps[1].SponsorID != nil {
+			t.Errorf("blueprints = %+v", bps)
+		}
+		if len(links) != 1 || links[0].ExternalID != agentSupport || links[0].BlueprintID != blueprintSupport ||
+			links[0].ManagerID == nil {
+			t.Errorf("links = %+v", links)
+		}
 		g, err := graph.Build(tx, testkit.Now)
 		if err != nil {
 			t.Fatal(err)
@@ -215,8 +277,15 @@ func TestAgentsIngestAndOwnershipViolations(t *testing.T) {
 
 	// a second sync with the sponsorless agent gone from Entra removes its profile
 	f.body["/beta/servicePrincipals/microsoft.graph.agentIdentity"] = `{"value":[]}`
+	f.body["/beta/applications/microsoft.graph.agentIdentityBlueprint"] = `{"value":[]}`
 	syncTenant(t, db, tenantA, context.Background(), hr{}, f.connector(agentCfg()))
 	testkit.Read(t, tdb, func(tx *store.TenantTx) error {
+		if bps, _ := tx.AgentBlueprints(); len(bps) != 0 {
+			t.Errorf("blueprints after they left Entra = %d", len(bps))
+		}
+		if ls, _ := tx.AgentLinks(); len(ls) != 0 {
+			t.Errorf("links after the agents left Entra = %d", len(ls))
+		}
 		if ps, _ := tx.AgentProfiles(); len(ps) != 0 {
 			t.Errorf("profiles after the agents left Entra = %d", len(ps))
 		}

@@ -148,3 +148,113 @@ func (tx *TenantTx) DeleteMCPFinding(id int64) error {
 	_, err := tx.exec(mcpFindingsDelete, sql.Named("id", id))
 	return err
 }
+
+// Entra Agent ID blueprints and agent relations (schema/0830_agent_blueprints.sql, issue #478).
+
+// AgentBlueprint is the template an agent identity was created from.
+type AgentBlueprint struct {
+	Source, ExternalID, AppID, Name string
+	CreatorRef, SponsorRef          string
+	SponsorID                       *int64
+	FirstSeenAt, LastSeenAt         time.Time
+}
+
+// AgentLink is an agent's blueprint and manager; it shares the key of its AgentProfile.
+type AgentLink struct {
+	Source, ExternalID string
+	BlueprintID        string
+	ManagerRef         string
+	ManagerID          *int64
+}
+
+var (
+	agentBlueprintsList = tq("agent_blueprints.list", `
+		SELECT b.source, b.external_id, b.app_id, b.name, b.creator_ref, b.sponsor_ref, b.sponsor_identity_id,
+			b.first_seen_at, b.last_seen_at
+		FROM agent_blueprints b WHERE b.tenant_id = @tenant ORDER BY b.source, b.external_id`)
+	agentBlueprintsUpsert = tq("agent_blueprints.upsert", `
+		INSERT INTO agent_blueprints (tenant_id, source, external_id, app_id, name, creator_ref, sponsor_ref,
+			sponsor_identity_id, first_seen_at, last_seen_at)
+		VALUES (@tenant, @source, @external_id, @app_id, @name, @creator_ref, @sponsor_ref, @sponsor_identity_id,
+			@seen_at, @seen_at)
+		ON CONFLICT (tenant_id, source, external_id) DO UPDATE SET app_id = excluded.app_id, name = excluded.name,
+			creator_ref = excluded.creator_ref, sponsor_ref = excluded.sponsor_ref,
+			sponsor_identity_id = excluded.sponsor_identity_id, last_seen_at = excluded.last_seen_at`)
+	agentBlueprintsDelete = tq("agent_blueprints.delete", `
+		DELETE FROM agent_blueprints WHERE tenant_id = @tenant AND source = @source AND external_id = @external_id`)
+
+	agentLinksList = tq("agent_links.list", `
+		SELECT l.source, l.external_id, l.blueprint_id, l.manager_ref, l.manager_identity_id
+		FROM agent_links l WHERE l.tenant_id = @tenant ORDER BY l.source, l.external_id`)
+	agentLinksUpsert = tq("agent_links.upsert", `
+		INSERT INTO agent_links (tenant_id, source, external_id, blueprint_id, manager_ref, manager_identity_id)
+		VALUES (@tenant, @source, @external_id, @blueprint_id, @manager_ref, @manager_identity_id)
+		ON CONFLICT (tenant_id, source, external_id) DO UPDATE SET blueprint_id = excluded.blueprint_id,
+			manager_ref = excluded.manager_ref, manager_identity_id = excluded.manager_identity_id`)
+	agentLinksDelete = tq("agent_links.delete", `
+		DELETE FROM agent_links WHERE tenant_id = @tenant AND source = @source AND external_id = @external_id`)
+)
+
+func scanAgentBlueprint(s scanner) (*AgentBlueprint, error) {
+	var b AgentBlueprint
+	var sponsor sql.NullInt64
+	var first, last string
+	if err := s.Scan(&b.Source, &b.ExternalID, &b.AppID, &b.Name, &b.CreatorRef, &b.SponsorRef, &sponsor, &first, &last); err != nil {
+		return nil, err
+	}
+	b.SponsorID = intp(sponsor)
+	var err error
+	if b.FirstSeenAt, err = timeutil.ParseDB(first); err != nil {
+		return nil, err
+	}
+	b.LastSeenAt, err = timeutil.ParseDB(last)
+	return &b, err
+}
+
+func scanAgentLink(s scanner) (*AgentLink, error) {
+	var l AgentLink
+	var mgr sql.NullInt64
+	if err := s.Scan(&l.Source, &l.ExternalID, &l.BlueprintID, &l.ManagerRef, &mgr); err != nil {
+		return nil, err
+	}
+	l.ManagerID = intp(mgr)
+	return &l, nil
+}
+
+// AgentBlueprints lists the tenant's agent blueprints.
+func (tx *TenantTx) AgentBlueprints() ([]*AgentBlueprint, error) {
+	return collect(tx, scanAgentBlueprint, agentBlueprintsList)
+}
+
+// UpsertAgentBlueprint stores a blueprint; first_seen_at is kept on update.
+func (tx *TenantTx) UpsertAgentBlueprint(b *AgentBlueprint, seenAt time.Time) error {
+	_, err := tx.exec(agentBlueprintsUpsert, sql.Named("source", b.Source), sql.Named("external_id", b.ExternalID),
+		sql.Named("app_id", b.AppID), sql.Named("name", b.Name), sql.Named("creator_ref", b.CreatorRef),
+		sql.Named("sponsor_ref", b.SponsorRef), sql.Named("sponsor_identity_id", IP(b.SponsorID)), sql.Named("seen_at", T(seenAt)))
+	return err
+}
+
+// DeleteAgentBlueprint removes one blueprint.
+func (tx *TenantTx) DeleteAgentBlueprint(source, externalID string) error {
+	_, err := tx.exec(agentBlueprintsDelete, sql.Named("source", source), sql.Named("external_id", externalID))
+	return err
+}
+
+// AgentLinks lists the tenant's agent links.
+func (tx *TenantTx) AgentLinks() ([]*AgentLink, error) {
+	return collect(tx, scanAgentLink, agentLinksList)
+}
+
+// UpsertAgentLink stores an agent's blueprint and manager.
+func (tx *TenantTx) UpsertAgentLink(l *AgentLink) error {
+	_, err := tx.exec(agentLinksUpsert, sql.Named("source", l.Source), sql.Named("external_id", l.ExternalID),
+		sql.Named("blueprint_id", l.BlueprintID), sql.Named("manager_ref", l.ManagerRef),
+		sql.Named("manager_identity_id", IP(l.ManagerID)))
+	return err
+}
+
+// DeleteAgentLink removes one link.
+func (tx *TenantTx) DeleteAgentLink(source, externalID string) error {
+	_, err := tx.exec(agentLinksDelete, sql.Named("source", source), sql.Named("external_id", externalID))
+	return err
+}

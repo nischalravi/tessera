@@ -8,6 +8,7 @@
       "accountEnabled": true,
       "createdByAppId": "11110000-0000-4000-8000-000000000001",
       "createdDateTime": "2026-09-01T10:00:00Z",
+      "agentIdentityBlueprintId": "bbbbbbbb-0000-4000-8000-000000000001",
       "passwordCredentials": [
         {"keyId": "eeeeeeee-0000-4000-8000-000000000001", "displayName": "triage secret", "startDateTime": "2026-06-01T00:00:00Z", "endDateTime": "2027-06-01T00:00:00Z", "hint": "zq7", "secretText": null},
         {"keyId": "eeeeeeee-0000-4000-8000-000000000002", "displayName": "old secret", "startDateTime": "2024-01-01T00:00:00Z", "endDateTime": "2025-01-01T00:00:00Z", "hint": "old", "secretText": null}

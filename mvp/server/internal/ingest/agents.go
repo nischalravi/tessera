@@ -26,7 +26,7 @@ func agentDiscovery(c *store.TenantTx, now time.Time, results []*connectors.Disc
 	}
 	have := len(systems) > 0
 	for _, r := range results {
-		have = have || len(r.Agents) > 0 || len(r.MCPFindings) > 0
+		have = have || len(r.Agents) > 0 || len(r.MCPFindings) > 0 || len(r.Blueprints) > 0
 	}
 	if !have {
 		return nil
@@ -49,6 +49,37 @@ func agentDiscovery(c *store.TenantTx, now time.Time, results []*connectors.Disc
 			}
 			seenProfile[[2]string{a.System, a.ExternalID}] = true
 			st.Agents++
+			link := store.AgentLink{Source: a.System, ExternalID: a.ExternalID, BlueprintID: a.BlueprintID,
+				ManagerRef: a.ManagerRef, ManagerID: res.Identity(a.Manager)}
+			if link.BlueprintID == "" && link.ManagerRef == "" && link.ManagerID == nil {
+				err = c.DeleteAgentLink(a.System, a.ExternalID)
+			} else {
+				err = c.UpsertAgentLink(&link)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+	seenBlueprint := map[[2]string]bool{}
+	for _, r := range results {
+		for _, b := range r.Blueprints {
+			if err := c.UpsertAgentBlueprint(&store.AgentBlueprint{Source: b.System, ExternalID: b.ExternalID, AppID: b.AppID,
+				Name: b.Name, CreatorRef: b.CreatorRef, SponsorRef: b.SponsorRef, SponsorID: res.Identity(b.Sponsor)}, now); err != nil {
+				return err
+			}
+			seenBlueprint[[2]string{b.System, b.ExternalID}] = true
+		}
+	}
+	blueprints, err := c.AgentBlueprints()
+	if err != nil {
+		return err
+	}
+	for _, b := range blueprints {
+		if slices.Contains(systems, b.Source) && !seenBlueprint[[2]string{b.Source, b.ExternalID}] {
+			if err := c.DeleteAgentBlueprint(b.Source, b.ExternalID); err != nil {
+				return err
+			}
 		}
 	}
 	profiles, err := c.AgentProfiles()
@@ -58,6 +89,9 @@ func agentDiscovery(c *store.TenantTx, now time.Time, results []*connectors.Disc
 	for _, p := range profiles {
 		if slices.Contains(systems, p.Source) && !seenProfile[[2]string{p.Source, p.ExternalID}] {
 			if err := c.DeleteAgentProfile(p.Source, p.ExternalID); err != nil {
+				return err
+			}
+			if err := c.DeleteAgentLink(p.Source, p.ExternalID); err != nil {
 				return err
 			}
 		}

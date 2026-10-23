@@ -665,7 +665,7 @@ hand in each environment.
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
 `GET /api/graph?identity_id=|resource_id=` · `GET /api/nhi` · `GET /api/ai-agents` ·
-`GET /api/ai-agents/mcp-findings[?kind=mcp_server|agent_credential]` ·
+`GET /api/ai-agents/mcp-findings[?kind=mcp_server|agent_credential]` · `GET /api/ai-agents/blueprints` ·
 `GET /api/least-privilege/recommendations?unused_days=60&kind=remove|right_size|role_trim` ·
 `POST /api/least-privilege/revoke {edge_id, dry_run}` · `GET /api/policies` · `GET /api/violations` ·
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
@@ -5488,6 +5488,17 @@ identities) and `mcp_findings`, both tenant-scoped with cross-tenant guard trigg
 (`schema/0375_agent_discovery.sql`). `GET /api/ai-agents` is the `ai_agent` inventory with source,
 creator, sponsor status and violating policy ids; `GET /api/nhi` is unchanged. The demo company
 supplies Okta-sourced agents and five sample findings, so the screens work without any connector.
+
+**Entra Agent ID blueprints and managers (issue #478).** With `TESSERA_ENTRA_DISCOVER_AGENTS=true` the
+connector also reads Graph beta `applications/microsoft.graph.agentIdentityBlueprint` and its `sponsors`, the
+agent's `agentIdentityBlueprintId`, and `servicePrincipals/{id}/microsoft.graph.agentIdentity/manager`. Storage:
+`agent_blueprints` and `agent_links` (`schema/0830_agent_blueprints.sql`, Postgres variant and RLS included).
+`GET /api/ai-agents/blueprints` lists blueprints with sponsor, sponsor status and agent count; each
+`GET /api/ai-agents` row gains `blueprint`, `manager` and `manager_ref`, and an agent with no sponsor at all
+(none resolved, none named by Entra) carries the `no_sponsor` flag next to the existing `nhi-ownership`
+violation. A 403 or 404 on blueprints or manager means none, not a failed sync. Tested on recorded fixtures
+(`internal/connectors/entra/testdata/blueprints.json`, `agent_manager_1.json`); the blueprint and manager
+endpoint paths and the `agentIdentityBlueprintId` field are unverified against a live tenant.
 
 ### Groups from the command line and declarative plans (`tessera-cli groups`)
 
