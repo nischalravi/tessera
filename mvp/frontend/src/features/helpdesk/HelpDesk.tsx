@@ -5,10 +5,13 @@ import {
   HelpdeskCase,
   HelpdeskFinding,
   HelpdeskMethod,
+  HelpdeskRecentAction,
+  HelpdeskSettings,
   cancelHelpdeskCase,
   executeHelpdeskCase,
   fmtDate,
   managerApproveHelpdeskCase,
+  saveHelpdeskSettings,
   secondApproveHelpdeskCase,
   startHelpdeskCase,
   useApi,
@@ -31,7 +34,7 @@ import { PersonPicker } from "../directory/correlation";
  * verification policy is satisfied. Hiding controls with can() is for usability only: the API
  * enforces helpdesk.reset / helpdesk.approve, the policy and a fresh phishing-resistant sign-in.
  */
-type Tab = "cases" | "detections";
+type Tab = "cases" | "detections" | "settings";
 
 const METHOD_LABEL: Record<HelpdeskMethod, string> = {
   push: "Push to a phishing-resistant authenticator",
@@ -76,12 +79,14 @@ export function HelpDesk() {
           tabs={[
             { id: "cases", label: `Cases${cases.data ? ` (${open} open)` : ""}` },
             { id: "detections", label: `Detections${findings.data ? ` (${findings.data.findings.length})` : ""}` },
+            { id: "settings", label: "Settings" },
           ]}
         />
       }
     >
       {tab === "cases" && <Cases q={cases} />}
       {tab === "detections" && <Detections q={findings} />}
+      {tab === "settings" && <Settings />}
       {starting && (
         <StartDialog
           onClose={() => setStarting(false)}
@@ -207,6 +212,14 @@ function CasePanel({ c, onClose, onChanged }: { c: HelpdeskCase; onClose: () => 
             <span className="small">second approver{c.second_approver && `: ${c.second_approver}`}</span></li>
         )}
       </ul>
+      {p.recent_auth_method && (
+        <Callout tone={p.blocked ? "bad" : "warn"} icon={<ShieldAlert size={16} />}>
+          {p.blocked
+            ? `Blocked: an authentication method was added in the last ${p.recent_auth_method.days} days. The reset cannot run until that window has passed.`
+            : `An authentication method was added in the last ${p.recent_auth_method.days} days, so this reset needs a second approver. A vishing attacker adds a method, then asks the help desk to reset.`}
+          <ul className="small">{p.recent_auth_method.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
+        </Callout>
+      )}
       {live && !p.satisfied && <Callout tone="neutral">Still needed: {p.missing.join("; ")}.</Callout>}
 
       {c.verifications.length > 0 && (
@@ -252,7 +265,7 @@ function CasePanel({ c, onClose, onChanged }: { c: HelpdeskCase; onClose: () => 
             <Button size="sm" icon={<BadgeCheck size={14} />} disabled={!canApprove || busy}
               onClick={() => act(() => managerApproveHelpdeskCase(c.id, evidence.trim() || undefined), "Manager approval recorded")}>
               I am the manager: approve</Button>
-            {c.privileged && (
+            {p.needs_second_approver && (
               <Button size="sm" icon={<BadgeCheck size={14} />} disabled={!canApprove || busy || p.second_approved}
                 onClick={() => act(() => secondApproveHelpdeskCase(c.id), "Second approval recorded")}>Approve as second approver</Button>
             )}
@@ -276,6 +289,64 @@ function CasePanel({ c, onClose, onChanged }: { c: HelpdeskCase; onClose: () => 
         </>
       )}
     </SidePanel>
+  );
+}
+
+const RECENT_ACTION: Record<HelpdeskRecentAction, string> = {
+  require_approval: "Require a second approver",
+  block: "Block the reset until the window has passed",
+  off: "Off: do not check",
+};
+
+/** The recent authentication method rule (issue #477). Changing it needs helpdesk.approve and a fresh phishing-resistant sign-in. */
+function Settings() {
+  const { can } = useSession();
+  const toast = useToast();
+  const q = useApi<HelpdeskSettings>("/helpdesk/settings");
+  const [days, setDays] = useState<number | null>(null);
+  const [action, setAction] = useState<HelpdeskRecentAction | null>(null);
+  const [busy, setBusy] = useState(false);
+  const s = q.data;
+  const d = days ?? s?.recent_method_days ?? 7;
+  const a = action ?? s?.recent_method_action ?? "require_approval";
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await saveHelpdeskSettings({ recent_method_days: d, recent_method_action: a });
+      toast("Settings saved", { kind: "ok" });
+      setDays(null);
+      setAction(null);
+      q.reload();
+    } catch (err: any) {
+      toast(String(err.message ?? err), { kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (q.error) return <Callout tone="bad">{q.error.message}</Callout>;
+  return (
+    <form onSubmit={save} className="stack" aria-label="Recently added authentication method">
+      <h2 className="h-sm">Recently added authentication method</h2>
+      <p className="small muted">
+        Attackers who phone the help desk often add a sign-in method first. When the person gained a method in the last N days, or a connected
+        IdP reported a suspicious one, a reset needs a second approver, or is blocked.
+      </p>
+      <label className="field">
+        Window (days, 1 to 90)
+        <input className="input" type="number" min={1} max={90} value={d} disabled={!s || !can("helpdesk.approve")}
+          onChange={(e) => setDays(Number(e.target.value))} />
+      </label>
+      <label className="field">
+        When it applies
+        <select className="input" value={a} disabled={!s || !can("helpdesk.approve")} onChange={(e) => setAction(e.target.value as HelpdeskRecentAction)}>
+          {(Object.keys(RECENT_ACTION) as HelpdeskRecentAction[]).map((k) => <option key={k} value={k}>{RECENT_ACTION[k]}</option>)}
+        </select>
+      </label>
+      {!can("helpdesk.approve") && <Callout tone="neutral">Changing this needs the helpdesk.approve permission.</Callout>}
+      {s?.updated_at && <p className="small muted">Last changed by {s.updated_by} on {fmtDate(s.updated_at)}.</p>}
+      <div><Button type="submit" variant="primary" disabled={!s || !can("helpdesk.approve") || busy || d < 1 || d > 90}>{busy ? "Saving…" : "Save"}</Button></div>
+    </form>
   );
 }
 

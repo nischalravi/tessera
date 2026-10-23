@@ -178,6 +178,9 @@ func applyDeletionGuard(e *env, ch *store.AdminChange, v *deletionGuardPayload) 
 			next := sp.policy()
 			to = describeSource(next)
 			err = deleteguard.SetSource(e.tx, next, &by, e.now)
+			if err == nil {
+				err = recordSourceApproval(e, ch, sp, next, &by)
+			}
 		}
 		if err != nil {
 			return err
@@ -199,6 +202,23 @@ func applyDeletionGuard(e *env, ch *store.AdminChange, v *deletionGuardPayload) 
 	_, err = audit.Record(e.tx.Context(), e.tx, "deletion_guard.policy_changed", detail, audit.At(e.now),
 		audit.Target("admin_change", ch.ID.String()))
 	return err
+}
+
+// recordSourceApproval records whether two admins approved an override as looser than the category as
+// the category is now. Only that exempts it from the category's tenant-wide budget later; a category
+// tightened afterwards (one admin) cannot turn a single-admin override into one (#494).
+func recordSourceApproval(e *env, ch *store.AdminChange, sp deletionSourcePayload, next deleteguard.SourcePolicy, by *string) error {
+	tp, err := deleteguard.PolicyOf(e.tx, sp.Category)
+	if err != nil {
+		return err
+	}
+	pop, err := e.tx.DeletionPopulation(sp.Category)
+	if err != nil {
+		return err
+	}
+	cat, over := deleteguard.Resolve(tp, nil, true), deleteguard.Resolve(tp, &next, true)
+	two := ch.ApprovedBy != nil && cat.Mode != deleteguard.ModeOff && over.Overridden && deleteguard.Loosens(cat.Policy, over.Policy, pop)
+	return deleteguard.SetSourceApproved(e.tx, deleteguard.SourceRef{Kind: sp.Kind, ID: sp.SourceID}, sp.Category, two, by, e.now)
 }
 
 func describePolicy(p deleteguard.Policy) string {

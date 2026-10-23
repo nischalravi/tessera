@@ -153,6 +153,8 @@ var tables = []string{
 	"deletion_holds", "deletion_hold_items",
 	// per-source settings (schema/0690_deletion_guard_sources.sql)
 	"deletion_guard_source_policies", "deletion_guard_source_state", "deletion_guard_source_ledger",
+	// two-admin approval of an override (schema/0730_deletion_guard_source_approvals.sql)
+	"deletion_guard_source_approvals",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)
@@ -199,6 +201,8 @@ var tables = []string{
 	"review_populations", "review_population_rows", "review_auto_decisions", "tenant_settings",
 	// verified help-desk resets (schema/0254_helpdesk.sql)
 	"helpdesk_cases", "helpdesk_verifications", "helpdesk_signals", "helpdesk_findings",
+	// recent authentication method rule settings and IdP risk signals (schema/0720_helpdesk_auth_method_risk.sql)
+	"helpdesk_settings", "helpdesk_idp_risks",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// certificates and rotation state, tenant branding (schema/0410_certificates.sql, 0411_branding.sql)

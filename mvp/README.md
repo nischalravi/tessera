@@ -578,7 +578,8 @@ worker you did not intend, though a duplicate is harmless: claims and operation 
 ### Config transport (dev → test → prod)
 
 Admin → Export / import configuration moves a tenant's connections (config, owners, credential
-*references*), readiness overlays and sign-in connections to another tenant, usually on another
+*references*), readiness overlays, sign-in connections, catalog items, review schedules, alert rules and
+log-streaming sinks to another tenant, usually on another
 instance, as a **signed bundle** (`server/internal/transport`). Export signs with the tenant's
 Ed25519 key (made on first export, sealed under the KEK; a server without a KEK cannot export).
 Import accepts only bundles signed by a **trusted signer**: paste the exporting tenant's public
@@ -597,12 +598,40 @@ connection on plain http or a private address, is refused. Applies are audited
 (`config.import.applied` with the bundle hash) and listed under Imports. Permission:
 `config.transport` (tenant admin); reading keys, signers and history needs `admin.read`.
 
+**Bundle version 2** (issue #497) also carries catalog items, review schedules, alert rules and
+log-streaming (SIEM) sinks; a version 1 bundle is still accepted and an import then leaves those four
+alone. What an import does with each: **catalog items** are matched to a group by (system, external id)
+(the group must exist here, else the item is *manual*), added or updated through the same checks as
+`PUT /api/catalog/...` and audited `catalog.item.put`; the owner, a person, is never carried or set.
+**Review schedules** are matched by name and added *paused* with no first run and no escalation reviewer
+(`review.schedule.put`); a change keeps the first run, enabled state, reviewer, role scope and review type
+set here, and an escalating schedule that has no reviewer here is *manual*. **Alert rules** are the
+tenant's changed settings by rule id (`alert.rule.updated`); a change that turns a rule off or makes it
+fire less often is flagged "loosens detection" in the plan. **SIEM sinks** are matched by name and added
+*disabled* and without their token (`siem.sink.created`); a sink that already exists with different
+settings is *manual*, because where audit events are sent never changes by import. None of the four is
+removed by an import, with prune or without; each plan item carries its section. On a prod server a sink
+aimed at localhost is refused.
+
+**From a pipeline.** `tessera-cli config key|export|plan|apply` (`server/cmd/tessera-cli/config.go`)
+makes the same calls as the page, through the signed-in session of `tessera-cli login --scope
+"tessera:admin"`:
+
+```
+tessera-cli config export -o bundle.json            # in the source environment
+tessera-cli config plan   -f bundle.json [--json]   # in the destination; exit 1 if it cannot be applied
+tessera-cli config apply  -f bundle.json [--prune] [--digest D]   # plans, then applies exactly that plan
+```
+
+`--digest` takes the `digest` of an earlier `plan --json`: the apply then happens only if nothing changed
+since it was reviewed. The destination must trust the source's key first (`config key` prints it; add it
+under Trusted signers). Exit 3 means the server wants a fresher sign-in (apply needs step-up).
+
 **Not in a bundle yet** (each needs cross-tenant id mapping for the groups and entitlements it
-names, so it is left for a follow-up rather than shipped half-checked): business roles and their
-versions and members, ABAC policies and bindings, catalog items and approval policies, tenant
-admin settings and security contacts (these change only through admin change requests), review
-schedules, alert rules, SIEM sinks, lifecycle rules and native groups. Set them up by hand in
-each environment; the bundle covers connections, readiness overlays and sign-in connections only.
+names): business roles and their versions and members, ABAC policies and bindings, approval
+policies, tenant admin settings and security contacts (these change only through admin change
+requests), lifecycle rules and native groups (use `tessera-cli groups export`/`apply`). Set them up by
+hand in each environment.
 
 ### Main API endpoints
 
@@ -641,7 +670,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
 `POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
-`GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
+`GET /api/audit/events/{event_id}/proof[?path=true]` (with `path=true` the proof carries the records from the event up to its signed checkpoint, up to 2000, and `audit.VerifyInclusion` or any verifier of the golden vector checks that they link and end at the checkpoint's `head_hash`; Admin → Audit log → an event → Inclusion proof downloads it) · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
 `GET /api/auth/session` (`user.identity_id` is the directory person the sign-in is linked to) · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
 `GET /api/auth/step-up?acr=&max_age=&return_to=` ·
@@ -1139,7 +1168,14 @@ the way the old sweepers did (active tenant list), then works each one in its ow
 * **Failure.** A failed attempt becomes `failed` and runs again after `10s * 2^(n-1)` (cap 15 min, plus or
   minus 20% jitter); after `max_attempts`, or on `queue.Permanent(err)`, it is `dead` and
   `queue.job_dead` is audited. `POST /api/queue/jobs/{id}/retry` puts a dead job back with a fresh
-  budget (`jobs.manage`, tenant admin, step-up; `queue.job_retried` audited).
+  budget (`jobs.manage`, tenant admin, step-up; `queue.job_retried` audited). A dead job is also alerted:
+  the `queue_job_dead` alert rule matches `queue.job_dead` (and `provisioning_failed` matches `job.failed`),
+  so failed jobs raise alerts that go to the alert channels (severity, threshold and window are tenant settings).
+* **Pause and resume.** `POST /api/queue/schedules/{name}/pause|resume` (`{"reason"?}`; `jobs.manage`, step-up)
+  stops or restarts a recurring job for the tenant; work already queued or running finishes, and a resumed
+  schedule fires once if it came due while paused. Audited `queue.schedule_paused` / `queue.schedule_resumed`
+  in the same transaction; repeating the state it already has changes and audits nothing. Admin → Jobs → Queue
+  shows paused schedules and a Pause / Resume button on each.
 * **Schedules.** Specs are `@every 30s` or 5-field cron (UTC). A worker that finds a schedule due moves
   `next_run_at` and enqueues the job (key `schedule:name:window`) in one transaction, so a window runs
   once however many workers poll; after downtime it fires once, not per missed window. Schedules are
@@ -2967,6 +3003,27 @@ IdP is never called.
   signals will come from the IdP log connectors; until then `POST /api/helpdesk/signals`
   `{identity_id, kind: mfa_device_added|sign_in, location, device, occurred_at}`
   (`helpdesk.approve`) simulates the feed and is a 404 in production.
+- **Recently added authentication method** (issue #477). MFA bypass by vishing the help desk
+  continues (ShinyHunters against Okta SSO), and Entra now detects suspiciously added methods. The
+  rule (`internal/helpdesk/recentauth.go`) looks, within `recent_method_days` (1 to 90, default 7)
+  of now, for (1) a method of any of the identity's accounts whose IdP-reported `enrolled_at`
+  (MFA posture, schema 0255) is inside the window, (2) an `mfa_device_added` signal, and (3) an IdP
+  risk signal for the identity. A method with no enrolment date never triggers: unknown is not
+  recent. `recent_method_action` is `require_approval` (default: the case needs the second
+  approver a privileged identity needs, who is not the requester or the subject; the second-approval
+  route then works for it), `block` (the case cannot execute while the window is open; an approval
+  does not lift it) or `off`. It is evaluated live, so the case view, the second approval and the
+  execute claim all see it, and a case opened before a signal arrived is covered. The policy
+  decision answers `recent_auth_method {action, days, reasons}` and `blocked`; reasons name the
+  system, the method kind and label and its age, never a factor value. Settings (schema 0720,
+  `helpdesk_settings`, one row per tenant): `GET /api/helpdesk/settings` (`graph.read`) and
+  `PUT /api/helpdesk/settings {recent_method_days, recent_method_action}` (`helpdesk.approve`,
+  step-up, audited as `helpdesk.settings.updated` with the old values). IdP risk signals
+  (`helpdesk_idp_risks`): `POST /api/helpdesk/risk-signals {identity_id, source, detail,
+  occurred_at}` (`helpdesk.approve`) records that a connected IdP reported a suspicious method
+  (audited `helpdesk.risk_signal.ingested`). It can only make a reset stricter, so it is available in
+  production; the Entra and Okta log connectors do not call it yet. Starting a case that triggers the
+  rule is audited as `helpdesk.case.recent_auth_method`. Help desk → Settings edits the rule.
 - **Simulated outside production.** The `simulated` executor (calls nothing), the push provider
   (always approves) and the IDV provider (accepts any session reference not starting with
   `fail`) exist when `TESSERA_ENV` is not `prod`. In production push and IDV answer
@@ -3945,7 +4002,11 @@ interval, 5 minutes or 1000 events) are the window that cannot be proven complet
 422); page back with `before_seq`.
 
 The Admin → Audit log page lists the events, can include API requests, verifies the chain and
-exports it.
+exports it. Its filter bar sends the actor id, target type, target id and a UTC date range to the
+server (`actor_id`, `target_type`, `target_id`, `from`, `to`), so it filters the whole ledger and not
+the 500 rows on screen. Opening an event shows how its actor signed in (the `authn` context: assurance
+level, phishing-resistant or not, `acr`, authentication time) and builds its inclusion proof for an
+evidence pack (`?path=true`, downloaded as JSON).
 
 #### S3 Object Lock anchor
 

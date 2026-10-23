@@ -17,7 +17,7 @@ func deletionGuardCovered() map[string]bool {
 		"DeletionHoldsDue", "OpenDeletionHolds", "DeletionHoldItems", "SetDeletionHoldItem", "ResolveDeletionHold",
 		"OpenDeletionHoldByCorrelation", "AppendDeletionHoldItems", "SetDeletionHoldReason",
 		"DeletionSourcePolicies", "DeletionSourcePoliciesOf", "DeletionSourcePolicy", "PutDeletionSourcePolicy", "DeleteDeletionSourcePolicy",
-		"DeletionSourceCount", "PutDeletionSourceCount", "DeletionsAppliedBySource", "RecordSourceDeletions"} {
+		"DeletionSourceApproved", "SetDeletionSourceApproved", "DeletionSourceCount", "PutDeletionSourceCount", "DeletionsAppliedBySource", "RecordSourceDeletions"} {
 		out[k] = true // TestIsolation_DeletionGuard
 	}
 	return out
@@ -49,6 +49,9 @@ func TestIsolation_DeletionGuard(t *testing.T) {
 			Mode: "hold_excess", MaxCount: &ten, WindowMinutes: 30, FeedDropPercent: &drop, FeedEmptyCheck: &off}, now); err != nil {
 			return err
 		}
+		if err := c.SetDeletionSourceApproved("connection", "conn-1", "identities", true, nil, now); err != nil {
+			return err
+		}
 		if err := c.PutDeletionSourceCount("connection", "conn-1", "identities", 120, now); err != nil {
 			return err
 		}
@@ -73,6 +76,9 @@ func TestIsolation_DeletionGuard(t *testing.T) {
 		}
 		if _, err := c.DeletionSourcePolicy("connection", "conn-1", "identities"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("DeletionSourcePolicy(A's) = %v", err)
+		}
+		if ok, err := c.DeletionSourceApproved("connection", "conn-1", "identities"); err != nil || ok {
+			t.Errorf("DeletionSourceApproved(A's) = %v, %v", ok, err)
 		}
 		if _, ok, err := c.DeletionSourceCount("connection", "conn-1", "identities"); err != nil || ok {
 			t.Errorf("DeletionSourceCount(A's) = %v, %v", ok, err)
@@ -131,6 +137,9 @@ func TestIsolation_DeletionGuard(t *testing.T) {
 		if p, err := c.DeletionSourcePolicy("connection", "conn-1", "identities"); err != nil || p.Mode != "hold_excess" || p.WindowMinutes != 30 ||
 			p.FeedEmptyCheck == nil || *p.FeedEmptyCheck || *p.FeedDropPercent != 50 {
 			t.Errorf("A's override = %+v, %v", p, err)
+		}
+		if ok, err := c.DeletionSourceApproved("connection", "conn-1", "identities"); err != nil || !ok {
+			t.Errorf("A's approval = %v, %v", ok, err)
 		}
 		if n, ok, err := c.DeletionSourceCount("connection", "conn-1", "identities"); err != nil || !ok || n != 120 {
 			t.Errorf("A's last count = %d %v %v", n, ok, err)

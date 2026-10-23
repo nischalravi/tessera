@@ -554,6 +554,24 @@ export interface AuditRow {
   prev_hash?: string;
 }
 
+/** A neighbour event in a proof: only the link fields. */
+export interface AuditLink { seq: number; hash: string; prev_hash: string }
+
+/** A signed checkpoint of the chain head (GET /api/audit/checkpoints). */
+export interface AuditCheckpoint {
+  id: string; seq: number; head_hash: string; created_at: string; jws: string; anchor_status: string; anchor_ref: string | null; anchored_at: string | null;
+}
+
+/**
+ * GET /api/audit/events/{id}/proof: the event as exported (re-hashable), its neighbours in the chain and the first signed
+ * checkpoint at or after it, so an auditor can check one event without the whole ledger.
+ */
+export interface AuditProof {
+  event: Record<string, unknown> & { hash: string; prev_hash: string; seq: number };
+  previous: AuditLink | null; next: AuditLink | null; checkpoint: AuditCheckpoint | null; events_to_checkpoint: number;
+  hash_algorithm: string; genesis: string;
+}
+
 /** POST /api/audit/verify: the chain, checkpoint and anchor check of this tenant. */
 export interface AuditVerifyReport {
   tenant: string;
@@ -2619,9 +2637,18 @@ export interface HelpdeskPolicy {
   counted_methods: HelpdeskMethod[];
   needs_second_approver: boolean;
   second_approved: boolean;
+  /** Set when an authentication method was added recently or an IdP reported a risk signal (issue #477). */
+  recent_auth_method?: { action: "require_approval" | "block"; days: number; reasons: string[] };
+  /** True when the tenant's action is block: the case cannot run until the window has passed. */
+  blocked: boolean;
   allowed_methods: HelpdeskMethod[];
   missing: string[];
 }
+/** The recent authentication method rule (issue #477). */
+export type HelpdeskRecentAction = "off" | "require_approval" | "block";
+export interface HelpdeskSettings { recent_method_days: number; recent_method_action: HelpdeskRecentAction; updated_by: string; updated_at: string | null }
+export const saveHelpdeskSettings = (b: { recent_method_days: number; recent_method_action: HelpdeskRecentAction }) =>
+  api<HelpdeskSettings>("/helpdesk/settings", b, "PUT");
 export interface HelpdeskVerification {
   id: string;
   method: HelpdeskMethod;
@@ -4190,6 +4217,10 @@ export interface QueueWorkerTarget {
 export const queue = {
   /** Puts a dead job back in the queue with a fresh attempt budget (step-up, audited). */
   retry: (id: string) => api<QueueJob>(`/queue/jobs/${encodeURIComponent(id)}/retry`, {}),
+  /** Stops a recurring job from firing (step-up, audited). Work already queued or running finishes. */
+  pauseSchedule: (name: string, reason?: string) => api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/pause`, reason ? { reason } : {}),
+  /** Lets a paused schedule fire again: once if it came due while paused, then on its cadence. */
+  resumeSchedule: (name: string) => api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/resume`, {}),
 };
 
 // ------------------------------------------------- config transport (#170)
@@ -4198,7 +4229,7 @@ export interface SigningKey { kid: string; public_key: string; tenant: string; c
 export interface TrustedSigner { kid: string; public_key: string; label: string; added_by: string | null; added_at: string }
 export interface ExportedBundle { hash: string; kid: string; file_name: string; excluded: { section: string; name: string; reason: string }[] | null; bundle: unknown }
 export type ImportAction = "add" | "change" | "remove" | "unchanged" | "manual";
-export interface PlanItem { section: "connections" | "overlays" | "identity_providers"; name: string; action: ImportAction; fields?: string[]; notes?: string[] }
+export interface PlanItem { section: "connections" | "overlays" | "identity_providers" | "catalog_items" | "review_schedules" | "alert_rules" | "siem_sinks"; name: string; action: ImportAction; fields?: string[]; notes?: string[] }
 export interface ImportPlan {
   hash: string; digest: string; digest_prune: string; signer: string; signer_kid: string; exported_at: string; items: PlanItem[]; refusals: string[];
   source: { tenant_id: string; tenant: string; env: string; instance?: string; exported_by: string };

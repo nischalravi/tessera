@@ -22,6 +22,8 @@ import { DeletionGuard } from "./DeletionGuard";
 import { HeldDeletions } from "./HeldDeletions";
 import { ConfigTransfer } from "./ConfigTransfer";
 import { SiemSinks } from "./SiemSinks";
+import { AuditEventPanel, AuditFilters } from "./AuditEvent";
+import { AuditQuery, EMPTY_AUDIT_QUERY, auditPath } from "./auditQuery";
 
 const ICONS: Record<string, LucideIcon> = { UserPlus, Radio, Plug, Fingerprint, UserCog, Bell, Mail, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare, Activity, ShieldAlert };
 const Icon = ({ name, size = 18 }: { name: string; size?: number }) => {
@@ -71,8 +73,9 @@ const OUTCOME_TONE: Record<string, "ok" | "warning" | "critical" | "neutral"> = 
 
 /** Read-only view of the tenant's hash-chained audit ledger (design §13, §17). */
 function AuditLog() {
-  const [withHttp, setWithHttp] = useState(false);
-  const { data, error } = useApi<AuditRow[]>(`/audit?limit=500${withHttp ? "&include_http=true" : ""}`);
+  const [query, setQuery] = useState<AuditQuery>(EMPTY_AUDIT_QUERY);
+  const [open, setOpen] = useState<AuditRow | null>(null);
+  const { data, error } = useApi<AuditRow[]>(auditPath(query));
   const [report, setReport] = useState<AuditVerifyReport | null>(null);
   const [verifying, setVerifying] = useState(false);
   const toast = useToast();
@@ -113,15 +116,18 @@ function AuditLog() {
           </Callout>
         )}
       </div>
+      <AuditFilters key={JSON.stringify([query.actorId, query.targetType, query.targetId, query.from, query.to])} value={query} onApply={setQuery} />
       <DataTable
         id="audit"
         rows={data}
         error={error}
         rowKey={(r) => r.event_id ?? r.id}
+        onRowClick={setOpen}
+        activeKey={open?.event_id ?? open?.id}
         initialSort={["seq", -1]}
         toolbarExtra={
           <label className="row tight small">
-            <input type="checkbox" checked={withHttp} onChange={(e) => setWithHttp(e.target.checked)} /> Include API requests
+            <input type="checkbox" checked={query.includeHttp} onChange={(e) => setQuery({ ...query, includeHttp: e.target.checked })} /> Include API requests
           </label>
         }
         columns={[
@@ -145,6 +151,7 @@ function AuditLog() {
           { id: "actor_type", label: "Actor type", options: ["anonymous", "system", "user", "api_client", "operator"].map((o) => ({ value: o, label: o })), get: (r) => r.actor_type ?? "" },
         ]}
       />
+      {open && <AuditEventPanel event={open} onClose={() => setOpen(null)} />}
       {mock.log.length > 0 && (
         <div className="card flush">
           <div className="card-h"><h2 className="row tight">Preview actions in this browser <PreviewBadge /></h2><span className="xs faint tnum">{mock.log.length}</span></div>
@@ -180,14 +187,14 @@ export function AdminSectionPage() {
     <Page title={s.title} badge={s.live ? undefined : <PreviewBadge />} crumbs={s.id === "connections" ? [["Settings"], [s.title]] : [["Settings"], ["Admin", "/admin"], [s.title]]} sub={s.summary}>
       <div className="stack">
         {Live && <Live />}
-        {(s.will.length > 0 || !s.live) && (
-          <div className="card stack-sm">
-            <h2 className="row tight"><Icon name={s.icon} size={16} /> {s.live ? "Coming next on this page" : "What this page will do"}</h2>
-            <ul className="small" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
-              {s.will.map((w) => <li key={w}>{w}</li>)}
-            </ul>
-            {!s.live && <Callout tone="neutral">This is a Preview. Nothing here is saved yet: the settings API is part of a later phase.</Callout>}
-          </div>
+        {(!s.live || s.will.length > 0) && (
+        <div className="card stack-sm">
+          <h2 className="row tight"><Icon name={s.icon} size={16} /> {s.live ? "Coming next on this page" : "What this page will do"}</h2>
+          <ul className="small" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
+            {s.will.map((w) => <li key={w}>{w}</li>)}
+          </ul>
+          {!s.live && <Callout tone="neutral">This is a Preview. Nothing here is saved yet: the settings API is part of a later phase.</Callout>}
+        </div>
         )}
       </div>
     </Page>

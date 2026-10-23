@@ -60,6 +60,9 @@ type Request struct {
 	// RunID names the run or request that made the call (the request id when empty and there is one);
 	// a hold records it with the actor, see Contributor.
 	RunID string
+	// CoActors are further platform users answerable for the run besides Actor (a queued sync that
+	// another admin retried): a hold records each as a contributor, so none of them can release it.
+	CoActors []string
 }
 
 // DefaultFeedDropPercent is how far a source's record count may fall against the last good run
@@ -202,14 +205,21 @@ func AdmitFrom(tx *store.TenantTx, now time.Time, category, source, sourceID, co
 
 type requesterKey struct{}
 
-// WithRequester names the platform user who queued the work a worker is running (a queued sync), so
-// the holds it makes record them as a contributor and they cannot release them (#487). A run nobody
+// WithRequester names the platform users answerable for the work a worker is running (a queued sync:
+// who queued it, and who retried it after it died, #495), so the holds it makes record each as a
+// contributor and none of them can release them (#487). A run nobody
 // queued (a schedule) carries none: its contributor has no actor and exempts no one.
-func WithRequester(ctx context.Context, userID string) context.Context {
-	if userID == "" {
+func WithRequester(ctx context.Context, userIDs ...string) context.Context {
+	var ids []string
+	for _, id := range userIDs {
+		if id != "" && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
 		return ctx
 	}
-	return context.WithValue(ctx, requesterKey{}, userID)
+	return context.WithValue(ctx, requesterKey{}, ids)
 }
 
 // AdmitWith is AdmitFrom for a request built by the caller (a source-driven run with feed checks).
@@ -224,9 +234,13 @@ func AdmitWith(tx *store.TenantTx, now time.Time, req Request) (*Decision, error
 			req.SourceID = *ac.Actor.Display
 		}
 	}
-	if req.Actor == "" {
-		if id, ok := tx.Context().Value(requesterKey{}).(string); ok {
-			req.Actor = id
+	if ids, ok := tx.Context().Value(requesterKey{}).([]string); ok {
+		for _, id := range ids {
+			if req.Actor == "" {
+				req.Actor = id
+			} else if id != req.Actor {
+				req.CoActors = append(req.CoActors, id)
+			}
 		}
 	}
 	return Admit(tx, now, req)
@@ -301,13 +315,19 @@ func Admit(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
 		// A source's own threshold bounds the source; it does not lift it out of the tenant-wide
 		// budget (#485). Every deletion also counts against the category's limit, so N sources with
 		// identical overrides cannot apply N times what the category allows in one window. An override
-		// that loosens the category took two admins to set and is its own budget by design.
+		// is its own budget only when two admins approved it as looser than the category (recorded when
+		// the change was approved, #494) and it still is: a category tightened later by one admin never
+		// turns an override into one.
 		cat := Resolve(tp, nil, req.SourceDriven)
 		catPop, err := tx.DeletionPopulation(req.Category)
 		if err != nil {
 			return nil, err
 		}
-		if cat.Mode != ModeOff && !Loosens(cat.Policy, pol, catPop) {
+		approved, err := tx.DeletionSourceApproved(ref.Kind, ref.ID, req.Category)
+		if err != nil {
+			return nil, err
+		}
+		if cat.Mode != ModeOff && !(approved && Loosens(cat.Policy, pol, catPop)) {
 			catUsed, err := tx.DeletionsApplied(req.Category, now.Add(-cat.Window()))
 			if err != nil {
 				return nil, err
@@ -387,6 +407,17 @@ type Contributor struct {
 	RunID    string    `json:"run_id,omitempty"`
 	At       time.Time `json:"at"`
 	Added    int       `json:"added"`
+}
+
+// contributorsOf is the contributor of the run, and one for each co-actor.
+func contributorsOf(tx *store.TenantTx, now time.Time, req Request, added int) []Contributor {
+	out := []Contributor{contributorOf(tx, now, req, added)}
+	for _, id := range req.CoActors {
+		c := out[0]
+		c.Actor = id
+		out = append(out, c)
+	}
+	return out
 }
 
 func contributorOf(tx *store.TenantTx, now time.Time, req Request, added int) Contributor {
@@ -492,7 +523,9 @@ func hold(tx *store.TenantTx, now time.Time, req Request, res Resolved, ref Sour
 		// the hold now also describes this run: who added items, and the sanity counts the approver sees
 		var rs reason
 		if json.Unmarshal([]byte(h.Reason), &rs) == nil {
-			rs.Contributors = addContributor(rs.Contributors, contributorOf(tx, now, req, len(items)))
+			for _, c := range contributorsOf(tx, now, req, len(items)) {
+				rs.Contributors = addContributor(rs.Contributors, c)
+			}
 			rs.Attempted += d.Attempted
 			rs.Applied += len(d.Applied)
 			if req.NewCount > 0 || req.PrevCount > 0 {
@@ -528,7 +561,7 @@ func hold(tx *store.TenantTx, now time.Time, req Request, res Resolved, ref Sour
 		MaxPercent: pol.MaxPercent, Population: pop, Limit: d.Limit, UsedBefore: d.Used, Attempted: d.Attempted,
 		Applied: len(d.Applied), Mode: pol.Mode, Sanity: req.Sanity, PreviousCount: req.PrevCount, NewCount: req.NewCount,
 		SourceDriven: req.SourceDriven, SourceKind: ref.Kind, SourceRef: ref.ID, SourceOverride: res.Overridden,
-		Contributors: []Contributor{contributorOf(tx, now, req, len(items))}})
+		Contributors: contributorsOf(tx, now, req, len(items))})
 	if err != nil {
 		return err
 	}
