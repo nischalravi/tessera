@@ -23,7 +23,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Values.csi.enabled -}}{{ default (printf "%s-env" (include "tessera.fullname" .)) .Values.csi.syncedSecretName }}
 {{- else -}}{{ required "secrets.existingSecret is required (a Secret with keys TESSERA_DB, TESSERA_DB_APP, TESSERA_KEK), or enable csi" .Values.secrets.existingSecret }}{{- end -}}
 {{- end -}}
-{{- define "tessera.image" -}}{{ printf "%s:%s" .repository (.tag | default "latest") }}{{- end -}}
+{{- define "tessera.image" -}}{{- if .digest -}}{{ printf "%s:%s@%s" .repository (.tag | default "latest") .digest }}{{- else -}}{{ printf "%s:%s" .repository (.tag | default "latest") }}{{- end -}}{{- end -}}
 {{- /* Pod security context shared by every pod of the chart. OpenShift assigns uid and fsGroup itself. */ -}}
 {{- define "tessera.podSecurityContext" -}}
 runAsNonRoot: true

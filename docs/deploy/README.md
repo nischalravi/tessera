@@ -13,6 +13,8 @@ Files: `deploy/docker` (images), `deploy/compose` (one VM), `deploy/helm/tessera
 |---|---|---|
 | API | `tessera-api` (`cmd/tessera`, distroless static, uid 65532) | `serve -addr 0.0.0.0:8000`. Also `worker`, `admin`, `backup`, `check-db` subcommands |
 | UI | `tessera-ui` (nginx-unprivileged, uid 101) | **The Go API does not serve the web UI.** The UI image serves `mvp/frontend/dist` and proxies `/api`, `/public/t`, `/.well-known`, `/t/<slug>/oauth|bootstrap|mcp` to the API, so one origin serves both (prod UI is same-origin, CORS off). Same path list as `mvp/frontend/vite.config.ts` |
+| UI headers | (same image) | Static responses carry a strict CSP (`default-src 'self'`, no inline script, `frame-ancestors 'none'`), `nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options`. `Strict-Transport-Security` is sent only when `X-Forwarded-Proto` is `https`; its value is the container env `TESSERA_HSTS` (default `max-age=31536000; includeSubDomains`, set it empty to turn HSTS off). Headers live in `deploy/docker/nginx/tessera-headers.inc` |
+| Base images | `deploy/docker/Dockerfile`, `deploy/compose` | Pinned by tag and `@sha256` digest (a test in `internal/archtest` rejects unpinned or `:latest` third-party images). Refresh with `docker buildx imagetools inspect <tag>`. Compose `init-certs`/`init-kek` use the Dockerfile `init` target (pinned alpine + openssl); the KEK is mounted only into `init-kek` |
 | CLI | `tessera-cli` target | Operator/user CLI (device sign-in). Optional |
 | Dev IdP | `tessera-devidp` target | Development only. Listens on loopback only, never in the prod image, refused by the prod guard rails |
 | Database | Postgres 16 | Required for more than one replica. SQLite is single-node only |
