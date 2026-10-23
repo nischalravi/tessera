@@ -3,6 +3,7 @@ package ingest
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
@@ -23,6 +24,10 @@ func agentDiscovery(c *store.TenantTx, now time.Time, results []*connectors.Disc
 				systems = append(systems, s)
 			}
 		}
+	}
+	var bpSystems []string
+	for _, r := range results {
+		bpSystems = append(bpSystems, r.BlueprintSnapshotOf...)
 	}
 	have := len(systems) > 0
 	for _, r := range results {
@@ -49,9 +54,9 @@ func agentDiscovery(c *store.TenantTx, now time.Time, results []*connectors.Disc
 			}
 			seenProfile[[2]string{a.System, a.ExternalID}] = true
 			st.Agents++
-			link := store.AgentLink{Source: a.System, ExternalID: a.ExternalID, BlueprintID: a.BlueprintID,
-				ManagerRef: a.ManagerRef, ManagerID: res.Identity(a.Manager)}
-			if link.BlueprintID == "" && link.ManagerRef == "" && link.ManagerID == nil {
+			link := store.AgentLink{Source: a.System, ExternalID: a.ExternalID, BlueprintAppID: a.BlueprintAppID,
+				ManagerApplications: strings.Join(a.ManagerApplications, ",")}
+			if link.BlueprintAppID == "" && link.ManagerApplications == "" {
 				err = c.DeleteAgentLink(a.System, a.ExternalID)
 			} else {
 				err = c.UpsertAgentLink(&link)
@@ -76,7 +81,7 @@ func agentDiscovery(c *store.TenantTx, now time.Time, results []*connectors.Disc
 		return err
 	}
 	for _, b := range blueprints {
-		if slices.Contains(systems, b.Source) && !seenBlueprint[[2]string{b.Source, b.ExternalID}] {
+		if slices.Contains(bpSystems, b.Source) && !seenBlueprint[[2]string{b.Source, b.ExternalID}] {
 			if err := c.DeleteAgentBlueprint(b.Source, b.ExternalID); err != nil {
 				return err
 			}

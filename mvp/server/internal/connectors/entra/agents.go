@@ -10,7 +10,6 @@ package entra
 //
 //	GET /beta/servicePrincipals/microsoft.graph.agentIdentity   the agent identities
 //	GET /beta/servicePrincipals/{id}/microsoft.graph.agentIdentity/sponsors   its sponsors
-//	GET /beta/servicePrincipals/{id}/microsoft.graph.agentIdentity/manager    its manager (issue #478)
 //	GET /beta/applications/microsoft.graph.agentIdentityBlueprint             the blueprints, with /{id}/microsoft.graph.agentIdentityBlueprint/sponsors
 //
 // The shapes are those of the Graph documentation, exercised here against
@@ -64,9 +63,11 @@ type eAgent struct {
 	PasswordCredentials []eCredential `json:"passwordCredentials"`
 	KeyCredentials      []eCredential `json:"keyCredentials"`
 	// BlueprintID is the blueprint the agent identity was created from (issue #478).
-	BlueprintID string `json:"agentIdentityBlueprintId"`
-	sponsors    []eSponsor
-	manager     *eSponsor
+	// BlueprintAppID is agentIdentityBlueprintId: the blueprint's appId, not its object id. The
+	// managerApplications (returned only with $select) are application ids, not people.
+	BlueprintAppID      string   `json:"agentIdentityBlueprintId"`
+	ManagerApplications []string `json:"managerApplications"`
+	sponsors            []eSponsor
 }
 
 // eBlueprint is an agent identity blueprint: an application of type
@@ -79,7 +80,7 @@ type eBlueprint struct {
 	sponsors       []eSponsor
 }
 
-const agentSelect = "$select=id,appId,displayName,accountEnabled,createdByAppId,createdDateTime,agentIdentityBlueprintId,passwordCredentials,keyCredentials&$top=999"
+const agentSelect = "$select=id,appId,displayName,accountEnabled,createdByAppId,createdDateTime,agentIdentityBlueprintId,managerApplications,passwordCredentials,keyCredentials&$top=999"
 
 const blueprintSelect = "$select=id,appId,displayName,createdByAppId&$top=999"
 
@@ -123,23 +124,13 @@ func (c *Connector) readAgents(ctx context.Context) (agents []*eAgent, ok bool, 
 			}
 			return nil, false, fmt.Errorf("entra: agent sponsors: %w", err)
 		}
-		// The manager is a single directory object; 403/404 (none set, or not readable) means none.
-		var m eSponsor
-		mp := "/servicePrincipals/" + url.PathEscape(a.ID) + "/microsoft.graph.agentIdentity/manager"
-		if _, err := c.api.GetJSON(ctx, c.graphBeta(mp, personSelect), nil, &m); err != nil {
-			if s := connsync.Status(err); s != 403 && s != 404 {
-				return nil, false, fmt.Errorf("entra: agent manager: %w", err)
-			}
-		} else if m.ID != "" {
-			a.manager = &m
-		}
 	}
 	sort.SliceStable(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
 	return agents, true, nil
 }
 
-// readBlueprints lists the agent identity blueprints and their sponsors. A 403
-// or 404 means none to read.
+// readBlueprints lists the agent identity blueprints and their sponsors. Any error
+// means the list is not complete: the caller must not treat it as an empty snapshot.
 func (c *Connector) readBlueprints(ctx context.Context) ([]*eBlueprint, error) {
 	var out []*eBlueprint
 	_, err := listAll(ctx, c, c.graphBeta("/applications/microsoft.graph.agentIdentityBlueprint", blueprintSelect), func(b eBlueprint) error {
@@ -149,9 +140,6 @@ func (c *Connector) readBlueprints(ctx context.Context) ([]*eBlueprint, error) {
 		return nil
 	})
 	if err != nil {
-		if s := connsync.Status(err); s == 403 || s == 404 {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("entra: agent blueprints: %w", err)
 	}
 	for _, b := range out {
@@ -161,6 +149,7 @@ func (c *Connector) readBlueprints(ctx context.Context) ([]*eBlueprint, error) {
 			return nil
 		})
 		if err != nil {
+			// no sponsors readable for this blueprint: it has none we know of; anything else is incomplete
 			if s := connsync.Status(err); s == 403 || s == 404 {
 				b.sponsors = nil
 				continue
@@ -170,6 +159,14 @@ func (c *Connector) readBlueprints(ctx context.Context) ([]*eBlueprint, error) {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+// statusText names a failure by its HTTP status only, never by a response body.
+func statusText(err error) string {
+	if s := connsync.Status(err); s != 0 {
+		return fmt.Sprintf("HTTP %d", s)
+	}
+	return "request failed"
 }
 
 // applyBlueprints adds the blueprint records; the sponsor is the first enabled
@@ -284,17 +281,12 @@ func (c *Connector) applyAgents(res *connectors.DiscoveryResult, agents []*eAgen
 		if rec.Sponsor != nil && rec.SponsorRef == "" {
 			rec.SponsorRef = rec.Sponsor.Email
 		}
-		if validID(a.BlueprintID) {
-			rec.BlueprintID = a.BlueprintID
+		if validID(a.BlueprintAppID) {
+			rec.BlueprintAppID = a.BlueprintAppID
 		}
-		if a.manager != nil {
-			if rec.ManagerRef = a.manager.email(); rec.ManagerRef == "" {
-				rec.ManagerRef = a.manager.DisplayName
-			}
-			if a.manager.AccountEnabled == nil || *a.manager.AccountEnabled {
-				if e := a.manager.email(); e != "" {
-					rec.Manager = &connectors.IdentityRef{Email: e}
-				}
+		for _, m := range a.ManagerApplications {
+			if validID(m) {
+				rec.ManagerApplications = append(rec.ManagerApplications, m)
 			}
 		}
 		res.Agents = append(res.Agents, rec)

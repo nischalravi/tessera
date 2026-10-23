@@ -148,7 +148,7 @@ func TestAgentBlueprintsAndLinks(t *testing.T) {
 	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &bps) != nil || len(bps) != 1 {
 		t.Fatalf("blueprints: %d %.300s", rec.Code, rec.Body.String())
 	}
-	if bps[0]["id"] != "bp-1" || bps[0]["agents"] != float64(1) || bps[0]["sponsor_status"] != "active" || bps[0]["sponsor"] == nil {
+	if bps[0]["id"] != "bp-obj-1" || bps[0]["app_id"] != "bp-app-1" || bps[0]["agents"] != float64(1) || bps[0]["sponsor_status"] != "active" || bps[0]["sponsor"] == nil {
 		t.Errorf("blueprint = %v", bps[0])
 	}
 	rec = serveOnce(h, http.MethodGet, "/api/ai-agents", "")
@@ -158,7 +158,7 @@ func TestAgentBlueprintsAndLinks(t *testing.T) {
 	}
 	bot := agents[0].(map[string]any) // the fixture has one agent
 	bp, _ := bot["blueprint"].(map[string]any)
-	if bp["id"] != "bp-1" || bot["manager"] == nil || bot["manager_ref"] == nil || containsAny(bot["flags"], "no_sponsor") {
+	if bp["id"] != "bp-app-1" || bp["name"] == "bp-app-1" || bot["manager_applications"] == nil || containsAny(bot["flags"], "no_sponsor") {
 		t.Errorf("helper bot = %v", bot)
 	}
 }

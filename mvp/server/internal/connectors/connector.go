@@ -183,11 +183,12 @@ type AgentRecord struct {
 	// identity. They are never credentials.
 	CreatorRef string
 	SponsorRef string
-	// BlueprintID is the ExternalID of the BlueprintRecord the agent was created
-	// from; Manager and ManagerRef are its manager (issue #478).
-	BlueprintID string
-	Manager     *IdentityRef
-	ManagerRef  string
+	// BlueprintAppID is the AppID of the BlueprintRecord the agent was created from (Entra
+	// agentIdentityBlueprintId is the blueprint's appId, not its object id). ManagerApplications
+	// are the application ids that manage the agent (Entra managerApplications): applications,
+	// not people (issue #478).
+	BlueprintAppID      string
+	ManagerApplications []string
 }
 
 // BlueprintRecord is an agent blueprint, the template agent identities are
@@ -265,10 +266,13 @@ type DiscoveryResult struct {
 	// AgentSnapshotOf names the systems for which this result is the complete
 	// list of both: ingest replaces what it holds for those systems, so an
 	// agent or finding that is gone from the source is gone from Tessera.
-	Agents          []AgentRecord
-	Blueprints      []BlueprintRecord
-	MCPFindings     []MCPFindingRecord
-	AgentSnapshotOf []string
+	Agents     []AgentRecord
+	Blueprints []BlueprintRecord
+	// BlueprintSnapshotOf lists the systems whose blueprints were listed completely; only then may
+	// blueprints missing from Blueprints be removed.
+	BlueprintSnapshotOf []string
+	MCPFindings         []MCPFindingRecord
+	AgentSnapshotOf     []string
 	// Stats are per-object-class attribute fill counts computed by the
 	// connector, so fill rates need no attribute values. Optional.
 	Stats *DiscoveryStats

@@ -5489,16 +5489,18 @@ identities) and `mcp_findings`, both tenant-scoped with cross-tenant guard trigg
 creator, sponsor status and violating policy ids; `GET /api/nhi` is unchanged. The demo company
 supplies Okta-sourced agents and five sample findings, so the screens work without any connector.
 
-**Entra Agent ID blueprints and managers (issue #478).** With `TESSERA_ENTRA_DISCOVER_AGENTS=true` the
-connector also reads Graph beta `applications/microsoft.graph.agentIdentityBlueprint` and its `sponsors`, the
-agent's `agentIdentityBlueprintId`, and `servicePrincipals/{id}/microsoft.graph.agentIdentity/manager`. Storage:
-`agent_blueprints` and `agent_links` (`schema/0830_agent_blueprints.sql`, Postgres variant and RLS included).
-`GET /api/ai-agents/blueprints` lists blueprints with sponsor, sponsor status and agent count; each
-`GET /api/ai-agents` row gains `blueprint`, `manager` and `manager_ref`, and an agent with no sponsor at all
-(none resolved, none named by Entra) carries the `no_sponsor` flag next to the existing `nhi-ownership`
-violation. A 403 or 404 on blueprints or manager means none, not a failed sync. Tested on recorded fixtures
-(`internal/connectors/entra/testdata/blueprints.json`, `agent_manager_1.json`); the blueprint and manager
-endpoint paths and the `agentIdentityBlueprintId` field are unverified against a live tenant.
+**Entra Agent ID blueprints (issue #478).** With `TESSERA_ENTRA_DISCOVER_AGENTS=true` the connector also reads
+Graph **beta** `applications/microsoft.graph.agentIdentityBlueprint` and its `sponsors`, and, on each agent identity,
+`agentIdentityBlueprintId` (the blueprint's **appId**, not its object id) and `managerApplications` (application
+ids, requested with `$select`; applications, not people). Required Graph application permissions:
+`AgentIdentity.Read.All` and `AgentIdentityBlueprint.Read.All`. Storage: `agent_blueprints` and `agent_links`
+(`schema/0830_agent_blueprints.sql`, Postgres variant and RLS included). `GET /api/ai-agents/blueprints` lists
+blueprints with sponsor, sponsor status and agent count; each `GET /api/ai-agents` row gains `blueprint`
+(joined on appId) and `manager_applications`, and an agent with no sponsor at all (none resolved, none named by
+Entra) carries the `no_sponsor` flag next to the existing `nhi-ownership` violation. Humans stay sponsors and
+owners. A failed or forbidden blueprint list is never an empty snapshot: stored blueprints are kept and the
+sync result is marked partial with the HTTP status. Tested on recorded fixtures only; the beta shapes follow
+Microsoft's documentation and were not run against a live tenant.
 
 ### Groups from the command line and declarative plans (`tessera-cli groups`)
 

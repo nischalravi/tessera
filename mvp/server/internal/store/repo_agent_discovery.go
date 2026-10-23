@@ -159,12 +159,12 @@ type AgentBlueprint struct {
 	FirstSeenAt, LastSeenAt         time.Time
 }
 
-// AgentLink is an agent's blueprint and manager; it shares the key of its AgentProfile.
+// AgentLink is an agent's blueprint (by the blueprint's appId) and its managerApplications
+// (application ids, comma separated; not people); it shares the key of its AgentProfile.
 type AgentLink struct {
-	Source, ExternalID string
-	BlueprintID        string
-	ManagerRef         string
-	ManagerID          *int64
+	Source, ExternalID  string
+	BlueprintAppID      string
+	ManagerApplications string
 }
 
 var (
@@ -184,13 +184,13 @@ var (
 		DELETE FROM agent_blueprints WHERE tenant_id = @tenant AND source = @source AND external_id = @external_id`)
 
 	agentLinksList = tq("agent_links.list", `
-		SELECT l.source, l.external_id, l.blueprint_id, l.manager_ref, l.manager_identity_id
+		SELECT l.source, l.external_id, l.blueprint_app_id, l.manager_applications
 		FROM agent_links l WHERE l.tenant_id = @tenant ORDER BY l.source, l.external_id`)
 	agentLinksUpsert = tq("agent_links.upsert", `
-		INSERT INTO agent_links (tenant_id, source, external_id, blueprint_id, manager_ref, manager_identity_id)
-		VALUES (@tenant, @source, @external_id, @blueprint_id, @manager_ref, @manager_identity_id)
-		ON CONFLICT (tenant_id, source, external_id) DO UPDATE SET blueprint_id = excluded.blueprint_id,
-			manager_ref = excluded.manager_ref, manager_identity_id = excluded.manager_identity_id`)
+		INSERT INTO agent_links (tenant_id, source, external_id, blueprint_app_id, manager_applications)
+		VALUES (@tenant, @source, @external_id, @blueprint_app_id, @manager_applications)
+		ON CONFLICT (tenant_id, source, external_id) DO UPDATE SET blueprint_app_id = excluded.blueprint_app_id,
+			manager_applications = excluded.manager_applications`)
 	agentLinksDelete = tq("agent_links.delete", `
 		DELETE FROM agent_links WHERE tenant_id = @tenant AND source = @source AND external_id = @external_id`)
 )
@@ -213,11 +213,9 @@ func scanAgentBlueprint(s scanner) (*AgentBlueprint, error) {
 
 func scanAgentLink(s scanner) (*AgentLink, error) {
 	var l AgentLink
-	var mgr sql.NullInt64
-	if err := s.Scan(&l.Source, &l.ExternalID, &l.BlueprintID, &l.ManagerRef, &mgr); err != nil {
+	if err := s.Scan(&l.Source, &l.ExternalID, &l.BlueprintAppID, &l.ManagerApplications); err != nil {
 		return nil, err
 	}
-	l.ManagerID = intp(mgr)
 	return &l, nil
 }
 
@@ -245,11 +243,10 @@ func (tx *TenantTx) AgentLinks() ([]*AgentLink, error) {
 	return collect(tx, scanAgentLink, agentLinksList)
 }
 
-// UpsertAgentLink stores an agent's blueprint and manager.
+// UpsertAgentLink stores an agent's blueprint and managerApplications.
 func (tx *TenantTx) UpsertAgentLink(l *AgentLink) error {
 	_, err := tx.exec(agentLinksUpsert, sql.Named("source", l.Source), sql.Named("external_id", l.ExternalID),
-		sql.Named("blueprint_id", l.BlueprintID), sql.Named("manager_ref", l.ManagerRef),
-		sql.Named("manager_identity_id", IP(l.ManagerID)))
+		sql.Named("blueprint_app_id", l.BlueprintAppID), sql.Named("manager_applications", l.ManagerApplications))
 	return err
 }
 

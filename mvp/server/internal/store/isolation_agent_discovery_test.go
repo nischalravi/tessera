@@ -31,8 +31,8 @@ func TestIsolation_AgentBlueprintsScoped(t *testing.T) {
 				SponsorID: &me}, storetest.Now); err != nil {
 				return err
 			}
-			return c.UpsertAgentLink(&store.AgentLink{Source: "entra", ExternalID: "agent-1", BlueprintID: "bp",
-				ManagerRef: "mgr-" + tn.Slug, ManagerID: &me})
+			return c.UpsertAgentLink(&store.AgentLink{Source: "entra", ExternalID: "agent-1", BlueprintAppID: "bp",
+				ManagerApplications: "mgr-" + tn.Slug})
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -52,8 +52,8 @@ func TestIsolation_AgentBlueprintsScoped(t *testing.T) {
 		for _, l := range ls {
 			if l.Source == "entra" {
 				n += 10
-				if l.ManagerRef != "mgr-"+slug {
-					t.Errorf("link %q in tenant %s", l.ManagerRef, slug)
+				if l.ManagerApplications != "mgr-"+slug {
+					t.Errorf("link %q in tenant %s", l.ManagerApplications, slug)
 				}
 			}
 		}
@@ -80,12 +80,6 @@ func TestIsolation_AgentBlueprintsScoped(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("B stored a blueprint sponsored by A's identity")
-	}
-	err = f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
-		return c.UpsertAgentLink(&store.AgentLink{Source: "entra", ExternalID: "x", ManagerID: &foreign})
-	})
-	if err == nil {
-		t.Error("B stored a link managed by A's identity")
 	}
 }
 

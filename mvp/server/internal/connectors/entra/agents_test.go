@@ -23,9 +23,11 @@ const (
 
 	blueprintSupport = "bbbbbbbb-0000-4000-8000-000000000001" // sponsored by Ada
 	blueprintNoOwner = "bbbbbbbb-0000-4000-8000-000000000002" // no sponsor
+	// agents link to a blueprint by its appId, which differs from its object id
+	blueprintSupportApp = "55550000-0000-4000-8000-000000000001"
 )
 
-// Blueprints, the agent-to-blueprint link and the manager (issue #478).
+// Blueprints, the agent-to-blueprint link (by appId) and managerApplications (issue #478).
 func TestBlueprintsAndManagerDiscovered(t *testing.T) {
 	f := newFake(t)
 	f.withAgents()
@@ -47,11 +49,11 @@ func TestBlueprintsAndManagerDiscovered(t *testing.T) {
 	for _, a := range res.Agents {
 		switch a.ExternalID {
 		case agentSupport:
-			if a.BlueprintID != blueprintSupport || a.ManagerRef != "Ben.Sample@Fixture.onmicrosoft.com" || a.Manager == nil {
+			if a.BlueprintAppID != blueprintSupportApp || len(a.ManagerApplications) != 1 || a.ManagerApplications[0] != "66660000-0000-4000-8000-000000000001" {
 				t.Errorf("support agent link = %+v", a)
 			}
 		default:
-			if a.BlueprintID != "" || a.Manager != nil || a.ManagerRef != "" {
+			if a.BlueprintAppID != "" || len(a.ManagerApplications) != 0 {
 				t.Errorf("agent %s link = %+v, want none", a.ExternalID, a)
 			}
 		}
@@ -66,6 +68,26 @@ func TestBlueprintsUnavailableIsNotAFailure(t *testing.T) {
 	if err != nil || len(res.Blueprints) != 0 || len(res.Agents) != 3 {
 		t.Errorf("blueprints = %d, agents = %d, err = %v", len(res.Blueprints), len(res.Agents), err)
 	}
+	if len(res.BlueprintSnapshotOf) != 0 || res.Partial == "" || strings.Contains(res.Partial, "leaky") {
+		t.Errorf("a failed blueprint list claimed a snapshot or hid the error: snapshot %v, partial %q", res.BlueprintSnapshotOf, res.Partial)
+	}
+}
+
+// A blueprint list that fails (403) must not delete the blueprints stored earlier.
+func TestBlueprintsSurviveAFailedList(t *testing.T) {
+	f := newFake(t)
+	f.withAgents()
+	db := testkit.Open(t)
+	testkit.CreateTenant(t, db, tenantA, "entra-bp-survive")
+	syncTenant(t, db, tenantA, context.Background(), hr{}, f.connector(agentCfg()))
+	f.status["/beta/applications"] = 403
+	syncTenant(t, db, tenantA, context.Background(), hr{}, f.connector(agentCfg()))
+	testkit.Read(t, &testkit.DB{DB: db, Tenant: tenantA}, func(tx *store.TenantTx) error {
+		if bps, _ := tx.AgentBlueprints(); len(bps) != 2 {
+			t.Errorf("blueprints after a 403 = %d, want the 2 stored before", len(bps))
+		}
+		return nil
+	})
 }
 
 // withAgents serves the Agent ID fixtures (Graph beta) next to the directory ones.
@@ -75,11 +97,7 @@ func (f *fake) withAgents() {
 		name := "agent_sponsors_" + string(rune('1'+i)) + ".json"
 		f.body["/beta/servicePrincipals/"+id+"/microsoft.graph.agentIdentity/sponsors"] = string(connsynctest.Fixture(f.t, name, f.srv.URL))
 	}
-	for _, id := range []string{agentOrphan, agentLeft} {
-		f.status["/beta/servicePrincipals/"+id+"/microsoft.graph.agentIdentity/manager"] = 404 // no manager set
-	}
 	f.body["/beta/applications/"+blueprintNoOwner+"/microsoft.graph.agentIdentityBlueprint/sponsors"] = `{"value":[]}`
-	f.body["/beta/servicePrincipals/"+agentSupport+"/microsoft.graph.agentIdentity/manager"] = string(connsynctest.Fixture(f.t, "agent_manager_1.json", f.srv.URL))
 	f.body["/beta/applications/microsoft.graph.agentIdentityBlueprint"] = string(connsynctest.Fixture(f.t, "blueprints.json", f.srv.URL))
 	f.body["/beta/applications/"+blueprintSupport+"/microsoft.graph.agentIdentityBlueprint/sponsors"] = string(connsynctest.Fixture(f.t, "blueprint_sponsors_1.json", f.srv.URL))
 }
@@ -247,8 +265,8 @@ func TestAgentsIngestAndOwnershipViolations(t *testing.T) {
 		if len(bps) != 2 || bps[0].SponsorID == nil || *bps[0].SponsorID != byXID["EMP-2001"].ID || bps[1].SponsorID != nil {
 			t.Errorf("blueprints = %+v", bps)
 		}
-		if len(links) != 1 || links[0].ExternalID != agentSupport || links[0].BlueprintID != blueprintSupport ||
-			links[0].ManagerID == nil {
+		if len(links) != 1 || links[0].ExternalID != agentSupport || links[0].BlueprintAppID != blueprintSupportApp ||
+			links[0].ManagerApplications != "66660000-0000-4000-8000-000000000001" {
 			t.Errorf("links = %+v", links)
 		}
 		g, err := graph.Build(tx, testkit.Now)

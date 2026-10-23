@@ -759,16 +759,16 @@ export interface AgentRow {
   violations: string[];
   first_seen_at: string | null;
   last_seen_at: string | null;
-  /** Entra Agent ID: the blueprint the agent was created from (issue #478). */
+  /** Entra Agent ID: the blueprint the agent was created from, matched on the blueprint's app id (issue #478). */
   blueprint: { id: string; name: string } | null;
-  /** Its manager, and the manager as the source spells it. Flags carries "no_sponsor" when it has no sponsor at all. */
-  manager: PersonBrief | null;
-  manager_ref: string | null;
+  /** Application ids that manage the agent (Entra managerApplications): applications, not people. Flags carries "no_sponsor" when it has no sponsor at all. */
+  manager_applications: string[] | null;
 }
 
 /** An Entra Agent ID blueprint, with its sponsor and how many agents use it (issue #478). */
 export interface AgentBlueprint {
   source: string;
+  /** The blueprint's object id; agents link by app_id. */
   id: string;
   app_id: string | null;
   name: string;

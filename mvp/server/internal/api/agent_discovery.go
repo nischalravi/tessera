@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/nhi"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -46,12 +47,12 @@ type agentView struct {
 	Violations            []string `json:"violations"`
 	FirstSeenAt           *string  `json:"first_seen_at"`
 	LastSeenAt            *string  `json:"last_seen_at"`
-	// Blueprint (Entra Agent ID) is the template the agent was created from; Manager is its
-	// manager, as Tessera identity when it resolved and as the source spells it otherwise.
-	// Flags carries "no_sponsor" when the agent has no sponsor at all (issue #478).
-	Blueprint  *blueprintRef `json:"blueprint"`
-	Manager    *nhi.Owner    `json:"manager"`
-	ManagerRef *string       `json:"manager_ref"`
+	// Blueprint (Entra Agent ID) is the template the agent was created from, matched on the
+	// blueprint's appId. ManagerApplications are the application ids that manage the agent
+	// (applications, not people; humans are sponsors and owners). Flags carries "no_sponsor"
+	// when the agent has no sponsor at all (issue #478).
+	Blueprint           *blueprintRef `json:"blueprint"`
+	ManagerApplications []string      `json:"manager_applications"`
 }
 
 type blueprintRef struct {
@@ -62,7 +63,7 @@ type blueprintRef struct {
 // blueprintView is one row of the agent blueprint inventory.
 type blueprintView struct {
 	Source        string     `json:"source"`
-	ID            string     `json:"id"`
+	ID            string     `json:"id"` // the blueprint's object id; agents link by app_id
 	AppID         *string    `json:"app_id"`
 	Name          string     `json:"name"`
 	Creator       *string    `json:"creator"`
@@ -114,8 +115,8 @@ func (s *Server) listAgentBlueprints(_ http.ResponseWriter, r *http.Request, p *
 	}
 	agents := map[[2]string]int{}
 	for _, l := range links {
-		if l.BlueprintID != "" {
-			agents[[2]string{l.Source, l.BlueprintID}]++
+		if l.BlueprintAppID != "" {
+			agents[[2]string{l.Source, l.BlueprintAppID}]++
 		}
 	}
 	out := []blueprintView{}
@@ -123,7 +124,7 @@ func (s *Server) listAgentBlueprints(_ http.ResponseWriter, r *http.Request, p *
 		sp := ownerOf(people, b.SponsorID)
 		out = append(out, blueprintView{Source: b.Source, ID: b.ExternalID, AppID: nonEmptyPtr(b.AppID), Name: b.Name,
 			Creator: nonEmptyPtr(b.CreatorRef), Sponsor: sp, SponsorRef: nonEmptyPtr(b.SponsorRef), SponsorStatus: sponsorStatus(sp),
-			Agents: agents[[2]string{b.Source, b.ExternalID}], FirstSeenAt: timeutil.ISO(b.FirstSeenAt), LastSeenAt: timeutil.ISO(b.LastSeenAt)})
+			Agents: agents[[2]string{b.Source, b.AppID}], FirstSeenAt: timeutil.ISO(b.FirstSeenAt), LastSeenAt: timeutil.ISO(b.LastSeenAt)})
 	}
 	return out, nil
 }
@@ -148,10 +149,6 @@ func (s *Server) listAIAgents(_ http.ResponseWriter, r *http.Request, p *params)
 	for _, pr := range profiles {
 		byIdentity[pr.IdentityID] = pr
 	}
-	people, _, err := a.c.IdentityMap()
-	if err != nil {
-		return nil, err
-	}
 	bps, err := a.c.AgentBlueprints()
 	if err != nil {
 		return nil, err
@@ -160,9 +157,11 @@ func (s *Server) listAIAgents(_ http.ResponseWriter, r *http.Request, p *params)
 	if err != nil {
 		return nil, err
 	}
-	blueprintName := map[[2]string]string{}
+	blueprintName := map[[2]string]string{} // by the blueprint's appId, which agents carry
 	for _, b := range bps {
-		blueprintName[[2]string{b.Source, b.ExternalID}] = b.Name
+		if b.AppID != "" {
+			blueprintName[[2]string{b.Source, b.AppID}] = b.Name
+		}
 	}
 	linkOf := map[[2]string]*store.AgentLink{}
 	for _, l := range links {
@@ -201,14 +200,16 @@ func (s *Server) listAIAgents(_ http.ResponseWriter, r *http.Request, p *params)
 			v.Creator, v.SponsorRef = nonEmptyPtr(pr.CreatorRef), nonEmptyPtr(pr.SponsorRef)
 			v.FirstSeenAt, v.LastSeenAt = timeutil.ISOPtr(&pr.FirstSeenAt), timeutil.ISOPtr(&pr.LastSeenAt)
 			if l := linkOf[[2]string{pr.Source, pr.ExternalID}]; l != nil {
-				if l.BlueprintID != "" {
-					name := blueprintName[[2]string{pr.Source, l.BlueprintID}]
+				if l.BlueprintAppID != "" {
+					name := blueprintName[[2]string{pr.Source, l.BlueprintAppID}]
 					if name == "" {
-						name = l.BlueprintID
+						name = l.BlueprintAppID
 					}
-					v.Blueprint = &blueprintRef{ID: l.BlueprintID, Name: name}
+					v.Blueprint = &blueprintRef{ID: l.BlueprintAppID, Name: name}
 				}
-				v.Manager, v.ManagerRef = ownerOf(people, l.ManagerID), nonEmptyPtr(l.ManagerRef)
+				if l.ManagerApplications != "" {
+					v.ManagerApplications = strings.Split(l.ManagerApplications, ",")
+				}
 			}
 		}
 		// No sponsor at all (neither an identity nor a name from the source) is its own flag;

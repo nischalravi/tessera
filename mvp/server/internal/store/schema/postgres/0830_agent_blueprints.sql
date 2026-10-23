@@ -22,9 +22,7 @@ CREATE TABLE agent_links (
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
   source TEXT NOT NULL,
   external_id TEXT NOT NULL,
-  blueprint_id TEXT NOT NULL DEFAULT '',
-  manager_ref TEXT NOT NULL DEFAULT '',
-  manager_identity_id BIGINT,
-  PRIMARY KEY (tenant_id, source, external_id),
-  FOREIGN KEY (tenant_id, manager_identity_id) REFERENCES identities (tenant_id, id)
+  blueprint_app_id TEXT NOT NULL DEFAULT '',
+  manager_applications TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (tenant_id, source, external_id)
 );
