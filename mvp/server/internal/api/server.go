@@ -29,6 +29,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/casclient"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
+	"github.com/nischalravi/tessera/mvp/server/internal/breach"
 	"github.com/nischalravi/tessera/mvp/server/internal/condaccess"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
@@ -319,7 +320,9 @@ type Server struct {
 	oauthapps *oauthapps.Service
 	// ghtokens is the GitHub and CI token inventory (issue #476); never nil.
 	ghtokens *ghtokens.Service
-	vms      *vms.Service
+	// breach is vendor breach response (issue #475); never nil.
+	breach *breach.Service
+	vms    *vms.Service
 	// mcp is the MCP authorization server (issue #115); never nil.
 	mcp *mcpauth.Service
 	// ssf is the Shared Signals receiver (issue #114); never nil.
@@ -425,6 +428,7 @@ func New(cfg Config) *Server {
 		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.oauthapps = &oauthapps.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
 	s.ghtokens = &ghtokens.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
+	s.breach = &breach.Service{Rotation: s.rotation}
 	s.vms = &vms.Service{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound, Keyer: cfg.Identifiers,
 		RT: connsync.Runtime{Env: cfg.Env, AllowLoopback: cfg.Env == config.Dev}, Clock: func() time.Time { return s.clock() }}
 	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
@@ -509,6 +513,7 @@ func New(cfg Config) *Server {
 	s.registerDeletionGuardRoutes()
 	s.registerOAuthAppsRoutes()
 	s.registerGitHubTokenRoutes()
+	s.registerBreachRoutes()
 	s.registerSiemRoutes()
 	s.registerCertificateRoutes()
 	s.registerBrandingRoutes()
