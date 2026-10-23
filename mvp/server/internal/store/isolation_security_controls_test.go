@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -98,7 +99,55 @@ func TestIsolation_TimedSchedulePause(t *testing.T) {
 	})
 }
 
+// TestIsolation_PausedWithoutEnd (issue #522): the schedules disabled with no pause end are listed per tenant, and the
+// client approver is set on this tenant's client only.
+func TestIsolation_PausedWithoutEnd(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	now := storetest.Now
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		if err := f.DB.InTenant(t.Context(), tn.ID, func(c *store.TenantTx) error {
+			if err := c.EnsureQueueSchedule(&store.QueueSchedule{Name: "s", Kind: "k", Spec: "@every 1m", NextRunAt: now}, now); err != nil {
+				return err
+			}
+			return c.SetQueueScheduleEnabled("s", false, now) // an old pause: no end
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inA(t, f, func(c *store.TenantTx) error { return c.PauseQueueScheduleUntil("s", now.Add(time.Hour), now) })
+	inA(t, f, func(c *store.TenantTx) error {
+		if ss, err := c.QueueSchedulesPausedWithoutEnd(); err != nil || len(ss) != 0 {
+			t.Errorf("A, paused with an end: %v, %v", ss, err)
+		}
+		return nil
+	})
+	inB(t, f, func(c *store.TenantTx) error {
+		if ss, err := c.QueueSchedulesPausedWithoutEnd(); err != nil || len(ss) != 1 || ss[0].Name != "s" {
+			t.Errorf("B, paused with no end: %v, %v", ss, err)
+		}
+		return nil
+	})
+	rowsA, rowsB := seedOAuthRows(t, f.DB, f.A.ID, 0x61), seedOAuthRows(t, f.DB, f.B.ID, 0x62)
+	_ = rowsB
+	inB(t, f, func(c *store.TenantTx) error {
+		if err := c.SetAPIClientApprover(rowsA.machine.ClientID, "someone"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("B set the approver of A's client: %v", err)
+		}
+		return nil
+	})
+	inA(t, f, func(c *store.TenantTx) error {
+		if err := c.SetAPIClientApprover(rowsA.machine.ClientID, "someone"); err != nil {
+			t.Fatal(err)
+		}
+		if cl, err := c.APIClientByClientID(rowsA.machine.ClientID); err != nil || cl.ApprovedBy != "someone" {
+			t.Errorf("approver = %+v, %v", cl, err)
+		}
+		return nil
+	})
+}
+
 func securityControlsCovered() map[string]bool {
 	return map[string]bool{"HelpdeskIdPRisk": true, "HelpdeskIdPRiskList": true, "DismissHelpdeskIdPRisk": true,
-		"PauseQueueScheduleUntil": true, "QueueSchedulesToResume": true} // the tests above
+		"PauseQueueScheduleUntil": true, "QueueSchedulesToResume": true, "QueueSchedulesPausedWithoutEnd": true,
+		"SetAPIClientApprover": true} // the tests above
 }

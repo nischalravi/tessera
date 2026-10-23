@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -121,6 +122,16 @@ func (a *Authenticator) authenticateMachine(r *http.Request, vt *VerifiedToken) 
 		if !vt.Bound {
 			via = ViaBearer
 		}
+		// a client made before the creator check (issue #509), or whose approver has since lost a role, must not do what
+		// its approver cannot (issue #522)
+		missing, err := ClientExceedsApprover(tx, cl, scopes, a.Clock().UTC())
+		if err != nil {
+			return err
+		}
+		if len(missing) > 0 {
+			reason = FailClientExceedsApprover
+			return nil
+		}
 		p = &Principal{Kind: KindAPIClient, TenantID: vt.Tenant.ID, ClientID: cl.ClientID, Display: cl.Name,
 			AssignedRoles: assigned, ActiveRoles: active, InactiveRoles: inactive, Scopes: ScopeSetOf(scopes), Via: via}
 		return nil
@@ -149,4 +160,52 @@ func ScopeSetOf(scopes []string) ScopeSet {
 		}
 	}
 	return out
+}
+
+// ClientExceedsApprover lists the permissions a machine client would hold with these scopes (perms(roles) ∩
+// perms(scopes), the rule of its token principal) that the person who vouched for it does not hold now (issue #522).
+// #509 refuses such a client at creation and key rotation, against the signed-in admin, and records that admin in
+// ApprovedBy; this is the check at every token and request, so an approver who lost a role, or left, also takes the
+// client's extra permissions away, and so is a client made before #509. The approver is the user in ApprovedBy (their
+// assigned roles, step-up or not; none at all when the user is gone or disabled). A client made with the CLI
+// (ApprovedByOperator) is the operator's call and passes. A client with no approver on record (made before this was
+// recorded) is held to its owner's permissions, which re-keying it by an admin who holds them, or giving the owner the
+// roles, sets right.
+func ClientExceedsApprover(tx *store.TenantTx, cl *store.APIClient, scopes []string, now time.Time) ([]string, error) {
+	who := cl.OwnerUserID
+	switch cl.ApprovedBy {
+	case store.ApprovedByOperator:
+		return nil, nil
+	case "":
+	default:
+		id, err := uuid.Parse(cl.ApprovedBy)
+		if err != nil {
+			return nil, nil
+		}
+		who = &id
+	}
+	if who == nil {
+		return nil, nil
+	}
+	_, active, _ := MachineRoles(cl.Roles)
+	want := EffectivePermissions(&Principal{ActiveRoles: active, Scopes: ScopeSetOf(scopes)})
+	have := PermissionSet{PermAuthenticated: true}
+	u, err := tx.PlatformUser(*who)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	if err == nil && u.Status == "active" {
+		as, err := tx.RoleAssignments(u.ID)
+		if err != nil {
+			return nil, err
+		}
+		have = EffectivePermissions(&Principal{ActiveRoles: AssignedRoles(as, now)})
+	}
+	var missing []string
+	for _, p := range want.Sorted() {
+		if !have.Has(p) {
+			missing = append(missing, string(p))
+		}
+	}
+	return missing, nil
 }

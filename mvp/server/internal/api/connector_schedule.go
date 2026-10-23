@@ -15,7 +15,7 @@ import (
 // Connector sync schedule and status (Admin > Connections, issue #498):
 //
 //	GET /api/connectors/sync-status      the schedule, the last sync run, and per connector the record counts and last sync
-//	PUT /api/connectors/sync-schedule    {delta_every_minutes, full_every_hours} (0 turns a schedule off; step-up; both 0 raises an alert)
+//	PUT /api/connectors/sync-schedule    {delta_every_minutes, full_every_hours} (0 turns a schedule off; step-up; both 0, or no delta with a full sync every 168 h or more, raises an alert)
 //
 // A delta sync lets each connector resume from its checkpoint; a full sync ignores the checkpoints. Both are schedules of
 // the tenant's job queue, so they run as the connector_sync job (shown under Jobs) wherever a worker runs it.
@@ -113,6 +113,15 @@ func (s *Server) connectorSyncStatus(_ http.ResponseWriter, r *http.Request, _ *
 	return map[string]any{"schedule": syncScheduleOf(sc), "last_run": last, "connectors": rows}, nil
 }
 
+// maxQuietSyncHours is the longest gap between scheduled syncs that is not "off": with no delta sync, a full sync
+// less often than every 7 days leaves the source systems unseen for longer than any review cycle relies on (issue #521).
+const maxQuietSyncHours = 168
+
+// syncsEffectivelyOff is true for 0 and 0, and for no delta sync with a full sync only every 7 days or less often.
+func syncsEffectivelyOff(deltaMinutes, fullHours int) bool {
+	return deltaMinutes == 0 && (fullHours == 0 || fullHours >= maxQuietSyncHours)
+}
+
 type syncScheduleBody struct {
 	DeltaEveryMinutes int `json:"delta_every_minutes"`
 	FullEveryHours    int `json:"full_every_hours"`
@@ -131,7 +140,7 @@ func (s *Server) putConnectorSyncSchedule(_ http.ResponseWriter, r *http.Request
 		return nil, err
 	}
 	if err := c.Audit(now, actor(r), "connectors.schedule_updated", ojson.Object{{Key: "delta_every_minutes", Value: b.DeltaEveryMinutes},
-		{Key: "full_every_hours", Value: b.FullEveryHours}, {Key: "all_syncs_off", Value: b.DeltaEveryMinutes == 0 && b.FullEveryHours == 0}}); err != nil {
+		{Key: "full_every_hours", Value: b.FullEveryHours}, {Key: "all_syncs_off", Value: syncsEffectivelyOff(b.DeltaEveryMinutes, b.FullEveryHours)}}); err != nil {
 		return nil, err
 	}
 	sc, err := worker.GetSyncSchedule(c)

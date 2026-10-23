@@ -105,6 +105,11 @@ type Queue struct {
 	// Retention is how long succeeded jobs are kept (7 days); see Prune.
 	Retention time.Duration
 	Log       *slog.Logger
+	// BoundLegacyPause says which schedules must never stay paused with no end (the protected ones, issue #512). When
+	// a tenant is first seen by this process, every such schedule found paused with no end (paused before the
+	// upgrade that added paused_until) gets MaxLegacyPause, so it resumes by itself, and a queue.schedule_paused
+	// event with protected and migrated set, which raises the schedule_paused alert (issue #522). Nil: not checked.
+	BoundLegacyPause func(name string) bool
 
 	mu        sync.Mutex
 	kinds     map[string]Kind
@@ -343,7 +348,7 @@ func (q *Queue) ensureSchedules(ctx context.Context, t tenancy.ID) error {
 				return err
 			}
 		}
-		return nil
+		return q.boundLegacyPauses(tx, now)
 	})
 	if err == nil {
 		q.mu.Lock()
@@ -351,6 +356,36 @@ func (q *Queue) ensureSchedules(ctx context.Context, t tenancy.ID) error {
 		q.mu.Unlock()
 	}
 	return err
+}
+
+// MaxLegacyPause is how long a protected schedule that was paused with no end stays paused after the upgrade.
+const MaxLegacyPause = 24 * time.Hour
+
+// boundLegacyPauses gives every protected schedule that is paused with no end an end (BoundLegacyPause), audited.
+func (q *Queue) boundLegacyPauses(tx *store.TenantTx, now time.Time) error {
+	if q.BoundLegacyPause == nil {
+		return nil
+	}
+	ss, err := tx.QueueSchedulesPausedWithoutEnd()
+	if err != nil {
+		return err
+	}
+	until := now.Add(MaxLegacyPause)
+	for _, s := range ss {
+		if !q.BoundLegacyPause(s.Name) {
+			continue
+		}
+		if err := tx.PauseQueueScheduleUntil(s.Name, until, now); err != nil {
+			return err
+		}
+		if err := tx.Audit(now, "queue.scheduler", "queue.schedule_paused", ojson.Object{{Key: "schedule", Value: s.Name},
+			{Key: "kind", Value: s.Kind}, {Key: "protected", Value: true}, {Key: "migrated", Value: true},
+			{Key: "reason", Value: "paused with no end before the upgrade; it resumes by itself"},
+			{Key: "resume_at", Value: until.UTC().Format(time.RFC3339)}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // FireSchedules enqueues the tenant's due schedules, once per window: the

@@ -68,7 +68,7 @@ GET    /api/jml/leaver-plan/{identity_id}            graph.read      -
 GET    /api/siem/sinks                               siem.read       -  # issue #169
 POST   /api/siem/sinks                               siem.configure  STEP_UP_POLICY  # issue #169
 PUT    /api/siem/sinks/{sink_id}                     siem.configure  STEP_UP_POLICY  # issue #169
-POST   /api/siem/sinks/{sink_id}/rewind              siem.configure  -  # issue #169
+POST   /api/siem/sinks/{sink_id}/rewind              siem.configure  STEP_UP_POLICY  # issue #169, #520
 POST   /api/siem/sinks/{sink_id}/test                siem.configure  -  # issue #169
 GET    /api/admin/certificates                       connections.read    -
 POST   /api/admin/certificates                       connections.manage  STEP_UP_POLICY  # Admin > Certificates
@@ -85,7 +85,7 @@ GET    /api/siem/sinks/{sink_id}/dead-letters        siem.read       -  # issue 
 GET    /api/alerts                                   alerts.read     -  # issue #168
 GET    /api/alerts/summary                           alerts.read     -  # issue #168
 GET    /api/alerts/rules                             alerts.read     -  # issue #168
-PUT    /api/alerts/rules/{rule_id}                   alerts.configure -  # issue #168
+PUT    /api/alerts/rules/{rule_id}                   alerts.configure STEP_UP_POLICY  # issue #168, #521
 GET    /api/alerts/channels                          alerts.configure -  # issue #168
 POST   /api/alerts/channels                          alerts.configure STEP_UP_POLICY  # issue #168
 PUT    /api/alerts/channels/{channel_id}             alerts.configure STEP_UP_POLICY  # issue #168

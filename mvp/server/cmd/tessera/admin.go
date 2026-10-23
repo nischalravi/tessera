@@ -42,6 +42,7 @@ import (
 //	tessera admin recover-tenant -tenant acme -operator <id> -co-operator <id> -ticket <ref> ...
 //	tessera admin revoke-signing-key -tenant acme -kid <kid> -reason "..."
 //	tessera admin add-client    -tenant acme -name "ETL" -owner jane@acme.com -jwks-file pub.jwks -scope "tessera:read" -roles viewer
+//	tessera admin list-overprivileged-clients -tenant acme
 //
 // Every command runs as the operator (the OS user) and is audited in the
 // tenant's chain. invite-admin and recover-tenant print a one-time URL; only
@@ -57,6 +58,8 @@ const adminUsage = `usage:
   tessera admin wrap-kek      -kms aws:arn:…|azure:https://<vault>/keys/<k>/<v>|gcp:projects/… [-generate]   (KEK on stdin; prints TESSERA_KEK_WRAPPED)
   tessera admin add-client    -tenant slug -name "Display name" -owner user-id-or-email -jwks-file public.jwks
                               -scope "tessera:read ..." -roles viewer,operator,auditor [-dpop=false] [-db path]
+  tessera admin list-overprivileged-clients -tenant slug [-db path]
+                              (machine clients whose permissions exceed their approver's: they get no token; issue #522)
   (-db is a SQLite path or a postgres:// DSN)`
 
 // maxInviteTTL is the longest a bootstrap invitation may live (§15.3).
@@ -130,6 +133,9 @@ func adminCmd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return addClient(e, addClientArgs{tenant: *tenant, name: *name, owner: *owner, jwksFile: *jwksFile, scope: *scope,
 				roles: *roles, dpop: *dpopFlag})
 		}
+	case "list-overprivileged-clients":
+		tenant := fset.String("tenant", "", "tenant slug")
+		run = func(e *adminEnv) error { return listOverprivilegedClients(e, *tenant) }
 	default:
 		return fmt.Errorf("unknown admin command %q\n%s", sub, adminUsage)
 	}
@@ -546,7 +552,7 @@ func addClient(e *adminEnv, a addClientArgs) error {
 	}
 	c := &store.APIClient{ClientID: clientID, Name: name, Kind: store.ClientMachine, // #nosec G101 -- names of an auth method and a grant, not a credential
 		GrantTypes: []string{oauth.GrantClientCredentials}, TokenEndpointAuthMethod: "private_key_jwt", JWKS: jwks,
-		DPoPRequired: a.dpop, AllowedScopes: scopes, Roles: roles, Status: store.ClientActive, CreatedAt: e.now}
+		DPoPRequired: a.dpop, AllowedScopes: scopes, Roles: roles, ApprovedBy: store.ApprovedByOperator, Status: store.ClientActive, CreatedAt: e.now}
 	if err := e.db.InTenant(e.ctx, t.ID, func(tx *store.TenantTx) error {
 		owner, err := findOwner(tx, a.owner)
 		if err != nil {
@@ -572,6 +578,56 @@ func addClient(e *adminEnv, a addClientArgs) error {
 		fmt.Fprintln(e.stdout, "warning: DPoP is not required; a token this client gets without a DPoP proof is a Bearer token")
 	}
 	return nil
+}
+
+// listOverprivilegedClients prints the tenant's active machine clients whose effective permissions (roles ∩ scopes)
+// exceed what the person who vouched for them holds now (issue #522, auth.ClientExceedsApprover): clients made before
+// the creator check of #509, and clients whose approving admin lost a role or left. The token endpoint and the API
+// refuse them already; this is the inventory to fix them (an admin who holds the permissions rotates the client's
+// keys, which approves it again, or the client is revoked).
+func listOverprivilegedClients(e *adminEnv, slug string) error {
+	t, err := lookupTenant(e, slug)
+	if err != nil {
+		return err
+	}
+	n := 0
+	if err := e.db.ReadTenant(e.ctx, t.ID, func(tx *store.TenantTx) error {
+		cs, err := tx.APIClients()
+		if err != nil {
+			return err
+		}
+		for _, c := range cs {
+			if c.Kind != store.ClientMachine || c.Status != store.ClientActive {
+				continue
+			}
+			missing, err := auth.ClientExceedsApprover(tx, c, c.AllowedScopes, e.now)
+			if err != nil {
+				return err
+			}
+			if len(missing) == 0 {
+				continue
+			}
+			n++
+			fmt.Fprintf(e.stdout, "%s\t%s\tapprover %s\troles %s\tscopes %s\tlacks %s\n", c.ClientID, c.Name, approverID(c),
+				strings.Join(c.Roles, ","), strings.Join(c.AllowedScopes, " "), strings.Join(missing, ","))
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("list-overprivileged-clients: %w", err)
+	}
+	fmt.Fprintf(e.stdout, "%d machine client(s) hold permissions their approver lacks in %s\n", n, t.Slug)
+	return nil
+}
+
+// approverID is who is compared with the client: its recorded approver, else (made before it was recorded) its owner.
+func approverID(c *store.APIClient) string {
+	switch {
+	case c.ApprovedBy != "":
+		return c.ApprovedBy
+	case c.OwnerUserID != nil:
+		return "owner " + c.OwnerUserID.String()
+	}
+	return "none"
 }
 
 // newClientID is "tsc_" and 16 base32 characters (80 random bits).

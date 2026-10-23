@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS api_clients (
   owner_user_id TEXT REFERENCES platform_users (id),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
   created_at TEXT NOT NULL, last_used_at TEXT, change_request_id TEXT,
+  -- who vouched for the client's permissions (issue #522, see store.APIClient.ApprovedBy); added to an existing database by DB.upgradeSecurityControls
+  approved_by TEXT NOT NULL DEFAULT '',
   UNIQUE (tenant_id, id),
   UNIQUE (tenant_id, client_id),
   -- every machine client has an owner (the NHI owner rule)

@@ -140,7 +140,7 @@ var (
 		VALUES (@id, @tenant, @name, @kind, @payload, @spec, @enabled, @max_attempts, @next_run_at, @now, @now)
 		ON CONFLICT (tenant_id, name) DO UPDATE SET kind = excluded.kind, payload = excluded.payload,
 			spec = excluded.spec, enabled = excluded.enabled, max_attempts = excluded.max_attempts,
-			next_run_at = excluded.next_run_at, updated_at = @now`)
+			next_run_at = excluded.next_run_at, paused_until = '', updated_at = @now`)
 	queueScheduleSetEnabled = tq("queue_schedules.set_enabled", `
 		UPDATE queue_schedules SET enabled = @enabled, paused_until = '', updated_at = @now WHERE tenant_id = @tenant AND name = @name`)
 	// a pause with an end: the schedule resumes by itself when paused_until passes (QueueSchedulesToResume)
@@ -149,6 +149,9 @@ var (
 	queueScheduleToResume = tq("queue_schedules.to_resume", `
 		SELECT `+queueScheduleCols+` FROM queue_schedules s
 		WHERE s.tenant_id = @tenant AND s.enabled = 0 AND s.paused_until <> '' AND s.paused_until <= @now ORDER BY s.name`)
+	queueSchedulePausedOpen = tq("queue_schedules.paused_open", `
+		SELECT `+queueScheduleCols+` FROM queue_schedules s
+		WHERE s.tenant_id = @tenant AND s.enabled = 0 AND s.paused_until = '' ORDER BY s.name`)
 	queueScheduleGet = tq("queue_schedules.get", `
 		SELECT `+queueScheduleCols+` FROM queue_schedules s WHERE s.tenant_id = @tenant AND s.name = @name`)
 	queueScheduleList = tq("queue_schedules.list", `
@@ -422,6 +425,12 @@ func (tx *TenantTx) PauseQueueScheduleUntil(name string, until, now time.Time) e
 // QueueSchedulesToResume lists paused schedules whose pause has ended.
 func (tx *TenantTx) QueueSchedulesToResume(now time.Time) ([]*QueueSchedule, error) {
 	return collect(tx, scanQueueSchedule, queueScheduleToResume, sql.Named("now", RT(now)))
+}
+
+// QueueSchedulesPausedWithoutEnd lists disabled schedules with no pause end: paused before paused_until existed, or
+// turned off by their own settings (the connector sync schedules).
+func (tx *TenantTx) QueueSchedulesPausedWithoutEnd() ([]*QueueSchedule, error) {
+	return collect(tx, scanQueueSchedule, queueSchedulePausedOpen)
 }
 
 // DueQueueSchedules lists enabled schedules whose next_run_at has passed.

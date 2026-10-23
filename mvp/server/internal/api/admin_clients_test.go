@@ -51,7 +51,7 @@ func seedClient(tb testing.TB, db *store.DB, tenant tenancy.ID, clientID, name s
 		authtest.Phr, storetest.Now)
 	c := &store.APIClient{ClientID: clientID, Name: name, Kind: store.ClientMachine, GrantTypes: []string{oauth.GrantClientCredentials},
 		TokenEndpointAuthMethod: "private_key_jwt", JWKS: jwks, DPoPRequired: true, AllowedScopes: []string{"tessera:read"},
-		Roles: []string{"viewer"}, OwnerUserID: &owner.UserID, CreatedAt: storetest.Now}
+		Roles: []string{"viewer"}, OwnerUserID: &owner.UserID, ApprovedBy: store.ApprovedByOperator, CreatedAt: storetest.Now}
 	for _, o := range opts {
 		o(c)
 	}

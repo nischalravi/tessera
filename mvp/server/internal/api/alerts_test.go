@@ -194,7 +194,7 @@ func TestAlertsAPI_CrossTenant(t *testing.T) {
 		}
 	}
 	// rules are per tenant: B's change does not touch A
-	if rec := alertsDo(h, admin, "PUT", "/api/alerts/rules/mfa_bypass", `{"enabled":false,"severity":"low","threshold":1,"window_minutes":5}`); rec.Code != 200 {
+	if rec := alertsDo(h, admin, "PUT", "/api/alerts/rules/access_drift", `{"enabled":false,"severity":"low","threshold":1,"window_minutes":5}`); rec.Code != 200 {
 		t.Fatalf("B's rule change: %d %s", rec.Code, rec.Body)
 	}
 	if storetest.Dump(t, f.DB, f.A.ID) != before {
