@@ -96,6 +96,7 @@ const RotationSecrets = named(rotationPages, "RotationSecrets");
 const RotationJobs = named(rotationPages, "RotationJobs");
 const RotationPolicies = named(rotationPages, "RotationPolicies");
 const VendorCompromised = named(rotationPages, "VendorCompromised");
+const BreachResponse = named(rotationPages, "BreachResponse");
 const SharedSignals = named(() => import("../features/admin/SharedSignals"), "SharedSignals");
 const EventSinks = named(() => import("../features/admin/EventSinks"), "EventSinks");
 const RequestSettings = named(() => import("../features/admin/RequestSettings"), "RequestSettings");
@@ -225,6 +226,7 @@ export default function App() {
                     <Route path="/rotation/jobs" element={<RotationJobs />} />
                     <Route path="/rotation/policies" element={<RotationPolicies />} />
                     <Route path="/rotation/vendor" element={<VendorCompromised />} />
+                    <Route path="/rotation/breach" element={<BreachResponse />} />
                     <Route path="/directory/groups/loaders" element={<Loaders />} />
                     <Route path="/directory/groups/folders/:id" element={<FolderPage />} />
                     <Route path="/directory/groups/:id" element={<GroupPage />} />

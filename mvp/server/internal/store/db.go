@@ -255,6 +255,8 @@ var tables = []string{
 	"oauth_app_facts", "oauth_app_changes",
 	// GitHub and CI token inventory (schema/0710_github_tokens.sql)
 	"github_tokens",
+	// vendor breach response plans (schema/0800_breach_response.sql)
+	"breach_plans", "breach_items",
 	// guest lifecycle (schema/0371_guest_lifecycle.sql)
 	"guest_lifecycle_settings", "guest_reminders", "guest_renewal_tokens", "guest_lifecycle_tasks", "sponsorship_stepups",
 	"guest_deprovisioning",
