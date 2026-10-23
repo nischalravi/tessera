@@ -198,6 +198,17 @@ var Rules = []*Rule{
 		},
 	},
 	{
+		ID: "queue_job_dead", Name: "Background job gave up", Kind: "event", Severity: "high", Threshold: 1, Window: time.Hour,
+		Description: "A queued background job (a sweep, sync or retry) used up its attempts and will not run again until an admin retries it (issue #497).",
+		Match: func(e *store.AuditEvent) (Hit, bool) {
+			if e.Action != "queue.job_dead" {
+				return Hit{}, false
+			}
+			kind := orStr(str(detailOf(e), "kind"), "unknown")
+			return Hit{Key: kind, Title: "Background job gave up: " + kind}, true
+		},
+	},
+	{
 		ID: "access_drift", Name: "Access drift needs action", Kind: "event", Severity: "medium", Threshold: 1, Window: time.Hour,
 		Description: "Reconciliation found access that differs from what was approved, and its remediation policy acted on it (#301).",
 		Match: func(e *store.AuditEvent) (Hit, bool) {

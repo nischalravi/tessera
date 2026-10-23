@@ -63,6 +63,9 @@ type sinkView struct {
 	HasCA           bool        `json:"has_ca"`
 	HasToken        bool        `json:"has_token"`
 	IncludeHTTP     bool        `json:"include_http"`
+	EventFilter     []string    `json:"event_filter"` // audit actions or prefixes; empty: every event
+	Region          string      `json:"region"`       // s3
+	AccessKeyID     string      `json:"access_key_id"`
 	Enabled         bool        `json:"enabled"`
 	CursorSeq       int64       `json:"cursor_seq"`
 	HeadSeq         int64       `json:"head_seq"`
@@ -78,7 +81,7 @@ type sinkView struct {
 }
 
 func redactSinkTarget(k *store.SiemSink) string {
-	if k.Kind != "webhook" {
+	if k.Kind == "syslog" {
 		return k.Target
 	}
 	return safehttp.RedactURL(k.Target) // scheme://host[:port]/… (#333)
@@ -90,7 +93,8 @@ func sinkViewOf(tx *store.TenantTx, k *store.SiemSink, head int64) (sinkView, er
 		return sinkView{}, err
 	}
 	return sinkView{ID: k.ID, Name: k.Name, Kind: k.Kind, Format: k.Format, Target: redactSinkTarget(k), Flavor: k.Flavor,
-		HasCA: k.CAPEM != nil, HasToken: len(k.SecretSealed) > 0, IncludeHTTP: k.IncludeHTTP, Enabled: k.Enabled, CursorSeq: k.CursorSeq,
+		HasCA: k.CAPEM != nil, HasToken: len(k.SecretSealed) > 0, IncludeHTTP: k.IncludeHTTP, EventFilter: nonNil(k.EventFilter), Region: k.Region,
+		AccessKeyID: k.AccessKeyID, Enabled: k.Enabled, CursorSeq: k.CursorSeq,
 		HeadSeq: head, Health: siem.HealthOf(k, pending), Attempts: k.Attempts, NextAttemptAt: k.NextAttemptAt, LastError: k.LastError,
 		LastSuccessAt: k.LastSuccessAt, DeliveredCount: k.DeliveredCount, DeadLetterCount: k.DeadLetterCount, CreatedAt: k.CreatedAt,
 		UpdatedAt: k.UpdatedAt}, nil
@@ -131,8 +135,12 @@ type sinkBody struct {
 	CAPEM       *string `json:"ca_pem"` // omitted on update: keep
 	Token       *string `json:"token"`  // omitted: keep; "": clear
 	IncludeHTTP bool    `json:"include_http"`
-	Enabled     *bool   `json:"enabled"`
-	Start       string  `json:"start"` // creation only: now | beginning
+	// EventFilter: nil keeps the current filter on update; [] is every event.
+	EventFilter *[]string `json:"event_filter"`
+	Region      *string   `json:"region"`
+	AccessKeyID *string   `json:"access_key_id"`
+	Enabled     *bool     `json:"enabled"`
+	Start       string    `json:"start"` // creation only: now | beginning
 }
 
 func (b sinkBody) spec(cur *store.SiemSink) siem.SinkSpec {
@@ -147,6 +155,21 @@ func (b sinkBody) spec(cur *store.SiemSink) siem.SinkSpec {
 		sp.CAPEM = *b.CAPEM
 	} else if cur != nil && cur.CAPEM != nil {
 		sp.CAPEM = *cur.CAPEM
+	}
+	if b.EventFilter != nil {
+		sp.EventFilter = *b.EventFilter
+	} else if cur != nil {
+		sp.EventFilter = cur.EventFilter
+	}
+	if b.Region != nil {
+		sp.Region = *b.Region
+	} else if cur != nil {
+		sp.Region = cur.Region
+	}
+	if b.AccessKeyID != nil {
+		sp.AccessKeyID = *b.AccessKeyID
+	} else if cur != nil {
+		sp.AccessKeyID = cur.AccessKeyID
 	}
 	if cur != nil {
 		if sp.Format == "" {

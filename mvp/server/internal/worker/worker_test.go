@@ -503,3 +503,23 @@ func TestBeaterPublishesTargetStates(t *testing.T) {
 		t.Errorf("a worker that stopped cleanly left target rows: %+v", ts)
 	}
 }
+
+func TestSyncPayloadWithRetrier(t *testing.T) {
+	const a, b = "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b"
+	for _, tc := range []struct {
+		name string
+		in   worker.SyncPayload
+		user string
+		want []string
+	}{
+		{"scheduled run", worker.SyncPayload{}, a, []string{a}},
+		{"second retrier", worker.SyncPayload{RetriedBy: []string{a}}, b, []string{a, b}},
+		{"same retrier twice", worker.SyncPayload{RetriedBy: []string{a}}, a, []string{a}},
+		{"the requester retries", worker.SyncPayload{RequestedBy: a}, a, nil},
+		{"no user", worker.SyncPayload{}, "", nil},
+	} {
+		if got := tc.in.WithRetrier(tc.user).RetriedBy; !slices.Equal(got, tc.want) {
+			t.Errorf("%s: RetriedBy = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

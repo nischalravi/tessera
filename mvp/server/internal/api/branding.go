@@ -20,7 +20,7 @@ import (
 //
 //	GET /api/admin/branding                      the saved branding with the limits
 //	PUT /api/admin/branding                      {display_name, primary_color, on_primary_color?, logo?, remove_logo?}
-//	GET /api/auth/branding?tenant=<slug>         PUBLIC: what the sign-in and claim pages show (the unbranded default for an unknown tenant)
+//	GET /api/auth/branding?tenant=<slug>         PUBLIC: what the sign-in and claim pages show, with the default language (the unbranded default for an unknown tenant)
 //	GET /api/auth/branding/logo?tenant=<slug>    PUBLIC: the logo image, served with its own image content type and nosniff
 //
 // Reading needs admin.read and changing needs email.manage (the tenant admin's presentation setting) and a fresh
@@ -195,7 +195,7 @@ func (s *Server) putBranding(_ http.ResponseWriter, r *http.Request, _ *params) 
 // branding, gets the same unbranded answer, so the page cannot tell which tenants exist.
 func (s *Server) publicBranding(w http.ResponseWriter, r *http.Request, _ *params) (any, error) {
 	slug := r.URL.Query().Get("tenant")
-	b, _, err := s.tenantBranding(r, slug)
+	b, lang, err := s.tenantBranding(r, slug)
 	if err != nil {
 		return nil, err
 	}
@@ -207,21 +207,28 @@ func (s *Server) publicBranding(w http.ResponseWriter, r *http.Request, _ *param
 		out[len(out)-1].Value = "/api/auth/branding/logo?tenant=" + url.QueryEscape(slug) + "&v=" + v.Logo.SHA256[:12]
 		out = append(out, ojson.KV{Key: "logo_width", Value: v.Logo.Width}, ojson.KV{Key: "logo_height", Value: v.Logo.Height})
 	}
+	out = append(out, ojson.KV{Key: "language", Value: lang})
 	return out, nil
 }
 
-func (s *Server) tenantBranding(r *http.Request, slug string) (*store.TenantBranding, store.Tenant, error) {
+// tenantBranding reads a tenant's branding and default language; an unknown tenant has neither.
+func (s *Server) tenantBranding(r *http.Request, slug string) (*store.TenantBranding, string, error) {
 	t, ok, err := s.activeTenant(r.Context(), slug)
 	if err != nil || !ok {
-		return nil, t, err
+		return nil, "", err
 	}
 	var b *store.TenantBranding
+	lang := ""
 	err = s.store.ReadTenant(r.Context(), t.ID, func(tx *store.TenantTx) error {
 		var err error
-		b, err = currentBranding(tx)
+		if b, err = currentBranding(tx); err != nil {
+			return err
+		}
+		ls, _, err := branding.LoadSettings(tx)
+		lang = ls.DefaultLanguage
 		return err
 	})
-	return b, t, err
+	return b, lang, err
 }
 
 // publicBrandingLogo serves the stored logo. The content type is the one the image was checked as (PNG or JPEG),

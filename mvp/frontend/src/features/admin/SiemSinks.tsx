@@ -8,7 +8,7 @@ import { Badge, Button, Callout, Drawer, EmptyState, Loading, useConfirm, useToa
  * Log streaming (issue #169): push the tenant's audit ledger to a SIEM, in seq order, at least
  * once, from a durable cursor. Each sink shows its health, lag and dead letters.
  */
-const KIND_LABEL: Record<string, string> = { "webhook/hec": "Splunk HEC", "webhook/json": "HTTPS (JSON)", "syslog/": "Syslog over TLS" };
+const KIND_LABEL: Record<string, string> = { "webhook/hec": "Splunk HEC", "webhook/json": "HTTPS (JSON)", "syslog/": "Syslog over TLS", "s3/": "S3-compatible bucket" };
 
 export function SiemSinks() {
   const { data, error, reload } = useApi<SiemSink[]>("/siem/sinks");
@@ -54,7 +54,7 @@ export function SiemSinks() {
                   return (
                     <tr key={k.id}>
                       <td>
-                        <b>{k.name}</b> <Badge tone="outline">{k.format === "ocsf" ? "OCSF" : "JSON"}</Badge>
+                        <b>{k.name}</b> <Badge tone="outline">{k.format === "ocsf" ? "OCSF" : "JSON"}</Badge>{k.event_filter.length > 0 && <> <Badge tone="info">{k.event_filter.length} event filter{k.event_filter.length === 1 ? "" : "s"}</Badge></>}
                         <div className="xs faint truncate">{KIND_LABEL[`${k.kind}/${k.flavor}`] ?? k.kind} · {k.target}</div>
                       </td>
                       <td>
@@ -106,24 +106,31 @@ function DeadLetters({ sink, onClose }: { sink: SiemSink; onClose: () => void })
   );
 }
 
-type Preset = "hec" | "json" | "syslog";
+type Preset = "hec" | "json" | "syslog" | "s3";
+
+/** One entry per line or comma: grant.revoke, or a prefix such as auth.* */
+const parseFilter = (s: string) => Array.from(new Set(s.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean)));
 
 function SinkForm({ sink, onClose, onSaved }: { sink: SiemSink | null; onClose: () => void; onSaved: () => void }) {
   const toast = useToast();
   const k = sink;
   const [f, setF] = useState({
-    name: k?.name ?? "", preset: (k ? (k.kind === "syslog" ? "syslog" : k.flavor) : "hec") as Preset, format: k?.format ?? ("ocsf" as SiemFormat),
-    target: "", token: "", ca: "", includeHttp: k?.include_http ?? false, enabled: k?.enabled ?? true, start: "now" as "now" | "beginning",
+    name: k?.name ?? "", preset: (k ? (k.kind === "webhook" ? k.flavor : k.kind) : "hec") as Preset, format: k?.format ?? ("ocsf" as SiemFormat),
+    target: "", token: "", ca: "", region: k?.region ?? "", keyId: k?.access_key_id ?? "", filter: (k?.event_filter ?? []).join("\n"), includeHttp: k?.include_http ?? false, enabled: k?.enabled ?? true, start: "now" as "now" | "beginning",
   });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const kind: SiemKind = f.preset === "syslog" ? "syslog" : "webhook";
-  const flavor: SiemFlavor = f.preset === "syslog" ? "" : f.preset;
+  const kind: SiemKind = f.preset === "syslog" ? "syslog" : f.preset === "s3" ? "s3" : "webhook";
+  const flavor: SiemFlavor = f.preset === "hec" || f.preset === "json" ? f.preset : "";
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const body: SiemSinkInput = { name: f.name, format: f.format, include_http: f.includeHttp, enabled: f.enabled };
+    const body: SiemSinkInput = { name: f.name, format: f.format, include_http: f.includeHttp, event_filter: parseFilter(f.filter), enabled: f.enabled };
+    if (kind === "s3") {
+      body.region = f.region.trim();
+      body.access_key_id = f.keyId.trim();
+    }
     if (!k) {
       body.kind = kind;
       body.start = f.start;
@@ -142,7 +149,7 @@ function SinkForm({ sink, onClose, onSaved }: { sink: SiemSink | null; onClose: 
       setBusy(false);
     }
   };
-  const placeholder = f.preset === "hec" ? "https://splunk.example.com:8088/services/collector/event" : f.preset === "json" ? "https://….ingest.monitor.azure.com/dataCollectionRules/…/streams/…" : "logs.example.com:6514";
+  const placeholder = f.preset === "s3" ? "https://s3.eu-west-1.amazonaws.com/my-audit-bucket/tessera" : f.preset === "hec" ? "https://splunk.example.com:8088/services/collector/event" : f.preset === "json" ? "https://….ingest.monitor.azure.com/dataCollectionRules/…/streams/…" : "logs.example.com:6514";
   return (
     <Drawer title={k ? `Edit ${k.name}` : "New SIEM sink"} onClose={onClose}>
       <form className="stack" onSubmit={submit}>
@@ -153,15 +160,26 @@ function SinkForm({ sink, onClose, onSaved }: { sink: SiemSink | null; onClose: 
             <label className="row tight small"><input type="radio" name="preset" checked={f.preset === "hec"} onChange={() => setF({ ...f, preset: "hec" })} /> Splunk HTTP Event Collector</label>
             <label className="row tight small"><input type="radio" name="preset" checked={f.preset === "json"} onChange={() => setF({ ...f, preset: "json" })} /> HTTPS endpoint, JSON array (Microsoft Sentinel, Cribl, Logstash)</label>
             <label className="row tight small"><input type="radio" name="preset" checked={f.preset === "syslog"} onChange={() => setF({ ...f, preset: "syslog" })} /> Syslog over TLS (RFC 5425)</label>
+            <label className="row tight small"><input type="radio" name="preset" checked={f.preset === "s3"} onChange={() => setF({ ...f, preset: "s3" })} /> S3-compatible bucket (AWS S3, MinIO, R2: one object per batch)</label>
           </fieldset>
         )}
-        <label className="field">{kind === "syslog" ? "Collector (host:port)" : "URL (https)"}
+        <label className="field">{kind === "syslog" ? "Collector (host:port)" : kind === "s3" ? "Bucket URL with an optional key prefix (https)" : "URL (https)"}
           <input className="input" value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })} required={!k} placeholder={k ? `Keep ${k.target}` : placeholder} />
         </label>
         {kind === "webhook" && (
           <label className="field">{f.preset === "hec" ? "HEC token" : "Bearer token (optional)"}
             <input className="input" type="password" autoComplete="off" value={f.token} onChange={(e) => setF({ ...f, token: e.target.value })} required={!k && f.preset === "hec"} placeholder={k?.has_token ? "Keep the stored token" : ""} />
           </label>
+        )}
+        {kind === "s3" && (
+          <>
+            <label className="field">Region<input className="input" value={f.region} onChange={(e) => setF({ ...f, region: e.target.value })} required maxLength={31} placeholder="eu-west-1 (us-east-1 for most S3-compatible stores)" /></label>
+            <label className="field">Access key id<input className="input" value={f.keyId} onChange={(e) => setF({ ...f, keyId: e.target.value })} required maxLength={128} autoComplete="off" /></label>
+            <label className="field">Secret access key
+              <input className="input" type="password" autoComplete="off" value={f.token} onChange={(e) => setF({ ...f, token: e.target.value })} required={!k} placeholder={k?.has_token ? "Keep the stored secret" : ""} />
+              <span className="hint">Give it write-only access (s3:PutObject) to the prefix. Objects are named tenant/YYYY/MM/DD/first-last.ndjson, so a retry replaces its object instead of adding a copy.</span>
+            </label>
+          </>
         )}
         {kind === "syslog" && (
           <label className="field">CA certificate (PEM, optional, for a private CA)
@@ -173,6 +191,10 @@ function SinkForm({ sink, onClose, onSaved }: { sink: SiemSink | null; onClose: 
             <option value="ocsf">OCSF 1.3 (Authentication, Account Change, API Activity)</option>
             <option value="json">Tessera JSON (hash-chained export records)</option>
           </select>
+        </label>
+        <label className="field">Only these events (optional)
+          <textarea className="input" rows={3} value={f.filter} onChange={(e) => setF({ ...f, filter: e.target.value })} placeholder={"auth.*\ngrant.revoke"} />
+          <span className="hint">One audit action per line, or a prefix ending in .* (auth.* matches every action that starts with auth.). Empty sends every event. HTTP requests still need the box below.</span>
         </label>
         {!k && (
           <label className="field">Start from

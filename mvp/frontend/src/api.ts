@@ -554,6 +554,24 @@ export interface AuditRow {
   prev_hash?: string;
 }
 
+/** A neighbour event in a proof: only the link fields. */
+export interface AuditLink { seq: number; hash: string; prev_hash: string }
+
+/** A signed checkpoint of the chain head (GET /api/audit/checkpoints). */
+export interface AuditCheckpoint {
+  id: string; seq: number; head_hash: string; created_at: string; jws: string; anchor_status: string; anchor_ref: string | null; anchored_at: string | null;
+}
+
+/**
+ * GET /api/audit/events/{id}/proof: the event as exported (re-hashable), its neighbours in the chain and the first signed
+ * checkpoint at or after it, so an auditor can check one event without the whole ledger.
+ */
+export interface AuditProof {
+  event: Record<string, unknown> & { hash: string; prev_hash: string; seq: number };
+  previous: AuditLink | null; next: AuditLink | null; checkpoint: AuditCheckpoint | null; events_to_checkpoint: number;
+  hash_algorithm: string; genesis: string;
+}
+
 /** POST /api/audit/verify: the chain, checkpoint and anchor check of this tenant. */
 export interface AuditVerifyReport {
   tenant: string;
@@ -1883,13 +1901,80 @@ export interface EmailMessage {
   attempt_count: number;
   created_at: string;
   updated_at: string;
-  /** Deferred or failed messages can be sent again. */
+  /** Deferred, failed and bounced messages, and ones skipped because the address is suppressed, can be sent again. */
   retryable: boolean;
   /** Only in the detail. */
   attempts?: EmailAttempt[];
 }
 export interface EmailList { statuses: EmailStatus[]; email_mode: string; messages: EmailMessage[] }
 export const retryEmail = (id: string) => api<EmailMessage>(`/email/messages/${encodeURIComponent(id)}/retry`, {});
+
+// ---- the tenant's mail relay, chat workspace, wording and timings (Admin > Notifications, Email delivery)
+
+/** The tenant's own SMTP relay (GET /api/admin/mail-relay). The password is never returned: only whether one is set. */
+export interface MailRelay {
+  configured: boolean; enabled: boolean; host: string; port: number; tls: "starttls" | "tls" | "none"; username: string; has_password: boolean;
+  from: string; last_test_at: string | null; last_test_result: string; version: number; updated_by?: string;
+  can_manage: boolean;
+  /** How the server's own relay is set up (off, dev or smtp): it sends when the tenant's is off. */
+  server_relay: string;
+}
+export interface MailRelayInput {
+  version: number; enabled: boolean; host: string; port: number; tls: string; username: string;
+  /** Write-only: empty keeps the stored one. */
+  password?: string; clear_password?: boolean; from: string;
+}
+export const mailRelayPath = "/admin/mail-relay";
+export const mailRelayApi = {
+  /** The password never goes through the resume-after-step-up store. */
+  save: (b: MailRelayInput) => apiNoResume<MailRelay>(mailRelayPath, b, "PUT"),
+  remove: (version: number) => api<MailRelay>(mailRelayPath, { version }, "DELETE"),
+  test: () => api<{ outcome: EmailStatus; error?: string; queue_id?: string; banner?: string; steps: EmailStep[] }>(`${mailRelayPath}/test`, {}),
+};
+
+export type ChatProvider = "slack" | "teams";
+/** The tenant's Slack or Teams incoming webhook (GET /api/admin/chat). The URL is never returned. */
+export interface ChatWorkspace {
+  configured: boolean; provider: ChatProvider; enabled: boolean; has_webhook: boolean; webhook_host: string; kinds: string[];
+  fail_count: number; last_error: string; last_post_at: string | null; version: number; updated_by?: string;
+  can_manage: boolean; providers: ChatProvider[]; available_kinds: { id: string; label: string; description: string }[];
+  hosts: Record<ChatProvider, string>;
+}
+export interface ChatInput { version: number; provider: ChatProvider; enabled: boolean; webhook_url?: string; kinds: string[] }
+export const chatPath = "/admin/chat";
+export const chatApi = {
+  save: (b: ChatInput) => apiNoResume<ChatWorkspace>(chatPath, b, "PUT"),
+  remove: (version: number) => api<ChatWorkspace>(chatPath, { version }, "DELETE"),
+  test: () => api<{ ok: boolean }>(`${chatPath}/test`, {}),
+};
+
+export interface NotificationPolicy {
+  review_remind_after_days: number; review_remind_every_days: number; request_warn_hours: number; jit_warn_minutes: number; escalate_after_hours: number;
+  version: number; can_manage: boolean; defaults: Omit<NotificationPolicy, "version" | "can_manage" | "defaults">;
+}
+export const notificationPolicyPath = "/admin/notification-policy";
+export const notificationPolicyApi = {
+  save: (b: Omit<NotificationPolicy, "can_manage" | "defaults">) => api<NotificationPolicy>(notificationPolicyPath, b, "PUT"),
+};
+
+export interface NotificationTemplate { kind: string; label: string; description: string; customized: boolean; subject_tpl: string; body_tpl: string; updated_by?: string }
+export interface NotificationTemplates {
+  templates: NotificationTemplate[]; variables: { name: string; help: string }[]; can_manage: boolean; max_subject: number; max_body: number;
+}
+export const notificationTemplatesPath = "/admin/notification-templates";
+export const notificationTemplatesApi = {
+  save: (kind: string, subject_tpl: string, body_tpl: string) =>
+    api<NotificationTemplates>(`${notificationTemplatesPath}/${encodeURIComponent(kind)}`, { subject_tpl, body_tpl }, "PUT"),
+  reset: (kind: string) => api<NotificationTemplates>(`${notificationTemplatesPath}/${encodeURIComponent(kind)}`, undefined, "DELETE"),
+};
+
+export interface EmailSuppression { address: string; reason: "hard_bounce" | "manual"; note: string; message_id?: string; created_by: string; created_at: string }
+export interface EmailSuppressions { suppressions: EmailSuppression[]; can_manage: boolean }
+export const emailSuppressionsPath = "/email/suppressions";
+export const emailSuppressionsApi = {
+  add: (address: string, note: string) => api<EmailSuppressions>(emailSuppressionsPath, { address, note }),
+  lift: (address: string) => api<EmailSuppressions>(`${emailSuppressionsPath}/${encodeURIComponent(address)}`, undefined, "DELETE"),
+};
 
 // ---------------------------------------------------------------- business roles (issue #161)
 
@@ -3591,7 +3676,7 @@ export function describeConditions(p: Pick<AccessPolicy, "network_op" | "network
 
 // ------------------------------------------------------------ SIEM sinks (#169)
 
-export type SiemKind = "syslog" | "webhook";
+export type SiemKind = "syslog" | "webhook" | "s3";
 export type SiemFormat = "json" | "ocsf";
 export type SiemFlavor = "hec" | "json" | "";
 
@@ -3600,12 +3685,17 @@ export interface SiemSink {
   name: string;
   kind: SiemKind;
   format: SiemFormat;
-  /** host:port, or the webhook URL without its query string. */
+  /** host:port, the webhook URL without its query string, or the bucket URL with its key prefix. */
   target: string;
   flavor: SiemFlavor;
   has_ca: boolean;
   has_token: boolean;
   include_http: boolean;
+  /** Audit actions or prefixes (grant.revoke, auth.*) this sink receives; empty is every event. */
+  event_filter: string[];
+  /** S3 sinks: the signing region and the access key id (the secret access key is the token and is never returned). */
+  region: string;
+  access_key_id: string;
   enabled: boolean;
   cursor_seq: number;
   head_seq: number;
@@ -3629,9 +3719,13 @@ export interface SiemSinkInput {
   flavor?: SiemFlavor;
   /** Omit on update to keep; "" removes it. */
   ca_pem?: string;
-  /** Omit to keep the stored token; "" removes it. */
+  /** Omit to keep the stored token (for S3, the secret access key); "" removes it. */
   token?: string;
   include_http: boolean;
+  /** Omit on update to keep the current filter; [] is every event. */
+  event_filter?: string[];
+  region?: string;
+  access_key_id?: string;
   enabled: boolean;
   /** Creation only. */
   start?: "now" | "beginning";
@@ -3739,7 +3833,26 @@ export interface PublicBranding {
   logo_url: string | null;
   logo_width?: number;
   logo_height?: number;
+  /** The tenant's default language tag (Admin → Branding & labels); "" for none. */
+  language?: string;
 }
+
+/** Language, renamed terms and the email-logo switch (GET /api/admin/labels). */
+export interface LabelSettings {
+  version: number;
+  default_language: string;
+  email_logo: boolean;
+  labels: Record<string, string>;
+  can_manage: boolean;
+  terms: { key: string; hint: string; default: string }[];
+  languages: string[];
+  max_label: number;
+}
+export type LabelSettingsInput = Pick<LabelSettings, "version" | "default_language" | "email_logo" | "labels">;
+export const labelsPath = "/admin/labels";
+export const labelsApi = {
+  save: (b: LabelSettingsInput) => api<LabelSettings>(labelsPath, b, "PUT"),
+};
 
 /** The tenant's branding for the sign-in and claim pages; null if it cannot be read (the pages then show the default). */
 export async function publicBranding(tenant: string): Promise<PublicBranding | null> {
@@ -3763,9 +3876,27 @@ export interface IdentityRules {
   };
   correlation: { proposals: { name: string; description: string }[]; decisions: string };
   group_naming: { separator: string; allowed: string; max_segment: number; max_name: number; max_display: number; max_depth: number; case_insensitive: boolean };
-  dormancy: { identity_type: string; days: number; effect: string }[];
+  dormancy: { identity_type: string; label: string; days: number; effect: string }[];
+  /** What the tenant tunes: the correlation order, authoritative source per attribute and dormancy days. */
+  rules: {
+    version: number;
+    can_manage: boolean;
+    correlation_order: string[];
+    authoritative: Record<string, string>;
+    dormant_service_days: number;
+    dormant_ai_agent_days: number;
+    correlation_keys: string[];
+    attributes: string[];
+    systems: string[];
+    min_days: number;
+    max_days: number;
+  };
   not_configurable: string[];
 }
+export type IdentityRulesInput = Pick<IdentityRules["rules"], "version" | "correlation_order" | "authoritative" | "dormant_service_days" | "dormant_ai_agent_days">;
+export const identityRulesApi = {
+  save: (b: IdentityRulesInput) => api<IdentityRules>("/admin/identity-rules", b, "PUT"),
+};
 
 export const siemApi = {
   create: (body: SiemSinkInput) => api<SiemSink>("/siem/sinks", body),
@@ -4106,6 +4237,10 @@ export interface QueueWorkerTarget {
 export const queue = {
   /** Puts a dead job back in the queue with a fresh attempt budget (step-up, audited). */
   retry: (id: string) => api<QueueJob>(`/queue/jobs/${encodeURIComponent(id)}/retry`, {}),
+  /** Stops a recurring job from firing (step-up, audited). Work already queued or running finishes. */
+  pauseSchedule: (name: string, reason?: string) => api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/pause`, reason ? { reason } : {}),
+  /** Lets a paused schedule fire again: once if it came due while paused, then on its cadence. */
+  resumeSchedule: (name: string) => api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/resume`, {}),
 };
 
 // ------------------------------------------------- config transport (#170)
@@ -4114,7 +4249,7 @@ export interface SigningKey { kid: string; public_key: string; tenant: string; c
 export interface TrustedSigner { kid: string; public_key: string; label: string; added_by: string | null; added_at: string }
 export interface ExportedBundle { hash: string; kid: string; file_name: string; excluded: { section: string; name: string; reason: string }[] | null; bundle: unknown }
 export type ImportAction = "add" | "change" | "remove" | "unchanged" | "manual";
-export interface PlanItem { section: "connections" | "overlays" | "identity_providers"; name: string; action: ImportAction; fields?: string[]; notes?: string[] }
+export interface PlanItem { section: "connections" | "overlays" | "identity_providers" | "catalog_items" | "review_schedules" | "alert_rules" | "siem_sinks"; name: string; action: ImportAction; fields?: string[]; notes?: string[] }
 export interface ImportPlan {
   hash: string; digest: string; digest_prune: string; signer: string; signer_kid: string; exported_at: string; items: PlanItem[]; refusals: string[];
   source: { tenant_id: string; tenant: string; env: string; instance?: string; exported_by: string };

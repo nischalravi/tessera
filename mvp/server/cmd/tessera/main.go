@@ -636,7 +636,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	dispatcher := &notify.Dispatcher{DB: st, Sender: sender, Clock: clock, Log: logger, MaxAttempts: cfg.NotifyMaxAttempts,
-		DigestHour: cfg.NotifyDigestHour, BaseURL: cfg.PublicURL, Secrets: secrets}
+		DigestHour: cfg.NotifyDigestHour, BaseURL: cfg.PublicURL, Secrets: secrets,
+		Relay: notify.RelayEnv{Env: cfg.Env, AllowLoopback: cfg.OutboundAllowLoopback, Sealer: sealer}, HTTP: outbound}
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger, OnTenant: api.RecordAnchorRun(st)}

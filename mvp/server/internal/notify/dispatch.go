@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,6 +68,12 @@ type Dispatcher struct {
 	// Secrets supplies the one secret line of the guest claim emails (see
 	// Secrets); nil makes such notifications dead letters.
 	Secrets *Secrets
+
+	// Relay builds the sender of a tenant's own SMTP relay (Admin > Notifications); the zero value has no key, so a tenant
+	// relay cannot be opened and its email fails visibly instead of going out through the server's relay.
+	Relay RelayEnv
+	// HTTP is the SSRF-guarded client chat webhooks are posted through (safehttp.ForConfig); nil: chat is not delivered.
+	HTTP *http.Client
 }
 
 // Stats counts what a run did.
@@ -158,6 +165,16 @@ type claimed struct {
 	n       *store.Notification
 	attempt int    // the attempt number, counted by the claim
 	brand   string // the tenant's product name (Admin > Branding), "" for the default
+	logo    *emailLogo
+	tc      *tenantMail
+}
+
+// tenantMail is what one pass reads about a tenant's email: its own relay, its wording and the addresses it suppressed.
+type tenantMail struct {
+	relay      *store.MailRelayRow // enabled relay, or nil
+	templates  map[string]store.NotificationTemplateRow
+	suppressed map[string]bool // lower-case addresses of this batch that are suppressed
+	tenant     tenancy.ID
 }
 
 type outcome struct {
@@ -169,9 +186,17 @@ type outcome struct {
 	sent     *time.Time
 }
 
-// Tenant runs one pass for one tenant.
+// Tenant runs one pass for one tenant: its email, then its chat workspace.
 func (d *Dispatcher) Tenant(ctx context.Context, t tenancy.ID) (Stats, error) {
 	d.defaults()
+	st, err := d.tenantEmail(ctx, t)
+	if cerr := d.chatPass(ctx, t); cerr != nil {
+		err = errors.Join(err, fmt.Errorf("chat: %w", cerr))
+	}
+	return st, err
+}
+
+func (d *Dispatcher) tenantEmail(ctx context.Context, t tenancy.ID) (Stats, error) {
 	var st Stats
 	ctx = audit.AsSystem(ctx, Actor)
 	now := d.Clock().UTC()
@@ -231,14 +256,22 @@ func (d *Dispatcher) Tenant(ctx context.Context, t tenancy.ID) (Stats, error) {
 		if err != nil {
 			return err
 		}
+		logo, err := d.emailLogo(tx)
+		if err != nil {
+			return err
+		}
+		tc, err := d.tenantMail(tx, due)
+		if err != nil {
+			return err
+		}
 		for _, n := range due {
 			if err := tx.ClaimNotification(n.ID, n.Attempts, now.Add(d.Lease)); errors.Is(err, store.ErrNotFound) {
 				continue // another dispatcher took it
 			} else if err != nil {
 				return err
 			}
-			claims = append(claims, claimed{n, n.Attempts + 1, brand})
-			if d.Sender != nil && deref(n.Email) != "" {
+			claims = append(claims, claimed{n, n.Attempts + 1, brand, logo, tc})
+			if (d.Sender != nil || tc.relay != nil) && deref(n.Email) != "" {
 				if err := d.markSending(tx, n, now); err != nil {
 					return err
 				}
@@ -316,6 +349,41 @@ func strOrNil(s string) *string {
 	return &s
 }
 
+// tenantMail reads, in the claim transaction, what decides how this batch is sent.
+func (d *Dispatcher) tenantMail(tx *store.TenantTx, due []*store.Notification) (*tenantMail, error) {
+	tc := &tenantMail{suppressed: map[string]bool{}}
+	r, err := tx.MailRelay()
+	if err == nil && r.Enabled {
+		tc.relay = r
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	if tc.templates, err = Templates(tx); err != nil {
+		return nil, err
+	}
+	for _, n := range due {
+		addr := strings.ToLower(deref(n.Email))
+		if addr == "" || tc.suppressed[addr] {
+			continue
+		}
+		if s, err := Suppressed(tx, addr); err != nil {
+			return nil, err
+		} else if s {
+			tc.suppressed[addr] = true
+		}
+	}
+	tc.tenant = tx.Tenant()
+	return tc, nil
+}
+
+// rejected is an outcome that never reaches a relay: the transcript says why, so the delivery log shows it.
+func rejected(o outcome, email, msg string, delivery string) outcome {
+	now := time.Now().UTC()
+	o.att = &Attempt{Started: now, Finished: now, Steps: []Step{}, RcptTo: email, Outcome: OutcomeRejected, Error: msg}
+	o.delivery, o.err = delivery, msg
+	return o
+}
+
 // send makes one attempt and decides the outcome.
 func (d *Dispatcher) send(ctx context.Context, c claimed) outcome {
 	o := outcome{claimed: c}
@@ -327,19 +395,43 @@ func (d *Dispatcher) send(ctx context.Context, c claimed) outcome {
 	if c.n.Email != nil {
 		email = *c.n.Email
 	}
+	// the tenant's own relay, when it has one, sends instead of the server's
+	sender := d.Sender
+	if c.tc != nil && c.tc.relay != nil {
+		smtp, err := d.Relay.Sender(c.tc.tenant, c.tc.relay)
+		if err != nil {
+			return d.failed(o, email, err)
+		}
+		sender = smtp
+	}
 	switch {
 	case email == "":
 		return skip("the recipient has no email address")
-	case d.Sender == nil:
+	case sender == nil:
 		return skip("email is not configured")
+	case c.tc != nil && c.tc.suppressed[strings.ToLower(email)]:
+		return rejected(o, email, "the address is on the suppression list: no email is sent (Admin > Email delivery)", store.DeliverySkipped)
 	}
 	product := "Tessera"
 	if c.brand != "" {
 		product = c.brand
 	}
-	body := c.n.Body
+	link := ""
 	if c.n.Link != "" && d.BaseURL != "" {
-		body += "\n\nOpen in " + product + ": " + strings.TrimRight(d.BaseURL, "/") + c.n.Link
+		link = strings.TrimRight(d.BaseURL, "/") + c.n.Link
+	}
+	subject, body := "["+product+"] "+c.n.Subject, c.n.Body
+	if t, ok := c.tc.template(c.n.Kind); ok && !SecretKind(c.n.Kind) {
+		vars := map[string]string{"subject": c.n.Subject, "body": c.n.Body, "link": link, "product": product, "recipient": email}
+		if strings.TrimSpace(t.Subject) != "" {
+			subject = strings.NewReplacer("\r", " ", "\n", " ").Replace(Render(t.Subject, vars))
+		}
+		if strings.TrimSpace(t.Body) != "" {
+			body = Render(t.Body, vars)
+		}
+	}
+	if !c.tc.hasTemplateLink(c.n.Kind) && link != "" {
+		body += "\n\nOpen in " + product + ": " + link
 	}
 	body += "\n\n--\nYou get this because of your notification settings in " + product + "."
 	if SecretKind(c.n.Kind) {
@@ -354,14 +446,18 @@ func (d *Dispatcher) send(ctx context.Context, c claimed) outcome {
 			return o
 		}
 		body = c.n.Body + "\n\n" + secret + "\n\n--\nIf you were not expecting this message, ignore it: nothing happens until the link or code is used."
+		subject = "[" + product + "] " + c.n.Subject
 	}
-	mail := Email{ID: c.n.ID, To: email, Subject: "[" + product + "] " + c.n.Subject, Body: body}
+	mail := Email{ID: c.n.ID, To: email, Subject: subject, Body: body}
+	if c.logo != nil {
+		mail.HTML = c.logo.html(product, body)
+	}
 	var err error
-	if rec, ok := d.Sender.(RecordingSender); ok {
+	if rec, ok := sender.(RecordingSender); ok {
 		o.att, err = rec.SendRecorded(ctx, mail)
 	} else {
 		started := time.Now().UTC()
-		err = d.Sender.Send(ctx, mail)
+		err = sender.Send(ctx, mail)
 		o.att = &Attempt{Started: started, Finished: time.Now().UTC(), Steps: []Step{}, RcptTo: email, Outcome: OutcomeAccepted}
 		switch {
 		case err == nil:
@@ -388,6 +484,34 @@ func (d *Dispatcher) send(ctx context.Context, c claimed) outcome {
 		d.Log.Warn("notification email failed", "id", c.n.ID, "kind", c.n.Kind, "attempt", c.attempt, "status", o.delivery)
 	}
 	return o
+}
+
+// failed is a send that could not even start (the tenant relay cannot be built): retried with the usual backoff.
+func (d *Dispatcher) failed(o outcome, email string, err error) outcome {
+	now := d.Clock().UTC()
+	msg := scrub(err, email)
+	o.att = &Attempt{Started: now, Finished: now, Steps: []Step{}, RcptTo: email, Outcome: OutcomeFailed, Error: msg}
+	if o.attempt >= d.MaxAttempts {
+		o.delivery, o.err = store.DeliveryDead, msg
+		return o
+	}
+	next := now.Add(d.Backoff(o.attempt))
+	o.delivery, o.next, o.err = store.DeliveryPending, &next, msg
+	return o
+}
+
+func (tc *tenantMail) template(kind string) (store.NotificationTemplateRow, bool) {
+	if tc == nil {
+		return store.NotificationTemplateRow{}, false
+	}
+	t, ok := tc.templates[kind]
+	return t, ok
+}
+
+// hasTemplateLink reports whether the kind's template places the link itself.
+func (tc *tenantMail) hasTemplateLink(kind string) bool {
+	t, ok := tc.template(kind)
+	return ok && strings.TrimSpace(t.Body) != "" && strings.Contains(t.Body, "{{link}}")
 }
 
 // markSending creates the notification's delivery record if it has none and

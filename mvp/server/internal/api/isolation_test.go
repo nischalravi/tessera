@@ -271,6 +271,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/queue/jobs/{job_id}") {
 			continue // TestQueueAPI (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/queue/schedules/{name}") {
+			continue // TestQueueSchedulePauseResume (a schedule name, per tenant)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/access-drift/{drift_id}") || strings.HasPrefix(rt.Pattern, "/api/remediation-policies/{policy_id}") {
 			continue // TestDriftAPI (UUIDs, not fixture ids)
 		}
@@ -347,6 +350,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/email/messages/{message_id}") {
 			continue // TestEmailAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if rt.Pattern == "/api/email/suppressions/{address}" {
+			continue // TestSuppressionsAndDSNAPI (an email address, not a fixture id: tenant A gets 404 on B's)
 		}
 		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/t/{slug}/bootstrap" {
 			continue // TestIsolation_LoginCrossTenant (public; the tenant comes from the cookie or the slug)

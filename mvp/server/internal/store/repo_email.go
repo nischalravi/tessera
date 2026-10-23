@@ -67,7 +67,7 @@ var (
 		WHERE tenant_id = @tenant AND id = @id`)
 	notificationsRequeue = tq("notifications.requeue", `
 		UPDATE notifications SET delivery = 'pending', next_attempt_at = @at, last_error = NULL
-		WHERE tenant_id = @tenant AND id = @id AND delivery IN ('pending','dead')`)
+		WHERE tenant_id = @tenant AND id = @id AND delivery IN ('pending','dead','sent','skipped')`)
 )
 
 func scanEmail(s scanner) (*EmailMessage, error) {
