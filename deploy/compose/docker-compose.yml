@@ -21,11 +21,12 @@ x-hardened: &hardened
     options: { max-size: "20m", max-file: "5" }
 
 services:
-  # One-shot: prepares the Postgres TLS certificate and installs the KEK with the owner and mode the API
-  # requires (uid 65532, 0600). Safe to re-run; never overwrites an existing certificate.
-  init:
-    image: alpine/openssl:latest
-    entrypoint: ["/bin/sh", "-ec"]
+  # One-shots (image built from the pinned alpine in deploy/docker/Dockerfile, target init; openssl is added at
+  # build time). They run as root with only CHOWN/FOWNER/DAC_OVERRIDE and are split so the Postgres key
+  # generator never sees the KEK. Safe to re-run; neither overwrites existing material.
+  init-certs:
+    image: ${TESSERA_INIT_IMAGE:-tessera-init:latest}
+    build: { context: ../.., dockerfile: deploy/docker/Dockerfile, target: init }
     command:
       - |
         if [ ! -s /pgcerts/server.key ]; then
@@ -33,9 +34,7 @@ services:
             -addext "subjectAltName=DNS:db" -keyout /pgcerts/server.key -out /pgcerts/server.crt
         fi
         chown 70:70 /pgcerts/server.key /pgcerts/server.crt && chmod 0600 /pgcerts/server.key
-        install -m 0600 -o 65532 -g 65532 /run/secrets/tessera_kek /kek/kek
-    volumes: [pgcerts:/pgcerts, kek:/kek]
-    secrets: [tessera_kek]
+    volumes: [pgcerts:/pgcerts]
     restart: "no"
     user: root
     read_only: true
@@ -43,10 +42,25 @@ services:
     cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
     security_opt: ["no-new-privileges:true"]
 
+  # Installs the KEK with the owner and mode the API requires (uid 65532, 0600). No openssl use, no pgcerts.
+  init-kek:
+    image: ${TESSERA_INIT_IMAGE:-tessera-init:latest}
+    command:
+      - install -m 0600 -o 65532 -g 65532 /run/secrets/tessera_kek /kek/kek
+    volumes: [kek:/kek]
+    secrets: [tessera_kek]
+    restart: "no"
+    user: root
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    depends_on: { init-certs: { condition: service_completed_successfully } }
+
   db:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
     <<: *hardened
-    depends_on: { init: { condition: service_completed_successfully } }
+    depends_on: { init-certs: { condition: service_completed_successfully } }
     command:
       - postgres
       - -c
@@ -85,7 +99,7 @@ services:
     build: { context: ../.., dockerfile: deploy/docker/Dockerfile, target: api }
     <<: *hardened
     depends_on:
-      init: { condition: service_completed_successfully }
+      init-kek: { condition: service_completed_successfully }
       db: { condition: service_healthy }
     command: ["serve", "-addr", "0.0.0.0:8000"]
     environment:
@@ -133,7 +147,7 @@ services:
   # this VM and ports 80/443 open.
   caddy:
     profiles: ["tls"]
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
     <<: *hardened
     depends_on: { ui: { condition: service_healthy } }
     environment:

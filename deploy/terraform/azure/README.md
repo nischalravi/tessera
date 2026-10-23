@@ -16,7 +16,11 @@ terraform apply -var subscription_id=... -var registry_server=myacr.azurecr.io -
 
 # 1. connect as the Entra admin (the deploying principal) from inside the VNet (jump host / Cloud Shell with VNet)
 #    and create tessera_owner and tessera_app exactly as mvp/README.md "Postgres" says, with generated passwords.
-# 2. set the secrets in Key Vault (names are fixed, values never enter Terraform state):
+# 2. set the secrets in Key Vault (names are fixed, values never enter Terraform state). The vault is private by
+#    default (public access off, firewall default-deny): run this from a network with a private endpoint, or
+#    apply once with -var key_vault_public_network_access=true -var 'key_vault_allowed_ips=["a.b.c.d/32"]'
+#    and turn it off again afterwards. Container Apps must still be able to resolve the Key Vault references
+#    (the firewall keeps the AzureServices bypass): confirm the app starts, or add a private endpoint.
 #    db-owner-dsn db-app-dsn kek aws-access-key-id aws-secret-access-key
 az keyvault secret set --vault-name $(terraform output -raw key_vault_name) --name kek --value "$(openssl rand -base64 32)"
 # 3. terraform apply -var desired_min_replicas=2 ...

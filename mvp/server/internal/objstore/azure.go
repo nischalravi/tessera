@@ -3,6 +3,7 @@ package objstore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -51,6 +52,23 @@ func (a *Azure) do(ctx context.Context, method, key string, body []byte, hdr map
 	if sas := a.sas(); sas != "" {
 		raw += "?" + sas
 	}
+	return a.send(ctx, method, raw, body, hdr)
+}
+
+// containerURL is the Get Container Properties URL (restype=container), with the SAS token when one is set.
+func (a *Azure) containerURL() string {
+	base := a.T.Endpoint
+	if base == "" {
+		base = "https://" + a.T.Account + ".blob.core.windows.net"
+	}
+	raw := base + "/" + a.T.Bucket + "?restype=container"
+	if sas := a.sas(); sas != "" {
+		raw += "&" + sas
+	}
+	return raw
+}
+
+func (a *Azure) send(ctx context.Context, method, raw string, body []byte, hdr map[string]string) (*http.Response, error) {
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
@@ -106,4 +124,29 @@ func (a *Azure) Get(ctx context.Context, key string) ([]byte, error) {
 		return nil, fmt.Errorf("objstore: azure get: %w", unwrapURL(err))
 	}
 	return readBody(resp, "azure get")
+}
+
+// VerifyRetention implements Verifier. With worm=container no per-blob policy is sent, so the container itself
+// must carry a time-based retention (immutability) policy: Get Container Properties has to report
+// x-ms-has-immutability-policy: true, otherwise anchors are deletable by anyone holding the blob role.
+// The data plane does not say whether the policy is locked, so locking it stays the operator's job (a policy
+// that is only "unlocked" can still be shortened or deleted). With worm=version every Put carries a locked
+// per-blob policy and fails on a container without version-level immutability, so there is nothing to check.
+func (a *Azure) VerifyRetention(ctx context.Context) error {
+	if a.T.Immutable != "container" {
+		return nil
+	}
+	resp, err := a.send(ctx, http.MethodGet, a.containerURL(), nil, nil)
+	if err != nil {
+		return fmt.Errorf("objstore: azure container: %w", unwrapURL(err))
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("objstore: azure container properties: %s (the anchor identity needs read access to the container's properties to verify its immutability policy)", resp.Status)
+	}
+	if !strings.EqualFold(resp.Header.Get("x-ms-has-immutability-policy"), "true") {
+		return errors.New("objstore: the Azure container has no immutability policy (add a time-based retention policy and lock it: az storage container immutability-policy create, then lock)")
+	}
+	return nil
 }

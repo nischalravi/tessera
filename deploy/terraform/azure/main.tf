@@ -187,10 +187,13 @@ resource "azurerm_key_vault" "this" {
   rbac_authorization_enabled    = true
   purge_protection_enabled      = true
   soft_delete_retention_days    = 30
-  public_network_access_enabled = true # operators set values from a workstation; narrow with network_acls
+  # Private by default. Set key_vault_public_network_access = true (and list your IPs in key_vault_allowed_ips)
+  # to set secret values from a workstation; the ACL stays default-deny either way.
+  public_network_access_enabled = var.key_vault_public_network_access
   network_acls {
-    default_action = "Allow"
+    default_action = "Deny"
     bypass         = "AzureServices"
+    ip_rules       = var.key_vault_allowed_ips
   }
   tags = local.tags
 }
