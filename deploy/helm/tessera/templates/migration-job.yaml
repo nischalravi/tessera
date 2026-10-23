@@ -1,0 +1,50 @@
+{{- if and .Values.migration.enabled (not .Values.csi.enabled) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "tessera.fullname" . }}-migrate
+  labels: {{- include "tessera.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels: {{- include "tessera.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{- include "tessera.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "tessera.image" .Values.image.api }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Opens the store as the owner login: applies the embedded goose migrations and rls.sql under an
+          # advisory lock, then exits.
+          args: ["check-db"]
+          env:
+            - name: TESSERA_DB
+              valueFrom: { secretKeyRef: { name: {{ include "tessera.secretName" . }}, key: TESSERA_DB } }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+          securityContext: {{- include "tessera.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            {{- if .Values.database.caConfigMap }}
+            - { name: db-ca, mountPath: /etc/tessera/db-ca, readOnly: true }
+            {{- end }}
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        {{- if .Values.database.caConfigMap }}
+        - name: db-ca
+          configMap: { name: {{ .Values.database.caConfigMap }} }
+        {{- end }}
+{{- end }}

@@ -1,0 +1,179 @@
+# Tessera Helm chart values. Reference chart: review every default before production.
+# Environment examples: examples/values-{eks,aks,gke,openshift}.yaml. Operations guide: docs/deploy/README.md.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  api:
+    repository: ghcr.io/nischalravi/tessera-api
+    tag: "latest"          # pin a version or digest in production
+  ui:
+    repository: ghcr.io/nischalravi/tessera-ui
+    tag: "latest"
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Replicas. Postgres is required (SQLite is single-node): the chart refuses to render without a secret source.
+# Background loops run on every replica until leader election lands (#517, "available once #517 merges").
+replicaCount: 2
+
+# ---------------------------------------------------------------- application settings (non-secret)
+config:
+  # REQUIRED. The https origin users reach (ingress host). TESSERA_ENV=prod refuses http.
+  publicUrl: ""
+  # REQUIRED. CIDRs allowed to set X-Forwarded-For: the ingress controller pods / load balancer subnets, plus
+  # 127.0.0.1/32 (the UI proxy sidecar). Prod refuses anything broader than /8.
+  trustedProxies: ["127.0.0.1/32"]
+  # REQUIRED in prod: s3://bucket/prefix, a bucket with Object Lock. AWS credentials come from IRSA on EKS;
+  # on AKS and GKE give the pod AWS credentials another way (see docs/deploy/README.md, "Audit anchor").
+  auditAnchor: ""
+  awsRegion: ""
+  # Extra TESSERA_* settings (non-secret). Example: { TESSERA_READY_MAX_LOOP_LAG_SECONDS: "300" }
+  extraEnv: {}
+
+# ---------------------------------------------------------------- secrets
+secrets:
+  # An existing Secret in the release namespace with keys:
+  #   TESSERA_DB       owner DSN  (postgres://tessera_owner:...@host:5432/tessera?sslmode=verify-full)
+  #   TESSERA_DB_APP   app DSN    (postgres://tessera_app:...@host:5432/tessera?sslmode=verify-full)
+  #   TESSERA_KEK      base64 of 32 random bytes
+  #   (optional) any other secret env, e.g. TESSERA_ARCHIVE_TOKEN_SEALED, AWS_ACCESS_KEY_ID
+  # Every key is exposed as an environment variable. (The KEK is passed as TESSERA_KEK, not as a file:
+  # TESSERA_KEK_FILE must be mode 0600 and Kubernetes secret volumes with fsGroup are group-readable.)
+  existingSecret: ""
+
+# Secrets Store CSI driver: pulls from AWS Secrets Manager / Azure Key Vault / GCP Secret Manager and syncs
+# them into a Kubernetes Secret (secretObjects) that the pods read as environment. Needs the driver and the
+# provider installed in the cluster. When enabled, secrets.existingSecret is ignored.
+csi:
+  enabled: false
+  provider: ""             # aws | azure | gcp
+  syncedSecretName: ""     # defaults to <fullname>-env
+  # Provider parameters, passed through unchanged. See the examples/ files for each cloud.
+  parameters: {}
+  # Which fetched object becomes which key of the synced Secret.
+  objects: []              # - { objectName: tessera-db-owner, key: TESSERA_DB }
+
+# ---------------------------------------------------------------- database
+database:
+  # Mount a CA bundle for sslmode=verify-full (RDS, Azure and Cloud SQL CAs are not in distroless roots).
+  # Reference it in the DSN: ...?sslmode=verify-full&sslrootcert=/etc/tessera/db-ca/ca.crt
+  caConfigMap: ""          # a ConfigMap with key ca.crt
+
+migration:
+  # Helm pre-install/pre-upgrade Job running `tessera check-db` as the owner login (applies the schema).
+  # Needs secrets.existingSecret to exist before the release (not with csi.enabled). Replicas also migrate on
+  # start under a Postgres advisory lock, so this only moves the work out of the rollout.
+  enabled: true
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+
+# ---------------------------------------------------------------- pod
+securityContext:
+  runAsUser: 65532         # ignored on OpenShift (openshift.enabled), which assigns the uid
+
+openshift:
+  enabled: false           # omit fixed uid/fsGroup and create a Route instead of an Ingress
+
+serviceAccount:
+  create: true
+  name: ""
+  # IRSA:                        eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/tessera
+  # Azure Workload Identity:     azure.workload.identity/client-id: <managed identity client id>
+  # GKE Workload Identity:       iam.gke.io/gcp-service-account: tessera@PROJECT.iam.gserviceaccount.com
+  annotations: {}
+podLabels: {}               # Azure Workload Identity needs azure.workload.identity/use: "true" here
+podAnnotations: {}
+automountServiceAccountToken: false
+# IRSA and Workload Identity inject projected tokens: set to true if you use them.
+
+resources:
+  api:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { memory: 1Gi }
+  ui:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+# Probes on the API container. /api/health is public, unaudited and always present. /livez and /readyz
+# exist in the API already; the split probe semantics of #517 ("available once #517 merges") will make
+# them the better choice: then set livenessPath: /livez and readinessPath: /readyz.
+probes:
+  livenessPath: /api/health
+  readinessPath: /api/health
+  startup: { failureThreshold: 30, periodSeconds: 5 }
+  liveness: { periodSeconds: 15, timeoutSeconds: 3, failureThreshold: 3 }
+  readiness: { periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3 }
+
+terminationGracePeriodSeconds: 45
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints:
+  enabled: true
+  maxSkew: 1
+  topologyKey: topology.kubernetes.io/zone
+extraVolumes: []
+extraVolumeMounts: []      # mounted into the api container
+extraEnv: []              # raw env entries for the api container
+
+# ---------------------------------------------------------------- exposure
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+ingress:
+  enabled: true
+  className: ""            # nginx | alb | gce | azure-application-gateway | ...
+  annotations: {}
+  host: ""                 # defaults to the host of config.publicUrl
+  tls:
+    enabled: true
+    secretName: ""         # leave empty when a controller / cert-manager / cloud LB terminates TLS
+
+route:                      # OpenShift, used when openshift.enabled
+  annotations: {}
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  # Namespaces/pods allowed to reach the UI port. Default: any pod in the namespace labelled as the ingress
+  # controller; set to your controller's namespace labels.
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+  # Egress: DNS, Postgres, and https. Tighten `databaseCIDRs` to the database subnet.
+  databaseCIDRs: ["0.0.0.0/0"]
+  databasePort: 5432
+  allowHttpsEgress: true   # connectors, IdPs, S3 anchor, webhooks (outbound goes through the SSRF guard)
+  dnsNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: kube-system
+
+# ---------------------------------------------------------------- monitoring
+metrics:
+  enabled: true            # serve /metrics on a separate listener (never on the public port)
+  port: 9464
+  serviceMonitor:
+    enabled: false         # needs the Prometheus Operator CRDs
+    interval: 30s
+    labels: {}             # e.g. release: kube-prometheus-stack
+  prometheusRule:
+    enabled: false         # installs deploy/prometheus/tessera-rules.yml (a copy lives in files/)
+    labels: {}

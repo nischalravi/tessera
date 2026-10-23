@@ -1,0 +1,17 @@
+{{- if and .Values.ingress.enabled .Values.openshift.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "tessera.fullname" . }}
+  labels: {{- include "tessera.labels" . | nindent 4 }}
+  {{- with .Values.route.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  host: {{ default (urlParse .Values.config.publicUrl).host .Values.ingress.host }}
+  to: { kind: Service, name: {{ include "tessera.fullname" . }} }
+  port: { targetPort: http }
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}

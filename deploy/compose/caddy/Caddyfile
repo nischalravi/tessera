@@ -1,0 +1,10 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$TESSERA_DOMAIN} {
+	encode zstd gzip
+	# Caddy sets X-Forwarded-For from the client address; the API trusts it because the compose network
+	# is in TESSERA_TRUSTED_PROXIES. HSTS is added by the API in prod.
+	reverse_proxy ui:8080
+}

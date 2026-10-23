@@ -1,0 +1,19 @@
+# Build context for deploy/docker/Dockerfile (run from the repo root).
+**/node_modules
+**/.git
+.github
+prototype
+docs
+deploy/*
+!deploy/docker
+mvp/server/bin
+mvp/server/var
+mvp/server/*.db
+mvp/server/*.db-*
+mvp/frontend/dist
+mvp/frontend/e2e
+mvp/frontend/playwright-report
+mvp/frontend/test-results
+**/*.tbak
+**/.env
+**/.env.*
