@@ -3725,7 +3725,26 @@ export interface PublicBranding {
   logo_url: string | null;
   logo_width?: number;
   logo_height?: number;
+  /** The tenant's default language tag (Admin → Branding & labels); "" for none. */
+  language?: string;
 }
+
+/** Language, renamed terms and the email-logo switch (GET /api/admin/labels). */
+export interface LabelSettings {
+  version: number;
+  default_language: string;
+  email_logo: boolean;
+  labels: Record<string, string>;
+  can_manage: boolean;
+  terms: { key: string; hint: string; default: string }[];
+  languages: string[];
+  max_label: number;
+}
+export type LabelSettingsInput = Pick<LabelSettings, "version" | "default_language" | "email_logo" | "labels">;
+export const labelsPath = "/admin/labels";
+export const labelsApi = {
+  save: (b: LabelSettingsInput) => api<LabelSettings>(labelsPath, b, "PUT"),
+};
 
 /** The tenant's branding for the sign-in and claim pages; null if it cannot be read (the pages then show the default). */
 export async function publicBranding(tenant: string): Promise<PublicBranding | null> {
@@ -3749,9 +3768,27 @@ export interface IdentityRules {
   };
   correlation: { proposals: { name: string; description: string }[]; decisions: string };
   group_naming: { separator: string; allowed: string; max_segment: number; max_name: number; max_display: number; max_depth: number; case_insensitive: boolean };
-  dormancy: { identity_type: string; days: number; effect: string }[];
+  dormancy: { identity_type: string; label: string; days: number; effect: string }[];
+  /** What the tenant tunes: the correlation order, authoritative source per attribute and dormancy days. */
+  rules: {
+    version: number;
+    can_manage: boolean;
+    correlation_order: string[];
+    authoritative: Record<string, string>;
+    dormant_service_days: number;
+    dormant_ai_agent_days: number;
+    correlation_keys: string[];
+    attributes: string[];
+    systems: string[];
+    min_days: number;
+    max_days: number;
+  };
   not_configurable: string[];
 }
+export type IdentityRulesInput = Pick<IdentityRules["rules"], "version" | "correlation_order" | "authoritative" | "dormant_service_days" | "dormant_ai_agent_days">;
+export const identityRulesApi = {
+  save: (b: IdentityRulesInput) => api<IdentityRules>("/admin/identity-rules", b, "PUT"),
+};
 
 export const siemApi = {
   create: (body: SiemSinkInput) => api<SiemSink>("/siem/sinks", body),

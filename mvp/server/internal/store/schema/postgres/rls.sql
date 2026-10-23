@@ -2214,3 +2214,17 @@ DROP POLICY IF EXISTS tenant_isolation ON github_tokens;
 CREATE POLICY tenant_isolation ON github_tokens
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE tenant_label_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_label_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON tenant_label_settings;
+CREATE POLICY tenant_isolation ON tenant_label_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE identity_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity_rules FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON identity_rules;
+CREATE POLICY tenant_isolation ON identity_rules
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

@@ -373,3 +373,28 @@ func TestNewSender(t *testing.T) {
 		t.Errorf("smtp = %v, %v", sd, err)
 	}
 }
+
+// A message with an HTML part is multipart/alternative with the plain text first; without one it stays text/plain.
+func TestSMTP_MessageWithAnHTMLPart(t *testing.T) {
+	send := func(html string) string {
+		t.Helper()
+		f := newFakeSMTP(t)
+		c := smtpFor(t, f, config.Dev, true)
+		if err := c.Send(context.Background(), notify.Email{ID: "n-2", To: "ann@b.example", Subject: "Hello", Body: "plain text body", HTML: html}); err != nil {
+			t.Fatal(err)
+		}
+		return f.data
+	}
+	plain := send("")
+	if !strings.Contains(plain, `Content-Type: text/plain; charset="utf-8"`) || strings.Contains(plain, "multipart") {
+		t.Errorf("plain message:\n%s", plain)
+	}
+	alt := send("<p>html body</p>")
+	i, j := strings.Index(alt, "Content-Type: text/plain"), strings.Index(alt, "Content-Type: text/html")
+	if !strings.Contains(alt, "Content-Type: multipart/alternative; boundary=") || i < 0 || j < i || !strings.HasSuffix(strings.TrimSpace(alt), "--") {
+		t.Errorf("alternative message:\n%s", alt)
+	}
+	if !strings.Contains(alt, base64.StdEncoding.EncodeToString([]byte("<p>html body</p>"))) || !strings.Contains(alt, base64.StdEncoding.EncodeToString([]byte("plain text body"))) {
+		t.Errorf("parts are not in the message:\n%s", alt)
+	}
+}

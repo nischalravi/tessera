@@ -1,6 +1,9 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
-import { BrandingSettings, brandingApi, relTime, useApi } from "../../api";
+import { BrandingSettings, LabelSettings, api, brandingApi, labelsApi, labelsPath, preferencesPath, relTime, useApi } from "../../api";
 import { useSession } from "../../app/auth";
+import { usePreferences } from "../../app/PrefsGate";
+import { PreferencesView } from "../../prefs";
+import { applyLabels } from "../../labels";
 import { Button, Callout, Loading, useToast } from "../../components";
 import { MIN_CONTRAST, bestOn, brandStyle, contrast, isHex, pairProblem } from "../../branding";
 import { BrandMark } from "../../public/BrandMark";
@@ -9,7 +12,7 @@ import { errText } from "./common";
 /**
  * Branding: the product name, button colours and logo the sign-in page, the guest claim pages and emails show.
  * The API enforces the same rules as the form: the colour pair must reach WCAG AA, the logo is a PNG or JPEG
- * (never SVG) within the size and dimension limits. Emails are plain text, so they carry the name only.
+ * (never SVG) within the size and dimension limits. Emails carry the name, and the logo when the switch below is on.
  */
 
 const toBase64 = (buf: ArrayBuffer) => {
@@ -20,6 +23,15 @@ const toBase64 = (buf: ArrayBuffer) => {
 };
 
 export function BrandingAdmin() {
+  return (
+    <div className="stack">
+      <BrandingForm />
+      <LabelsCard />
+    </div>
+  );
+}
+
+function BrandingForm() {
   const { data, error, reload } = useApi<BrandingSettings>("/admin/branding");
   const { can, session } = useSession();
   const edit = can("email.manage");
@@ -99,7 +111,7 @@ export function BrandingAdmin() {
       <form className="stack" onSubmit={submit}>
         <label className="field">Product name
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} required disabled={!edit} aria-describedby="brand-name-help" />
-          <span id="brand-name-help" className="xs faint">Shown where “Tessera” would be: the sign-in and claim pages, and the subject and footer of emails.</span>
+          <span id="brand-name-help" className="xs faint">Shown where “Tessera” would be: the sign-in and claim pages, and the subject and footer of emails. With “Show the logo in emails” on (below), emails carry the logo too.</span>
         </label>
         <div className="row" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
           <label className="field">Button colour
@@ -158,5 +170,93 @@ export function BrandingAdmin() {
         {data.updated_by && <p className="xs faint">Last changed by {data.updated_by} {data.updated_at && relTime(data.updated_at)}. Saving needs a recent strong sign-in; if it asks for one, sign in and save again.</p>}
       </form>
     </div>
+  );
+}
+
+const LANGUAGE_NAME: Record<string, string> = {
+  "en-US": "English (United States)", "en-GB": "English (United Kingdom)", "en-CA": "English (Canada)", "en-AU": "English (Australia)",
+  "de-DE": "Deutsch", "fr-FR": "Français", "es-ES": "Español", "pt-BR": "Português (Brasil)", "ja-JP": "日本語",
+};
+
+/**
+ * Language, renamed terms and the email-logo switch. The terms are swapped, singular and plural, in the navigation and
+ * the page titles; the language sets how dates and numbers are written for a person who chose no locale of their own.
+ * Saving needs a recent strong sign-in (the client asks for it), and reloads the app so the new words show at once.
+ */
+function LabelsCard() {
+  const { data, error, reload } = useApi<LabelSettings>(labelsPath);
+  const { apply } = usePreferences();
+  const toast = useToast();
+  const [lang, setLang] = useState("");
+  const [logo, setLogo] = useState(false);
+  const [labels, setLabels] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    setLang(data.default_language);
+    setLogo(data.email_logo);
+    setLabels(data.labels);
+  }, [data]);
+  if (!data) return <div className="card flush"><Loading error={error} /></div>;
+  const edit = data.can_manage;
+  const clean = Object.fromEntries(Object.entries(labels).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v !== ""));
+  const changed = lang !== data.default_language || logo !== data.email_logo || JSON.stringify(clean) !== JSON.stringify(data.labels);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!edit || busy) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      await labelsApi.save({ version: data.version, default_language: lang, email_logo: logo, labels: clean });
+      toast("Labels and language saved");
+      reload();
+      apply(await api<PreferencesView>(preferencesPath)); // the app re-renders with the new words and language
+    } catch (err) {
+      setProblem(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="card stack" style={{ maxWidth: 720 }} onSubmit={submit} aria-label="Labels and language">
+      <h2>Labels and language</h2>
+      <fieldset className="stack-sm" style={{ border: 0, padding: 0, margin: 0 }} disabled={!edit}>
+        <legend><h3>Rename objects</h3></legend>
+        <p className="small muted" style={{ margin: 0 }}>Use your organization's words. Each is swapped, singular and plural, in the navigation and the page titles. Leave a field empty to keep Tessera's word.</p>
+        <div className="grid g2">
+          {data.terms.map((t) => (
+            <label key={t.key} className="field">{t.key[0].toUpperCase() + t.key.slice(1)}
+              <input className="input" value={labels[t.key] ?? ""} placeholder={t.default} maxLength={data.max_label} onChange={(e) => setLabels((l) => ({ ...l, [t.key]: e.target.value }))} aria-describedby={`label-hint-${t.key.replace(/ /g, "-")}`} />
+              <span className="xs faint" id={`label-hint-${t.key.replace(/ /g, "-")}`}>{t.hint}</span>
+            </label>
+          ))}
+        </div>
+        <p className="xs faint" style={{ margin: 0 }} aria-live="polite">Preview: {Object.keys(clean).length === 0 ? "no words renamed." : data.terms.filter((t) => clean[t.key]).map((t) => `“${t.key}s” reads “${applyLabels(`${t.key}s`, { [t.key]: clean[t.key] })}”`).join("; ")}</p>
+      </fieldset>
+      <fieldset className="stack-sm" style={{ border: 0, padding: 0, margin: 0 }} disabled={!edit}>
+        <legend><h3>Default language</h3></legend>
+        <label className="field">Language
+          <select className="input" value={lang} onChange={(e) => setLang(e.target.value)} style={{ maxWidth: 320 }} aria-describedby="lang-help">
+            <option value="">Follow the browser</option>
+            {data.languages.map((l) => <option key={l} value={l}>{LANGUAGE_NAME[l] ?? l}</option>)}
+          </select>
+          <span className="xs faint" id="lang-help">How dates and numbers are written for people who chose no locale of their own (My account → Preferences). Messages are in English until a translation is added.</span>
+        </label>
+      </fieldset>
+      <fieldset className="stack-sm" style={{ border: 0, padding: 0, margin: 0 }} disabled={!edit}>
+        <legend><h3>Emails</h3></legend>
+        <label className="row small"><input type="checkbox" checked={logo} onChange={(e) => setLogo(e.target.checked)} /> Show the logo in emails</label>
+        <p className="xs faint" style={{ margin: 0 }}>Emails stay readable as plain text and also carry an HTML part with the logo above the message, loaded from your public Tessera address. Without a logo, or without that address, only the name is shown.</p>
+      </fieldset>
+      {problem && <Callout tone="bad">{problem}</Callout>}
+      {edit ? (
+        <div className="row"><Button type="submit" variant="primary" disabled={busy || !changed}>{busy ? "Saving…" : "Save labels and language"}</Button></div>
+      ) : (
+        <p className="small muted">Changing these needs the email.manage permission (tenant admin).</p>
+      )}
+    </form>
   );
 }

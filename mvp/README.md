@@ -634,7 +634,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
 `GET|POST /api/admin/certificates` · `POST /api/admin/certificates/generate {connection_id}` · `POST /api/admin/certificates/{id}/promote|retire` ·
 `GET|PUT /api/admin/branding` · `GET /api/auth/branding?tenant=` · `GET /api/auth/branding/logo?tenant=` (the last two are public, see "Certificates, branding and identity rules") ·
-`GET /api/admin/identity-rules` ·
+`GET|PUT /api/admin/identity-rules` · `GET|PUT /api/admin/labels` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
 `GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
@@ -926,14 +926,42 @@ and is audited as `branding.updated`.
   `Content-Type: image/png|jpeg`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, an
   ETag and `Cache-Control: public, max-age=300`.
 * Used by the sign-in page, the guest claim, register and renew pages (name, logo, button colours) and by email (subject
-  prefix, link line and footer say the product name; emails are plain text, so no logo). Without branding everything says Tessera.
+  prefix, link line and footer say the product name). Without branding everything says Tessera.
+* **Show the logo in emails** (`PUT /api/admin/labels`, `email_logo`). On, and with a logo saved and `TESSERA_PUBLIC_URL` set,
+  every email is `multipart/alternative`: the plain-text part first, then an HTML part with the logo (loaded from the public
+  logo URL, shown at most 48 px high) above the message, which is HTML-escaped. Off, or without a logo or public address,
+  emails stay plain text.
 
-**Identity rules** (`GET /api/admin/identity-rules`, `graph.read`). One read of what the identity engines apply: the matching
-rules with their tier (`internal/identity/match.Catalog`, kept in step by a test), the thresholds, the tenant's matching settings
-(changed with the existing `PUT /api/admin/matching`, `identity.matching.configure`, also editable on the page), the correlation
-proposals of `internal/correlation`, the group naming rules of `internal/groups/naming` and the machine-identity dormancy
-threshold of `internal/nhi`. It lists what is not configurable yet: the authoritative source per attribute, the order of the
-correlation rules and per-type dormancy thresholds have no engine behind them.
+**Labels and language** (`internal/branding/labels.go`, `settings.go`, schema `0765_tenant_label_settings.sql`).
+`GET|PUT /api/admin/labels` (`admin.read` to read; `email.manage` and a step-up to save; audited as `branding.labels.update`
+with the old values; `version` is optimistic, a stale one is 409 `version_conflict`) holds three things:
+
+* **Rename objects.** `labels` maps a fixed set of English terms (`entitlement`, `group`, `access review`, `guest`,
+  `application`) to the tenant's words, 1 to 40 characters of letters, digits, spaces, hyphens, `&` and apostrophes (never
+  markup). The UI swaps them, singular and plural, keeping the capital, in the navigation and the page titles
+  (`src/labels.ts`); it gets them with the preferences (`GET /api/me/preferences` has `tenant_language` and `labels`), so
+  they apply before the app renders. Saving reloads the app's tree so the new words show at once.
+* **Default language.** One of the locales a person can choose (`internal/prefs.Locales`), or empty for the browser's. It is the
+  locale dates and numbers are written in for a person who chose none (My account > Preferences wins), and the public branding
+  answer carries it as `language` (the claim pages pick the browser's language first, then this). Messages are English until a
+  translation catalog is added (`src/i18n`).
+* **Email logo** (above).
+
+**Identity rules** (`GET|PUT /api/admin/identity-rules`; `graph.read` to read, `matching.configure` and a step-up to save,
+audited as `identity.rules.update` with the old values, optimistic `version`). One read of what the identity engines apply: the
+matching rules with their tier (`internal/identity/match.Catalog`, kept in step by a test), the thresholds, the tenant's matching
+settings (changed with the existing `PUT /api/admin/matching`, `identity.matching.configure`, also editable on the page), the
+correlation proposals of `internal/correlation` and the group naming rules of `internal/groups/naming`. The PUT sets what the
+engines read through `internal/idrules` (schema `0766_identity_rules.sql`):
+
+* `correlation_order`: the keys the connector resolver (`ingest.Resolver.Identity`) tries, in order, to match a reference to a
+  person: `external_id` and `email` (default: both, external id first). A key left out is not tried; at least one is needed. A
+  reviewer's pinned account decision still wins.
+* `authoritative`: an attribute (`name`, `email`, `department`, `title`) to the system of one of the tenant's connections. When
+  a sync from another system reports a person already known, the stored value of that attribute is kept; the authoritative
+  system's value is taken; a person not yet known takes the first source's. An unknown system is 422 `unknown_source`.
+* `dormant_service_days`, `dormant_ai_agent_days` (1 to 3650, default 30): how long a service identity or an AI agent may go
+  unused before the machine-identity inventory (`internal/nhi`) flags it dormant. People have no usage-based dormancy yet.
 
 ### Alerts
 
