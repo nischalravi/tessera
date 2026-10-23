@@ -29,6 +29,9 @@ type assignSnap struct {
 	From       *string  `json:"enabled_from"`
 	To         *string  `json:"disabled_at"`
 	Values     []string `json:"values"`
+	// of a membership-owned assignment: the role and identity the membership named
+	MemberGroup    string `json:"member_group"`
+	MemberIdentity *int64 `json:"member_identity"`
 }
 
 func (a assignSnap) dates() (from, to *time.Time, err error) {
@@ -85,7 +88,7 @@ func LoadAt(tx *store.TenantTx, at time.Time) (*Set, error) {
 	}
 	s := newSet(tx)
 	for _, p := range perms {
-		g, subject, ok, err := pitOwnerRole(tx, p.OwnerType, p.OwnerID)
+		g, subject, ok, err := pitOwnerRole(tx, p)
 		if err != nil {
 			return nil, err
 		}
@@ -106,28 +109,37 @@ func LoadAt(tx *store.TenantTx, at time.Time) (*Set, error) {
 }
 
 // pitOwnerRole is ownerRole for history: a role that has since been deleted still
-// counts (its name is kept), a membership row that is gone does not (it names no
-// identity any more).
-func pitOwnerRole(tx *store.TenantTx, ownerType, ownerID string) (*store.NativeGroup, *int64, bool, error) {
-	if ownerType == store.AttrOwnerGroup {
-		g, err := tx.GrpGroup(store.GroupID(ownerID))
+// counts (its name is kept). A membership-owned assignment names its role and
+// identity from the snapshot, so a membership row deleted since still counts
+// (a disallow on it applied then); history written before the snapshot kept
+// them falls back to the row, and a row that is gone names no identity.
+func pitOwnerRole(tx *store.TenantTx, p assignSnap) (*store.NativeGroup, *int64, bool, error) {
+	if p.OwnerType == store.AttrOwnerGroup {
+		g, err := tx.GrpGroup(store.GroupID(p.OwnerID))
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, nil, false, nil
 		}
 		return g, nil, err == nil, err
 	}
-	m, err := tx.GrpDirectMembership(ownerID)
-	if errors.Is(err, store.ErrNotFound) || err == nil && m.MemberIdentity == nil {
+	gid, identity := store.GroupID(p.MemberGroup), p.MemberIdentity
+	if gid == "" {
+		m, err := tx.GrpDirectMembership(p.OwnerID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil, false, nil
+		}
+		if err != nil {
+			return nil, nil, false, err
+		}
+		gid, identity = m.GroupID, m.MemberIdentity
+	}
+	if identity == nil {
 		return nil, nil, false, nil
 	}
-	if err != nil {
-		return nil, nil, false, err
-	}
-	g, err := tx.GrpGroup(m.GroupID)
+	g, err := tx.GrpGroup(gid)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil, false, nil
 	}
-	return g, m.MemberIdentity, err == nil, err
+	return g, identity, err == nil, err
 }
 
 // SubjectAt reads the roles an identity was effectively in at an instant.

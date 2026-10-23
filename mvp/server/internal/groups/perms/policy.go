@@ -23,7 +23,7 @@ import (
 // more specific allow beat a broader disallow: the text is exact when no
 // allow overrides a disallow, and the decision point (Decide) is the authority
 // otherwise. An assignment outside its dates at now, or with a limit that does
-// not compile, is left out and named in a comment.
+// not compile, is left out and named in a comment (a forbid with such a limit stays, unconditional).
 func (s *Set) Policy(now time.Time) string {
 	var b strings.Builder
 	as := slices.Clone(s.Assignments)
@@ -35,8 +35,13 @@ func (s *Set) Policy(now time.Time) string {
 		}
 		cond, err := CompileLimits(a.Limits)
 		if err != nil {
-			fmt.Fprintf(&b, "// assignment %s is left out: %s\n", a.ID, oneLine(err.Error()))
-			continue
+			if !a.Disallowed {
+				fmt.Fprintf(&b, "// assignment %s is left out: %s\n", a.ID, oneLine(err.Error()))
+				continue
+			}
+			// fail closed: a deny whose limit cannot be read stays, unconditional
+			fmt.Fprintf(&b, "// assignment %s has a limit that does not compile (%s): its forbid is unconditional\n", a.ID, oneLine(err.Error()))
+			cond = nil
 		}
 		effect := "permit"
 		if a.Disallowed {

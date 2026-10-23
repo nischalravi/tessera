@@ -208,7 +208,17 @@ func (e Env) emit(typ string, a *store.GrpAttrAssign, values []string) error {
 	}
 	ev := events.New(typ, a.ID, e.Now, cause)
 	ev.CauseRef = e.CauseRef
-	ev.Data = events.Data(assignSnapshot(a, values))
+	snap := assignSnapshot(a, values)
+	if a.OwnerType == store.AttrOwnerMembership {
+		// keep who the membership named: the point-in-time view reads it after the row is gone
+		if m, err := e.Tx.GrpDirectMembership(a.OwnerID); err == nil {
+			snap["member_group"] = string(m.GroupID)
+			if m.MemberIdentity != nil {
+				snap["member_identity"] = *m.MemberIdentity
+			}
+		}
+	}
+	ev.Data = events.Data(snap)
 	return pit.Emit(e.Tx, ev)
 }
 

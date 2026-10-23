@@ -273,6 +273,9 @@ func loadLimits(tx *store.TenantTx) (map[string][]Limit, error) {
 	return out, nil
 }
 
+// KeyText is the text of a canonical value key.
+func KeyText(key string) string { return keyText(key) }
+
 // keyText is the value of a canonical value key ("s:text", "i:42").
 func keyText(key string) string {
 	if len(key) >= 2 && key[1] == ':' {
@@ -425,7 +428,10 @@ func (s *Set) Decide(sub Subject, q Query, ctx Context, now time.Time) (*Decisio
 		}
 		if ctx != nil && len(a.Limits) > 0 {
 			c, err := CompileLimits(a.Limits)
-			if err != nil || !c.Holds(ctx) { // a limit that does not compile never holds
+			switch {
+			case err != nil && a.Disallowed:
+				// fail closed: a deny whose limit cannot be read stays in force
+			case err != nil || !c.Holds(ctx): // an allow whose limit does not compile never holds
 				d.LimitsFailed = append(d.LimitsFailed, a.ID)
 				continue
 			}
@@ -479,6 +485,7 @@ func (s *Set) Effective(sub Subject, now time.Time) (out []Effect, truncated boo
 	type pair struct{ def, name, action string }
 	seen := map[pair]bool{}
 	var pairs []pair
+collect:
 	for _, a := range s.Assignments {
 		if !a.InDates(now) {
 			continue
@@ -493,6 +500,10 @@ func (s *Set) Effective(sub Subject, now time.Time) (out []Effect, truncated boo
 		for _, n := range withSelf(a.NameID, cl.names[a.NameID]) {
 			for _, ac := range withSelf(a.ActionID, cl.actions[a.ActionID]) {
 				if p := (pair{a.DefID, n, ac}); !seen[p] {
+					if len(pairs) >= MaxEntries { // the expansion is bounded too, not only the output
+						truncated = true
+						break collect
+					}
 					seen[p] = true
 					pairs = append(pairs, p)
 				}
@@ -500,10 +511,6 @@ func (s *Set) Effective(sub Subject, now time.Time) (out []Effect, truncated boo
 		}
 	}
 	for _, p := range pairs {
-		if len(out) >= MaxEntries {
-			truncated = true
-			break
-		}
 		res, err := s.fullName(p.name)
 		if err != nil {
 			return nil, false, err

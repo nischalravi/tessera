@@ -3602,6 +3602,13 @@ Postgres variant): `grp_pit_assigns`, the point-in-time history of attribute ass
   fails the limit; several limits on one assignment must all hold; several values of one `ipOnNetwork` or
   `timeWindow` are alternatives. The same condition tree is rendered as Cedar text and evaluated by the
   decision point (`TestLimits_EvaluatedByPDP`).
+- **Context for conditional denies.** A disallow whose limit reads a `ctx.*` value that the check
+  request does not carry does not apply (a missing value fails the limit, as in Cedar), so callers must
+  supply the context for a conditional deny to take effect. A limit that cannot compile is the
+  opposite case: a disallow with one stays in force unconditionally (and exports as an unconditional
+  `forbid`), an allow with one grants nothing. Limits are validated on write (`422 invalid_limit` from
+  `/api/groups/attr-assignments`), so this only guards rows stored earlier
+  (`TestLimits_UncompilableDisallowFailsClosed`).
 - **PIT view.** `grp_pit_assigns` is filled from the `attribute.*` events (and rebuilt by
   `POST /api/groups/pit/rebuild`, pruned by retention). `as_of=T` answers from it and from the effective
   membership history. What the history does not keep is read as it is now: the implication closures, and
@@ -3623,7 +3630,7 @@ Postgres variant): `grp_pit_assigns`, the point-in-time history of attribute ass
 | `GET /api/groups/{id}/permissions` | `groups.read` and the role's `read` privilege |
 
 - Tests: `go test ./internal/groups/perms` (`TestHeuristics_Table`, `TestCompileLimit_Table`,
-  `TestLimits_EvaluatedByPDP`, `TestPermissions_PITView`, `TestGrouperImport_RoundTrip`), `internal/api`
+  `TestLimits_EvaluatedByPDP`, `TestPermissions_PITView`, `TestPermissions_PITDisallowOfDeletedMembership`, `TestEffective_Bounded`, `TestGrouperImport_RoundTrip`), `internal/api`
   (`TestGroupsPermissionsAPI`), `TestIsolation_GroupPermissionTables` in `internal/store`.
 
 #### Group rules and membership constraints (GR-13, issue #56)
