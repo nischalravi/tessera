@@ -2,6 +2,8 @@ package vms
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -57,7 +59,7 @@ func (b *Beeline) VmsRecords(ctx context.Context, since *time.Time, yield func(*
 	}
 	return connsync.Walk(ctx, b.base, b.url(path, q), func(ctx context.Context, pageURL string) (string, error) {
 		var page struct {
-			Data  []blAssignment `json:"data"`
+			Data  []json.RawMessage `json:"data"`
 			Links struct {
 				Next string `json:"next"`
 			} `json:"links"`
@@ -66,7 +68,10 @@ func (b *Beeline) VmsRecords(ctx context.Context, since *time.Time, yield func(*
 			return "", err
 		}
 		for i := range page.Data {
-			a := &page.Data[i]
+			var a blAssignment
+			if err := json.Unmarshal(page.Data[i], &a); err != nil {
+				return "", fmt.Errorf("beeline: an assignment is not readable: %w", err)
+			}
 			rec := &connectors.VmsRecord{System: "beeline", WorkerID: a.ID,
 				Name: strings.TrimSpace(a.Worker.FirstName + " " + a.Worker.LastName), Email: a.Worker.Email, Supplier: a.Vendor,
 				Role: a.Role, SponsorEmployeeID: a.Manager.EmployeeID, SponsorEmail: a.Manager.Email, Status: status(a.State),
@@ -74,8 +79,9 @@ func (b *Beeline) VmsRecords(ctx context.Context, since *time.Time, yield func(*
 			if t := parseTime(a.Update); t != nil {
 				rec.UpdatedAt = *t
 			}
-			rec.EventID = eventID("beeline", a.ID, rec.Status, tstr(rec.StartsAt), tstr(rec.EndsAt), a.Manager.EmployeeID,
-				strings.ToLower(a.Manager.Email), strings.ToLower(a.Worker.Email), a.Update)
+			modified := applyMapping(rec, page.Data[i], b.set.Mapping, a.Update)
+			rec.EventID = eventID("beeline", rec.WorkerID, rec.Status, tstr(rec.StartsAt), tstr(rec.EndsAt), rec.SponsorEmployeeID,
+				strings.ToLower(rec.SponsorEmail), strings.ToLower(rec.Email), modified)
 			if err := yield(rec); err != nil {
 				return "", err
 			}

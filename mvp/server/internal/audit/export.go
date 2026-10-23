@@ -123,3 +123,48 @@ func Export(ctx context.Context, db *store.DB, t tenancy.ID, fromSeq, toSeq int6
 		}
 	}
 }
+
+// VerifyInclusion checks that records, in seq order, are a contiguous run of
+// one tenant's chain and end at wantHead: each record's hash recomputes
+// (VerifyRecord), each prev_hash is the hash of the record before it, and the
+// last hash is wantHead (a signed checkpoint's head_hash). With the first
+// record being the event in question, success shows the event is part of the
+// chain the checkpoint signs. It returns the last hash. wantHead "" skips the
+// head comparison. The records are the ExportRecord form: GET
+// /api/audit/events/{id}/proof?path=true returns them.
+func VerifyInclusion(records [][]byte, wantHead string) (string, error) {
+	if len(records) == 0 {
+		return "", fmt.Errorf("audit: no records to verify")
+	}
+	var prevHash string
+	var prevSeq int64
+	for i, line := range records {
+		ok, hash, err := VerifyRecord(line)
+		if err != nil {
+			return "", fmt.Errorf("audit: record %d: %w", i, err)
+		}
+		var link struct {
+			Seq      int64  `json:"seq"`
+			PrevHash string `json:"prev_hash"`
+		}
+		if err := json.Unmarshal(line, &link); err != nil {
+			return "", fmt.Errorf("audit: record %d: %w", i, err)
+		}
+		if !ok {
+			return "", fmt.Errorf("audit: record %d (seq %d): its hash does not match its content", i, link.Seq)
+		}
+		if i > 0 {
+			if link.Seq != prevSeq+1 {
+				return "", fmt.Errorf("audit: record %d: seq %d does not follow %d", i, link.Seq, prevSeq)
+			}
+			if link.PrevHash != prevHash {
+				return "", fmt.Errorf("audit: record %d (seq %d): prev_hash does not link to the record before it", i, link.Seq)
+			}
+		}
+		prevHash, prevSeq = hash, link.Seq
+	}
+	if wantHead != "" && prevHash != wantHead {
+		return prevHash, fmt.Errorf("audit: the path ends at %s, not at the checkpoint head %s", prevHash, wantHead)
+	}
+	return prevHash, nil
+}

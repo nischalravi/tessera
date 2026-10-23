@@ -78,6 +78,9 @@ POST   /api/admin/certificates/{certificate_id}/retire  connections.manage  STEP
 GET    /api/admin/branding                           admin.read      -  # Admin > Branding
 PUT    /api/admin/branding                           email.manage    STEP_UP_POLICY
 GET    /api/admin/identity-rules                     graph.read      -  # Admin > Identity rules
+PUT    /api/admin/identity-rules                     matching.configure STEP_UP_POLICY  # Admin > Identity rules
+GET    /api/admin/labels                             admin.read      -  # Admin > Branding & labels
+PUT    /api/admin/labels                             email.manage    STEP_UP_POLICY  # Admin > Branding & labels
 GET    /api/siem/sinks/{sink_id}/dead-letters        siem.read       -  # issue #169
 GET    /api/alerts                                   alerts.read     -  # issue #168
 GET    /api/alerts/summary                           alerts.read     -  # issue #168
@@ -326,6 +329,23 @@ PUT    /api/notifications/preferences                auth.self       -  # issue 
 GET    /api/email/messages                           email.read      -  # issue #189
 GET    /api/email/messages/{message_id}              email.read      -  # issue #189
 POST   /api/email/messages/{message_id}/retry        email.manage    -  # issue #189
+GET    /api/admin/mail-relay                         email.read      -  # Admin > Notifications
+PUT    /api/admin/mail-relay                         email.manage    STEP_UP_POLICY
+DELETE /api/admin/mail-relay                         email.manage    STEP_UP_POLICY
+POST   /api/admin/mail-relay/test                    email.manage    STEP_UP_POLICY
+GET    /api/admin/chat                               email.read      -  # Admin > Notifications
+PUT    /api/admin/chat                               email.manage    STEP_UP_POLICY
+DELETE /api/admin/chat                               email.manage    STEP_UP_POLICY
+POST   /api/admin/chat/test                          email.manage    STEP_UP_POLICY
+GET    /api/admin/notification-policy                email.read      -  # Admin > Notifications
+PUT    /api/admin/notification-policy                email.manage    STEP_UP_POLICY
+GET    /api/admin/notification-templates             email.read      -  # Admin > Notifications
+PUT    /api/admin/notification-templates/{kind}      email.manage    STEP_UP_POLICY
+DELETE /api/admin/notification-templates/{kind}      email.manage    STEP_UP_POLICY
+GET    /api/email/suppressions                       email.read      -  # Admin > Email delivery
+POST   /api/email/suppressions                       email.manage    -
+DELETE /api/email/suppressions/{address}             email.manage    -
+POST   /api/email/dsn                                email.manage    -  # a delivery status report (RFC 3464)
 POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
 POST   /api/identities/{identity_id}/disable         identities.contain STEP_UP_POLICY  # wire-previews: containment, then disabled
@@ -457,12 +477,15 @@ GET    /api/queue/jobs                               jobs.read       -  # issue 
 GET    /api/queue/schedules                          jobs.read       -  #
 GET    /api/queue/workers                            jobs.read       -  # issue #302
 POST   /api/queue/jobs/{job_id}/retry                jobs.manage     STEP_UP_POLICY  #
+POST   /api/queue/schedules/{name}/pause             jobs.manage     STEP_UP_POLICY  # issue #497
+POST   /api/queue/schedules/{name}/resume            jobs.manage     STEP_UP_POLICY  # issue #497
 GET    /api/queue/limits                             connections.read    -  # issue #302
 PUT    /api/queue/limits                             connections.manage  STEP_UP_POLICY
 DELETE /api/queue/limits                             connections.manage  STEP_UP_POLICY
 GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
 PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
 DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
+POST   /api/provisioning/targets/{id}/dry-run        provisioning.manage -  # issue #498
 GET    /api/provisioning/ops                         provisioning.read   -
 GET    /api/provisioning/ops/{op_id}                 provisioning.read   -
 POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -

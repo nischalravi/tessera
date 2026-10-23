@@ -4,6 +4,8 @@
  * An empty value is the default: the browser's time zone and locale, the locale's medium date, the home page.
  * It imports nothing from api.ts, which formats its dates through it.
  */
+import { setLabels } from "./labels.ts";
+
 export interface Preferences {
   time_zone: string;
   date_format: "" | "iso" | "dmy" | "mdy" | "long";
@@ -11,6 +13,9 @@ export interface Preferences {
   landing_page: string;
 }
 export interface PreferencesView extends Preferences {
+  /** The tenant's default language (Admin → Branding & labels) and the words it renamed. */
+  tenant_language?: string;
+  labels?: Record<string, string>;
   time_zones: string[];
   date_formats: string[];
   locales: string[];
@@ -21,10 +26,13 @@ export const NO_PREFERENCES: Preferences = { time_zone: "", date_format: "", loc
 export const preferencesPath = "/me/preferences";
 
 let current: Preferences = NO_PREFERENCES;
+let tenantLanguage = "";
 /** The signed-in user's preferences, as the date helpers see them. */
 export const getDisplayPrefs = () => current;
-export const setDisplayPrefs = (p: Preferences) => {
-  current = { ...NO_PREFERENCES, ...p };
+export const setDisplayPrefs = (p: Preferences & { tenant_language?: string; labels?: Record<string, string> }) => {
+  current = { time_zone: p.time_zone ?? "", date_format: p.date_format ?? "", locale: p.locale ?? "", landing_page: p.landing_page ?? "" };
+  tenantLanguage = p.tenant_language ?? "";
+  setLabels(p.labels);
 };
 
 export const DATE_FORMAT_LABEL: Record<string, string> = {
@@ -35,8 +43,8 @@ export const DATE_FORMAT_LABEL: Record<string, string> = {
   long: "21 Oct 2026",
 };
 
-/** The locale to format with: the user's, else the browser's (undefined). */
-const loc = (p: Preferences) => p.locale || undefined;
+/** The locale to format with: the user's, else the tenant's default language, else the browser's (undefined). */
+const loc = (p: Preferences) => p.locale || tenantLanguage || undefined;
 const zone = (p: Preferences) => p.time_zone || undefined;
 
 /** Intl refuses an unknown zone or locale; fall back to the browser's rather than break a page. */

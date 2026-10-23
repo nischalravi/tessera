@@ -6,9 +6,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
-// Scan windows: how far ahead access endings are announced, and how old an
-// open review campaign is before its reviewers are reminded (and then every
-// further ReviewReminderEvery).
+// Scan windows of a tenant that set no Policy (Admin > Notifications): how far ahead access endings are announced, and how
+// old an open review campaign is before its reviewers are reminded (and then every further ReviewReminderStep).
 const (
 	JITWarnWindow      = time.Hour
 	RequestWarnWindow  = 24 * time.Hour
@@ -28,7 +27,13 @@ func Scan(tx *store.TenantTx, now time.Time) ([]*store.Notification, error) {
 		out = append(out, rows...)
 		return err
 	}
-	jits, err := tx.JITExpiringBetween(now, now.Add(JITWarnWindow))
+	pol, _, err := LoadPolicy(tx)
+	if err != nil {
+		return nil, err
+	}
+	jitWarn, requestWarn := time.Duration(pol.JITWarnMinutes)*time.Minute, time.Duration(pol.RequestWarnHours)*time.Hour
+	remindAfter, remindEvery := time.Duration(pol.ReviewRemindAfterDays)*24*time.Hour, time.Duration(pol.ReviewRemindEveryDays)*24*time.Hour
+	jits, err := tx.JITExpiringBetween(now, now.Add(jitWarn))
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +42,7 @@ func Scan(tx *store.TenantTx, now time.Time) ([]*store.Notification, error) {
 			return nil, err
 		}
 	}
-	lines, err := tx.RequestLinesExpiringBetween(now, now.Add(RequestWarnWindow))
+	lines, err := tx.RequestLinesExpiringBetween(now, now.Add(requestWarn))
 	if err != nil {
 		return nil, err
 	}
@@ -74,11 +79,12 @@ func Scan(tx *store.TenantTx, now time.Time) ([]*store.Notification, error) {
 	}
 	for _, c := range camps {
 		age := now.Sub(c.CreatedAt)
-		if c.Status != "open" || age < ReviewReminderAge {
+		if c.Status != "open" || age < remindAfter {
 			continue
 		}
-		week := int(age / ReviewReminderStep)
-		if err := add(PlanReviewReminder(tx, now, c, week)); err != nil {
+		// the reminder's number: 1 at the first, then one more every remindEvery (a week, week by week, by default)
+		n := 1 + int((age-remindAfter)/remindEvery)
+		if err := add(PlanReviewReminder(tx, now, c, n)); err != nil {
 			return nil, err
 		}
 	}

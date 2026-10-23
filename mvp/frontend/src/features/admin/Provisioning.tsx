@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Play, RotateCcw, Settings2, XCircle } from "lucide-react";
+import { FlaskConical, Play, RotateCcw, Settings2, XCircle } from "lucide-react";
 import {
-  Connection, ProvKind, ProvOp, ProvOpDetail, ProvStatus, ProvTarget, ProvTargetInput, fmtDate, provisioning, relTime, useApi,
+  Connection, ProvDryRun, ProvKind, ProvOp, ProvOpDetail, ProvStatus, ProvTarget, ProvTargetInput, fmtDate, provisioning, relTime, useApi,
 } from "../../api";
 import { Badge, Button, Callout, DataTable, SidePanel, useToast } from "../../components";
 
@@ -108,6 +108,7 @@ function RunNow() {
 function Targets() {
   const { data } = useApi<ProvTarget[]>("/provisioning/targets");
   const [edit, setEdit] = useState<ProvTarget | "new" | null>(null);
+  const [dry, setDry] = useState<ProvTarget | null>(null);
   return (
     <div className="card stack-sm">
       <div className="row wrap" style={{ gap: 8, justifyContent: "space-between" }}>
@@ -130,7 +131,10 @@ function Targets() {
                   <td className="small">{t.kind === "scim" ? `SCIM 2.0${t.dialect === "entra" ? " (Entra)" : ""}` : t.kind === "okta" ? "Okta API" : VAULT[t.kind] ?? "Dev fake"}{t.fault ? <span className="faint"> · {t.fault.replace("_", " ")}</span> : null}</td>
                   <td className="small"><code className="xs">{t.base_url}</code></td>
                   <td><Badge tone={t.write_back ? "ok" : "neutral"}>{t.write_back ? "On" : "Off"}</Badge></td>
-                  <td><Button size="sm" onClick={() => setEdit(t)}>Edit</Button></td>
+                  <td>
+                    <Button size="sm" onClick={() => setEdit(t)}>Edit</Button>{" "}
+                    {["scim", "okta", "fake"].includes(t.kind) && !t.agent_id && <Button size="sm" variant="ghost" icon={<FlaskConical size={13} />} onClick={() => setDry(t)}>Dry run</Button>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -138,7 +142,65 @@ function Targets() {
         </div>
       )}
       {edit && <TargetPanel target={edit === "new" ? null : edit} onClose={() => setEdit(null)} />}
+      {dry && <DryRunPanel target={dry} onClose={() => setDry(null)} />}
     </div>
+  );
+}
+
+/** Shows what a change would send to the target, before write-back is on: reads happen, writes are only listed. */
+function DryRunPanel({ target, onClose }: { target: ProvTarget; onClose: () => void }) {
+  const [kind, setKind] = useState<ProvKind>("add_entitlement");
+  const [username, setUsername] = useState("");
+  const [group, setGroup] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [res, setRes] = useState<ProvDryRun | null>(null);
+  const entitlement = kind === "add_entitlement" || kind === "remove_entitlement";
+  const run = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    setRes(null);
+    try {
+      setRes(await provisioning.dryRun(target.connection_id, { kind, username: username.trim(), ...(entitlement ? { group_name: group.trim() } : {}) }));
+    } catch (e2) {
+      setErr((e2 as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <SidePanel title={`Dry run: ${target.connection_name}`} onClose={onClose}>
+      <form className="stack-sm" onSubmit={run}>
+        <p className="small muted" style={{ margin: 0 }}>
+          Pick a change and see the requests Tessera would make to this target. The target is read; nothing is changed. Write-back is <b>{target.write_back ? "on" : "off"}</b> for this connection.
+        </p>
+        {err && <Callout tone="bad">{err}</Callout>}
+        <label className="field">Change
+          <select className="input" value={kind} onChange={(e) => setKind(e.target.value as ProvKind)}>
+            {Object.entries(KIND).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+          </select>
+        </label>
+        <label className="field">Account (user name in the target)<input className="input" required maxLength={200} value={username} onChange={(e) => setUsername(e.target.value)} /></label>
+        {entitlement && <label className="field">Group name<input className="input" required maxLength={200} value={group} onChange={(e) => setGroup(e.target.value)} /></label>}
+        <div className="row"><Button type="submit" variant="primary" disabled={busy}>{busy ? "Reading the target…" : "Show what would be sent"}</Button></div>
+      </form>
+      {res && (
+        <div className="stack-sm" aria-live="polite">
+          <h3 style={{ margin: "8px 0 0" }}>{res.writes === 0 ? "Nothing would be changed" : `${res.writes} change${res.writes === 1 ? "" : "s"} would be sent`}</h3>
+          {res.error && <Callout tone="warn">The change stopped before its last step: {res.error}</Callout>}
+          <ol className="small stack-sm" style={{ margin: 0, paddingLeft: 18 }}>
+            {res.steps.map((s, i) => (
+              <li key={i}>
+                <Badge tone={s.sent ? "neutral" : "warning"}>{s.sent ? `Read ${s.status}` : "Held back"}</Badge> <code className="xs">{s.method} {s.url}</code>
+                {s.body && <pre className="xs" style={{ margin: "4px 0 0", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{s.body}</pre>}
+              </li>
+            ))}
+          </ol>
+          <p className="xs faint" style={{ margin: 0 }}>A held-back request is answered with an empty success, so a change that needs the answer to its first write (a new account's id) may show only that first write.</p>
+        </div>
+      )}
+    </SidePanel>
   );
 }
 

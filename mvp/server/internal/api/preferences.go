@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/branding"
 	"github.com/nischalravi/tessera/mvp/server/internal/prefs"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -28,15 +29,23 @@ func (s *Server) registerPreferenceRoutes() {
 
 type preferencesView struct {
 	prefs.Preferences
-	TimeZones    []string `json:"time_zones"`
-	DateFormats  []string `json:"date_formats"`
-	Locales      []string `json:"locales"`
-	LandingPages []string `json:"landing_pages"`
+	// TenantLanguage and Labels are the tenant's defaults (Admin > Branding & labels): the locale a person who chose
+	// none formats with, and the words the tenant renamed.
+	TenantLanguage string            `json:"tenant_language"`
+	Labels         map[string]string `json:"labels"`
+	TimeZones      []string          `json:"time_zones"`
+	DateFormats    []string          `json:"date_formats"`
+	Locales        []string          `json:"locales"`
+	LandingPages   []string          `json:"landing_pages"`
 }
 
-func preferencesResponse(p prefs.Preferences) preferencesView {
-	return preferencesView{Preferences: p, TimeZones: commonTimeZones, DateFormats: prefs.DateFormats, Locales: prefs.Locales,
-		LandingPages: prefs.LandingPages}
+func preferencesResponse(tx *store.TenantTx, p prefs.Preferences) (preferencesView, error) {
+	ls, _, err := branding.LoadSettings(tx)
+	if err != nil {
+		return preferencesView{}, err
+	}
+	return preferencesView{Preferences: p, TenantLanguage: ls.DefaultLanguage, Labels: ls.Labels, TimeZones: commonTimeZones, DateFormats: prefs.DateFormats, Locales: prefs.Locales,
+		LandingPages: prefs.LandingPages}, nil
 }
 
 // commonTimeZones is the short list the UI offers first; any IANA name is accepted.
@@ -53,7 +62,7 @@ func (s *Server) getPreferences(_ http.ResponseWriter, r *http.Request, _ *param
 	if err != nil {
 		return nil, err
 	}
-	return preferencesResponse(p), nil
+	return preferencesResponse(store.TxFrom(r.Context()), p)
 }
 
 func (s *Server) putPreferences(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -72,5 +81,5 @@ func (s *Server) putPreferences(_ http.ResponseWriter, r *http.Request, p *param
 	if err != nil {
 		return nil, cfgErr(err)
 	}
-	return preferencesResponse(saved), nil
+	return preferencesResponse(store.TxFrom(r.Context()), saved)
 }

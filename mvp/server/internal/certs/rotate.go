@@ -27,6 +27,7 @@ type Upload struct {
 	Purpose         string
 	Label           string
 	CertPEM         string
+	TrustPEM        string // mtls_client: CA certificates the target's server certificate must chain to
 	KeyPEM          string
 	IdPConnectionID *uuid.UUID // saml_sp: the connection it will sign for
 	ConnectionID    *string    // mtls_client: the connector that uses it (optional)
@@ -120,12 +121,21 @@ func UploadCertificate(tx *store.TenantTx, sl *seal.Sealer, u Upload, by string,
 	if u.ConnectionID != nil && u.Purpose != store.CertMTLSClient {
 		return nil, refuse("invalid_connection", "only an mtls_client certificate names a connector")
 	}
-	p, err := Parse(u.CertPEM, u.KeyPEM, now, u.Purpose == store.CertSAMLSP)
+	if strings.TrimSpace(u.TrustPEM) != "" && u.Purpose != store.CertMTLSClient {
+		return nil, refuse("invalid_trust_anchors", "only an mtls_client certificate takes trust anchors")
+	}
+	var p *Parsed
+	if u.Purpose == store.CertMTLSClient {
+		p, err = ParseMTLS(u.CertPEM, u.TrustPEM, u.KeyPEM, now)
+	} else {
+		p, err = Parse(u.CertPEM, u.KeyPEM, now, u.Purpose == store.CertSAMLSP)
+	}
 	if err != nil {
 		return nil, err
 	}
 	id := uuid.NewString()
 	c := record(tx, id, label, u.Purpose, p, by, now)
+	c.TrustPEM = p.TrustPEM
 	switch u.Purpose {
 	case store.CertSAMLSP:
 		conn, err := samlConnection(tx, *u.IdPConnectionID)
@@ -157,8 +167,16 @@ func UploadCertificate(tx *store.TenantTx, sl *seal.Sealer, u Upload, by string,
 	if err := insert(tx, c); err != nil {
 		return nil, err
 	}
-	if err := tx.Audit(now, by, "certificate.uploaded", detail(c, ojson.KV{Key: "status", Value: c.Status},
-		ojson.KV{Key: "key_algorithm", Value: c.KeyAlgorithm})); err != nil {
+	extra := []ojson.KV{{Key: "status", Value: c.Status}, {Key: "key_algorithm", Value: c.KeyAlgorithm}}
+	if c.Purpose == store.CertMTLSClient {
+		chain, _ := parseBundle("chain", c.CertPEM, MaxChainCerts)
+		anchors, _ := parseBundle("anchors", c.TrustPEM, MaxTrustAnchors)
+		extra = append(extra, ojson.KV{Key: "chain_length", Value: len(chain)}, ojson.KV{Key: "trust_anchors", Value: len(anchors)})
+		if c.ConnectionID != nil {
+			extra = append(extra, ojson.KV{Key: "for_connection", Value: *c.ConnectionID})
+		}
+	}
+	if err := tx.Audit(now, by, "certificate.uploaded", detail(c, extra...)); err != nil {
 		return nil, err
 	}
 	c.KeySealed = nil

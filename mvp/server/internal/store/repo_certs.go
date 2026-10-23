@@ -33,7 +33,8 @@ type TenantCertificate struct {
 	IdPConnectionID *string
 	ConnectionID    *string
 	Status          string
-	CertPEM         string
+	CertPEM         string // the certificate; for an mtls_client one, the chain: the leaf first, then its intermediates
+	TrustPEM        string // mtls_client: the CA certificates the target's server certificate must chain to (empty: the system roots)
 	KeySealed       []byte
 	Subject         string
 	Issuer          string
@@ -49,7 +50,7 @@ type TenantCertificate struct {
 	RetiredAt       *time.Time
 }
 
-const certCols = `c.id, c.purpose, c.label, c.idp_connection_id, c.connection_id, c.status, c.cert_pem, c.subject, c.issuer,
+const certCols = `c.id, c.purpose, c.label, c.idp_connection_id, c.connection_id, c.status, c.cert_pem, c.trust_pem, c.subject, c.issuer,
 	c.sans, c.not_before, c.not_after, c.fingerprint, c.key_algorithm, c.sig_algorithm, c.created_by, c.created_at,
 	c.activated_at, c.retired_at`
 
@@ -63,11 +64,15 @@ var (
 	certsNextOf = tq("tenant_certificates.next_of", `
 		SELECT `+certCols+` FROM tenant_certificates c
 		WHERE c.tenant_id = @tenant AND c.idp_connection_id = @idp AND c.status = 'next'`)
+	certsMTLSOf = tq("tenant_certificates.mtls_of", `
+		SELECT `+certCols+` FROM tenant_certificates c
+		WHERE c.tenant_id = @tenant AND c.purpose = 'mtls_client' AND c.status = 'active' AND c.connection_id = @connection
+		ORDER BY c.activated_at DESC, c.id LIMIT 1`)
 	certsInsert = tq("tenant_certificates.insert", `
 		INSERT INTO tenant_certificates (id, tenant_id, purpose, label, idp_connection_id, connection_id, status, cert_pem,
-			key_sealed, subject, issuer, sans, not_before, not_after, fingerprint, key_algorithm, sig_algorithm, created_by,
+			trust_pem, key_sealed, subject, issuer, sans, not_before, not_after, fingerprint, key_algorithm, sig_algorithm, created_by,
 			created_at, activated_at, retired_at)
-		VALUES (@id, @tenant, @purpose, @label, @idp, @connection, @status, @cert_pem, @key_sealed, @subject, @issuer, @sans,
+		VALUES (@id, @tenant, @purpose, @label, @idp, @connection, @status, @cert_pem, @trust_pem, @key_sealed, @subject, @issuer, @sans,
 			@not_before, @not_after, @fingerprint, @key_algorithm, @sig_algorithm, @created_by, @created_at, @activated_at,
 			@retired_at)`)
 	certsActivate = tq("tenant_certificates.activate", `
@@ -87,7 +92,7 @@ func scanCert(s scanner) (*TenantCertificate, error) {
 	var sans string
 	var nb, na, created string
 	var act, ret sql.NullString
-	if err := s.Scan(&c.ID, &c.Purpose, &c.Label, &idp, &conn, &c.Status, &c.CertPEM, &c.Subject, &c.Issuer, &sans, &nb, &na,
+	if err := s.Scan(&c.ID, &c.Purpose, &c.Label, &idp, &conn, &c.Status, &c.CertPEM, &c.TrustPEM, &c.Subject, &c.Issuer, &sans, &nb, &na,
 		&c.Fingerprint, &c.KeyAlgorithm, &c.SigAlgorithm, &c.CreatedBy, &created, &act, &ret); err != nil {
 		return nil, err
 	}
@@ -132,6 +137,12 @@ func (tx *TenantTx) CertificateKey(id string) ([]byte, error) {
 	return b, err
 }
 
+// ActiveMTLSCertificate returns the mutual-TLS certificate a connection presents (the newest active one that
+// names it), or ErrNotFound. Its key is read with CertificateKey.
+func (tx *TenantTx) ActiveMTLSCertificate(connectionID string) (*TenantCertificate, error) {
+	return one(tx, scanCert, certsMTLSOf, sql.Named("connection", connectionID))
+}
+
 // NextSAMLCertificate returns the key waiting to be promoted on a SAML connection, or ErrNotFound.
 func (tx *TenantTx) NextSAMLCertificate(idp uuid.UUID) (*TenantCertificate, error) {
 	return one(tx, scanCert, certsNextOf, sql.Named("idp", idp.String()))
@@ -150,7 +161,7 @@ func (tx *TenantTx) InsertCertificate(c *TenantCertificate) error {
 	}
 	_, err = tx.exec(certsInsert, sql.Named("id", c.ID), sql.Named("purpose", c.Purpose), sql.Named("label", c.Label),
 		sql.Named("idp", SP(c.IdPConnectionID)), sql.Named("connection", SP(c.ConnectionID)), sql.Named("status", c.Status),
-		sql.Named("cert_pem", c.CertPEM), sql.Named("key_sealed", key), sql.Named("subject", c.Subject),
+		sql.Named("cert_pem", c.CertPEM), sql.Named("trust_pem", c.TrustPEM), sql.Named("key_sealed", key), sql.Named("subject", c.Subject),
 		sql.Named("issuer", c.Issuer), sql.Named("sans", string(sans)), sql.Named("not_before", RT(c.NotBefore)),
 		sql.Named("not_after", RT(c.NotAfter)), sql.Named("fingerprint", c.Fingerprint),
 		sql.Named("key_algorithm", c.KeyAlgorithm), sql.Named("sig_algorithm", c.SigAlgorithm),

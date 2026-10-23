@@ -13,7 +13,9 @@ import { MessageKey, setLocale, t } from "../i18n";
  */
 export function PublicShell({ titleKey, brand, branding, children }: { titleKey: MessageKey; brand?: string; branding?: PublicBranding | null; children: ReactNode }) {
   const name = branding?.configured ? branding.name : brand ?? t("brand.default");
-  const lang = setLocale(typeof navigator === "undefined" ? [] : navigator.languages ?? [navigator.language]);
+  // the visitor's browser languages first, then the tenant's default (Admin → Branding & labels)
+  const browser = typeof navigator === "undefined" ? [] : navigator.languages ?? [navigator.language];
+  const lang = setLocale([...browser, ...(branding?.language ? [branding.language] : [])]);
   useEffect(() => {
     document.documentElement.lang = lang;
     document.title = `${t(titleKey)} · ${name}`;

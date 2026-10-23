@@ -1,6 +1,7 @@
 import { KeyboardEvent, ReactNode, useEffect, useRef } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
+import { applyLabels } from "../labels";
 
 export type Crumb = [label: string, to?: string];
 
@@ -11,7 +12,7 @@ export function Breadcrumbs({ items }: { items: Crumb[] }) {
       {items.map(([label, to], i) => (
         <span key={i} className="row tight">
           {i > 0 && <ChevronRight size={12} aria-hidden />}
-          {to && i < items.length - 1 ? <Link to={to}>{label}</Link> : <span aria-current={i === items.length - 1 ? "page" : undefined}>{label}</span>}
+          {to && i < items.length - 1 ? <Link to={to}>{applyLabels(label)}</Link> : <span aria-current={i === items.length - 1 ? "page" : undefined}>{applyLabels(label)}</span>}
         </span>
       ))}
     </nav>
@@ -34,7 +35,7 @@ export function Page({ title, crumbs = [], sub, actions, badge, count, tabs, com
   children: ReactNode;
 }) {
   useEffect(() => {
-    if (typeof title === "string") document.title = `${title} · Tessera`;
+    if (typeof title === "string") document.title = `${applyLabels(title)} · Tessera`;
   }, [title]);
   return (
     <div>
@@ -42,7 +43,7 @@ export function Page({ title, crumbs = [], sub, actions, badge, count, tabs, com
       <div className="page-head">
         <div className="grow">
           <div className="title-row">
-            <h1>{title}</h1>
+            <h1>{typeof title === "string" ? applyLabels(title) : title}</h1>
             {count !== undefined && count !== null && <span className="count">{count}</span>}
             {badge}
           </div>

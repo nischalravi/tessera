@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/idrules"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/internal/usage"
@@ -16,8 +17,9 @@ import (
 const (
 	// StaleSecretDays is the age after which a secret counts as stale.
 	StaleSecretDays = 90
-	// DormantDays is the inactivity after which an NHI counts as dormant.
-	DormantDays = 30
+	// DormantDays is the inactivity after which an NHI counts as dormant, unless the tenant sets another per identity
+	// type (Admin > Identity rules, internal/idrules).
+	DormantDays = idrules.DefaultDormantDays
 )
 
 // SecretView is the API rendering of a secret. It never contains secret material.
@@ -201,6 +203,10 @@ func Inventory(c *store.TenantTx, g *graph.Snapshot, u *usage.Index) ([]Item, er
 		return nil, err
 	}
 
+	rules, _, err := idrules.Load(c)
+	if err != nil {
+		return nil, err
+	}
 	out := []Item{}
 	for _, i := range all {
 		if i.Type == "human" {
@@ -231,7 +237,7 @@ func Inventory(c *store.TenantTx, g *graph.Snapshot, u *usage.Index) ([]Item, er
 				break
 			}
 		}
-		if last == nil || timeutil.Days(now, *last) >= DormantDays {
+		if last == nil || timeutil.Days(now, *last) >= rules.DormantDays(i.Type) {
 			flags = append(flags, "dormant")
 		}
 		priv, pii := 0, false

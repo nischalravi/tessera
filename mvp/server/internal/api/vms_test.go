@@ -70,15 +70,17 @@ func TestVmsAPI(t *testing.T) {
 	}
 
 	bad := map[string]string{
-		"unknown vendor":        `{"vendor":"workday","name":"x","base_url":"https://a.example.com"}`,
-		"bad name":              `{"vendor":"csv","name":"<script>"}`,
-		"no credential":         `{"vendor":"beeline","name":"Beeline","base_url":"https://bl.example.com"}`,
-		"a bare token":          `{"vendor":"beeline","name":"Beeline","base_url":"https://bl.example.com","credential":"abc"}`,
-		"no base url":           `{"vendor":"fieldglass","name":"FG2","credential":"a:b"}`,
-		"http in a base url":    `{"vendor":"fieldglass","name":"FG2","base_url":"http://fg.example.com","credential":"a:b"}`,
-		"a traversal path":      `{"vendor":"fieldglass","name":"FG2","base_url":"https://fg.example.com","credential":"a:b","settings":{"workers_path":"/a/../b"}}`,
-		"csv with half a fetch": `{"vendor":"csv","name":"File","base_url":"https://files.example.com"}`,
-		"unknown field":         `{"vendor":"csv","name":"File","extra":1}`,
+		"unknown vendor":                 `{"vendor":"workday","name":"x","base_url":"https://a.example.com"}`,
+		"bad name":                       `{"vendor":"csv","name":"<script>"}`,
+		"no credential":                  `{"vendor":"beeline","name":"Beeline","base_url":"https://bl.example.com"}`,
+		"a bare token":                   `{"vendor":"beeline","name":"Beeline","base_url":"https://bl.example.com","credential":"abc"}`,
+		"no base url":                    `{"vendor":"fieldglass","name":"FG2","credential":"a:b"}`,
+		"http in a base url":             `{"vendor":"fieldglass","name":"FG2","base_url":"http://fg.example.com","credential":"a:b"}`,
+		"a traversal path":               `{"vendor":"fieldglass","name":"FG2","base_url":"https://fg.example.com","credential":"a:b","settings":{"workers_path":"/a/../b"}}`,
+		"a REST mapping of first_name":   `{"vendor":"fieldglass","name":"FG3","base_url":"https://fg.example.com","credential":"a:b","settings":{"mapping":{"first_name":"fn"}}}`,
+		"a REST mapping with a bad path": `{"vendor":"fieldglass","name":"FG3","base_url":"https://fg.example.com","credential":"a:b","settings":{"mapping":{"email":"a b"}}}`,
+		"csv with half a fetch":          `{"vendor":"csv","name":"File","base_url":"https://files.example.com"}`,
+		"unknown field":                  `{"vendor":"csv","name":"File","extra":1}`,
 	}
 	for name, body := range bad {
 		if rec := reqDo(h, admin, "POST", "/api/vms/sources", body); rec.Code != 422 {
@@ -87,6 +89,11 @@ func TestVmsAPI(t *testing.T) {
 	}
 	if rec := reqDo(h, admin, "POST", "/api/vms/sources", create); rec.Code != 409 {
 		t.Errorf("duplicate name: %d", rec.Code)
+	}
+	// a Fieldglass source maps a custom field to the sponsor (issue #498)
+	mapped := `{"vendor":"fieldglass","name":"FG custom","base_url":"https://fg.example.com","credential":"a:b","settings":{"mapping":{"sponsor_email":"custom_fields.sponsor"}}}`
+	if rec := reqDo(h, admin, "POST", "/api/vms/sources", mapped); rec.Code != 201 || !strings.Contains(rec.Body.String(), `"sponsor_email":"custom_fields.sponsor"`) {
+		t.Errorf("REST mapping: %d %s", rec.Code, rec.Body)
 	}
 
 	// edits: the credential is kept unless the origin moves

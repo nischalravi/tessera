@@ -55,6 +55,15 @@ func TestRuleMatching(t *testing.T) {
 		{"provisioning_failed", ev("job.failed", "success", `{}`), true, "job.failed"},
 		{"provisioning_failed", ev("jml.leaver", "failure", `{}`), true, "jml.leaver"},
 		{"provisioning_failed", ev("grant.revoke", "failure", `{}`), false, ""},
+		{"provision_failed", ev("provision.failed", "success", `{"op_id":"op1","kind":"remove_member","target":"alice@x","error":"HTTP 500"}`), true, "op1"},
+		{"provision_failed", ev("provision.mismatch", "success", `{"op_id":"op1"}`), false, ""},
+		{"provision_failed", ev("provision.failed", "success", `{}`), true, "operation"},
+		{"provision_mismatch", ev("provision.mismatch", "success", `{"op_id":"op2","kind":"add_member","target":"bob@x","finding_id":"f1"}`), true, "op2"},
+		{"provision_mismatch", ev("provision.failed", "success", `{"op_id":"op2"}`), false, ""},
+		{"provision_mismatch", ev("provision.retry", "success", `{"op_id":"op2"}`), false, ""},
+		{"queue_job_dead", ev("queue.job_dead", "success", `{"kind":"sweep_drift","attempts":5}`), true, "sweep_drift"},
+		{"queue_job_dead", ev("queue.job_dead", "success", `{}`), true, "unknown"},
+		{"queue_job_dead", ev("queue.job_retried", "success", `{"kind":"sweep_drift"}`), false, ""},
 		{"access_drift", ev("drift.remediate", "success", `{"drift_id":"d1","class":"rogue","system":"okta","action":"owner_task"}`), true, "d1"},
 		{"access_drift", ev("drift.remediate", "failure", `{"drift_id":"d1"}`), false, ""},
 		{"oauth_app_change", ev("oauthapps.change_detected", "success", `{"change_id":"c1","summary":"New secret added to Klue"}`), true, "c1"},
@@ -645,5 +654,24 @@ func TestSMTPRequiresStartTLS(t *testing.T) {
 			t.Fatalf("sent before TLS: %q", seen)
 		}
 	case <-time.After(5 * time.Second):
+	}
+}
+
+// A failed or mismatched provisioning operation raises its own alert, one per operation, however many events it leaves.
+func TestProvisionEventsRaiseAlerts(t *testing.T) {
+	w := newWorld(t)
+	w.record(t, "provision.failed", "success", `{"op_id":"op1","kind":"remove_member","target":"alice@x","error":"HTTP 500"}`, w.now)
+	w.record(t, "provision.mismatch", "success", `{"op_id":"op2","kind":"add_member","target":"bob@x","finding_id":"f1"}`, w.now)
+	w.record(t, "provision.mismatch", "success", `{"op_id":"op2","kind":"add_member","target":"bob@x","finding_id":"f2"}`, w.now.Add(time.Minute))
+	res := w.eval(t, false)
+	if res.Raised != 2 || res.Bumped != 1 {
+		t.Fatalf("result %+v, want 2 raised and 1 bumped", res)
+	}
+	got := map[string]string{}
+	for _, a := range w.alerts(t, "live") {
+		got[a.RuleID] = a.Title
+	}
+	if got["provision_failed"] != "Provisioning failed: remove member for alice@x" || got["provision_mismatch"] != "Target did not apply add member for bob@x" {
+		t.Errorf("alerts = %v", got)
 	}
 }

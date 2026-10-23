@@ -741,3 +741,67 @@ func TestProvisioning_TargetThroughAnAgent(t *testing.T) {
 		return err
 	})
 }
+
+// A dry run reads the target and lists what the change would send, without changing the target. It is
+// audited, it works with write-back off, and it refuses what it cannot show.
+func TestProvisioning_DryRunShowsTheWritesAndSendsNone(t *testing.T) {
+	h := newProvHarness(t, fake.Options{Token: "tok"})
+	h.seedTarget()
+	if rec := h.c.do("POST", "/api/provisioning/targets/"+h.conn+"/dry-run", `{"kind":"remove_entitlement","username":"`+h.alice+`","group_name":"eng"}`); rec.Code != 404 {
+		t.Errorf("a connection without a target: %d %s", rec.Code, rec.Body)
+	}
+	h.target(`{"kind":"scim","base_url":"`+h.url+`","token":"tok","write_back":false}`, 200)
+	before := strings.Join(h.fake.Members("eng"), ",")
+	out := h.c.json("POST", "/api/provisioning/targets/"+h.conn+"/dry-run",
+		`{"kind":"remove_entitlement","username":"`+h.alice+`","group_name":"eng"}`, 200).(map[string]any)
+	steps, _ := out["steps"].([]any)
+	var reads, writes int
+	for _, s := range steps {
+		m := s.(map[string]any)
+		if m["sent"] == true {
+			reads++
+			if m["method"] != "GET" {
+				t.Errorf("a %v was sent: %v", m["method"], m)
+			}
+		} else {
+			writes++
+			if m["method"] == "GET" || m["body"] == "" {
+				t.Errorf("held-back write = %v", m)
+			}
+		}
+	}
+	if reads == 0 || writes != 1 || out["writes"] != float64(1) || out["write_back"] != false || out["error"] != "" {
+		t.Fatalf("dry run = %v", out)
+	}
+	if got := strings.Join(h.fake.Members("eng"), ","); got != before {
+		t.Errorf("the dry run changed the target: members %q, were %q", got, before)
+	}
+	for _, r := range h.fake.Requests() {
+		if !strings.HasPrefix(r, "GET ") {
+			t.Errorf("the target received %q", r)
+		}
+	}
+	if len(h.ops("")) != 0 || h.hasEdge("alice", "eng") == false {
+		t.Error("a dry run queued an operation or changed a grant")
+	}
+	if !strings.Contains(h.audit(), "provision.dry_run") {
+		t.Errorf("audit = %s", h.audit())
+	}
+	if body, _ := json.Marshal(out); strings.Contains(string(body), "tok\"") || strings.Contains(string(body), "Bearer") {
+		t.Error("the result carries the credential")
+	}
+	for name, body := range map[string]string{
+		"kind":     `{"kind":"purge","username":"a"}`,
+		"username": `{"kind":"disable_account","username":""}`,
+		"group":    `{"kind":"add_entitlement","username":"a"}`,
+		"unknown":  `{"kind":"disable_account","username":"a","password":"p"}`,
+	} {
+		if rec := h.c.do("POST", "/api/provisioning/targets/"+h.conn+"/dry-run", body); rec.Code != 400 && rec.Code != 422 {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	// a target reached through a Directory Agent cannot be called by the server
+	if rec := h.c.do("POST", "/api/provisioning/targets/not-a-uuid/dry-run", `{"kind":"disable_account","username":"a"}`); rec.Code != 400 && rec.Code != 422 && rec.Code != 404 {
+		t.Errorf("a bad connection id: %d", rec.Code)
+	}
+}

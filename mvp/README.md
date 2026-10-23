@@ -586,7 +586,8 @@ worker you did not intend, though a duplicate is harmless: claims and operation 
 ### Config transport (dev → test → prod)
 
 Admin → Export / import configuration moves a tenant's connections (config, owners, credential
-*references*), readiness overlays and sign-in connections to another tenant, usually on another
+*references*), readiness overlays, sign-in connections, catalog items, review schedules, alert rules and
+log-streaming sinks to another tenant, usually on another
 instance, as a **signed bundle** (`server/internal/transport`). Export signs with the tenant's
 Ed25519 key (made on first export, sealed under the KEK; a server without a KEK cannot export).
 Import accepts only bundles signed by a **trusted signer**: paste the exporting tenant's public
@@ -605,12 +606,40 @@ connection on plain http or a private address, is refused. Applies are audited
 (`config.import.applied` with the bundle hash) and listed under Imports. Permission:
 `config.transport` (tenant admin); reading keys, signers and history needs `admin.read`.
 
+**Bundle version 2** (issue #497) also carries catalog items, review schedules, alert rules and
+log-streaming (SIEM) sinks; a version 1 bundle is still accepted and an import then leaves those four
+alone. What an import does with each: **catalog items** are matched to a group by (system, external id)
+(the group must exist here, else the item is *manual*), added or updated through the same checks as
+`PUT /api/catalog/...` and audited `catalog.item.put`; the owner, a person, is never carried or set.
+**Review schedules** are matched by name and added *paused* with no first run and no escalation reviewer
+(`review.schedule.put`); a change keeps the first run, enabled state, reviewer, role scope and review type
+set here, and an escalating schedule that has no reviewer here is *manual*. **Alert rules** are the
+tenant's changed settings by rule id (`alert.rule.updated`); a change that turns a rule off or makes it
+fire less often is flagged "loosens detection" in the plan. **SIEM sinks** are matched by name and added
+*disabled* and without their token (`siem.sink.created`); a sink that already exists with different
+settings is *manual*, because where audit events are sent never changes by import. None of the four is
+removed by an import, with prune or without; each plan item carries its section. On a prod server a sink
+aimed at localhost is refused.
+
+**From a pipeline.** `tessera-cli config key|export|plan|apply` (`server/cmd/tessera-cli/config.go`)
+makes the same calls as the page, through the signed-in session of `tessera-cli login --scope
+"tessera:admin"`:
+
+```
+tessera-cli config export -o bundle.json            # in the source environment
+tessera-cli config plan   -f bundle.json [--json]   # in the destination; exit 1 if it cannot be applied
+tessera-cli config apply  -f bundle.json [--prune] [--digest D]   # plans, then applies exactly that plan
+```
+
+`--digest` takes the `digest` of an earlier `plan --json`: the apply then happens only if nothing changed
+since it was reviewed. The destination must trust the source's key first (`config key` prints it; add it
+under Trusted signers). Exit 3 means the server wants a fresher sign-in (apply needs step-up).
+
 **Not in a bundle yet** (each needs cross-tenant id mapping for the groups and entitlements it
-names, so it is left for a follow-up rather than shipped half-checked): business roles and their
-versions and members, ABAC policies and bindings, catalog items and approval policies, tenant
-admin settings and security contacts (these change only through admin change requests), review
-schedules, alert rules, SIEM sinks, lifecycle rules and native groups. Set them up by hand in
-each environment; the bundle covers connections, readiness overlays and sign-in connections only.
+names): business roles and their versions and members, ABAC policies and bindings, approval
+policies, tenant admin settings and security contacts (these change only through admin change
+requests), lifecycle rules and native groups (use `tessera-cli groups export`/`apply`). Set them up by
+hand in each environment.
 
 ### Main API endpoints
 
@@ -639,17 +668,17 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET /api/ssf/events` · `POST /public/t/{slug}/ssf/{transmitter_id}/events` (SSF push, see "Shared Signals receiver") ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it) · `POST /api/siem/sinks/{id}/rewind {seq}` ·
-`POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
+`POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` (a sink's `kind` is `syslog`, `webhook` or `s3`; `event_filter`, `region` and `access_key_id` are in the body and the view) ·
 `GET|POST /api/admin/certificates` · `POST /api/admin/certificates/generate {connection_id}` · `POST /api/admin/certificates/{id}/promote|retire` ·
 `GET|PUT /api/admin/branding` · `GET /api/auth/branding?tenant=` · `GET /api/auth/branding/logo?tenant=` (the last two are public, see "Certificates, branding and identity rules") ·
-`GET /api/admin/identity-rules` ·
+`GET|PUT /api/admin/identity-rules` · `GET|PUT /api/admin/labels` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
 `GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
 `GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
 `POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
-`GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
+`GET /api/audit/events/{event_id}/proof[?path=true]` (with `path=true` the proof carries the records from the event up to its signed checkpoint, up to 2000, and `audit.VerifyInclusion` or any verifier of the golden vector checks that they link and end at the checkpoint's `head_hash`; Admin → Audit log → an event → Inclusion proof downloads it) · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
 `GET /api/auth/session` (`user.identity_id` is the directory person the sign-in is linked to) · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
 `GET /api/auth/step-up?acr=&max_age=&return_to=` ·
@@ -664,7 +693,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET|POST /api/auth/dev-login` (dev and test only) ·
 `GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
 `POST /api/jobs/{job_id}/retry` ·
-`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` ·
+`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` · `POST /api/provisioning/targets/{connection_id}/dry-run` ·
 `GET /api/provisioning/ops[?status=&kind=&connection_id=&limit=]` · `GET /api/provisioning/ops/{op_id}` ·
 `POST /api/provisioning/ops/{op_id}/retry|cancel` · `POST /api/provisioning/run` ·
 `GET /api/provisioning/findings[?status=open|resolved]` ·
@@ -761,6 +790,9 @@ when a second reviewer is needed) ·
 `GET|PUT /api/notifications/preferences {prefs:{kind:channel}}` ·
 `GET /api/email/messages[?status=&kind=&recipient=&limit=]` · `GET /api/email/messages/{id}` ·
 `POST /api/email/messages/{id}/retry` ·
+`GET|PUT|DELETE /api/admin/mail-relay` · `POST /api/admin/mail-relay/test` · `GET|PUT|DELETE /api/admin/chat` · `POST /api/admin/chat/test` ·
+`GET|PUT /api/admin/notification-policy` · `GET /api/admin/notification-templates` · `PUT|DELETE /api/admin/notification-templates/{kind}` ·
+`GET|POST /api/email/suppressions` · `DELETE /api/email/suppressions/{address}` · `POST /api/email/dsn` (see "Notifications and email administration") ·
 `GET /api/admin/users` · `POST /api/admin/users/{id}/disable {reason}` · `GET /api/admin/idp-connections` ·
 `POST /api/admin/idp-connections/{id}/activate` · `GET|POST /api/admin/change-requests` ·
 `GET /api/admin/change-requests/{id}` · `POST /api/admin/change-requests/{id}/approve|reject|cancel|apply` ·
@@ -864,6 +896,11 @@ The pull export (`/api/audit/export`) stays available.
     - Messages are RFC 5424 with octet-counting framing, facility 13 (log audit), and the severity taken from the event's outcome.
     - Each message carries structured data `[tessera@32473 seq=… hash=…]`.
     - The port defaults to 6514. A private CA can be given as PEM.
+  - **S3-compatible bucket** (AWS S3, MinIO, Cloudflare R2; issue #498):
+    - Each batch is one `PUT` of newline-delimited JSON to `<bucket URL>/<tenant>/YYYY/MM/DD/<first seq>-<last seq>.ndjson` (`.ocsf.ndjson` for OCSF). The key comes from the batch's seq range, so a retry replaces its object instead of adding a copy.
+    - The target is the bucket URL with an optional key prefix (path style or virtual hosted), `region` is the signing region, `access_key_id` is stored in the clear and the secret access key is the sink's sealed `token`.
+    - Requests are signed with AWS Signature Version 4 (stdlib, checked against the AWS documentation vector) and go through `internal/safehttp`. Give the key `s3:PutObject` on the prefix only.
+- **Event filter (issue #498):** a sink can receive only some audit actions. `event_filter` is a list of actions (`grant.revoke`) or prefixes ending in `.*` (`auth.*`), `*` for all, empty for everything. A sink still needs `include_http` for `http.request`. Filtered-out events advance the cursor, but **Behind** still counts them (it is the distance to the ledger head).
 - **Formats:**
   - `json` is the export record. It carries `hash` and `prev_hash`, so the SIEM can recompute the chain.
   - `ocsf` is OCSF 1.3: Authentication (3002) for sign-in and sign-out, Account Change (3001) for role grants and revokes and user disables, and API Activity (6003) for everything else.
@@ -887,7 +924,7 @@ The pull export (`/api/audit/export`) stays available.
   - `siem.read`: auditor and tenant_admin, plus the `tessera:audit` scope.
   - `siem.configure`: tenant_admin, plus the `tessera:admin` scope.
 - **UI:** **Admin > Log streaming (SIEM)** lists each sink with its health, delivered count, dead letters, and Test, Replay and Edit actions.
-- **Not yet:** S3-compatible bucket sinks.
+- **Inbound signals from a SIEM** are Shared Signals streams (**Admin > Shared Signals**, `/api/ssf/transmitters`, issue #114); a SIEM that can transmit SSF/CAEP events is added there.
 ### Certificates, branding and identity rules
 
 Three Admin settings pages that were Previews are live (`/admin/certificates`, `/admin/branding`, `/admin/identity-rules`).
@@ -903,6 +940,15 @@ connection (`idp_connections`), uploaded and rotating certificates (`tenant_cert
   signature, and each field is at most 16 KiB. A SAML key must be RSA. The key is re-encoded as PKCS#8 and sealed with
   `internal/seal` (AAD binds tenant, table, column and row id). Refusals are 422 with a code (`cert_expired`, `weak_key`,
   `weak_signature`, `key_mismatch`, `bad_pem`, `bad_key`, `key_not_rsa`), 413 `cert_too_large`, 409 `duplicate_certificate`.
+* **Mutual TLS for a connection (issue #498).** An `mtls_client` upload may be a **chain** (`certificate_pem` holds the leaf first,
+  then up to 4 intermediates, each signing the one before it; `bad_chain` otherwise) and may carry **trust anchors**
+  (`trust_anchors_pem`: up to 10 CA certificates, stored in `tenant_certificates.trust_pem`; `bad_trust_anchor` for a
+  certificate that is not a CA). With `connection_id` the certificate is **handed to that connection**: its provisioning
+  target (SCIM, Okta; `internal/provision`, `Engine.httpFor`) presents the chain on every call and, when trust anchors are
+  given, trusts only those instead of the system roots (`safehttp.WithClientTLS`: the copy of the guarded client keeps every
+  address, port and redirect rule). The newest active certificate that names the connection is used; retiring it stops it.
+  A target reached through a Directory Agent does not use it (the agent holds its own identity). Expiry alerts cover the leaf
+  only. `chain_length` and `trust_anchors` (subjects) are in the listing; the audit event records counts, never PEM.
 * **SAML SP rotation.** `POST /api/admin/certificates/generate {connection_id}` (or an upload with purpose `saml_sp`) adds a
   `next` key. While it waits, `GET /api/auth/saml/{id}/metadata` lists both certificates (the overlap window), so the identity
   provider can trust the new one before it is used; sign-in keeps signing with the active key. `POST .../{id}/promote` copies the
@@ -934,14 +980,42 @@ and is audited as `branding.updated`.
   `Content-Type: image/png|jpeg`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, an
   ETag and `Cache-Control: public, max-age=300`.
 * Used by the sign-in page, the guest claim, register and renew pages (name, logo, button colours) and by email (subject
-  prefix, link line and footer say the product name; emails are plain text, so no logo). Without branding everything says Tessera.
+  prefix, link line and footer say the product name). Without branding everything says Tessera.
+* **Show the logo in emails** (`PUT /api/admin/labels`, `email_logo`). On, and with a logo saved and `TESSERA_PUBLIC_URL` set,
+  every email is `multipart/alternative`: the plain-text part first, then an HTML part with the logo (loaded from the public
+  logo URL, shown at most 48 px high) above the message, which is HTML-escaped. Off, or without a logo or public address,
+  emails stay plain text.
 
-**Identity rules** (`GET /api/admin/identity-rules`, `graph.read`). One read of what the identity engines apply: the matching
-rules with their tier (`internal/identity/match.Catalog`, kept in step by a test), the thresholds, the tenant's matching settings
-(changed with the existing `PUT /api/admin/matching`, `identity.matching.configure`, also editable on the page), the correlation
-proposals of `internal/correlation`, the group naming rules of `internal/groups/naming` and the machine-identity dormancy
-threshold of `internal/nhi`. It lists what is not configurable yet: the authoritative source per attribute, the order of the
-correlation rules and per-type dormancy thresholds have no engine behind them.
+**Labels and language** (`internal/branding/labels.go`, `settings.go`, schema `0765_tenant_label_settings.sql`).
+`GET|PUT /api/admin/labels` (`admin.read` to read; `email.manage` and a step-up to save; audited as `branding.labels.update`
+with the old values; `version` is optimistic, a stale one is 409 `version_conflict`) holds three things:
+
+* **Rename objects.** `labels` maps a fixed set of English terms (`entitlement`, `group`, `access review`, `guest`,
+  `application`) to the tenant's words, 1 to 40 characters of letters, digits, spaces, hyphens, `&` and apostrophes (never
+  markup). The UI swaps them, singular and plural, keeping the capital, in the navigation and the page titles
+  (`src/labels.ts`); it gets them with the preferences (`GET /api/me/preferences` has `tenant_language` and `labels`), so
+  they apply before the app renders. Saving reloads the app's tree so the new words show at once.
+* **Default language.** One of the locales a person can choose (`internal/prefs.Locales`), or empty for the browser's. It is the
+  locale dates and numbers are written in for a person who chose none (My account > Preferences wins), and the public branding
+  answer carries it as `language` (the claim pages pick the browser's language first, then this). Messages are English until a
+  translation catalog is added (`src/i18n`).
+* **Email logo** (above).
+
+**Identity rules** (`GET|PUT /api/admin/identity-rules`; `graph.read` to read, `matching.configure` and a step-up to save,
+audited as `identity.rules.update` with the old values, optimistic `version`). One read of what the identity engines apply: the
+matching rules with their tier (`internal/identity/match.Catalog`, kept in step by a test), the thresholds, the tenant's matching
+settings (changed with the existing `PUT /api/admin/matching`, `identity.matching.configure`, also editable on the page), the
+correlation proposals of `internal/correlation` and the group naming rules of `internal/groups/naming`. The PUT sets what the
+engines read through `internal/idrules` (schema `0766_identity_rules.sql`):
+
+* `correlation_order`: the keys the connector resolver (`ingest.Resolver.Identity`) tries, in order, to match a reference to a
+  person: `external_id` and `email` (default: both, external id first). A key left out is not tried; at least one is needed. A
+  reviewer's pinned account decision still wins.
+* `authoritative`: an attribute (`name`, `email`, `department`, `title`) to the system of one of the tenant's connections. When
+  a sync from another system reports a person already known, the stored value of that attribute is kept; the authoritative
+  system's value is taken; a person not yet known takes the first source's. An unknown system is 422 `unknown_source`.
+* `dormant_service_days`, `dormant_ai_agent_days` (1 to 3650, default 30): how long a service identity or an AI agent may go
+  unused before the machine-identity inventory (`internal/nhi`) flags it dormant. People have no usage-based dormancy yet.
 
 ### Alerts
 
@@ -1116,7 +1190,14 @@ the way the old sweepers did (active tenant list), then works each one in its ow
 * **Failure.** A failed attempt becomes `failed` and runs again after `10s * 2^(n-1)` (cap 15 min, plus or
   minus 20% jitter); after `max_attempts`, or on `queue.Permanent(err)`, it is `dead` and
   `queue.job_dead` is audited. `POST /api/queue/jobs/{id}/retry` puts a dead job back with a fresh
-  budget (`jobs.manage`, tenant admin, step-up; `queue.job_retried` audited).
+  budget (`jobs.manage`, tenant admin, step-up; `queue.job_retried` audited). A dead job is also alerted:
+  the `queue_job_dead` alert rule matches `queue.job_dead` (and `provisioning_failed` matches `job.failed`),
+  so failed jobs raise alerts that go to the alert channels (severity, threshold and window are tenant settings).
+* **Pause and resume.** `POST /api/queue/schedules/{name}/pause|resume` (`{"reason"?}`; `jobs.manage`, step-up)
+  stops or restarts a recurring job for the tenant; work already queued or running finishes, and a resumed
+  schedule fires once if it came due while paused. Audited `queue.schedule_paused` / `queue.schedule_resumed`
+  in the same transaction; repeating the state it already has changes and audits nothing. Admin → Jobs → Queue
+  shows paused schedules and a Pause / Resume button on each.
 * **Schedules.** Specs are `@every 30s` or 5-field cron (UTC). A worker that finds a schedule due moves
   `next_run_at` and enqueues the job (key `schedule:name:window`) in one transaction, so a window runs
   once however many workers poll; after downtime it fires once, not per missed window. Schedules are
@@ -1167,6 +1248,16 @@ change in the target system and checks that it happened.
   `0224`, one per connection) has a `write_back` switch. Off: the change edits the graph at once, as
   before, and nothing reaches the target (so the parity fixtures are unchanged). On: the change goes
   through the engine. Routing is by the connection's `system` (`provision.Submit`).
+* **Dry run (issue #498).** `POST /api/provisioning/targets/{connection_id}/dry-run {kind, username, group_name?}`
+  (`provisioning.manage`) shows what a change would send to the target before write-back is turned on, or at any time:
+  the connector runs against the real target with a transport that lets reads (GET, HEAD) through and records every other
+  request (method, URL, body without credentials) instead of sending it. A held-back write gets an empty success so later
+  steps show; a connector that needs the answer to its first write (a new account's id) may stop after it, and the result
+  says so. SCIM and Okta targets only (not vault or ERP targets, which sign in with a POST, and not agent-reached ones).
+  Audited as `provision.dry_run`; nothing is queued or stored.
+* **Alert rules (issue #498).** `provision_failed` (an operation ran out of attempts, event `provision.failed`) and
+  `provision_mismatch` (a re-read showed the target did not apply it, event `provision.mismatch`) raise a high alert, one
+  per operation, through the alert channels (Admin > Alerts).
 * **Connectors.** `internal/provision/scim` is a SCIM 2.0 client (filtered, paginated lists; group
   members read page by page; PATCH add/replace/remove, where a member is removed with the RFC 7644
   filter path and, if the server refuses it, with a value list; `dialect: entra` sends capitalised
@@ -2158,7 +2249,7 @@ entry (the top-bar bell: unread count, mark as read) and, if they want it, an em
 | `approval.escalated` | deciders and the stage's assignee | a stage passes its due time (not when it was due at once) |
 | `approval.delegated` | the delegate | someone delegates their approvals |
 | `review.launched`, `review.closed` | each reviewer of the campaign | campaign created, campaign complete |
-| `review.reminder` | reviewers with open items | once a week from the campaign's seventh day |
+| `review.reminder` | reviewers with open items | after 7 days, then weekly (the tenant sets both, see below) |
 | `jit.granted`, `jit.denied`, `jit.expiring` | the requester and the person | decision; access ends within the hour |
 | `access.ending` | the person (and others you name) | `notify.Expiring`, below |
 | `security.alert` | whoever the producer names | `notify.SecurityAlert`; **cannot be turned off** |
@@ -2210,13 +2301,14 @@ status code. The SMTP client is a small one on `net/textproto` so it can record 
 | `deferred` | a 4xx reply | yes, with backoff |
 | `rejected` | a 5xx reply, or an address that can never work | no |
 | `failed` | a network or TLS error, or a timeout | yes, with backoff |
-| `bounced` | reserved for bounce and DSN processing, a later step; nothing sets it yet | |
+| `bounced` | a delivery status report (DSN) said the address cannot be reached; the address is suppressed | only after the suppression is lifted |
 
 **Accepted means accepted by the relay, not delivered to the inbox.** The UI says so. After the
 attempts run out a deferred or failed message is a dead letter; `POST /api/email/messages/{id}/retry`
 (audited as `email.message.retry`) queues one more attempt. Reading needs `email.read` (auditor and
 tenant admin), retrying `email.manage` (tenant admin). The dev sink records its sends too, with a
-one-step transcript. Not yet: bounce and DSN processing, per-tenant relay settings.
+one-step transcript. Bounce processing, the tenant's own relay, suppression and "send again" are in "Notifications and
+email administration" below.
 
 **For other producers.** Write a notification from the transaction of your event:
 
@@ -2229,8 +2321,58 @@ notify.Expiring(tx, now, notify.Ending{Key: "identity:42", IdentityID: 42, Also:
 ```
 
 `notify.Identity`, `notify.User` and `notify.Deciders` build recipients. Add a kind to `notify.Kinds`
-(label, default, mandatory) and it appears in everyone's settings. Not yet: per-tenant SMTP and chat
-(the settings are server-wide), templates, per-kind digests.
+(label, default, mandatory) and it appears in everyone's settings. Not yet: per-kind digests.
+
+#### Notifications and email administration
+
+Admin > Notifications and Admin > Email delivery hold the tenant's own delivery settings. Reading needs `email.read`
+(auditor, tenant admin); every change needs `email.manage` (tenant admin) and, except for suppressions and delivery
+reports, a fresh phishing-resistant sign-in. Each change is audited in the same transaction with no secret in it, and a
+`version` in the body (0 when nothing is saved) makes a save a compare-and-set (409 `version_conflict`). Schema
+`0760` to `0764`, each with a Postgres variant and row-level security.
+
+* **Own SMTP relay** (`/api/admin/mail-relay`, `tenant_mail_relay`). Host, port, TLS (`starttls`, `tls`, `none`: `none`
+  only outside production), an optional login and a from address. When enabled, the tenant's notification email goes
+  through it and not the server's relay, and works even when the server has none. The password is **sealed under the KEK**
+  bound to the tenant (`seal.AAD(tenant, "tenant_mail_relay", "password_sealed")`), is write-only (the API says
+  `has_password`; an empty password keeps it, `clear_password` removes it) and is in no response or audit event. The host
+  is refused at save time when it is, or resolves to, a private, loopback, link-local or metadata address, or looks
+  internal (no dot, `.internal`, `.corp`, ...): 422 `internal_host`; the sender's guarded dialer (`safehttp.NewDialer`)
+  refuses it again at every connection. A relay whose sealed password cannot be opened fails visibly and is retried; it never
+  falls back to the server's relay. `POST /api/admin/mail-relay/test` sends one message to the signed-in admin's own
+  address and records the outcome (never to an address named in the request).
+* **Chat workspace** (`/api/admin/chat`, `tenant_chat_webhook`). A Slack or Microsoft Teams incoming webhook and the
+  notification kinds to post (default: approval needed, escalated, security alerts). The webhook URL is a credential: it is
+  sealed, write-only and never audited; only `https://` on the provider's own hosts is accepted (`hooks.slack.com`;
+  `*.webhook.office.com`, `*.logic.azure.com` and the Power Automate hosts for Teams; any host in development). Every post goes
+  through the SSRF-guarded client (`safehttp.ForConfig`). The dispatcher posts **one message per event**, however many
+  people it is for, from a cursor that starts when the webhook is turned on (no history is replayed) and stays 5 seconds
+  behind the clock. Slack text is escaped (`&`, `<`, `>`), so a notification cannot mention a channel. A failing event is
+  retried every pass and given up after five failures (`notification.chat`, status `dropped`), so one bad event does not
+  hold the rest back.
+* **Wording** (`/api/admin/notification-templates`, `notification_templates`). A subject and a text per notification kind
+  with `{{subject}}`, `{{body}}`, `{{link}}`, `{{product}}` and `{{recipient}}` and nothing else: no logic, no other data.
+  Only the kinds users can choose a channel for; the claim and recovery emails that carry a one-time secret are not
+  templatable. The subject stays one line. Without `{{link}}` in the text, the link line follows it; the footer is always
+  added. The inbox entry is not changed.
+* **Reminder cadence and SLAs** (`/api/admin/notification-policy`, `notification_policy`). First review reminder after N
+  days and every M days (default 7 and 7), how far ahead the end of requested access (24 hours) and of just-in-time
+  access (60 minutes) is announced, and the default approval escalation (48 hours) for a catalog item with no approval
+  policy of its own. An item's own policy, an organization's default stages and a workflow keep their own hours.
+* **Delivery status reports (DSN)** (`POST /api/email/dsn`). Post the raw RFC 3464 report (`multipart/report`, or just its
+  `message/delivery-status` part, at most 256 KiB) that the relay mails to the envelope sender; whatever collects that
+  mailbox calls it (for example with an API client holding `email.manage`). Each recipient block is matched to the email
+  Tessera sent through the `Message-ID` it set (the notification's id; Postfix's `X-Postfix-Queue-ID` is the fallback) and
+  the recipient must be the message's. `Action: failed` with a `5.x.x` status is a **hard bounce**: the message becomes
+  `bounced`, the report is added to its attempts, and the address is suppressed. `delayed` and a soft failure are recorded
+  without changing the status; `delivered` is recorded on the accepted message. A repeat report is `already_recorded`; one
+  that matches nothing of the tenant's is `not_matched` and records nothing. Audited as `email.dsn`.
+* **Suppression list** (`/api/email/suppressions`, `email_suppressions`). Addresses that are not emailed (they keep their
+  inbox entries); the delivery log says "on the suppression list". A hard bounce adds one; an admin can add or lift one
+  (`email.suppression.add` and `.lift`). **Send again** (`POST /api/email/messages/{id}/retry`) now also works for a
+  bounced message and for one skipped because of a suppression, once the suppression is lifted (409 `suppressed` until
+  then); a message the relay itself rejected stays final.
+* **Logo in emails** is set under Admin > Branding & labels (see Branding).
 
 ### SIS and HRIS intake (applicants, admits, pre-hires)
 
@@ -2285,6 +2427,11 @@ and the review queue are shared.
   `text/csv`, at most 1 MiB through the API) or fetched over HTTPS (`base_url` + `settings.csv_path`). CSV columns:
   `worker_id, name|first_name+last_name, email, supplier, role, sponsor_email, sponsor_employee_id, status,
   start_date, end_date, updated_at`; `settings.mapping` renames them, `settings.date_format` is a Go layout.
+  For `fieldglass` and `beeline`, `settings.mapping` takes a field from the worker's own JSON in place of the
+  documented one (issue #498): canonical field to a dotted path, for example
+  `{"sponsor_email": "custom_fields.hiring_manager", "end_date": "custom_fields.contract_end"}`. A path that is
+  missing, empty or not a plain value keeps the documented field; `first_name` and `last_name` are mapped through
+  `name`. Without a mapping nothing changes, event ids included.
   Every call goes through `internal/safehttp`; a paging link must stay on the configured host; the credential
   (`client_id:client_secret`, or a bearer token for a fetched CSV) is sealed under the KEK, bound to its row,
   write-only, and a change of base URL needs a new one.
@@ -3892,7 +4039,11 @@ interval, 5 minutes or 1000 events) are the window that cannot be proven complet
 422); page back with `before_seq`.
 
 The Admin → Audit log page lists the events, can include API requests, verifies the chain and
-exports it.
+exports it. Its filter bar sends the actor id, target type, target id and a UTC date range to the
+server (`actor_id`, `target_type`, `target_id`, `from`, `to`), so it filters the whole ledger and not
+the 500 rows on screen. Opening an event shows how its actor signed in (the `authn` context: assurance
+level, phishing-resistant or not, `acr`, authentication time) and builds its inclusion proof for an
+evidence pack (`?path=true`, downloaded as JSON).
 
 #### S3 Object Lock anchor
 
