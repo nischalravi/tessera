@@ -381,6 +381,9 @@ POST   /api/helpdesk/cases/{case_id}/execute         helpdesk.reset  STEP_UP_POL
 POST   /api/helpdesk/cases/{case_id}/cancel          helpdesk.reset  -  # issue #108
 GET    /api/helpdesk/findings                        graph.read      -  # issue #108
 POST   /api/helpdesk/signals                         helpdesk.approve -  # issue #108
+GET    /api/helpdesk/settings                        graph.read      -  # issue #477
+PUT    /api/helpdesk/settings                        helpdesk.approve STEP_UP_POLICY  # issue #477
+POST   /api/helpdesk/risk-signals                    helpdesk.approve -  # issue #477
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
