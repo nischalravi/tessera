@@ -2552,9 +2552,18 @@ export interface HelpdeskPolicy {
   counted_methods: HelpdeskMethod[];
   needs_second_approver: boolean;
   second_approved: boolean;
+  /** Set when an authentication method was added recently or an IdP reported a risk signal (issue #477). */
+  recent_auth_method?: { action: "require_approval" | "block"; days: number; reasons: string[] };
+  /** True when the tenant's action is block: the case cannot run until the window has passed. */
+  blocked: boolean;
   allowed_methods: HelpdeskMethod[];
   missing: string[];
 }
+/** The recent authentication method rule (issue #477). */
+export type HelpdeskRecentAction = "off" | "require_approval" | "block";
+export interface HelpdeskSettings { recent_method_days: number; recent_method_action: HelpdeskRecentAction; updated_by: string; updated_at: string | null }
+export const saveHelpdeskSettings = (b: { recent_method_days: number; recent_method_action: HelpdeskRecentAction }) =>
+  api<HelpdeskSettings>("/helpdesk/settings", b, "PUT");
 export interface HelpdeskVerification {
   id: string;
   method: HelpdeskMethod;

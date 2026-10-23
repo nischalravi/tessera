@@ -2885,6 +2885,27 @@ IdP is never called.
   signals will come from the IdP log connectors; until then `POST /api/helpdesk/signals`
   `{identity_id, kind: mfa_device_added|sign_in, location, device, occurred_at}`
   (`helpdesk.approve`) simulates the feed and is a 404 in production.
+- **Recently added authentication method** (issue #477). MFA bypass by vishing the help desk
+  continues (ShinyHunters against Okta SSO), and Entra now detects suspiciously added methods. The
+  rule (`internal/helpdesk/recentauth.go`) looks, within `recent_method_days` (1 to 90, default 7)
+  of now, for (1) a method of any of the identity's accounts whose IdP-reported `enrolled_at`
+  (MFA posture, schema 0255) is inside the window, (2) an `mfa_device_added` signal, and (3) an IdP
+  risk signal for the identity. A method with no enrolment date never triggers: unknown is not
+  recent. `recent_method_action` is `require_approval` (default: the case needs the second
+  approver a privileged identity needs, who is not the requester or the subject; the second-approval
+  route then works for it), `block` (the case cannot execute while the window is open; an approval
+  does not lift it) or `off`. It is evaluated live, so the case view, the second approval and the
+  execute claim all see it, and a case opened before a signal arrived is covered. The policy
+  decision answers `recent_auth_method {action, days, reasons}` and `blocked`; reasons name the
+  system, the method kind and label and its age, never a factor value. Settings (schema 0720,
+  `helpdesk_settings`, one row per tenant): `GET /api/helpdesk/settings` (`graph.read`) and
+  `PUT /api/helpdesk/settings {recent_method_days, recent_method_action}` (`helpdesk.approve`,
+  step-up, audited as `helpdesk.settings.updated` with the old values). IdP risk signals
+  (`helpdesk_idp_risks`): `POST /api/helpdesk/risk-signals {identity_id, source, detail,
+  occurred_at}` (`helpdesk.approve`) records that a connected IdP reported a suspicious method
+  (audited `helpdesk.risk_signal.ingested`). It can only make a reset stricter, so it is available in
+  production; the Entra and Okta log connectors do not call it yet. Starting a case that triggers the
+  rule is audited as `helpdesk.case.recent_auth_method`. Help desk → Settings edits the rule.
 - **Simulated outside production.** The `simulated` executor (calls nothing), the push provider
   (always approves) and the IDV provider (accepts any session reference not starting with
   `fail`) exist when `TESSERA_ENV` is not `prod`. In production push and IDV answer
