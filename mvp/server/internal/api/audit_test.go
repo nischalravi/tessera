@@ -645,3 +645,102 @@ func TestAudit_ListLimit(t *testing.T) {
 		}
 	}
 }
+
+// TestAuditProofPath: ?path=true makes the proof self-contained. The event and
+// the records after it up to the covering checkpoint re-hash, link and end at
+// the checkpoint's head hash (audit.VerifyInclusion); changing any record, or
+// dropping one, breaks it. Without a covering checkpoint the path is empty.
+func TestAuditProofPath(t *testing.T) {
+	t.Parallel()
+	f := storetest.TwoTenants(t)
+	h := isolationServer(t, f, f.A.ID).Handler()
+	for range 3 {
+		serveOnce(h, "GET", "/api/identities", "") // events to chain
+	}
+	evs := ledger(t, f.DB, f.A.ID) // newest first
+	if len(evs) < 6 {
+		t.Fatalf("only %d events", len(evs))
+	}
+	target, head := evs[len(evs)-2], evs[2] // the second event, and a head a few events from the end
+	type proofDoc struct {
+		Event      json.RawMessage `json:"event"`
+		Checkpoint *struct {
+			HeadHash string `json:"head_hash"`
+		} `json:"checkpoint"`
+		Between int64             `json:"events_to_checkpoint"`
+		Path    []json.RawMessage `json:"path"`
+	}
+	get := func(id string, q string) (*httptest.ResponseRecorder, proofDoc) {
+		t.Helper()
+		rec := serveOnce(h, "GET", "/api/audit/events/"+id+"/proof"+q, "")
+		var d proofDoc
+		if rec.Code == http.StatusOK {
+			if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return rec, d
+	}
+
+	// no checkpoint yet: path is empty and the event alone is not anchored
+	rec, d := get(target.ID.String(), "?path=true")
+	if rec.Code != 200 || d.Checkpoint != nil || len(d.Path) != 0 {
+		t.Fatalf("before a checkpoint: %d %s", rec.Code, rec.Body)
+	}
+	if rec, _ := get(target.ID.String(), "?path=maybe"); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("path=maybe: %d", rec.Code)
+	}
+
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(tx *store.TenantTx) error {
+		_, err := tx.InsertAuditCheckpoint(store.AuditCheckpoint{Seq: head.Seq, HeadHash: head.Hash, JWS: "x.y.z"})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec, d = get(target.ID.String(), "?path=true")
+	if rec.Code != 200 || d.Checkpoint == nil || d.Checkpoint.HeadHash != head.Hash {
+		t.Fatalf("with a checkpoint: %d %s", rec.Code, rec.Body)
+	}
+	if int64(len(d.Path)) != d.Between || d.Between != head.Seq-target.Seq {
+		t.Fatalf("path has %d records, want %d", len(d.Path), head.Seq-target.Seq)
+	}
+	records := append([][]byte{d.Event}, rawLines(d.Path)...)
+	if got, err := audit.VerifyInclusion(records, d.Checkpoint.HeadHash); err != nil || got != head.Hash {
+		t.Fatalf("inclusion: %q %v", got, err)
+	}
+	// without ?path the proof is as before: no path member
+	if _, plain := get(target.ID.String(), ""); plain.Path != nil {
+		t.Errorf("a path without asking: %d records", len(plain.Path))
+	}
+	// the head itself: nothing between, and the event is the checkpoint head
+	if _, hd := get(head.ID.String(), "?path=true"); hd.Between != 0 || len(hd.Path) != 0 {
+		t.Errorf("the head event: %+v", hd)
+	}
+
+	// tampering and gaps are caught
+	bad := append([][]byte(nil), records...)
+	bad[1] = []byte(strings.Replace(string(bad[1]), `"action":"`, `"action":"x`, 1))
+	if _, err := audit.VerifyInclusion(bad, d.Checkpoint.HeadHash); err == nil {
+		t.Error("an altered record verified")
+	}
+	gap := append(append([][]byte(nil), records[:1]...), records[2:]...)
+	if _, err := audit.VerifyInclusion(gap, d.Checkpoint.HeadHash); err == nil {
+		t.Error("a path with a missing record verified")
+	}
+	if _, err := audit.VerifyInclusion(records, strings.Repeat("0", 64)); err == nil {
+		t.Error("a wrong checkpoint head verified")
+	}
+	// another tenant cannot fetch it
+	hb := isolationServer(t, f, f.B.ID).Handler()
+	if rec := serveOnce(hb, "GET", "/api/audit/events/"+target.ID.String()+"/proof?path=true", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("B reading A's proof path: %d", rec.Code)
+	}
+}
+
+func rawLines(in []json.RawMessage) [][]byte {
+	out := make([][]byte, len(in))
+	for i, r := range in {
+		out[i] = r
+	}
+	return out
+}

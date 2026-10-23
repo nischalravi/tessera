@@ -33,7 +33,7 @@ const (
 
 // Item is one planned change.
 type Item struct {
-	Section string   `json:"section"` // connections | overlays | identity_providers
+	Section string   `json:"section"` // connections | overlays | identity_providers | catalog_items | review_schedules | alert_rules | siem_sinks
 	Name    string   `json:"name"`
 	Action  string   `json:"action"`
 	Fields  []string `json:"fields,omitempty"` // what differs, for a change
@@ -115,6 +115,18 @@ func MakePlan(tx *store.TenantTx, rd *readiness.Service, v *Verified, target Tar
 	if err := planIdPs(tx, b, p); err != nil {
 		return nil, err
 	}
+	if err := planCatalog(tx, b, p); err != nil {
+		return nil, err
+	}
+	if err := planReviewSchedules(tx, b, p); err != nil {
+		return nil, err
+	}
+	if err := planAlertRules(tx, b, p); err != nil {
+		return nil, err
+	}
+	if err := planSiemSinks(tx, b, p, target); err != nil {
+		return nil, err
+	}
 	for _, it := range p.Items {
 		switch it.Action {
 		case Add:
@@ -147,6 +159,11 @@ func devOnly(b *Bundle) []string {
 					out = append(out, fmt.Sprintf("connection %q points at %s, a localhost address, which a production server does not accept", c.Name, s))
 				}
 			}
+		}
+	}
+	for _, k := range b.SiemSinks {
+		if loopback(k.Target) {
+			out = append(out, fmt.Sprintf("log-streaming sink %q points at %s, a localhost address, which a production server does not accept", k.Name, k.Target))
 		}
 	}
 	for _, i := range b.IdentityProviders {
@@ -503,6 +520,30 @@ func Apply(tx *store.TenantTx, rd *readiness.Service, v *Verified, target Target
 					if _, err := rd.PutOverlay(tx, o.TemplateID, []byte(o.Body), actor, now); err != nil {
 						return nil, fmt.Errorf("overlay %q: %w", it.Name, err)
 					}
+				}
+			}
+		case SecCatalogItems:
+			if it.Action == Add || it.Action == Change {
+				if err := applyCatalog(tx, it, b, v.Hash, actor, actorUser, now); err != nil {
+					return nil, fmt.Errorf("catalog item %q: %w", it.Name, err)
+				}
+			}
+		case SecReviewSchedules:
+			if it.Action == Add || it.Action == Change {
+				if err := applyReviewSchedule(tx, it, b, v.Hash, actor, actorUser, now); err != nil {
+					return nil, fmt.Errorf("review schedule %q: %w", it.Name, err)
+				}
+			}
+		case SecAlertRules:
+			if it.Action == Change {
+				if err := applyAlertRule(tx, it, b, v.Hash, actor, actorUser, now); err != nil {
+					return nil, fmt.Errorf("alert rule %q: %w", it.Name, err)
+				}
+			}
+		case SecSiemSinks:
+			if it.Action == Add {
+				if err := applySiemSink(tx, it, b, target, v.Hash, actor, actorUser, now); err != nil {
+					return nil, fmt.Errorf("log-streaming sink %q: %w", it.Name, err)
 				}
 			}
 		case "identity_providers":

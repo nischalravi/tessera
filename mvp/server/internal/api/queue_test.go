@@ -206,3 +206,114 @@ func TestQueueRecordsJobRuns(t *testing.T) {
 }
 
 var failing = queue.Kind{Actor: "test.actor", Handler: func(context.Context, queue.Job) (any, error) { return nil, errors.New("nope") }}
+
+// TestQueueSchedulePauseResume: pausing a recurring job needs jobs.manage and a
+// fresh authentication, stops it firing, is audited with its reason, repeats
+// quietly, and cannot reach another tenant's schedule. A resumed schedule fires
+// again.
+func TestQueueSchedulePauseResume(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	srv := newIsolationServer(f)
+	h := srv.Handler()
+	tick := func() {
+		t.Helper()
+		if err := srv.Queue().Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		srv.Queue().Wait()
+	}
+	tick() // creates the schedules
+
+	admin := signIn(t, f.DB, f.A.ID, authtest.User{Email: "ta@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	stale := signIn(t, f.DB, f.A.ID, authtest.User{Email: "stale@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}},
+		authtest.Ctx{AAL: 2, Phr: true, AuthTime: storetest.Now.Add(-20 * time.Minute)}, storetest.Now)
+	auditor := signIn(t, f.DB, f.A.ID, authtest.User{Email: "au@a.example", Roles: []auth.Role{auth.RoleAuditor}}, authtest.Phr, storetest.Now)
+	adminB := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ta@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+
+	name := jobs.SweepRequests
+	pause, resume := "/api/queue/schedules/"+name+"/pause", "/api/queue/schedules/"+name+"/resume"
+	state := func(sess authtest.Login, tenant string) queueScheduleView {
+		t.Helper()
+		var all []queueScheduleView
+		rec := corrDo(h, sess, "GET", "/api/queue/schedules", "")
+		if err := json.Unmarshal(rec.Body.Bytes(), &all); err != nil || rec.Code != 200 {
+			t.Fatalf("schedules: %d %s", rec.Code, rec.Body)
+		}
+		for _, s := range all {
+			if s.Name == name {
+				return s
+			}
+		}
+		t.Fatalf("no %s schedule for %s", name, tenant)
+		return queueScheduleView{}
+	}
+
+	if rec := corrDo(h, auditor, "POST", pause, ""); rec.Code != 403 {
+		t.Errorf("auditor pause: %d %s", rec.Code, rec.Body)
+	}
+	if rec := corrDo(h, stale, "POST", pause, ""); rec.Code != 401 || !strings.Contains(rec.Body.String(), "step_up_required") {
+		t.Errorf("stale pause: %d %s", rec.Code, rec.Body)
+	}
+	for _, p := range []string{"/api/queue/schedules/nope/pause", "/api/queue/schedules/Bad%20Name/pause"} {
+		if rec := corrDo(h, admin, "POST", p, ""); rec.Code != 404 {
+			t.Errorf("%s: %d", p, rec.Code)
+		}
+	}
+	if rec := corrDo(h, admin, "POST", pause, `{"reason":"`+strings.Repeat("x", 501)+`"}`); rec.Code != 422 && rec.Code != 400 {
+		t.Errorf("long reason: %d", rec.Code)
+	}
+	if got := auditActions(t, f, f.A.ID); got["queue.schedule_paused"] != 0 {
+		t.Errorf("a refused pause was audited: %v", got)
+	}
+
+	rec := corrDo(h, admin, "POST", pause, `{"reason":"maintenance window"}`)
+	var out queueScheduleView
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != 200 || out.Enabled {
+		t.Fatalf("pause: %d %s", rec.Code, rec.Body)
+	}
+	if got := auditActions(t, f, f.A.ID); got["queue.schedule_paused"] != 1 {
+		t.Errorf("audit %v", got)
+	}
+	if rec = corrDo(h, admin, "POST", pause, ""); rec.Code != 200 {
+		t.Errorf("pausing twice: %d", rec.Code)
+	}
+	if got := auditActions(t, f, f.A.ID); got["queue.schedule_paused"] != 1 {
+		t.Errorf("a repeated pause was audited again: %v", got)
+	}
+	if !state(adminB, "B").Enabled {
+		t.Errorf("A's pause reached B")
+	}
+	if rec = corrDo(h, adminB, "POST", resume, ""); rec.Code != 200 {
+		t.Errorf("B resuming its own running schedule: %d", rec.Code)
+	}
+	if got := auditActions(t, f, f.A.ID); got["queue.schedule_resumed"] != 0 {
+		t.Errorf("B's resume reached A: %v", got)
+	}
+
+	// paused: it does not fire, however long the clock runs
+	paused := state(auditor, "A")
+	if paused.Enabled {
+		t.Fatalf("still enabled: %+v", paused)
+	}
+	for range 3 {
+		tick()
+	}
+	if after := state(auditor, "A"); after.LastEnqueuedAt == nil || paused.LastEnqueuedAt == nil || *after.LastEnqueuedAt != *paused.LastEnqueuedAt {
+		t.Errorf("a paused schedule fired: before %+v after %+v", paused, after)
+	}
+
+	rec = corrDo(h, admin, "POST", resume, "")
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != 200 || !out.Enabled {
+		t.Fatalf("resume: %d %s", rec.Code, rec.Body)
+	}
+	if got := auditActions(t, f, f.A.ID); got["queue.schedule_resumed"] != 1 {
+		t.Errorf("audit %v", got)
+	}
+	// B pausing its own schedule leaves A's running
+	if rec = corrDo(h, adminB, "POST", pause, ""); rec.Code != 200 || state(adminB, "B").Enabled {
+		t.Errorf("B pause: %d %s", rec.Code, rec.Body)
+	}
+	if !state(auditor, "A").Enabled {
+		t.Error("B's pause reached A's schedule")
+	}
+}

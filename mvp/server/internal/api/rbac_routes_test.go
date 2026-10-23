@@ -452,6 +452,8 @@ GET    /api/queue/jobs                               jobs.read       -  # issue 
 GET    /api/queue/schedules                          jobs.read       -  #
 GET    /api/queue/workers                            jobs.read       -  # issue #302
 POST   /api/queue/jobs/{job_id}/retry                jobs.manage     STEP_UP_POLICY  #
+POST   /api/queue/schedules/{name}/pause             jobs.manage     STEP_UP_POLICY  # issue #497
+POST   /api/queue/schedules/{name}/resume            jobs.manage     STEP_UP_POLICY  # issue #497
 GET    /api/queue/limits                             connections.read    -  # issue #302
 PUT    /api/queue/limits                             connections.manage  STEP_UP_POLICY
 DELETE /api/queue/limits                             connections.manage  STEP_UP_POLICY

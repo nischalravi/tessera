@@ -27,6 +27,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/queue"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
@@ -335,6 +336,8 @@ func (s *Server) registerQueueRoutes() {
 	s.handle(http.MethodGet, "/api/queue/schedules", read, need(auth.PermJobsRead), s.listQueueSchedules)
 	s.handle(http.MethodGet, "/api/queue/workers", read, need(auth.PermJobsRead), s.listQueueWorkers)
 	s.handle(http.MethodPost, "/api/queue/jobs/{job_id}/retry", write, needStepUp(auth.PermJobsManage, auth.StepUpPolicy), s.retryQueueJob)
+	s.handle(http.MethodPost, "/api/queue/schedules/{name}/pause", write, needStepUp(auth.PermJobsManage, auth.StepUpPolicy), s.pauseQueueSchedule)
+	s.handle(http.MethodPost, "/api/queue/schedules/{name}/resume", write, needStepUp(auth.PermJobsManage, auth.StepUpPolicy), s.resumeQueueSchedule)
 	s.registerConnectionLimitRoutes()
 }
 
@@ -426,10 +429,77 @@ func (s *Server) listQueueSchedules(_ http.ResponseWriter, r *http.Request, _ *p
 	}
 	out := make([]queueScheduleView, 0, len(ss))
 	for _, v := range ss {
-		out = append(out, queueScheduleView{Name: v.Name, Kind: v.Kind, Spec: v.Spec, Enabled: v.Enabled,
-			MaxAttempts: v.MaxAttempts, NextRunAt: v.NextRunAt.UTC().Format(time.RFC3339), LastEnqueuedAt: isoPtr(v.LastEnqueuedAt)})
+		out = append(out, viewQueueSchedule(v))
 	}
 	return out, nil
+}
+
+func viewQueueSchedule(v *store.QueueSchedule) queueScheduleView {
+	return queueScheduleView{Name: v.Name, Kind: v.Kind, Spec: v.Spec, Enabled: v.Enabled, MaxAttempts: v.MaxAttempts,
+		NextRunAt: v.NextRunAt.UTC().Format(time.RFC3339), LastEnqueuedAt: isoPtr(v.LastEnqueuedAt)}
+}
+
+var queueScheduleNameRE = regexp.MustCompile(`^[a-z][a-z0-9_.:-]{0,127}$`)
+
+type queueScheduleInput struct {
+	// Reason is optional free text kept in the audit event.
+	Reason string `json:"reason"`
+}
+
+const maxScheduleReason = 500
+
+func (s *Server) pauseQueueSchedule(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	return s.setQueueSchedule(r, p, false)
+}
+
+func (s *Server) resumeQueueSchedule(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	return s.setQueueSchedule(r, p, true)
+}
+
+// setQueueSchedule pauses or resumes a recurring job and audits it
+// (queue.schedule_paused, queue.schedule_resumed) in the same transaction.
+// Pausing stops new runs only: a job already queued or running finishes. A
+// resumed schedule fires once if it came due while paused, then keeps its
+// cadence. Repeating the state it already has is a no-op that is not audited.
+func (s *Server) setQueueSchedule(r *http.Request, p *params, enable bool) (any, error) {
+	name := p.path["name"]
+	if !queueScheduleNameRE.MatchString(name) {
+		return nil, &httpError{http.StatusNotFound, "Not Found"}
+	}
+	var in queueScheduleInput
+	if err := decodeBody(r, &in, true); err != nil {
+		return nil, err
+	}
+	if len(in.Reason) > maxScheduleReason {
+		return nil, badRequest("invalid_reason", "reason must be at most 500 characters")
+	}
+	c := store.TxFrom(r.Context())
+	cur, err := c.QueueSchedule(name)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, &httpError{http.StatusNotFound, "Not Found"}
+	} else if err != nil {
+		return nil, err
+	}
+	if cur.Enabled == enable {
+		return viewQueueSchedule(cur), nil
+	}
+	now := s.clock()
+	if err := c.SetQueueScheduleEnabled(name, enable, now); err != nil {
+		return nil, err
+	}
+	action := "queue.schedule_paused"
+	if enable {
+		action = "queue.schedule_resumed"
+	}
+	if err := c.Audit(now, actor(r), action, ojson.Object{{Key: "schedule", Value: name}, {Key: "kind", Value: cur.Kind},
+		{Key: "reason", Value: in.Reason}}); err != nil {
+		return nil, err
+	}
+	cur, err = c.QueueSchedule(name)
+	if err != nil {
+		return nil, err
+	}
+	return viewQueueSchedule(cur), nil
 }
 
 type queueWorkerView struct {
