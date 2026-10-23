@@ -670,7 +670,7 @@ hand in each environment.
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
 `GET /api/graph?identity_id=|resource_id=` · `GET /api/nhi` · `GET /api/ai-agents` ·
-`GET /api/ai-agents/mcp-findings[?kind=mcp_server|agent_credential]` ·
+`GET /api/ai-agents/mcp-findings[?kind=mcp_server|agent_credential]` · `GET /api/ai-agents/blueprints` ·
 `GET /api/least-privilege/recommendations?unused_days=60&kind=remove|right_size|role_trim` ·
 `POST /api/least-privilege/revoke {edge_id, dry_run}` · `GET /api/policies` · `GET /api/violations` ·
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
@@ -5493,6 +5493,19 @@ identities) and `mcp_findings`, both tenant-scoped with cross-tenant guard trigg
 (`schema/0375_agent_discovery.sql`). `GET /api/ai-agents` is the `ai_agent` inventory with source,
 creator, sponsor status and violating policy ids; `GET /api/nhi` is unchanged. The demo company
 supplies Okta-sourced agents and five sample findings, so the screens work without any connector.
+
+**Entra Agent ID blueprints (issue #478).** With `TESSERA_ENTRA_DISCOVER_AGENTS=true` the connector also reads
+Graph **beta** `applications/microsoft.graph.agentIdentityBlueprint` and its `sponsors`, and, on each agent identity,
+`agentIdentityBlueprintId` (the blueprint's **appId**, not its object id) and `managerApplications` (application
+ids, requested with `$select`; applications, not people). Required Graph application permissions:
+`AgentIdentity.Read.All` and `AgentIdentityBlueprint.Read.All`. Storage: `agent_blueprints` and `agent_links`
+(`schema/0830_agent_blueprints.sql`, Postgres variant and RLS included). `GET /api/ai-agents/blueprints` lists
+blueprints with sponsor, sponsor status and agent count; each `GET /api/ai-agents` row gains `blueprint`
+(joined on appId) and `manager_applications`, and an agent with no sponsor at all (none resolved, none named by
+Entra) carries the `no_sponsor` flag next to the existing `nhi-ownership` violation. Humans stay sponsors and
+owners. A failed or forbidden blueprint list is never an empty snapshot: stored blueprints are kept and the
+sync result is marked partial with the HTTP status. Tested on recorded fixtures only; the beta shapes follow
+Microsoft's documentation and were not run against a live tenant.
 
 ### Groups from the command line and declarative plans (`tessera-cli groups`)
 

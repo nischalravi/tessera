@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -137,10 +139,58 @@ func TestMCPFindingsAPI(t *testing.T) {
 	}
 }
 
+// Entra Agent ID (issue #478): blueprints, an agent's blueprint and manager.
+func TestAgentBlueprintsAndLinks(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := isolationServer(t, f, f.A.ID).Handler()
+	rec := serveOnce(h, http.MethodGet, "/api/ai-agents/blueprints", "")
+	var bps []map[string]any
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &bps) != nil || len(bps) != 1 {
+		t.Fatalf("blueprints: %d %.300s", rec.Code, rec.Body.String())
+	}
+	if bps[0]["id"] != "bp-obj-1" || bps[0]["app_id"] != "bp-app-1" || bps[0]["agents"] != float64(1) || bps[0]["sponsor_status"] != "active" || bps[0]["sponsor"] == nil {
+		t.Errorf("blueprint = %v", bps[0])
+	}
+	rec = serveOnce(h, http.MethodGet, "/api/ai-agents", "")
+	var agents []any
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &agents) != nil {
+		t.Fatalf("agents: %d %.300s", rec.Code, rec.Body.String())
+	}
+	bot := agents[0].(map[string]any) // the fixture has one agent
+	bp, _ := bot["blueprint"].(map[string]any)
+	if bp["id"] != "bp-app-1" || bp["name"] == "bp-app-1" || bot["manager_applications"] == nil || containsAny(bot["flags"], "no_sponsor") {
+		t.Errorf("helper bot = %v", bot)
+	}
+}
+
+// An agent whose source names no sponsor and that resolved to none is flagged no_sponsor.
+func TestAgentNoSponsorFlag(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		if err := c.UpsertAgentProfile(&store.AgentProfile{Source: "okta", ExternalID: "helper-bot",
+			IdentityID: f.A.IDs["helper-bot"], Kind: "okta_service_app"}, storetest.Now); err != nil {
+			return err
+		}
+		return c.SetIdentityOwner(f.A.IDs["helper-bot"], nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := serveOnce(isolationServer(t, f, f.A.ID).Handler(), http.MethodGet, "/api/ai-agents", "")
+	var agents []any
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &agents) != nil {
+		t.Fatalf("agents: %d %.300s", rec.Code, rec.Body.String())
+	}
+	bot := agents[0].(map[string]any) // the fixture has one agent
+	if bot["sponsor_status"] != "none" || !containsAny(bot["flags"], "no_sponsor") {
+		t.Errorf("helper bot = %v", bot)
+	}
+}
+
 // Tenant B never sees tenant A's agents or findings.
 func TestAgentRoutesAreTenantScoped(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	for path, own := range map[string]string{"/api/ai-agents": "Helper Bot", "/api/ai-agents/mcp-findings": "github-scan"} {
+	for path, own := range map[string]string{"/api/ai-agents": "Helper Bot", "/api/ai-agents/mcp-findings": "github-scan", "/api/ai-agents/blueprints": "blueprint"} {
 		a := serveOnce(isolationServer(t, f, f.A.ID).Handler(), http.MethodGet, path, "")
 		if a.Code != 200 || !leaks(a.Body.String()) {
 			t.Errorf("as A, %s: %d, sentinel visible = %v (positive control)", path, a.Code, leaks(a.Body.String()))

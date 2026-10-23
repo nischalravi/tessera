@@ -37,6 +37,7 @@ GET    /api/graph                                    graph.read      -
 GET    /api/nhi                                      graph.read      -
 GET    /api/ai-agents                                graph.read      -  # issue #116
 GET    /api/ai-agents/mcp-findings                   graph.read      -  # issue #116
+GET    /api/ai-agents/blueprints                     graph.read      -  # issue #478
 GET    /api/least-privilege/recommendations          graph.read      -
 POST   /api/least-privilege/revoke                   graph.read      -  (dry_run=false: grants.revoke + STEP_UP_POLICY in the handler)
 GET    /api/policies                                 graph.read      -
