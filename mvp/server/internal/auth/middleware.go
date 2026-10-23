@@ -39,6 +39,8 @@ const (
 	FailIdentityDisabled = "identity_disabled"
 	FailTenantInactive   = "tenant_inactive"
 	FailClientDisabled   = "client_disabled"
+	// FailClientExceedsOwner: the machine client holds permissions its approver no longer holds (issue #522).
+	FailClientExceedsApprover = "client_exceeds_approver"
 )
 
 // Authenticator resolves the session cookie of a request to a Principal

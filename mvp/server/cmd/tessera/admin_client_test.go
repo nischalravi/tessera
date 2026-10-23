@@ -167,8 +167,26 @@ func TestAdminAddClient(t *testing.T) {
 		if n != 2 {
 			t.Errorf("%d oauth.client.created events, want 2", n)
 		}
+		if c.ApprovedBy != store.ApprovedByOperator {
+			t.Errorf("approved_by = %q", c.ApprovedBy)
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+
+	// issue #522: a client made before approvers were recorded, an operator client with a viewer owner, is listed;
+	// the CLI-made clients are not
+	if err := st.InTenant(ctx, acme.ID, func(tx *store.TenantTx) error {
+		return tx.InsertAPIClient(&store.APIClient{ClientID: "tsc_legacyops", Name: "ops-bot", Kind: store.ClientMachine,
+			GrantTypes: []string{oauth.GrantClientCredentials}, TokenEndpointAuthMethod: "private_key_jwt", DPoPRequired: true,
+			AllowedScopes: []string{"tessera:write"}, Roles: []string{"operator"}, OwnerUserID: &owner.UserID, CreatedAt: now})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := adminRun(t, db, "list-overprivileged-clients", "-tenant", "acme")
+	if err != nil || !strings.Contains(list, "tsc_legacyops") || !strings.Contains(list, "jit.deny_revoke") || strings.Contains(list, m[1]) ||
+		!strings.Contains(list, "1 machine client(s)") {
+		t.Errorf("list-overprivileged-clients: %v %s", err, list)
 	}
 }

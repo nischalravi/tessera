@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
@@ -20,8 +21,9 @@ import (
 //
 //	GET  /api/siem/sinks                              sinks with their health and lag
 //	POST /api/siem/sinks                              add a sink
-//	PUT  /api/siem/sinks/{sink_id}                    change a sink (narrowing its event filter is a two-admin change request)
-//	POST /api/siem/sinks/{sink_id}/rewind {seq}       replay from seq+1 (0: everything)
+//	PUT  /api/siem/sinks/{sink_id}                    change a sink (omitted fields keep their value; narrowing its event filter, turning include_http
+//	                                                  off, or moving it to another origin is a two-admin change request)
+//	POST /api/siem/sinks/{sink_id}/rewind {seq}       replay from seq+1 (0: everything; step-up)
 //	POST /api/siem/sinks/{sink_id}/test               send one test event now
 //	GET  /api/siem/sinks/{sink_id}/dead-letters       batches the destination rejected
 
@@ -31,7 +33,7 @@ func (s *Server) registerSiemRoutes() {
 	s.handle(http.MethodGet, "/api/siem/sinks", read, readS, s.listSiemSinks)
 	s.handle(http.MethodPost, "/api/siem/sinks", write, configureStepUp, s.createSiemSink)
 	s.handle(http.MethodPut, "/api/siem/sinks/{sink_id}", write, configureStepUp, s.updateSiemSink)
-	s.handle(http.MethodPost, "/api/siem/sinks/{sink_id}/rewind", write, configure, s.rewindSiemSink)
+	s.handle(http.MethodPost, "/api/siem/sinks/{sink_id}/rewind", write, configureStepUp, s.rewindSiemSink)
 	s.handle(http.MethodPost, "/api/siem/sinks/{sink_id}/test", phased, configure, s.rd(s.testSiemSink))
 	s.handle(http.MethodGet, "/api/siem/sinks/{sink_id}/dead-letters", read, readS, s.siemDeadLetters)
 }
@@ -133,9 +135,9 @@ type sinkBody struct {
 	Format      string  `json:"format"`
 	Target      *string `json:"target"` // omitted on update: keep
 	Flavor      string  `json:"flavor"`
-	CAPEM       *string `json:"ca_pem"` // omitted on update: keep
-	Token       *string `json:"token"`  // omitted: keep; "": clear
-	IncludeHTTP bool    `json:"include_http"`
+	CAPEM       *string `json:"ca_pem"`       // omitted on update: keep
+	Token       *string `json:"token"`        // omitted: keep; "": clear
+	IncludeHTTP *bool   `json:"include_http"` // omitted on update: keep; on create: off
 	// EventFilter: nil keeps the current filter on update; [] is every event.
 	EventFilter *[]string `json:"event_filter"`
 	Region      *string   `json:"region"`
@@ -145,8 +147,13 @@ type sinkBody struct {
 }
 
 func (b sinkBody) spec(cur *store.SiemSink) siem.SinkSpec {
-	sp := siem.SinkSpec{Name: b.Name, Kind: b.Kind, Format: b.Format, Flavor: b.Flavor, Token: b.Token, IncludeHTTP: b.IncludeHTTP,
+	sp := siem.SinkSpec{Name: b.Name, Kind: b.Kind, Format: b.Format, Flavor: b.Flavor, Token: b.Token,
 		Enabled: b.Enabled == nil || *b.Enabled, Start: b.Start}
+	if b.IncludeHTTP != nil {
+		sp.IncludeHTTP = *b.IncludeHTTP
+	} else if cur != nil {
+		sp.IncludeHTTP = cur.IncludeHTTP
+	}
 	if b.Target != nil {
 		sp.Target = *b.Target
 	} else if cur != nil {
@@ -231,15 +238,29 @@ func (s *Server) updateSiemSink(_ http.ResponseWriter, r *http.Request, p *param
 	} else if err != nil {
 		return nil, err
 	}
-	// Narrowing the event filter removes detection: it is a two-admin change (issue #511). Widening, clearing or
-	// keeping it stays here. (An unnormalized filter that narrows is refused too: the check normalizes first.)
+	// Narrowing the event filter, or turning include_http off, removes detection: it is a two-admin change (issues
+	// #511, #520). Widening, clearing or keeping them stays here. (An unnormalized filter that narrows is refused
+	// too: the check normalizes first.)
+	narrows := b.IncludeHTTP != nil && cur.IncludeHTTP && !*b.IncludeHTTP
 	if b.EventFilter != nil {
 		if next, err := siem.NormalizeFilter(*b.EventFilter); err == nil && siem.Narrows(cur.EventFilter, next) {
-			return nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
-				Msg: "narrowing a sink's event filter needs a second admin: submit a change request of type " + admin.TypeSiemSinkFilter +
-					" (POST /api/admin/change-requests, payload {sink_id, event_filter}) for a different admin to approve",
-				Extra: map[string]any{"change_type": admin.TypeSiemSinkFilter}}
+			narrows = true
 		}
+	}
+	if narrows {
+		return nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
+			Msg: "narrowing what a sink receives (its event filter, or include_http off) needs a second admin: submit a change request of type " +
+				admin.TypeSiemSinkFilter + " (POST /api/admin/change-requests, payload {sink_id, event_filter and/or include_http}) for a different admin to approve",
+			Extra: map[string]any{"change_type": admin.TypeSiemSinkFilter}}
+	}
+	// Moving the sink to another origin sends the audit feed somewhere the SOC's collector does not watch: two admins
+	// (issue #520). A change of path on the same origin stays here.
+	if b.Target != nil && siem.SinkOrigin(cur.Kind, cur.Target) != siem.SinkOrigin(cur.Kind, strings.TrimSpace(*b.Target)) {
+		return nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
+			Msg: "moving a sink to another origin needs a second admin: submit a change request of type " + admin.TypeSiemSinkTarget +
+				" (POST /api/admin/change-requests, payload {sink_id, target}) for a different admin to approve; the sink is then disabled " +
+				"until you give it the new destination's token",
+			Extra: map[string]any{"change_type": admin.TypeSiemSinkTarget}}
 	}
 	k, err := siem.UpdateSink(tx, s.siemSealer(), cur.ID, b.spec(cur), s.cfg.Env == config.Dev, by, s.clock().UTC())
 	if err != nil {

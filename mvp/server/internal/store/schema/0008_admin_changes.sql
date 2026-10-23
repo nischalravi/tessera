@@ -58,7 +58,12 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     -- deletion threshold guard settings: loosening takes two admins (internal/admin/change_deleteguard.go)
     'deletion_guard.update',
     -- a SIEM sink's event filter: narrowing it takes two admins (internal/admin/change_siem.go)
-    'siem.sink.filter')),
+    'siem.sink.filter',
+    -- moving a SIEM sink to another destination takes two admins (internal/admin/change_siem.go, issue #520)
+    'siem.sink.target',
+    -- loosening a security alert rule (disable, raise the threshold, lower the severity, shorten the window) takes two admins
+    -- (internal/admin/change_alerts.go, issue #521)
+    'alerts.rule.loosen')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

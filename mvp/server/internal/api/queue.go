@@ -72,7 +72,8 @@ func (s *Server) newQueue() *queue.Queue {
 		}
 		obs.DefaultLoops.Register(k, every, true)
 	}
-	q := &queue.Queue{DB: s.store, Clock: func() time.Time { return s.clock() }, Log: s.log.With("component", "queue")}
+	q := &queue.Queue{DB: s.store, Clock: func() time.Time { return s.clock() }, Log: s.log.With("component", "queue"),
+		BoundLegacyPause: boundLegacyPause}
 	// jit_sweep is also the manual POST /api/jit/sweep: its runs carry the
 	// route so the run history can retry them.
 	q.Register(jobs.JITSweep, queue.Kind{Handler: tracked(jobs.JITSweep, s.queueJITSweep), Actor: "jit.sweeper", Method: http.MethodPost, Route: "/api/jit/sweep"})
@@ -394,12 +395,23 @@ type queueScheduleView struct {
 const MaxProtectedPause = 24 * time.Hour
 
 // protectedSchedules are the schedules that do security work in the background: containment retries for leavers,
-// the lifecycle, SoD mitigation and admin change sweeps, drift, certificate expiry, and the connector syncs that feed
+// the lifecycle, SoD mitigation and admin change sweeps, drift, certificate expiry, SSF polling, contractor feeds, guest
+// lifecycle, OAuth app sync, JIT and request expiry, and the connector syncs that feed
 // everything else. One admin pausing one of them for good would blind the platform without a trace beyond the audit
 // log, so a pause needs a reason, is capped at MaxProtectedPause and raises the schedule_paused alert.
 var protectedSchedules = map[string]bool{jobs.ContainmentRetry: true, jobs.SweepLifecycle: true, jobs.SweepSoDMitigations: true,
 	jobs.SweepAdminChanges: true, jobs.CertificateExpiry: true, jobs.SweepDrift: true,
+	// issue #521: incoming Shared Signals events, contractor feeds (and their leavers), guest grace and retention, OAuth
+	// app risk, and the sweeps that expire temporary access and requests
+	jobs.SweepSSFPoll: true, jobs.VmsSync: true, jobs.GuestLifecycle: true, jobs.OAuthSync: true, jobs.JITSweep: true,
+	jobs.SweepRequests:       true,
 	worker.DeltaScheduleName: true, worker.FullScheduleName: true}
+
+// boundLegacyPause says which protected schedules get an end when found paused with none (issue #522). The two connector
+// sync schedules are left out: a tenant turns them off with sync-schedule (0), which has its own alert.
+func boundLegacyPause(name string) bool {
+	return protectedSchedules[name] && name != worker.DeltaScheduleName && name != worker.FullScheduleName
+}
 
 var (
 	queueStatuses = []string{store.QueueQueued, store.QueueRunning, store.QueueSucceeded, store.QueueFailed, store.QueueDead}

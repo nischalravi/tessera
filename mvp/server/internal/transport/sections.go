@@ -463,9 +463,14 @@ func planAlertRules(tx *store.TenantTx, b *Bundle, p *Plan) error {
 			it.Action = Unchanged
 			if len(it.Fields) > 0 {
 				it.Action = Change
-				if (cur.Enabled && !r.Enabled) || alerts.SeverityRank(r.Severity) < alerts.SeverityRank(cur.Severity) ||
-					r.Threshold > cur.Threshold || r.WindowMinutes < int(cur.Window/time.Minute) {
+				if alerts.Loosens(cur, alerts.RuleSpec{Enabled: r.Enabled, Severity: r.Severity, Threshold: r.Threshold,
+					WindowMinutes: r.WindowMinutes}) {
 					it.Notes = append(it.Notes, "this loosens detection: it fires less often or not at all")
+					if alerts.IsSecurityRule(r.ID) {
+						// a security rule is loosened by two admins, not by a file (issue #521)
+						it.Action = Manual
+						it.Notes = append(it.Notes, "loosening a security rule takes two admins: request an "+"alerts.rule.loosen change under Admin > Change requests")
+					}
 				}
 			}
 		}

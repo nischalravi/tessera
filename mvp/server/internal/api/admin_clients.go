@@ -71,6 +71,14 @@ func ensureWithinCreator(r *http.Request, roles, scopes []string) error {
 	return nil
 }
 
+// approverOf is the signed-in admin who vouches for a client's permissions now (store.APIClient.ApprovedBy, issue #522).
+func approverOf(r *http.Request) string {
+	if pr := principal(r); pr != nil && pr.UserID != nil {
+		return pr.UserID.String()
+	}
+	return ""
+}
+
 // clientView is an OAuth client as the admin API shows it: the registered
 // public keys (kid, algorithm, RFC 7638 thumbprint) and never any secret (a
 // machine client has none: it authenticates with a key only it holds).
@@ -218,6 +226,10 @@ func (s *Server) adminCreateAPIClient(_ http.ResponseWriter, r *http.Request, _ 
 	if err != nil {
 		return nil, err
 	}
+	if len(b.Roles) == 0 {
+		return nil, badRequest("invalid_roles", "roles: at least one of "+strings.Join(machineClientRoles, ", ")+" is required, even for a client "+
+			"with only the tessera:email-dsn scope (the scope grants email.dsn alone; the role is what the scopes narrow)")
+	}
 	roles, err := pickList("roles", b.Roles, machineClientRoles)
 	if err != nil {
 		return nil, err
@@ -241,7 +253,7 @@ func (s *Server) adminCreateAPIClient(_ http.ResponseWriter, r *http.Request, _ 
 	c := &store.APIClient{ClientID: clientID, Name: name, Kind: store.ClientMachine, // #nosec G101 -- names of an auth method and a grant, not a credential
 		GrantTypes: []string{oauth.GrantClientCredentials}, TokenEndpointAuthMethod: "private_key_jwt", JWKS: jwks,
 		DPoPRequired: b.DPoPRequired == nil || *b.DPoPRequired, AllowedScopes: scopes, Roles: roles, OwnerUserID: &owner.ID,
-		Status: store.ClientActive, CreatedAt: now}
+		ApprovedBy: approverOf(r), Status: store.ClientActive, CreatedAt: now}
 	if err := tx.InsertAPIClient(c); err != nil {
 		return nil, err
 	}
@@ -339,6 +351,13 @@ func (s *Server) adminRotateAPIClientKeys(_ http.ResponseWriter, r *http.Request
 		return nil, err
 	}
 	c.JWKS = jwks
+	// the rotating admin holds everything the client can do (checked above) and now vouches for it (issue #522)
+	if who := approverOf(r); who != "" {
+		if err := tx.SetAPIClientApprover(c.ClientID, who); err != nil {
+			return nil, err
+		}
+		c.ApprovedBy = who
+	}
 	if err := tx.Audit(now, actor(r), "oauth.client.keys_rotated", ojson.Object{{Key: "client_id", Value: c.ClientID}, {Key: "mode", Value: b.Mode},
 		{Key: "key_thumbprints", Value: jwkThumbprints(next)}, {Key: "added_thumbprints", Value: jwkThumbprints(incoming)}}); err != nil {
 		return nil, err

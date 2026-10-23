@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
@@ -23,7 +24,7 @@ import (
 //	GET  /api/alerts?status=&severity=&rule=          alerts, newest activity first
 //	GET  /api/alerts/summary                          live counts by status and severity (the bell)
 //	GET  /api/alerts/rules                            built-in rules with the tenant's settings
-//	PUT  /api/alerts/rules/{rule_id}                  change a rule's settings
+//	PUT  /api/alerts/rules/{rule_id}                  change a rule's settings (step-up; loosening a security rule is a two-admin change request)
 //	GET  /api/alerts/channels                         delivery channels (targets redacted)
 //	POST /api/alerts/channels                         add a channel (webhooks: the secret is shown once)
 //	PUT  /api/alerts/channels/{channel_id}            change a channel
@@ -39,7 +40,7 @@ func (s *Server) registerAlertRoutes() {
 	s.handle(http.MethodGet, "/api/alerts", read, readA, s.listAlerts)
 	s.handle(http.MethodGet, "/api/alerts/summary", read, readA, s.alertSummary)
 	s.handle(http.MethodGet, "/api/alerts/rules", read, readA, s.listAlertRules)
-	s.handle(http.MethodPut, "/api/alerts/rules/{rule_id}", write, configure, s.putAlertRule)
+	s.handle(http.MethodPut, "/api/alerts/rules/{rule_id}", write, configureStepUp, s.putAlertRule)
 	s.handle(http.MethodGet, "/api/alerts/channels", read, configure, s.listAlertChannels)
 	s.handle(http.MethodPost, "/api/alerts/channels", write, configureStepUp, s.createAlertChannel)
 	s.handle(http.MethodPut, "/api/alerts/channels/{channel_id}", write, configureStepUp, s.updateAlertChannel)
@@ -319,8 +320,25 @@ func (s *Server) putAlertRule(_ http.ResponseWriter, r *http.Request, p *params)
 		return nil, err
 	}
 	tx := store.TxFrom(r.Context())
-	if err := alerts.SetRule(tx, p.path["rule_id"], alerts.RuleSpec{Enabled: b.Enabled, Severity: b.Severity, Threshold: b.Threshold,
-		WindowMinutes: b.WindowMinutes}, by, s.clock().UTC()); err != nil {
+	spec := alerts.RuleSpec{Enabled: b.Enabled, Severity: b.Severity, Threshold: b.Threshold, WindowMinutes: b.WindowMinutes}
+	if err := alerts.CheckRule(p.path["rule_id"], spec); err != nil {
+		return nil, alertErr(err)
+	}
+	// Loosening a security rule (disable it, lower its severity, raise its threshold, shorten its window) is a
+	// two-admin change (issue #521): the alert may be the only control on what it watches.
+	if alerts.IsSecurityRule(p.path["rule_id"]) {
+		cur, err := alerts.EffectiveRule(tx, p.path["rule_id"])
+		if err != nil {
+			return nil, err
+		}
+		if cur != nil && alerts.Loosens(*cur, spec) {
+			return nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
+				Msg: "loosening a security alert rule needs a second admin: submit a change request of type " + admin.TypeAlertRuleLoosen +
+					" (POST /api/admin/change-requests, payload {rule_id, enabled, severity, threshold, window_minutes}) for a different admin to approve",
+				Extra: map[string]any{"change_type": admin.TypeAlertRuleLoosen}}
+		}
+	}
+	if err := alerts.SetRule(tx, p.path["rule_id"], spec, by, s.clock().UTC()); err != nil {
 		return nil, alertErr(err)
 	}
 	return s.listAlertRules(nil, r, p)

@@ -539,7 +539,7 @@ func UpdateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, 
 	// must never follow the sink to another origin: an edit that moves the
 	// target (webhook scheme, host or port; syslog host:port) has to bring a
 	// new token or clear it. A path-only change keeps it (#332, as #315).
-	from, to := sinkOrigin(k.Kind, k.Target), sinkOrigin(k.Kind, s.Target)
+	from, to := SinkOrigin(k.Kind, k.Target), SinkOrigin(k.Kind, s.Target)
 	moved := from != to
 	if moved && s.Token == nil && len(k.SecretSealed) > 0 {
 		return nil, refuse(422, "credential_required",
@@ -575,10 +575,10 @@ func UpdateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, 
 	return k, tx.Audit(now, by.Display, "siem.sink.updated", d)
 }
 
-// sinkOrigin is where a sink's token would be sent: scheme://host:port for a
+// SinkOrigin is where a sink's token would be sent: scheme://host:port for a
 // webhook (default ports filled in, case folded), host:port for syslog. An
 // unparsable target is its own origin, so any change to it counts as a move.
-func sinkOrigin(kind, target string) string {
+func SinkOrigin(kind, target string) string {
 	if kind == "syslog" {
 		host, port, err := net.SplitHostPort(target)
 		if err != nil {
@@ -716,28 +716,75 @@ func SameFilter(a, b []string) bool {
 	return slices.Equal(x, y)
 }
 
-// SetEventFilter replaces a sink's event filter and audits it (siem.sink.filter_changed, which every sink
-// receives). The two-admin change type siem.sink.filter applies a narrowing through it.
-func SetEventFilter(tx *store.TenantTx, id string, filter []string, changeID string, now time.Time) (*store.SiemSink, error) {
+// SetFilters changes what a sink receives and audits it (siem.sink.filter_changed, which every sink receives): its
+// event filter (nil keeps it) and whether it gets http.request events (nil keeps it). The two-admin change type
+// siem.sink.filter applies a narrowing of either through it.
+func SetFilters(tx *store.TenantTx, id string, filter *[]string, includeHTTP *bool, changeID string, now time.Time) (*store.SiemSink, error) {
 	k, err := tx.SiemSink(id)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, refuse(404, "sink_not_found", "sink not found")
 	} else if err != nil {
 		return nil, err
 	}
-	next, err := NormalizeFilter(filter)
-	if err != nil {
-		return nil, err
+	was, wasHTTP := k.EventFilter, k.IncludeHTTP
+	next := was
+	if filter != nil {
+		if next, err = NormalizeFilter(*filter); err != nil {
+			return nil, err
+		}
 	}
-	was := k.EventFilter
-	k.EventFilter, k.UpdatedAt = next, now
+	nextHTTP := wasHTTP
+	if includeHTTP != nil {
+		nextHTTP = *includeHTTP
+	}
+	k.EventFilter, k.IncludeHTTP, k.UpdatedAt = next, nextHTTP, now
 	if err := tx.UpdateSiemSink(k); err != nil {
 		return nil, err
 	}
 	// in the transaction that applies the change, next to admin.change.applied
 	_, err = audit.Record(tx.Context(), tx, "siem.sink.filter_changed", ojson.Object{{Key: "sink_id", Value: k.ID},
 		{Key: "name", Value: k.Name}, {Key: "from", Value: stringsAny(was)}, {Key: "to", Value: stringsAny(next)},
-		{Key: "narrowed", Value: Narrows(was, next)}, {Key: "change_id", Value: changeID}}, audit.At(now), audit.Target("admin_change", changeID))
+		{Key: "narrowed", Value: Narrows(was, next) || (wasHTTP && !nextHTTP)}, {Key: "include_http_from", Value: wasHTTP},
+		{Key: "include_http_to", Value: nextHTTP}, {Key: "change_id", Value: changeID}}, audit.At(now), audit.Target("admin_change", changeID))
+	return k, err
+}
+
+// CheckRetarget validates a new target for the sink (the same rules as creating one) and returns it cleaned.
+func CheckRetarget(k *store.SiemSink, target string, dev bool) (string, error) {
+	sp := SinkSpec{Name: k.Name, Kind: k.Kind, Format: k.Format, Target: target, Flavor: k.Flavor, EventFilter: k.EventFilter,
+		Region: k.Region, AccessKeyID: k.AccessKeyID}
+	if k.CAPEM != nil {
+		sp.CAPEM = *k.CAPEM
+	}
+	if err := sp.check(dev); err != nil {
+		return "", err
+	}
+	return sp.Target, nil
+}
+
+// Retarget moves a sink to a new destination after two admins approved it (siem.sink.target, issue #520). The
+// sealed token never follows a sink to another origin (#332), so it is cleared, and the sink is disabled until an
+// admin gives it the new destination's token and enables it. The change is audited as siem.sink.retargeted with
+// the previous and new origin; the request and its approval went to the old destination while it was still the target.
+func Retarget(tx *store.TenantTx, id, target string, dev bool, changeID string, now time.Time) (*store.SiemSink, error) {
+	k, err := tx.SiemSink(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, refuse(404, "sink_not_found", "sink not found")
+	} else if err != nil {
+		return nil, err
+	}
+	target, err = CheckRetarget(k, target, dev)
+	if err != nil {
+		return nil, err
+	}
+	from, to := SinkOrigin(k.Kind, k.Target), SinkOrigin(k.Kind, target)
+	k.Target, k.SecretSealed, k.Enabled, k.UpdatedAt = target, nil, false, now
+	if err := tx.UpdateSiemSink(k); err != nil {
+		return nil, err
+	}
+	_, err = audit.Record(tx.Context(), tx, "siem.sink.retargeted", ojson.Object{{Key: "sink_id", Value: k.ID},
+		{Key: "name", Value: k.Name}, {Key: "previous_origin", Value: from}, {Key: "origin", Value: to},
+		{Key: "disabled", Value: true}, {Key: "change_id", Value: changeID}}, audit.At(now), audit.Target("admin_change", changeID))
 	return k, err
 }
 

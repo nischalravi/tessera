@@ -74,10 +74,10 @@ func TestProtectedSchedulePauseResumesByItself(t *testing.T) {
 		return on
 	}
 	// an ordinary schedule keeps today's behaviour: no reason needed, paused until resumed, no automatic resume
-	if rec = corrDo(h, admin, "POST", "/api/queue/schedules/"+jobs.SweepRequests+"/pause", ""); rec.Code != 200 {
+	if rec = corrDo(h, admin, "POST", "/api/queue/schedules/"+jobs.Maintenance+"/pause", ""); rec.Code != 200 {
 		t.Errorf("pausing an ordinary schedule: %d %s", rec.Code, rec.Body)
 	}
-	if rec = corrDo(h, admin, "POST", "/api/queue/schedules/"+jobs.SweepRequests+"/pause", `{"resume_after_hours":3}`); rec.Code != 200 {
+	if rec = corrDo(h, admin, "POST", "/api/queue/schedules/"+jobs.Maintenance+"/pause", `{"resume_after_hours":3}`); rec.Code != 200 {
 		t.Errorf("a repeated pause is a no-op: %d", rec.Code)
 	}
 	offset.Store(int64(23 * time.Hour / time.Second))
