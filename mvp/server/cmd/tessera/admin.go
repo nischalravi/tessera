@@ -55,6 +55,7 @@ const adminUsage = `usage:
                               -operator-phr -co-operator-phr [-db path]
   tessera admin revoke-signing-key -tenant slug -kid kid -reason text [-db path]
   tessera admin gen-rls       [-out path] [-check]   (Postgres row-level security; needs no database)
+  tessera admin wrap-kek      -kms aws:arn:…|azure:https://<vault>/keys/<k>/<v>|gcp:projects/… [-generate]   (KEK on stdin; prints TESSERA_KEK_WRAPPED)
   tessera admin add-client    -tenant slug -name "Display name" -owner user-id-or-email -jwks-file public.jwks
                               -scope "tessera:read ..." -roles viewer,operator,auditor [-dpop=false] [-db path]
   tessera admin list-overprivileged-clients -tenant slug [-db path]
@@ -80,6 +81,9 @@ func adminCmd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	sub, args := args[0], args[1:]
 	if sub == "gen-rls" {
 		return genRLS(args, stdout, stderr)
+	}
+	if sub == "wrap-kek" {
+		return wrapKEKCmd(ctx, args, stdin, stdout, stderr)
 	}
 	fset := flag.NewFlagSet("tessera admin "+sub, flag.ContinueOnError)
 	fset.SetOutput(stderr)
@@ -145,7 +149,7 @@ func adminCmd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
-	sealer, err := cfg.Sealer(config.DevKEKPath(*dbFlag))
+	sealer, err := loadSealer(ctx, cfg, config.DevKEKPath(*dbFlag))
 	if err != nil {
 		return err
 	}

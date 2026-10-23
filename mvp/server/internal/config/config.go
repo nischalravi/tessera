@@ -8,7 +8,7 @@
 // the public URL is not https; COOKIE_SECURE is false; there is no KEK;
 // CORS_ORIGINS is not empty (the UI is same-origin in production, so CORS is
 // off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_SAFEDIAL_ALLOW is set; TESSERA_DEV_IDP_URL is set; the
-// audit anchor is not an s3:// URL (missing or file:// included); TESSERA_NOW freezes the clock; a
+// audit anchor is not an s3://, azure:// or gs:// URL (missing or file:// included); TESSERA_NOW freezes the clock; a
 // trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6); TESSERA_METRICS_ADDR is a wildcard, hostname or public
 // address (/metrics is internal only); TESSERA_AUTH_RATE_BURST or TESSERA_ANON_RATE_BURST
 // exceeds its production cap. The guard rail on dev_mock IdP connections
@@ -16,6 +16,7 @@
 package config
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -32,6 +33,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/kekwrap"
+	"github.com/nischalravi/tessera/mvp/server/internal/objstore"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
@@ -69,6 +72,7 @@ type Config struct {
 	DBApp                 string // TESSERA_DB_APP: the application login's postgres:// DSN for request traffic (carries a password: never log it)
 	DBAllowPrivilegedApp  bool   // TESSERA_DEV_DB_ALLOW_PRIVILEGED_APP: let the request pool be a privileged login (dev only)
 	KEKFile               string // TESSERA_KEK_FILE, when set
+	KEKKMS                string // TESSERA_KEK_KMS, when the KEK is wrapped by a cloud key service
 	CookieSecure          bool
 	CORSOrigins           []string
 	TrustedProxies        []netip.Prefix
@@ -133,7 +137,10 @@ type Config struct {
 	// ArchiveTokenSealed (TESSERA_ARCHIVE_TOKEN_SEALED) is the base64 of the
 	// object store's bearer token sealed under the KEK (`tessera archive
 	// seal-token`). Prod refuses ArchiveURL without it.
-	ArchiveTokenSealed    string
+	ArchiveTokenSealed string
+	// BackupURL (TESSERA_BACKUP_URL) is an s3://, azure:// or gs:// URL each
+	// scheduled backup is also copied to. SQLite only, like the backups.
+	BackupURL             string
 	BackupEveryMinutes    int
 	BackupKeep            int
 	AccessTokenTTLSeconds int
@@ -218,7 +225,9 @@ type Config struct {
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
 
-	kek *secretKey // decoded TESSERA_KEK or TESSERA_KEK_FILE; nil means "dev auto-generated"
+	kekRef     kekwrap.Ref // TESSERA_KEK_KMS, parsed
+	kekWrapped []byte      // TESSERA_KEK_WRAPPED, decoded; cleared once unwrapped
+	kek        *secretKey  // decoded TESSERA_KEK or TESSERA_KEK_FILE; nil means "dev auto-generated"
 	// outbound is the validated environment and loopback exception, set
 	// only by Load. safehttp.ForConfig reads it (Outbound), so neither a
 	// hand-built Config nor one whose exported fields were edited after
@@ -366,8 +375,12 @@ func Load(getenv func(string) string) (*Config, error) {
 	slices.Sort(c.ExternalWorkerKinds)
 	c.ConnectorSyncSchedule = strings.TrimSpace(getenv("TESSERA_CONNECTOR_SYNC_SCHEDULE"))
 	c.AuditAnchor = str("TESSERA_AUDIT_ANCHOR", "", "")
-	if a := c.AuditAnchor; a != "" && !strings.HasPrefix(a, "file://") && !strings.HasPrefix(a, "s3://") {
-		bad("TESSERA_AUDIT_ANCHOR: %q is not a file:// or s3:// URL", a)
+	if a := c.AuditAnchor; a != "" && !strings.HasPrefix(a, "file://") && !strings.HasPrefix(a, "s3://") && !isCloudAnchor(a) {
+		bad("TESSERA_AUDIT_ANCHOR: %q is not a file://, s3://, azure:// or gs:// URL", a)
+	} else if isCloudAnchor(a) {
+		if err := checkObjectURL(a, prod); err != nil {
+			bad("TESSERA_AUDIT_ANCHOR: %v", err)
+		}
 	}
 	c.AuditCheckpointSeconds = integer("TESSERA_AUDIT_CHECKPOINT_SECONDS", 300, 1, 86400)
 	c.AuditCheckpointEvents = integer("TESSERA_AUDIT_CHECKPOINT_EVENTS", 1000, 1, 1_000_000)
@@ -384,7 +397,12 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.BackupDir = str("TESSERA_BACKUP_DIR", "", "")
 	c.ArchiveDir = str("TESSERA_ARCHIVE_DIR", "", "")
 	c.ArchiveURL = str("TESSERA_ARCHIVE_URL", "", "")
-	if u := c.ArchiveURL; u != "" {
+	if u := c.ArchiveURL; objstore.IsObjectURL(u) {
+		// s3://, azure:// or gs://: credentials come from the workload identity
+		if err := checkObjectURL(u, prod); err != nil {
+			bad("TESSERA_ARCHIVE_URL: %v", err)
+		}
+	} else if u != "" {
 		pu, err := url.Parse(u)
 		switch {
 		case err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" || pu.User != nil || pu.RawQuery != "" || pu.Fragment != "":
@@ -402,7 +420,23 @@ func Load(getenv func(string) string) (*Config, error) {
 			bad("TESSERA_ARCHIVE_TOKEN_SEALED needs TESSERA_ARCHIVE_URL")
 		}
 	}
-	if prod && c.ArchiveURL != "" && c.ArchiveTokenSealed == "" {
+	if c.ArchiveTokenSealed != "" && objstore.IsObjectURL(c.ArchiveURL) {
+		bad("TESSERA_ARCHIVE_TOKEN_SEALED applies to http(s) archive stores only; s3://, azure:// and gs:// use the workload identity")
+	}
+	c.BackupURL = str("TESSERA_BACKUP_URL", "", "")
+	if c.BackupURL != "" {
+		switch {
+		case !objstore.IsObjectURL(c.BackupURL):
+			bad("TESSERA_BACKUP_URL must be an s3://, azure:// or gs:// URL")
+		case c.BackupDir == "":
+			bad("TESSERA_BACKUP_URL needs TESSERA_BACKUP_DIR (the backup is written there, then copied)")
+		default:
+			if err := checkObjectURL(c.BackupURL, prod); err != nil {
+				bad("TESSERA_BACKUP_URL: %v", err)
+			}
+		}
+	}
+	if prod && c.ArchiveURL != "" && !objstore.IsObjectURL(c.ArchiveURL) && c.ArchiveTokenSealed == "" {
 		bad("TESSERA_ARCHIVE_URL needs TESSERA_ARCHIVE_TOKEN_SEALED with TESSERA_ENV=prod (an archive store that accepts unauthenticated writes is refused)")
 	}
 	c.BackupEveryMinutes = integer("TESSERA_BACKUP_EVERY_MINUTES", 360, 5, 7*24*60)
@@ -503,9 +537,28 @@ func Load(getenv func(string) string) (*Config, error) {
 	// KEK: TESSERA_KEK (base64 of 32 bytes) or TESSERA_KEK_FILE (a file
 	// holding that base64), never both.
 	inline, file := strings.TrimSpace(getenv("TESSERA_KEK")), strings.TrimSpace(getenv("TESSERA_KEK_FILE"))
+	wrapped, kms := strings.TrimSpace(getenv("TESSERA_KEK_WRAPPED")), strings.TrimSpace(getenv("TESSERA_KEK_KMS"))
 	switch {
 	case inline != "" && file != "":
 		bad("set only one of TESSERA_KEK and TESSERA_KEK_FILE")
+	case (inline != "" || file != "") && (wrapped != "" || kms != ""):
+		bad("set only one of TESSERA_KEK, TESSERA_KEK_FILE and TESSERA_KEK_WRAPPED with TESSERA_KEK_KMS")
+	case wrapped != "" || kms != "":
+		// A KEK wrapped by a cloud key service: validated here, unwrapped once
+		// at start by ResolveKEK (Load itself makes no network call).
+		switch ref, err := kekwrap.ParseRef(kms); {
+		case wrapped == "" || kms == "":
+			bad("TESSERA_KEK_WRAPPED and TESSERA_KEK_KMS must be set together")
+		case err != nil:
+			bad("TESSERA_KEK_KMS: %v", err)
+		default:
+			w, derr := base64.StdEncoding.DecodeString(wrapped)
+			if derr != nil || len(w) == 0 || len(w) > 8192 {
+				bad("TESSERA_KEK_WRAPPED: not base64 of a wrapped key (make it with `tessera admin wrap-kek`)")
+			} else {
+				c.KEKKMS, c.kekRef, c.kekWrapped = kms, ref, w
+			}
+		}
 	case inline != "":
 		k, err := decodeKEK(inline)
 		if err != nil {
@@ -522,7 +575,7 @@ func Load(getenv func(string) string) (*Config, error) {
 			c.kek = &secretKey{k}
 		}
 	case prod:
-		bad("a KEK is required with TESSERA_ENV=prod (set TESSERA_KEK_FILE or TESSERA_KEK)")
+		bad("a KEK is required with TESSERA_ENV=prod (set TESSERA_KEK_FILE, TESSERA_KEK, or TESSERA_KEK_WRAPPED with TESSERA_KEK_KMS)")
 	}
 
 	if prod {
@@ -582,9 +635,11 @@ func Load(getenv func(string) string) (*Config, error) {
 		case c.AuditAnchor == "":
 			bad("TESSERA_AUDIT_ANCHOR is required with TESSERA_ENV=prod (s3://…)")
 		case strings.HasPrefix(strings.ToLower(c.AuditAnchor), "file:"):
-			bad("TESSERA_AUDIT_ANCHOR must not be file:// with TESSERA_ENV=prod (use s3://…)")
+			bad("TESSERA_AUDIT_ANCHOR must not be file:// with TESSERA_ENV=prod (use s3://…, azure://… or gs://…)")
+		case isCloudAnchor(c.AuditAnchor):
+			// azure:// (immutable blob storage) and gs:// (locked bucket retention)
 		case !strings.HasPrefix(c.AuditAnchor, "s3://") || len(c.AuditAnchor) == len("s3://"):
-			bad("TESSERA_AUDIT_ANCHOR must be an s3://bucket/prefix URL with TESSERA_ENV=prod (got %q)", c.AuditAnchor)
+			bad("TESSERA_AUDIT_ANCHOR must be an s3://bucket/prefix URL (Object Lock), or azure://account/container/prefix (immutable storage) or gs://bucket/prefix (locked retention), with TESSERA_ENV=prod (got %q)", c.AuditAnchor)
 		}
 	}
 	if len(errs) > 0 {
@@ -595,6 +650,23 @@ func Load(getenv func(string) string) (*Config, error) {
 	}
 	c.outbound = &outboundSettings{env: c.Env, allowLoopback: c.OutboundAllowLoopback}
 	return c, nil
+}
+
+// isCloudAnchor reports an azure:// or gs:// anchor URL.
+func isCloudAnchor(a string) bool {
+	return strings.HasPrefix(a, "azure://") || strings.HasPrefix(a, "gs://")
+}
+
+// checkObjectURL validates an object-store URL; prod refuses a plain-http endpoint.
+func checkObjectURL(raw string, prod bool) error {
+	t, err := objstore.ParseURL(raw)
+	if err != nil {
+		return err
+	}
+	if prod && strings.HasPrefix(t.Endpoint, "http://") {
+		return errors.New("the endpoint option must be https with TESSERA_ENV=prod")
+	}
+	return nil
 }
 
 // ArchiveDirFor is the directory of the local archive store for a database
@@ -769,6 +841,8 @@ func (c *Config) kekSource() string {
 	switch {
 	case c.KEKFile != "":
 		return "file:" + c.KEKFile + " (REDACTED)"
+	case c.KEKKMS != "":
+		return "kms:" + c.KEKKMS + " (REDACTED)"
 	case c.kek != nil:
 		return "env (REDACTED)"
 	}
@@ -880,12 +954,39 @@ func DevMailPath(dbPath string) string {
 	return filepath.Join(localDir(dbPath), "var", "dev-mail.jsonl")
 }
 
+// KEKWrapped reports whether the KEK is a wrapped one that ResolveKEK must
+// unwrap before Sealer can be used.
+func (c *Config) KEKWrapped() bool { return c.kek == nil && len(c.kekWrapped) > 0 }
+
+// ResolveKEK unwraps TESSERA_KEK_WRAPPED with the cloud key service named by
+// TESSERA_KEK_KMS, through unwrap (cmd/tessera passes kekwrap.Unwrap bound to
+// the safehttp client and the workload identity). It does nothing when the KEK
+// is not wrapped. After it, the configuration behaves exactly as with
+// TESSERA_KEK. The wrapped value is dropped once opened.
+func (c *Config) ResolveKEK(ctx context.Context, unwrap func(ctx context.Context, ref kekwrap.Ref, wrapped []byte) ([]byte, error)) error {
+	if !c.KEKWrapped() {
+		return nil
+	}
+	k, err := unwrap(ctx, c.kekRef, c.kekWrapped)
+	if err != nil {
+		return err
+	}
+	if len(k) != seal.KeySize {
+		return fmt.Errorf("config: the unwrapped KEK is %d bytes, want %d", len(k), seal.KeySize)
+	}
+	c.kek, c.kekWrapped = &secretKey{k}, nil
+	return nil
+}
+
 // Sealer returns the KEK sealer. With no KEK configured (dev only; Load
 // refuses that in prod) it loads the dev KEK at devKEKPath, generating it
 // with mode 0600 on first use.
 func (c *Config) Sealer(devKEKPath string) (*seal.Sealer, error) {
 	if c.kek != nil {
 		return seal.New(c.kek.b)
+	}
+	if c.KEKWrapped() {
+		return nil, errors.New("config: the KEK is wrapped (TESSERA_KEK_WRAPPED): ResolveKEK must run first")
 	}
 	if c.IsProd() {
 		return nil, errors.New("config: no KEK configured")
@@ -966,8 +1067,16 @@ func readKEKFile(path string) ([]byte, error) {
 	if !fi.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("%s is accessible to other users (mode %04o); chmod 600 it", path, fi.Mode().Perm())
+	// A secret volume (Kubernetes, a CSI driver) is mounted 0440 or 0640
+	// with the pod's fsGroup, so the group may read it. What is never
+	// accepted: any access for others, and write access for the group. The
+	// file must also belong to this process or to root (not to another user
+	// who could replace it).
+	if perm := fi.Mode().Perm(); perm&0o007 != 0 || perm&0o020 != 0 {
+		return nil, fmt.Errorf("%s is accessible to other users (mode %04o); chmod 600 it (a mounted secret volume may be 0440 or 0640)", path, perm)
+	}
+	if err := checkKEKOwner(fi, path); err != nil {
+		return nil, err
 	}
 	b, err := os.ReadFile(path) // #nosec G304 -- operator-chosen KEK path
 	if err != nil {

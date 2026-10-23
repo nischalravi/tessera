@@ -7,6 +7,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/archive"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/objstore"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -24,6 +25,16 @@ func newArchive(cfg *config.Config, dbFile string, st *store.DB, sealer *seal.Se
 	}
 	var blobs archive.BlobStore
 	switch {
+	case objstore.IsObjectURL(cfg.ArchiveURL):
+		deps, err := newObjDeps(cfg)
+		if err != nil {
+			return nil, err
+		}
+		o, err := objstore.Open(cfg.ArchiveURL, deps)
+		if err != nil {
+			return nil, err
+		}
+		blobs = &archive.ObjectStore{S: o}
 	case cfg.ArchiveURL != "":
 		client, err := safehttp.ForConfigLimits(cfg, 2*time.Minute, archive.MaxBlobBytes+1<<20)
 		if err != nil {

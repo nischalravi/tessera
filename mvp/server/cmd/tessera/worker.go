@@ -104,7 +104,7 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 		return fmt.Errorf("-metrics-addr: %w", err)
 	}
 	clock := cfg.Clock()
-	sealer, err := cfg.Sealer(config.DevKEKPath(o.db))
+	sealer, err := loadSealer(ctx, cfg, config.DevKEKPath(o.db))
 	if err != nil {
 		return err
 	}
