@@ -62,6 +62,8 @@ const (
 	// introspection endpoint. It is a capability of the client's registration,
 	// not an API scope: it covers no permission (auth.ScopeSetOf drops it).
 	ScopeIntrospect = "tessera:introspect"
+	// ScopeEmailDSN is held by a machine client that posts delivery status reports (POST /api/email/dsn).
+	ScopeEmailDSN = "tessera:email-dsn"
 
 	// CLIClientID is the first-party CLI client every tenant has.
 	CLIClientID = "tessera-cli"

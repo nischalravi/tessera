@@ -15,13 +15,15 @@ import (
 // Connector sync schedule and status (Admin > Connections, issue #498):
 //
 //	GET /api/connectors/sync-status      the schedule, the last sync run, and per connector the record counts and last sync
-//	PUT /api/connectors/sync-schedule    {delta_every_minutes, full_every_hours} (0 turns a schedule off)
+//	PUT /api/connectors/sync-schedule    {delta_every_minutes, full_every_hours} (0 turns a schedule off; step-up; both 0 raises an alert)
 //
 // A delta sync lets each connector resume from its checkpoint; a full sync ignores the checkpoints. Both are schedules of
 // the tenant's job queue, so they run as the connector_sync job (shown under Jobs) wherever a worker runs it.
 func (s *Server) registerConnectorScheduleRoutes() {
 	s.handle(http.MethodGet, "/api/connectors/sync-status", read, need(auth.PermConnectionsRead), s.connectorSyncStatus)
-	s.handle(http.MethodPut, "/api/connectors/sync-schedule", write, need(auth.PermConnectionsManage), s.putConnectorSyncSchedule)
+	// step-up (issue #512): turning both schedules off (0 and 0) stops every scheduled sync, so leavers and new grants in
+	// the source systems go unseen; that raises the schedule_paused alert
+	s.handle(http.MethodPut, "/api/connectors/sync-schedule", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.putConnectorSyncSchedule)
 }
 
 type syncScheduleView struct {
@@ -129,7 +131,7 @@ func (s *Server) putConnectorSyncSchedule(_ http.ResponseWriter, r *http.Request
 		return nil, err
 	}
 	if err := c.Audit(now, actor(r), "connectors.schedule_updated", ojson.Object{{Key: "delta_every_minutes", Value: b.DeltaEveryMinutes},
-		{Key: "full_every_hours", Value: b.FullEveryHours}}); err != nil {
+		{Key: "full_every_hours", Value: b.FullEveryHours}, {Key: "all_syncs_off", Value: b.DeltaEveryMinutes == 0 && b.FullEveryHours == 0}}); err != nil {
 		return nil, err
 	}
 	sc, err := worker.GetSyncSchedule(c)

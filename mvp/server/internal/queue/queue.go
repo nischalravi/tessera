@@ -365,11 +365,30 @@ func (q *Queue) FireSchedules(ctx context.Context, t tenancy.ID) error {
 	if err := q.DB.ReadTenant(ctx, t, func(tx *store.TenantTx) error {
 		ss, err := tx.DueQueueSchedules(now)
 		due = len(ss) > 0
+		if err != nil || due {
+			return err
+		}
+		rs, err := tx.QueueSchedulesToResume(now)
+		due = len(rs) > 0
 		return err
 	}); err != nil || !due {
 		return err
 	}
 	return q.DB.InTenant(ctx, t, func(tx *store.TenantTx) error {
+		// a protected schedule paused with an end resumes by itself (issue #512), audited like a manual resume
+		rs, err := tx.QueueSchedulesToResume(now)
+		if err != nil {
+			return err
+		}
+		for _, r := range rs {
+			if err := tx.SetQueueScheduleEnabled(r.Name, true, now); err != nil {
+				return err
+			}
+			if err := tx.Audit(now, "queue.scheduler", "queue.schedule_resumed", ojson.Object{{Key: "schedule", Value: r.Name},
+				{Key: "kind", Value: r.Kind}, {Key: "automatic", Value: true}}); err != nil {
+				return err
+			}
+		}
 		ss, err := tx.DueQueueSchedules(now)
 		if err != nil {
 			return err

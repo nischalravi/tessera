@@ -49,7 +49,8 @@ func (s *Server) registerNotifyAdminRoutes() {
 	s.handle(http.MethodGet, "/api/email/suppressions", read, read_, s.listSuppressions)
 	s.handle(http.MethodPost, "/api/email/suppressions", write, ops, s.addSuppression)
 	s.handle(http.MethodDelete, "/api/email/suppressions/{address}", write, ops, s.liftSuppression)
-	s.handle(http.MethodPost, "/api/email/dsn", write, ops, s.postDSN)
+	s.handle(http.MethodPost, "/api/email/dsn", write, Route{Perm: auth.PermEmailDSN, BodyType: "multipart/report",
+		BodyTypes: []string{"message/delivery-status", "message/rfc822"}}, s.postDSN)
 }
 
 // adminErr turns the errors of the notification settings into API errors.

@@ -467,7 +467,42 @@ func TestAdminAPIClients_Manage(t *testing.T) {
 		t.Errorf("a private key: %d %s", rec.Code, rec.Body)
 	}
 
-	rec := do(admin, "POST", "/api/admin/api-clients", create(map[string]any{"scopes": []string{"tessera:read", "tessera:audit", "tessera:read"}, "roles": []string{"auditor"}}))
+	// issue #509: a tenant admin has no data-plane permission, so it cannot mint a client that has one
+	for name, body := range map[string]map[string]any{
+		"operator + write": create(map[string]any{"scopes": []string{"tessera:write", "tessera:read"}, "roles": []string{"operator"}}),
+		"operator + read":  create(map[string]any{"scopes": []string{"tessera:read"}, "roles": []string{"operator"}, "name": "r"}),
+		"auditor + audit":  create(map[string]any{"scopes": []string{"tessera:audit"}, "roles": []string{"auditor"}}),
+	} {
+		rec := do(admin, "POST", "/api/admin/api-clients", body)
+		if name == "operator + read" {
+			// graph.read and the read-scope permissions of an operator are all held by a tenant admin
+			if rec.Code != 201 {
+				t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+			}
+			continue
+		}
+		if rec.Code != 403 || !strings.Contains(rec.Body.String(), "exceeds_creator") {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	// a creator that also holds the operator role may grant it
+	both := signIn(t, f.DB, f.B.ID, authtest.User{Email: "both@b.example", Roles: []auth.Role{auth.RoleTenantAdmin, auth.RoleOperator}}, authtest.Phr, now)
+	if rec := do(both, "POST", "/api/admin/api-clients", create(map[string]any{"scopes": []string{"tessera:write", "tessera:read"}, "roles": []string{"operator"}, "name": "ops"})); rec.Code != 201 {
+		t.Errorf("tenant_admin + operator creates an operator client: %d %s", rec.Code, rec.Body)
+	} else {
+		var oc map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &oc)
+		// the plain admin cannot take that client over by rotating its keys
+		if r2 := do(admin, "POST", "/api/admin/api-clients/"+oc["client_id"].(string)+"/keys", map[string]any{"mode": "replace", "jwks": pubJWKS(t, "z")}); r2.Code != 403 {
+			t.Errorf("rotating an operator client's keys as a tenant admin: %d %s", r2.Code, r2.Body)
+		}
+	}
+	// the DSN collector scope needs no role (issue #513), and a tenant admin holds email.dsn
+	if rec := do(admin, "POST", "/api/admin/api-clients", create(map[string]any{"scopes": []string{"tessera:email-dsn"}, "name": "bounces"})); rec.Code != 201 {
+		t.Errorf("an email-dsn client: %d %s", rec.Code, rec.Body)
+	}
+
+	rec := do(admin, "POST", "/api/admin/api-clients", create(map[string]any{"scopes": []string{"tessera:read", "tessera:read"}, "roles": []string{"viewer"}}))
 	if rec.Code != 201 {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body)
 	}
@@ -475,7 +510,7 @@ func TestAdminAPIClients_Manage(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &c)
 	id, _ := c["client_id"].(string)
 	if !strings.HasPrefix(id, "tsc_") || c["kind"] != "machine" || c["status"] != "active" || c["dpop_required"] != true || c["last_used_at"] != nil ||
-		fmt.Sprint(c["allowed_scopes"]) != "[tessera:read tessera:audit]" || fmt.Sprint(c["roles"]) != "[auditor]" || c["owner_user_id"] == nil {
+		fmt.Sprint(c["allowed_scopes"]) != "[tessera:read]" || fmt.Sprint(c["roles"]) != "[viewer]" || c["owner_user_id"] == nil {
 		t.Fatalf("created client = %v", c)
 	}
 	if ks, _ := c["keys"].([]any); len(ks) != 1 || ks[0].(map[string]any)["kid"] != "k1" {
@@ -541,14 +576,14 @@ func TestAdminAPIClients_Manage(t *testing.T) {
 		for _, e := range evs {
 			if strings.HasPrefix(e.Action, "oauth.client.") {
 				got[e.Action]++
-				if d := string(e.Detail); strings.Contains(d, `"x"`) || strings.Contains(d, `"y"`) || strings.Contains(d, "jwks") || !strings.Contains(d, id) {
+				if d := string(e.Detail); strings.Contains(d, `"x"`) || strings.Contains(d, `"y"`) || strings.Contains(d, "jwks") || (e.Action != "oauth.client.created" && !strings.Contains(d, id)) {
 					t.Errorf("%s detail = %s", e.Action, d)
 				}
 			}
 		}
 		return err
 	})
-	if got["oauth.client.created"] != 1 || got["oauth.client.keys_rotated"] != 2 || got["oauth.client.revoked"] != 1 {
+	if got["oauth.client.created"] != 4 || got["oauth.client.keys_rotated"] != 2 || got["oauth.client.revoked"] != 1 {
 		t.Errorf("audit = %v", got)
 	}
 }

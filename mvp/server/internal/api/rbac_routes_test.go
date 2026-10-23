@@ -26,7 +26,7 @@ GET    /api/health                                   public
 GET    /api/connectors                               graph.read      -
 POST   /api/connectors/sync                          connectors.sync -
 GET    /api/connectors/sync-status                   connections.read -  # issue #498
-PUT    /api/connectors/sync-schedule                 connections.manage -  # issue #498
+PUT    /api/connectors/sync-schedule                 connections.manage STEP_UP_POLICY  # issues #498, #512
 GET    /api/summary                                  graph.read      -
 GET    /api/identities                               graph.read      -
 GET    /api/identities/{identity_id}                 graph.read      -
@@ -345,7 +345,7 @@ DELETE /api/admin/notification-templates/{kind}      email.manage    STEP_UP_POL
 GET    /api/email/suppressions                       email.read      -  # Admin > Email delivery
 POST   /api/email/suppressions                       email.manage    -
 DELETE /api/email/suppressions/{address}             email.manage    -
-POST   /api/email/dsn                                email.manage    -  # a delivery status report (RFC 3464)
+POST   /api/email/dsn                                email.dsn       -  # a delivery status report (RFC 3464)
 POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
 POST   /api/identities/{identity_id}/disable         identities.contain STEP_UP_POLICY  # wire-previews: containment, then disabled
@@ -407,7 +407,9 @@ GET    /api/helpdesk/findings                        graph.read      -  # issue 
 POST   /api/helpdesk/signals                         helpdesk.approve -  # issue #108
 GET    /api/helpdesk/settings                        graph.read      -  # issue #477
 PUT    /api/helpdesk/settings                        helpdesk.approve STEP_UP_POLICY  # issue #477
-POST   /api/helpdesk/risk-signals                    helpdesk.approve -  # issue #477
+POST   /api/helpdesk/risk-signals                    helpdesk.risk   STEP_UP_POLICY  # issues #477, #510
+GET    /api/helpdesk/risk-signals                    helpdesk.risk   -  # issue #510
+POST   /api/helpdesk/risk-signals/{risk_id}/dismiss  helpdesk.risk   STEP_UP_POLICY  # issue #510
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
