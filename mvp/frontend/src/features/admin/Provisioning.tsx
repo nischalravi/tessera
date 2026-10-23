@@ -106,7 +106,7 @@ function RunNow() {
 // ---------------------------------------------------------------- targets
 
 function Targets() {
-  const { data } = useApi<ProvTarget[]>("/provisioning/targets");
+  const { data, reload } = useApi<ProvTarget[]>("/provisioning/targets");
   const [edit, setEdit] = useState<ProvTarget | "new" | null>(null);
   const [dry, setDry] = useState<ProvTarget | null>(null);
   return (
@@ -123,7 +123,7 @@ function Targets() {
       {data && data.length > 0 && (
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Connection</th><th>Type</th><th>Address</th><th>Write-back</th><th><span className="sr-only">Actions</span></th></tr></thead>
+            <thead><tr><th>Connection</th><th>Type</th><th>Address</th><th>Write-back</th><th>Agent resource</th><th><span className="sr-only">Actions</span></th></tr></thead>
             <tbody>
               {data.map((t) => (
                 <tr key={t.connection_id}>
@@ -131,6 +131,7 @@ function Targets() {
                   <td className="small">{t.kind === "scim" ? `SCIM 2.0${t.dialect === "entra" ? " (Entra)" : ""}` : t.kind === "okta" ? "Okta API" : VAULT[t.kind] ?? "Dev fake"}{t.fault ? <span className="faint"> · {t.fault.replace("_", " ")}</span> : null}</td>
                   <td className="small"><code className="xs">{t.base_url}</code></td>
                   <td><Badge tone={t.write_back ? "ok" : "neutral"}>{t.write_back ? "On" : "Off"}</Badge></td>
+                  <td className="small">{t.kind === "scim" && !t.agent_id ? <DiscoveryCell target={t} onDone={reload} /> : <span className="faint">n/a</span>}</td>
                   <td>
                     <Button size="sm" onClick={() => setEdit(t)}>Edit</Button>{" "}
                     {["scim", "okta", "fake"].includes(t.kind) && !t.agent_id && <Button size="sm" variant="ghost" icon={<FlaskConical size={13} />} onClick={() => setDry(t)}>Dry run</Button>}
@@ -143,6 +144,35 @@ function Targets() {
       )}
       {edit && <TargetPanel target={edit === "new" ? null : edit} onClose={() => setEdit(null)} />}
       {dry && <DryRunPanel target={dry} onClose={() => setDry(null)} />}
+    </div>
+  );
+}
+
+/** Whether the SCIM service advertises the Agent resource (issue #542). Read-only: Tessera does not provision /Agents yet. */
+function DiscoveryCell({ target, onDone }: { target: ProvTarget; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const d = target.discovery;
+  const check = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await provisioning.discover(target.connection_id);
+      onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="stack-sm">
+      {!d ? <span className="faint">Not checked</span> : d.error && !d.agent_advertised
+        ? <Badge tone="warning">Check failed</Badge>
+        : <Badge tone={d.agent_advertised ? "info" : "neutral"}>{d.agent_advertised ? "Advertised" : "Not advertised"}</Badge>}
+      {d && <div className="xs faint">{relTime(d.checked_at)}{d.error ? ` · ${d.error}` : ""}</div>}
+      {err && <div className="xs" role="alert">{err}</div>}
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => void check()}>{busy ? "Checking…" : d ? "Check again" : "Check"}</Button>
     </div>
   );
 }

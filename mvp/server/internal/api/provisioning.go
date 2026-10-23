@@ -39,6 +39,8 @@ func (s *Server) registerProvisioningRoutes() {
 	s.handle(http.MethodDelete, "/api/provisioning/targets/{id}", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.deleteTarget))
 	// phased: the dry run reads from the target, so it holds no transaction open while it waits.
 	s.handle(P, "/api/provisioning/targets/{id}/dry-run", phased, need(auth.PermProvisioningManage), s.dryRunTarget)
+	// Discovery reads the target's ServiceProviderConfig and ResourceTypes (issue #542); phased for the same reason.
+	s.handle(P, "/api/provisioning/targets/{id}/discover", phased, need(auth.PermProvisioningManage), s.discoverTarget)
 	s.handle(G, "/api/provisioning/ops", read, need(auth.PermProvisioningRead), s.rd(s.listOps))
 	s.handle(G, "/api/provisioning/ops/{op_id}", read, need(auth.PermProvisioningRead), s.rd(s.getOp))
 	s.handle(P, "/api/provisioning/ops/{op_id}/retry", write, need(auth.PermProvisioningManage), s.rd(s.retryOp))
@@ -72,27 +74,29 @@ func notFoundErr(what string) error {
 // ---------------------------------------------------------------- views
 
 type targetView struct {
-	ConnectionID   string  `json:"connection_id"`
-	ConnectionName string  `json:"connection_name"`
-	System         string  `json:"system"`
-	Kind           string  `json:"kind"`
-	BaseURL        string  `json:"base_url"`
-	Dialect        string  `json:"dialect,omitempty"`
-	APIRoot        string  `json:"api_root,omitempty"`
-	Fault          string  `json:"fault,omitempty"`
-	OnDeprovision  string  `json:"on_deprovision,omitempty"` // "delete": accounts are deleted after the grace period (issue #74)
-	AgentID        string  `json:"agent_id,omitempty"`       // the Directory Agent that reaches this target (issue #302)
-	WriteBack      bool    `json:"write_back"`
-	HasCredential  bool    `json:"has_credential"`
-	CredentialVer  *string `json:"credential_version"`
-	UpdatedAt      string  `json:"updated_at"`
+	ConnectionID   string `json:"connection_id"`
+	ConnectionName string `json:"connection_name"`
+	System         string `json:"system"`
+	Kind           string `json:"kind"`
+	BaseURL        string `json:"base_url"`
+	Dialect        string `json:"dialect,omitempty"`
+	APIRoot        string `json:"api_root,omitempty"`
+	Fault          string `json:"fault,omitempty"`
+	OnDeprovision  string `json:"on_deprovision,omitempty"` // "delete": accounts are deleted after the grace period (issue #74)
+	AgentID        string `json:"agent_id,omitempty"`       // the Directory Agent that reaches this target (issue #302)
+	// Discovery is the last read of a SCIM target's ServiceProviderConfig and ResourceTypes (issue #542).
+	Discovery     *provision.DiscoveryRecord `json:"discovery,omitempty"`
+	WriteBack     bool                       `json:"write_back"`
+	HasCredential bool                       `json:"has_credential"`
+	CredentialVer *string                    `json:"credential_version"`
+	UpdatedAt     string                     `json:"updated_at"`
 }
 
 func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -383,6 +387,16 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	// stored token must never follow the target to another origin or kind: an
 	// edit that moves it has to bring a new token (#315).
 	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL))
+	if existing && !moved {
+		// an edit that leaves the destination alone keeps what discovery found there
+		var os provision.Settings
+		if json.Unmarshal([]byte(old.Settings), &os) == nil && os.Discovery != nil {
+			st.Discovery = os.Discovery
+			if b, err := json.Marshal(st); err == nil {
+				t.Settings = string(b)
+			}
+		}
+	}
 	credential := "none"
 	if len(t.CredentialEnc) > 0 {
 		credential = "kept"
@@ -529,6 +543,28 @@ func (s *Server) dryRunTarget(_ http.ResponseWriter, r *http.Request, p *params)
 		return nil, err
 	}
 	return map[string]any{"connection_id": id, "kind": in.Kind, "write_back": writeBack, "steps": res.Steps, "writes": res.Writes(), "error": res.Error}, nil
+}
+
+// discoverTarget reads the ServiceProviderConfig and ResourceTypes of a SCIM target and records whether it
+// advertises the Agent resource (issue #542). Read-only toward the target; a failed read is recorded on the
+// target and returned in the body, never as an error, and never touches Users/Groups provisioning.
+func (s *Server) discoverTarget(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return nil, err
+	}
+	rec, err := s.prov.Discover(r.Context(), p.scope.Tenant, id)
+	if err != nil {
+		return nil, provErr(err)
+	}
+	if err := p.scope.Write(r.Context(), func(tx *store.TenantTx) error {
+		det := ojson.Object{{Key: "connection_id", Value: id}, {Key: "agent_advertised", Value: rec.AgentAdvertised},
+			{Key: "ok", Value: rec.Error == ""}}
+		return tx.Audit(s.clock(), actor(r), "provision.discover", det)
+	}); err != nil {
+		return nil, err
+	}
+	return rec, nil
 }
 
 // ---------------------------------------------------------------- operations

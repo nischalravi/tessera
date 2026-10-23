@@ -4180,9 +4180,12 @@ export interface ProvFinding {
 
 export interface ProvOpDetail extends ProvOp { payload: { account?: Record<string, unknown>; group?: Record<string, unknown> }; findings: ProvFinding[] }
 
+/** Last read of a SCIM target's ServiceProviderConfig and ResourceTypes (issue #542). */
+export interface ProvDiscovery { checked_at: string; agent_advertised: boolean; service_provider_config: boolean; resource_types: string[]; error?: string }
+
 export interface ProvTarget {
   connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle"; base_url: string; api_root?: string;
-  dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; agent_id?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
+  dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; agent_id?: string; discovery?: ProvDiscovery; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
 /** token is write-only: omit it to keep the stored credential. A change of kind or origin (scheme, host, port) needs a new token (422 credential_required). */
@@ -4194,6 +4197,8 @@ export interface ProvDryRun { connection_id: string; kind: ProvKind; write_back:
 
 export const provisioning = {
   targets: () => api<ProvTarget[]>("/provisioning/targets"),
+  /** Reads the target's ServiceProviderConfig and ResourceTypes and records whether it advertises the Agent resource. A failed read is returned in `error`. */
+  discover: (connectionId: string) => api<ProvDiscovery>(`/provisioning/targets/${connectionId}/discover`, {}),
   /** What a change would send to the target: reads happen, writes are listed and held back. */
   dryRun: (connectionId: string, body: ProvDryRunInput) => api<ProvDryRun>(`/provisioning/targets/${connectionId}/dry-run`, body),
   putTarget: (connectionId: string, body: ProvTargetInput) => apiNoResume<ProvTarget>(`/provisioning/targets/${connectionId}`, body, "PUT"),

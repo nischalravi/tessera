@@ -497,6 +497,7 @@ GET    /api/provisioning/targets                     provisioning.read   -  # is
 PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
 DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
 POST   /api/provisioning/targets/{id}/dry-run        provisioning.manage -  # issue #498
+POST   /api/provisioning/targets/{id}/discover       provisioning.manage -  # issue #542
 GET    /api/provisioning/ops                         provisioning.read   -
 GET    /api/provisioning/ops/{op_id}                 provisioning.read   -
 POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -
