@@ -2298,3 +2298,10 @@ DROP POLICY IF EXISTS tenant_isolation ON breach_items;
 CREATE POLICY tenant_isolation ON breach_items
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_pit_assigns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_pit_assigns FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_pit_assigns;
+CREATE POLICY tenant_isolation ON grp_pit_assigns
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

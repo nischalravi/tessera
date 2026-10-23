@@ -22,6 +22,7 @@ const pitDirCols = `p.group_id, p.list_id, p.member_type, p.member_key, p.member
 	p.enabled_from, p.disabled_at, p.start_at, p.end_at, p.start_seq, p.end_seq`
 const pitEffCols = `p.group_id, p.list_id, p.identity_id, p.start_at, p.end_at, p.start_seq, p.end_seq`
 const pitPrivCols = `p.privilege_id, p.snapshot, p.start_at, p.end_at, p.start_seq, p.end_seq`
+const pitAssignCols = `p.assign_id, p.def_id, p.owner_type, p.owner_id, p.snapshot, p.start_at, p.end_at, p.start_seq, p.end_seq`
 const digestCols = `d.day, d.first_seq, d.last_seq, d.event_count, d.merkle_root, d.audit_seq, d.created_at`
 
 var (
@@ -79,6 +80,12 @@ var (
 	pitPrivClose = tq("grp_pit_privileges.close", `UPDATE grp_pit_privileges SET end_at = @end_at, end_seq = @end_seq
 		WHERE tenant_id = @tenant AND privilege_id = @privilege_id AND end_seq IS NULL`)
 
+	pitAssignOpen = tq("grp_pit_assigns.open", `INSERT INTO grp_pit_assigns (tenant_id, assign_id, def_id, owner_type, owner_id,
+			snapshot, start_at, start_seq)
+		VALUES (@tenant, @assign_id, @def_id, @owner_type, @owner_id, @snapshot, @start_at, @start_seq)`)
+	pitAssignClose = tq("grp_pit_assigns.close", `UPDATE grp_pit_assigns SET end_at = @end_at, end_seq = @end_seq
+		WHERE tenant_id = @tenant AND assign_id = @assign_id AND end_seq IS NULL`)
+
 	// ---- point in time: whole-table scopes (rebuild, retention, comparison)
 	pitObjDelete  = tq("grp_pit_objects.delete_of", `DELETE FROM grp_pit_objects WHERE tenant_id = @tenant AND (@object_id = '' OR object_id = @object_id)`)
 	pitDirDelete  = tq("grp_pit_direct.delete_of", `DELETE FROM grp_pit_direct WHERE tenant_id = @tenant AND (@group_id = '' OR group_id = @group_id)`)
@@ -94,6 +101,19 @@ var (
 		ORDER BY p.group_id, p.list_id, p.identity_id, p.start_seq`)
 	pitPrivList = tq("grp_pit_privileges.list", `SELECT `+pitPrivCols+` FROM grp_pit_privileges p
 		WHERE p.tenant_id = @tenant ORDER BY p.privilege_id, p.start_seq`)
+	pitAssignDelete = tq("grp_pit_assigns.delete_all", `DELETE FROM grp_pit_assigns WHERE tenant_id = @tenant`)
+	pitAssignList   = tq("grp_pit_assigns.list", `SELECT `+pitAssignCols+` FROM grp_pit_assigns p
+		WHERE p.tenant_id = @tenant ORDER BY p.assign_id, p.start_seq`)
+	pitAssignCountBefore = tq("grp_pit_assigns.count_before", `SELECT count(*) FROM grp_pit_assigns p
+		WHERE p.tenant_id = @tenant AND p.start_seq <= @seq`)
+	pitAssignPrune = tq("grp_pit_assigns.prune", `DELETE FROM grp_pit_assigns
+		WHERE tenant_id = @tenant AND end_at IS NOT NULL AND end_at < @before AND end_seq <= @max_seq`)
+	// the intervals of the permission and limit assignments that held at an instant (the definition's type is its current one)
+	pitAssignAt = tq("grp_pit_assigns.at", `SELECT `+pitAssignCols+` FROM grp_pit_assigns p
+		JOIN grp_attr_defs d ON d.tenant_id = p.tenant_id AND d.id = p.def_id
+		WHERE p.tenant_id = @tenant AND d.tenant_id = @tenant AND d.attr_type IN ('perm','limit')
+		  AND p.start_at <= @at AND (p.end_at IS NULL OR p.end_at > @at)
+		ORDER BY p.assign_id, p.start_seq`)
 	pitObjCountBefore = tq("grp_pit_objects.count_before", `SELECT count(*) FROM grp_pit_objects p
 		WHERE p.tenant_id = @tenant AND (@object_id = '' OR p.object_id = @object_id) AND p.start_seq <= @seq`)
 	pitDirCountBefore = tq("grp_pit_direct.count_before", `SELECT count(*) FROM grp_pit_direct p
@@ -372,6 +392,20 @@ func (tx *TenantTx) ClosePitEffective(group, list string, identity int64, at tim
 	return err
 }
 
+// OpenPitAssign starts an interval of an attribute assignment.
+func (tx *TenantTx) OpenPitAssign(assignID, defID, ownerType, ownerID string, snapshot json.RawMessage, at time.Time, seq int64) error {
+	_, err := tx.exec(pitAssignOpen, sql.Named("assign_id", assignID), sql.Named("def_id", defID),
+		sql.Named("owner_type", ownerType), sql.Named("owner_id", ownerID), sql.Named("snapshot", string(snapshot)),
+		sql.Named("start_at", RT(at)), sql.Named("start_seq", seq))
+	return err
+}
+
+// ClosePitAssign ends the open interval of an attribute assignment.
+func (tx *TenantTx) ClosePitAssign(assignID string, at time.Time, seq int64) error {
+	_, err := tx.exec(pitAssignClose, append(endArgs(at, seq), sql.Named("assign_id", assignID))...)
+	return err
+}
+
 // OpenPitPrivilege starts an interval of a privilege grant.
 func (tx *TenantTx) OpenPitPrivilege(privilegeID string, snapshot json.RawMessage, at time.Time, seq int64) error {
 	_, err := tx.exec(pitPrivOpen, sql.Named("privilege_id", privilegeID), sql.Named("snapshot", string(snapshot)),
@@ -399,7 +433,10 @@ func (tx *TenantTx) DeleteGrpPit(group string) error {
 		return err
 	}
 	if group == "" {
-		_, err := tx.exec(pitPrivDelete)
+		if _, err := tx.exec(pitPrivDelete); err != nil {
+			return err
+		}
+		_, err := tx.exec(pitAssignDelete)
 		return err
 	}
 	return nil
@@ -412,7 +449,7 @@ func (tx *TenantTx) PruneGrpPit(cutoff time.Time, maxSeq int64) (PitTotals, erro
 	for _, p := range []struct {
 		s tstmt
 		n *int64
-	}{{pitObjPrune, &t.Objects}, {pitDirPrune, &t.Direct}, {pitEffPrune, &t.Effective}, {pitPrivPrune, &t.Privileges}} {
+	}{{pitObjPrune, &t.Objects}, {pitDirPrune, &t.Direct}, {pitEffPrune, &t.Effective}, {pitPrivPrune, &t.Privileges}, {pitAssignPrune, &t.Assigns}} {
 		res, err := tx.exec(p.s, sql.Named("before", RT(cutoff)), sql.Named("max_seq", maxSeq))
 		if err != nil {
 			return t, err
@@ -440,7 +477,10 @@ func (tx *TenantTx) GrpPitStartedBefore(group string, seq int64) (PitTotals, err
 		return t, err
 	}
 	if group == "" {
-		t.Privileges, err = tx.count64(pitPrivCountBefore, sql.Named("seq", seq))
+		if t.Privileges, err = tx.count64(pitPrivCountBefore, sql.Named("seq", seq)); err != nil {
+			return t, err
+		}
+		t.Assigns, err = tx.count64(pitAssignCountBefore, sql.Named("seq", seq))
 	}
 	return t, err
 }
@@ -552,6 +592,34 @@ func (tx *TenantTx) GrpPitEffectives(group string) ([]*PitEffective, error) {
 // GrpPitPrivileges lists every privilege interval of the tenant.
 func (tx *TenantTx) GrpPitPrivileges() ([]*PitPrivilege, error) {
 	return collect(tx, scanPitPrivilege, pitPrivList)
+}
+
+func scanPitAssign(s scanner) (*PitAssign, error) {
+	var p PitAssign
+	var snap, start string
+	var end sql.NullString
+	var endSeq sql.NullInt64
+	if err := s.Scan(&p.AssignID, &p.DefID, &p.OwnerType, &p.OwnerID, &snap, &start, &end, &p.StartSeq, &endSeq); err != nil {
+		return nil, err
+	}
+	p.Snapshot, p.EndSeq = json.RawMessage(snap), intp(endSeq)
+	var err error
+	if p.StartAt, err = ParseRT(start); err != nil {
+		return nil, err
+	}
+	p.EndAt, err = rtp(end)
+	return &p, err
+}
+
+// GrpPitAssigns lists every attribute-assignment interval of the tenant.
+func (tx *TenantTx) GrpPitAssigns() ([]*PitAssign, error) {
+	return collect(tx, scanPitAssign, pitAssignList)
+}
+
+// GrpPitPermAssignsAt lists the permission and limit assignment intervals that
+// held at an instant.
+func (tx *TenantTx) GrpPitPermAssignsAt(at time.Time) ([]*PitAssign, error) {
+	return collect(tx, scanPitAssign, pitAssignAt, sql.Named("at", RT(at)))
 }
 
 // GrpPitEffectiveIn returns the effective-membership intervals of a group's

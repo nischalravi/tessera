@@ -23,12 +23,13 @@ type Snapshot struct {
 	Direct     []*store.PitDirect    `json:"direct"`
 	Effective  []*store.PitEffective `json:"effective"`
 	Privileges []*store.PitPrivilege `json:"privileges,omitempty"`
+	Assigns    []*store.PitAssign    `json:"assigns,omitempty"`
 }
 
 // Totals counts the rows of a snapshot.
 func (s *Snapshot) Totals() store.PitTotals {
 	return store.PitTotals{Objects: int64(len(s.Objects)), Direct: int64(len(s.Direct)), Effective: int64(len(s.Effective)),
-		Privileges: int64(len(s.Privileges))}
+		Privileges: int64(len(s.Privileges)), Assigns: int64(len(s.Assigns))}
 }
 
 // Dump reads the PIT rows of one group (its object intervals, direct and
@@ -47,6 +48,9 @@ func Dump(tx *store.TenantTx, group string) (*Snapshot, error) {
 	}
 	if group == "" {
 		if s.Privileges, err = tx.GrpPitPrivileges(); err != nil {
+			return nil, err
+		}
+		if s.Assigns, err = tx.GrpPitAssigns(); err != nil {
 			return nil, err
 		}
 	}

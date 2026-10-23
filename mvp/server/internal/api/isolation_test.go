@@ -623,6 +623,12 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 			queries = []string{fmt.Sprintf("?identity_id=%d", b["alice"]), fmt.Sprintf("?resource_id=%d", b["resource:aws:prod"]),
 				fmt.Sprintf("?identity_id=%d&perm_key=perm:%d", b["alice"], b["perm:aws:get-pii"])}
 		}
+		if path == "/api/groups/permissions/check" {
+			continue // needs a resource and an action: TestGroupsPermissionsAPI
+		}
+		if path == "/api/groups/permissions/effective" {
+			queries = []string{fmt.Sprintf("?identity=%d", b["alice"])}
+		}
 		if path == "/api/access/as-of" {
 			queries = []string{fmt.Sprintf("?resource=%d&date=2026-10-08", b["resource:aws:prod"]),
 				fmt.Sprintf("?resource=%d&date=2026-10-08T09:00:00", b["resource:aws:customer-pii"])}
