@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Pause, Play, RotateCcw } from "lucide-react";
 import { JobRun, QueueJob, QueueSchedule, QueueWorker, api, fmtDate, jobs, queue, relTime, useApi } from "../../api";
+import { PauseScheduleDialog } from "./PauseScheduleDialog";
 import { Badge, Button, Callout, DataTable, SidePanel, useToast } from "../../components";
 
 const KIND: Record<string, string> = {
@@ -127,17 +128,13 @@ function ScheduleToggle({ schedule: r, onDone }: { schedule: QueueSchedule; onDo
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const label = KIND[r.kind] ?? r.kind;
-  const toggle = async () => {
+  const [asking, setAsking] = useState(false);
+  const run = async (reason?: string, hours?: number) => {
     setBusy(true);
     try {
-      if (r.enabled) {
-        // a security schedule needs a reason and resumes by itself within 24 hours (issue #512)
-        const reason = r.protected ? window.prompt(`Why pause ${label}? It is a security schedule and resumes by itself within 24 hours.`) : undefined;
-        if (r.protected && !reason?.trim()) { setBusy(false); return; }
-        await queue.pauseSchedule(r.name, reason?.trim() || undefined);
-      }
+      if (r.enabled) await queue.pauseSchedule(r.name, reason, hours);
       else await queue.resumeSchedule(r.name);
-      toast(r.enabled ? `${label} paused${r.protected ? " until it resumes by itself (24 hours at most)" : ""}. Work already queued will still run.` : `${label} resumed.`);
+      toast(r.enabled ? `${label} paused${r.protected ? ` for ${hours} ${hours === 1 ? "hour" : "hours"}, then it resumes by itself` : ""}. Work already queued will still run.` : `${label} resumed.`);
       onDone();
     } catch (e) {
       toast((e as Error).message, { kind: "error" });
@@ -145,10 +142,15 @@ function ScheduleToggle({ schedule: r, onDone }: { schedule: QueueSchedule; onDo
       setBusy(false);
     }
   };
+  // a security schedule needs a reason and resumes by itself within 24 hours (issue #512)
+  const toggle = () => (r.enabled && r.protected ? setAsking(true) : run());
   return (
+    <>
     <Button size="sm" icon={r.enabled ? <Pause size={13} /> : <Play size={13} />} disabled={busy} onClick={toggle} aria-label={`${r.enabled ? "Pause" : "Resume"} ${label}`}>
       {r.enabled ? "Pause" : "Resume"}
     </Button>
+    {asking && <PauseScheduleDialog label={label} onClose={() => setAsking(false)} onConfirm={(reason, hours) => { setAsking(false); void run(reason, hours); }} />}
+    </>
   );
 }
 

@@ -1,5 +1,7 @@
 import { FormEvent, useState } from "react";
 import { History, Plus, Radio, Send } from "lucide-react";
+import { TwoAdminDialog } from "./TwoAdminDialog";
+import { TwoAdminType, siemFilterPayload, siemTargetPayload, twoAdminType } from "./twoAdmin";
 import { SIEM_HEALTH, SiemDeadLetter, SiemFlavor, SiemFormat, SiemKind, SiemSink, SiemSinkInput, relTime, siemApi, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { Badge, Button, Callout, Drawer, EmptyState, Loading, useConfirm, useToast } from "../../components";
@@ -120,6 +122,7 @@ function SinkForm({ sink, onClose, onSaved }: { sink: SiemSink | null; onClose: 
   });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [ask, setAsk] = useState<{ type: TwoAdminType; payload: Record<string, unknown>; what: string } | null>(null);
   const kind: SiemKind = f.preset === "syslog" ? "syslog" : f.preset === "s3" ? "s3" : "webhook";
   const flavor: SiemFlavor = f.preset === "hec" || f.preset === "json" ? f.preset : "";
   const submit = async (e: FormEvent) => {
@@ -144,6 +147,15 @@ function SinkForm({ sink, onClose, onSaved }: { sink: SiemSink | null; onClose: 
       toast(`${saved.name} saved`);
       onSaved();
     } catch (err: any) {
+      const type = k ? twoAdminType(err) : null;
+      if (k && type === "siem.sink.filter") {
+        const p = siemFilterPayload(k, { event_filter: body.event_filter ?? [], include_http: f.includeHttp });
+        if (p) { setAsk({ type, payload: p, what: "The new event filter or include_http setting would stop events reaching the SOC, so a second admin must approve it." }); return; }
+      }
+      if (k && type === "siem.sink.target") {
+        setAsk({ type, payload: siemTargetPayload(k.id, f.target), what: `Moving this sink to ${f.target.trim()} sends the audit feed to a different origin. A second admin must approve it. Once applied, the sink is disabled until you give it the new destination's token.` });
+        return;
+      }
       setError(String(err.message ?? err));
     } finally {
       setBusy(false);
@@ -152,6 +164,7 @@ function SinkForm({ sink, onClose, onSaved }: { sink: SiemSink | null; onClose: 
   const placeholder = f.preset === "s3" ? "https://s3.eu-west-1.amazonaws.com/my-audit-bucket/tessera" : f.preset === "hec" ? "https://splunk.example.com:8088/services/collector/event" : f.preset === "json" ? "https://….ingest.monitor.azure.com/dataCollectionRules/…/streams/…" : "logs.example.com:6514";
   return (
     <Drawer title={k ? `Edit ${k.name}` : "New SIEM sink"} onClose={onClose}>
+      {ask && <TwoAdminDialog type={ask.type} payload={ask.payload} what={ask.what} onClose={() => setAsk(null)} />}
       <form className="stack" onSubmit={submit}>
         <label className="field">Name<input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={100} placeholder="e.g. Splunk Cloud" /></label>
         {!k && (
