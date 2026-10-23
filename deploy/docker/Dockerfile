@@ -118,7 +118,7 @@ COPY --from=uibuild /ui/dist /usr/share/nginx/html
 # Only /tmp needs to be writable (rendered config, pid, temp files): run with a read-only root filesystem
 # and a tmpfs or emptyDir on /tmp.
 ENV API_UPSTREAM=api:8000 \
-    NGINX_ENVSUBST_OUTPUT_DIR=/tmp/nginx-conf
+    NGINX_ENVSUBST_OUTPUT_DIR=/tmp
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
   CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
