@@ -385,7 +385,21 @@ type queueScheduleView struct {
 	MaxAttempts    int     `json:"max_attempts"`
 	NextRunAt      string  `json:"next_run_at"`
 	LastEnqueuedAt *string `json:"last_enqueued_at"`
+	// Protected marks a security schedule: pausing it needs a reason and ends by itself (at most MaxProtectedPause).
+	Protected   bool    `json:"protected"`
+	PausedUntil *string `json:"paused_until"`
 }
+
+// MaxProtectedPause is the longest a protected schedule stays paused: it resumes by itself after that (issue #512).
+const MaxProtectedPause = 24 * time.Hour
+
+// protectedSchedules are the schedules that do security work in the background: containment retries for leavers,
+// the lifecycle, SoD mitigation and admin change sweeps, drift, certificate expiry, and the connector syncs that feed
+// everything else. One admin pausing one of them for good would blind the platform without a trace beyond the audit
+// log, so a pause needs a reason, is capped at MaxProtectedPause and raises the schedule_paused alert.
+var protectedSchedules = map[string]bool{jobs.ContainmentRetry: true, jobs.SweepLifecycle: true, jobs.SweepSoDMitigations: true,
+	jobs.SweepAdminChanges: true, jobs.CertificateExpiry: true, jobs.SweepDrift: true,
+	worker.DeltaScheduleName: true, worker.FullScheduleName: true}
 
 var (
 	queueStatuses = []string{store.QueueQueued, store.QueueRunning, store.QueueSucceeded, store.QueueFailed, store.QueueDead}
@@ -436,14 +450,18 @@ func (s *Server) listQueueSchedules(_ http.ResponseWriter, r *http.Request, _ *p
 
 func viewQueueSchedule(v *store.QueueSchedule) queueScheduleView {
 	return queueScheduleView{Name: v.Name, Kind: v.Kind, Spec: v.Spec, Enabled: v.Enabled, MaxAttempts: v.MaxAttempts,
-		NextRunAt: v.NextRunAt.UTC().Format(time.RFC3339), LastEnqueuedAt: isoPtr(v.LastEnqueuedAt)}
+		NextRunAt: v.NextRunAt.UTC().Format(time.RFC3339), LastEnqueuedAt: isoPtr(v.LastEnqueuedAt),
+		Protected: protectedSchedules[v.Name], PausedUntil: isoPtr(v.PausedUntil)}
 }
 
 var queueScheduleNameRE = regexp.MustCompile(`^[a-z][a-z0-9_.:-]{0,127}$`)
 
 type queueScheduleInput struct {
-	// Reason is optional free text kept in the audit event.
+	// Reason is free text kept in the audit event; pausing a protected schedule requires it.
 	Reason string `json:"reason"`
+	// ResumeAfterHours is how long a protected schedule stays paused (1 to 24, default 24); it then resumes by itself.
+	// Other schedules stay paused until resumed, and take no value here.
+	ResumeAfterHours int `json:"resume_after_hours"`
 }
 
 const maxScheduleReason = 500
@@ -484,15 +502,42 @@ func (s *Server) setQueueSchedule(r *http.Request, p *params, enable bool) (any,
 		return viewQueueSchedule(cur), nil
 	}
 	now := s.clock()
-	if err := c.SetQueueScheduleEnabled(name, enable, now); err != nil {
+	detail := ojson.Object{{Key: "schedule", Value: name}, {Key: "kind", Value: cur.Kind}, {Key: "reason", Value: in.Reason}}
+	protected := protectedSchedules[name]
+	switch {
+	case enable:
+		if in.ResumeAfterHours != 0 {
+			return nil, badRequest("invalid_resume_after_hours", "resume_after_hours applies to a pause")
+		}
+		err = c.SetQueueScheduleEnabled(name, true, now)
+	case protected:
+		hours := in.ResumeAfterHours
+		if hours == 0 {
+			hours = int(MaxProtectedPause / time.Hour)
+		}
+		if strings.TrimSpace(in.Reason) == "" {
+			return nil, badRequest("reason_required", "pausing "+name+" needs a reason: it is a security schedule")
+		}
+		if hours < 1 || hours > int(MaxProtectedPause/time.Hour) {
+			return nil, badRequest("invalid_resume_after_hours", "a security schedule can be paused for 1 to 24 hours; it then resumes by itself")
+		}
+		until := now.Add(time.Duration(hours) * time.Hour)
+		detail = append(detail, ojson.KV{Key: "protected", Value: true}, ojson.KV{Key: "paused_until", Value: until.UTC().Format(time.RFC3339)})
+		err = c.PauseQueueScheduleUntil(name, until, now)
+	default:
+		if in.ResumeAfterHours != 0 {
+			return nil, badRequest("invalid_resume_after_hours", name+" has no automatic resume: resume it yourself")
+		}
+		err = c.SetQueueScheduleEnabled(name, false, now)
+	}
+	if err != nil {
 		return nil, err
 	}
 	action := "queue.schedule_paused"
 	if enable {
 		action = "queue.schedule_resumed"
 	}
-	if err := c.Audit(now, actor(r), action, ojson.Object{{Key: "schedule", Value: name}, {Key: "kind", Value: cur.Kind},
-		{Key: "reason", Value: in.Reason}}); err != nil {
+	if err := c.Audit(now, actor(r), action, detail); err != nil {
 		return nil, err
 	}
 	cur, err = c.QueueSchedule(name)

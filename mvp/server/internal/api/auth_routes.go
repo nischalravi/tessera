@@ -4,6 +4,8 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -77,10 +79,10 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 	ctx = audit.SetPrincipal(ctx, ap)
 	r = r.WithContext(ctx)
 	if !auth.SafeMethod(r.Method) {
-		if hasBody(r) && !jsonContentType(r) && !bodyTypeIs(r, rt.spec.BodyType) {
+		if hasBody(r) && !jsonContentType(r) && !bodyTypeIs(r, rt.spec.BodyType, rt.spec.BodyTypes) {
 			detail := "request bodies must be application/json"
 			if rt.spec.BodyType != "" {
-				detail += " or " + rt.spec.BodyType
+				detail += " or " + strings.Join(append([]string{rt.spec.BodyType}, rt.spec.BodyTypes...), ", ")
 			}
 			writeJSON(w, http.StatusUnsupportedMediaType, ojson.Object{{Key: "error", Value: "unsupported_media_type"},
 				{Key: "detail", Value: detail}})
@@ -153,12 +155,12 @@ func jsonContentType(r *http.Request) bool {
 
 // bodyTypeIs reports whether the body is declared as the route's own media
 // type (never true for a route with none).
-func bodyTypeIs(r *http.Request, want string) bool {
+func bodyTypeIs(r *http.Request, want string, more []string) bool {
 	if want == "" {
 		return false
 	}
 	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	return err == nil && mt == want
+	return err == nil && (mt == want || slices.Contains(more, mt))
 }
 
 // principal returns the request's authenticated principal. Every non-public

@@ -665,12 +665,88 @@ func NormalizeFilter(in []string) ([]string, error) {
 	return out, nil
 }
 
+// alwaysDelivered are the audit actions a sink receives whatever its filter says (issue #511): a change to log
+// streaming itself, to the audit ledger, to an admin change request, or to how someone signs in with a privileged
+// credential. A filter that hid them would let one admin blind the SIEM and the change that did it.
+var alwaysDelivered = []string{"siem.", "audit.", "admin.change.", "auth.break_glass", "breakglass.", "auth.step_up.", "auth.role.",
+	"stepup.", "deletion_guard."}
+
+// AlwaysDelivered reports whether a sink receives this action regardless of its event filter.
+func AlwaysDelivered(action string) bool {
+	for _, p := range alwaysDelivered {
+		if strings.HasPrefix(action, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// Narrows reports whether next lets through fewer events than cur: an empty filter (every event) or "*" narrowed to
+// a list, or an entry of cur that no entry of next covers. Widening, clearing and reordering are not narrowing.
+func Narrows(cur, next []string) bool {
+	all := func(f []string) bool { return len(f) == 0 || slices.Contains(f, "*") }
+	if all(next) {
+		return false
+	}
+	if all(cur) {
+		return true
+	}
+	covers := func(g, f string) bool { // does next entry g match every action entry f matches?
+		switch {
+		case g == f:
+			return true
+		case strings.HasSuffix(g, ".*"):
+			return strings.HasPrefix(strings.TrimSuffix(f, "*"), strings.TrimSuffix(g, "*"))
+		}
+		return false
+	}
+	for _, f := range cur {
+		if !slices.ContainsFunc(next, func(g string) bool { return covers(g, f) }) {
+			return true
+		}
+	}
+	return false
+}
+
+// SameFilter reports whether two normalized filters hold the same entries.
+func SameFilter(a, b []string) bool {
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(x, y)
+}
+
+// SetEventFilter replaces a sink's event filter and audits it (siem.sink.filter_changed, which every sink
+// receives). The two-admin change type siem.sink.filter applies a narrowing through it.
+func SetEventFilter(tx *store.TenantTx, id string, filter []string, changeID string, now time.Time) (*store.SiemSink, error) {
+	k, err := tx.SiemSink(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, refuse(404, "sink_not_found", "sink not found")
+	} else if err != nil {
+		return nil, err
+	}
+	next, err := NormalizeFilter(filter)
+	if err != nil {
+		return nil, err
+	}
+	was := k.EventFilter
+	k.EventFilter, k.UpdatedAt = next, now
+	if err := tx.UpdateSiemSink(k); err != nil {
+		return nil, err
+	}
+	// in the transaction that applies the change, next to admin.change.applied
+	_, err = audit.Record(tx.Context(), tx, "siem.sink.filter_changed", ojson.Object{{Key: "sink_id", Value: k.ID},
+		{Key: "name", Value: k.Name}, {Key: "from", Value: stringsAny(was)}, {Key: "to", Value: stringsAny(next)},
+		{Key: "narrowed", Value: Narrows(was, next)}, {Key: "change_id", Value: changeID}}, audit.At(now), audit.Target("admin_change", changeID))
+	return k, err
+}
+
 // EventMatches reports whether a sink with this filter receives an event with
 // this audit action. An empty filter receives everything. "*" matches every
 // action, "auth.*" every action that starts with "auth.", anything else only
 // that action. (A sink still needs include_http to receive http.request.)
 func EventMatches(filter []string, action string) bool {
-	if len(filter) == 0 {
+	if len(filter) == 0 || AlwaysDelivered(action) {
 		return true
 	}
 	for _, f := range filter {

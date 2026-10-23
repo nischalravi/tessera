@@ -56,7 +56,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     -- deleting a folder with everything in it needs a second admin when it is large or populated (internal/admin/change_folder.go)
     'groups.folder.delete_recursive',
     -- deletion threshold guard settings: loosening takes two admins (internal/admin/change_deleteguard.go)
-    'deletion_guard.update')),
+    'deletion_guard.update',
+    -- a SIEM sink's event filter: narrowing it takes two admins (internal/admin/change_siem.go)
+    'siem.sink.filter')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

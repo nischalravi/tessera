@@ -138,6 +138,9 @@ const (
 	// email delivery log (issue #189)
 	PermEmailRead   Permission = "email.read"
 	PermEmailManage Permission = "email.manage"
+	// PermEmailDSN lets a caller post delivery status reports (POST /api/email/dsn). A mailbox collector holds it
+	// through the tessera:email-dsn scope alone, with no role (issue #513).
+	PermEmailDSN Permission = "email.dsn"
 
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
@@ -156,6 +159,9 @@ const (
 	// second approval and feeds the simulated signal feed.
 	PermHelpdeskReset   Permission = "helpdesk.reset"
 	PermHelpdeskApprove Permission = "helpdesk.approve"
+	// PermHelpdeskRisk reports and dismisses IdP risk signals that harden help-desk resets (issue #510). Admins only:
+	// a forged signal can block account recovery, so operators do not hold it.
+	PermHelpdeskRisk Permission = "helpdesk.risk"
 	// native groups (issue #44, GR-1; #47, GR-4). groups.read and groups.write
 	// let a principal reach the group routes; what it may do to each folder and
 	// group is then decided by the object's privileges (internal/groups/privs),
@@ -216,12 +222,12 @@ var rolePermissions = map[Role][]Permission{
 		PermGuestsSponsor, PermGuestsRead, PermGuestsRecover, PermSponsorshipsApprove, PermTermsManage, PermIdentitiesContain,
 		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermWorkflowsManage,
 		PermFlatfileUpload, PermFlatfileCloseTasks,
-		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove, PermSSFConfigure, PermAgentsManage, PermGroupsLoaderAdmin, PermOAuthAppsManage, PermOAuthAppsRevoke},
+		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove, PermHelpdeskRisk, PermSSFConfigure, PermAgentsManage, PermGroupsLoaderAdmin, PermOAuthAppsManage, PermOAuthAppsRevoke},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin,
+		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermEmailDSN, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin,
 		PermJobsRead, PermJobsManage, PermProvisioningRead, PermProvisioningManage, PermConfigTransport,
-		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermFlatfileManage, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermConditionalAccessRead, PermConditionalAccessManage, PermGroupsLoaderAdmin, PermOAuthAppsManage},
+		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermFlatfileManage, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermConditionalAccessRead, PermConditionalAccessManage, PermGroupsLoaderAdmin, PermOAuthAppsManage, PermHelpdeskRisk},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -299,7 +305,12 @@ const (
 	ScopeWrite Scope = "tessera:write"
 	ScopeAudit Scope = "tessera:audit"
 	ScopeAdmin Scope = "tessera:admin"
+	// ScopeEmailDSN is a narrow machine scope: it grants PermEmailDSN and nothing else, and needs no role.
+	ScopeEmailDSN Scope = "tessera:email-dsn"
 )
+
+// scopeOnlyPermissions are granted by a token's scope alone, without a role: effective = (roles ∩ scopes) ∪ these.
+var scopeOnlyPermissions = map[Scope][]Permission{ScopeEmailDSN: {PermEmailDSN}}
 
 var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead},
@@ -346,6 +357,13 @@ func EffectivePermissions(p *Principal) PermissionSet {
 		for perm := range out {
 			if !allowed[perm] {
 				delete(out, perm)
+			}
+		}
+		for sc, ok := range p.Scopes {
+			if ok {
+				for _, perm := range scopeOnlyPermissions[sc] {
+					out[perm] = true
+				}
 			}
 		}
 	}

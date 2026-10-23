@@ -50,6 +50,8 @@ type QueueSchedule struct {
 	LastEnqueuedAt *time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	// PausedUntil is when a paused schedule resumes by itself (issue #512); nil: it stays paused until resumed.
+	PausedUntil *time.Time
 }
 
 // QueueJobFilter narrows QueueJobs. Empty fields match everything.
@@ -62,7 +64,7 @@ const queueJobCols = `q.id, q.kind, q.payload, q.idempotency_key, q.schedule_id,
 	q.max_attempts, q.last_error, q.lease_owner, q.lease_expires_at, q.created_at, q.updated_at, q.finished_at`
 
 const queueScheduleCols = `s.id, s.name, s.kind, s.payload, s.spec, s.enabled, s.max_attempts, s.next_run_at,
-	s.last_enqueued_at, s.created_at, s.updated_at`
+	s.last_enqueued_at, s.created_at, s.updated_at, s.paused_until`
 
 // queueDue is the WHERE clause of work a worker may claim: waiting work whose
 // time has come, or running work whose lease expired (its worker is gone).
@@ -140,7 +142,13 @@ var (
 			spec = excluded.spec, enabled = excluded.enabled, max_attempts = excluded.max_attempts,
 			next_run_at = excluded.next_run_at, updated_at = @now`)
 	queueScheduleSetEnabled = tq("queue_schedules.set_enabled", `
-		UPDATE queue_schedules SET enabled = @enabled, updated_at = @now WHERE tenant_id = @tenant AND name = @name`)
+		UPDATE queue_schedules SET enabled = @enabled, paused_until = '', updated_at = @now WHERE tenant_id = @tenant AND name = @name`)
+	// a pause with an end: the schedule resumes by itself when paused_until passes (QueueSchedulesToResume)
+	queueSchedulePause = tq("queue_schedules.pause", `
+		UPDATE queue_schedules SET enabled = 0, paused_until = @until, updated_at = @now WHERE tenant_id = @tenant AND name = @name`)
+	queueScheduleToResume = tq("queue_schedules.to_resume", `
+		SELECT `+queueScheduleCols+` FROM queue_schedules s
+		WHERE s.tenant_id = @tenant AND s.enabled = 0 AND s.paused_until <> '' AND s.paused_until <= @now ORDER BY s.name`)
 	queueScheduleGet = tq("queue_schedules.get", `
 		SELECT `+queueScheduleCols+` FROM queue_schedules s WHERE s.tenant_id = @tenant AND s.name = @name`)
 	queueScheduleList = tq("queue_schedules.list", `
@@ -186,11 +194,19 @@ func scanQueueSchedule(s scanner) (*QueueSchedule, error) {
 	var enabled int
 	var next, created, updated string
 	var last sql.NullString
+	var until string
 	if err := s.Scan(&q.ID, &q.Name, &q.Kind, &q.Payload, &q.Spec, &enabled, &q.MaxAttempts, &next, &last, &created,
-		&updated); err != nil {
+		&updated, &until); err != nil {
 		return nil, err
 	}
 	q.Enabled = enabled == 1
+	if until != "" {
+		t, err := ParseRT(until)
+		if err != nil {
+			return nil, err
+		}
+		q.PausedUntil = &t
+	}
 	var err error
 	if q.NextRunAt, err = ParseRT(next); err != nil {
 		return nil, err
@@ -395,6 +411,17 @@ func (tx *TenantTx) SetQueueScheduleEnabled(name string, enabled bool, now time.
 		e = 1
 	}
 	return tx.execOne(queueScheduleSetEnabled, sql.Named("name", name), sql.Named("enabled", e), sql.Named("now", RT(now)))
+}
+
+// PauseQueueScheduleUntil pauses the named schedule until the given time, when it resumes by itself; ErrNotFound
+// when the tenant has none of that name.
+func (tx *TenantTx) PauseQueueScheduleUntil(name string, until, now time.Time) error {
+	return tx.execOne(queueSchedulePause, sql.Named("name", name), sql.Named("until", RT(until)), sql.Named("now", RT(now)))
+}
+
+// QueueSchedulesToResume lists paused schedules whose pause has ended.
+func (tx *TenantTx) QueueSchedulesToResume(now time.Time) ([]*QueueSchedule, error) {
+	return collect(tx, scanQueueSchedule, queueScheduleToResume, sql.Named("now", RT(now)))
 }
 
 // DueQueueSchedules lists enabled schedules whose next_run_at has passed.

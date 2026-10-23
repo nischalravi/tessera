@@ -130,9 +130,14 @@ function ScheduleToggle({ schedule: r, onDone }: { schedule: QueueSchedule; onDo
   const toggle = async () => {
     setBusy(true);
     try {
-      if (r.enabled) await queue.pauseSchedule(r.name);
+      if (r.enabled) {
+        // a security schedule needs a reason and resumes by itself within 24 hours (issue #512)
+        const reason = r.protected ? window.prompt(`Why pause ${label}? It is a security schedule and resumes by itself within 24 hours.`) : undefined;
+        if (r.protected && !reason?.trim()) { setBusy(false); return; }
+        await queue.pauseSchedule(r.name, reason?.trim() || undefined);
+      }
       else await queue.resumeSchedule(r.name);
-      toast(r.enabled ? `${label} paused. Work already queued will still run.` : `${label} resumed.`);
+      toast(r.enabled ? `${label} paused${r.protected ? " until it resumes by itself (24 hours at most)" : ""}. Work already queued will still run.` : `${label} resumed.`);
       onDone();
     } catch (e) {
       toast((e as Error).message, { kind: "error" });

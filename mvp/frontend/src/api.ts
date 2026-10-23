@@ -4236,6 +4236,8 @@ export interface QueueJob {
 }
 export interface QueueSchedule {
   name: string; kind: string; spec: string; enabled: boolean; max_attempts: number; next_run_at: string; last_enqueued_at: string | null;
+  /** A security schedule: pausing it needs a reason and ends by itself within 24 hours (issue #512). */
+  protected?: boolean; paused_until?: string | null;
 }
 
 /** A queue worker as one tenant sees it (issue #302): a `tessera worker` or an API process running queue kinds.
@@ -4300,7 +4302,7 @@ export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rej
 export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
   | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
-  | "groups.loader.save" | "retention.update" | "deletion_guard.update";
+  | "groups.loader.save" | "retention.update" | "deletion_guard.update" | "siem.sink.filter";
 
 export interface AdminPersonRef { id: string; display_name: string }
 

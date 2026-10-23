@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS queue_schedules (
   last_enqueued_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  -- when a paused protected schedule resumes by itself ('' = no automatic resume), issue #512 (see 0770)
+  paused_until TEXT NOT NULL DEFAULT '',
   UNIQUE (tenant_id, name)
 );
 CREATE INDEX IF NOT EXISTS ix_queue_schedules_due ON queue_schedules (tenant_id, enabled, next_run_at);

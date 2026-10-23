@@ -33,7 +33,15 @@ CREATE TABLE IF NOT EXISTS helpdesk_idp_risks (
   source TEXT NOT NULL DEFAULT '',
   detail TEXT NOT NULL DEFAULT '',
   occurred_at TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  -- who posted it (the signed-in admin; the source label above is an unverified claim) and, once dismissed,
+  -- who dismissed it and why ('' = not dismissed). Added by issue #510, see 0770 and DB.upgradeSecurityControls.
+  submitted_by TEXT NOT NULL DEFAULT '',
+  submitted_by_user TEXT NOT NULL DEFAULT '',
+  dismissed_at TEXT NOT NULL DEFAULT '',
+  dismissed_by TEXT NOT NULL DEFAULT '',
+  dismissed_by_user TEXT NOT NULL DEFAULT '',
+  dismiss_reason TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS ix_helpdesk_idp_risks_identity ON helpdesk_idp_risks (tenant_id, identity_id, occurred_at);
 

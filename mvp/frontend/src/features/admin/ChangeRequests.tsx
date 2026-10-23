@@ -15,6 +15,7 @@ const FORM_TYPES: { id: ChangeType; label: string; example?: string }[] = [
   { id: "tenant.settings.update", label: "Change tenant settings", example: '{\n  "require_phr_for_all": true\n}' },
   { id: "tenant.security_contacts.update", label: "Replace security contacts", example: '{\n  "contacts": [\n    { "name": "Jane Doe", "email": "jane@example.com" },\n    { "name": "Raj Patel", "email": "raj@example.com" }\n  ]\n}' },
   { id: "retention.update", label: "Change log retention", example: '{\n  "audit_days": 730,\n  "job_runs_days": 90\n}' },
+  { id: "siem.sink.filter", label: "Change a SIEM sink's event filter (narrowing needs a second admin)", example: '{\n  "sink_id": "",\n  "event_filter": ["auth.*", "grant.revoke"]\n}' },
   { id: "idp_connection.update_trust", label: "Change an IdP connection's trust settings", example: '{\n  "connection_id": "",\n  "group_role_mapping": { "Tessera Viewers": "viewer" }\n}' },
   { id: "idp_connection.update_cosmetic", label: "Rename an IdP connection or edit its domains", example: '{\n  "connection_id": "",\n  "name": ""\n}' },
   { id: "idp_connection.disable", label: "Disable an IdP connection", example: '{\n  "connection_id": ""\n}' },

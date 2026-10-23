@@ -3,6 +3,7 @@ package helpdesk
 import (
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"sort"
 	"strings"
 	"time"
@@ -93,12 +94,8 @@ func RecentAuthFor(c *store.TenantTx, identityID int64, now time.Time) (*RecentA
 		return nil, err
 	}
 	for _, r := range risks {
-		if recent(r.OccurredAt) {
-			who := clip(r.Source, 60)
-			if who == "" {
-				who = "an IdP"
-			}
-			hits = append(hits, hit{r.OccurredAt, fmt.Sprintf("%s reported a suspicious authentication method %s", who, ago(now, r.OccurredAt))})
+		if r.DismissedAt == nil && recent(r.OccurredAt) {
+			hits = append(hits, hit{r.OccurredAt, fmt.Sprintf("%s reported a suspicious authentication method %s", riskReporter(r), ago(now, r.OccurredAt))})
 		}
 	}
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].at.After(hits[j].at) })
@@ -110,6 +107,22 @@ func RecentAuthFor(c *store.TenantTx, identityID int64, now time.Time) (*RecentA
 		out.Reasons = append(out.Reasons, h.reason)
 	}
 	return out, nil
+}
+
+// riskReporter says who a risk signal came from. Source is a label the poster typed, so it is shown as the
+// poster's own claim: the person who posted it is the real attribution (issue #510).
+func riskReporter(r *store.HelpdeskIdPRisk) string {
+	label := clip(r.Source, 60)
+	if r.SubmittedBy == "" {
+		if label == "" {
+			return "a risk signal (poster not recorded)"
+		}
+		return fmt.Sprintf("a risk signal (poster not recorded; source label %q is unverified)", label)
+	}
+	if label == "" {
+		return "reported by " + clip(r.SubmittedBy, 60) + " (manual)"
+	}
+	return fmt.Sprintf("reported by %s (manual; source label %q is unverified)", clip(r.SubmittedBy, 60), label)
 }
 
 // SettingsInput is the recent authentication method rule's settings.
@@ -155,7 +168,12 @@ type RiskInput struct {
 // method for the identity (Entra's real-time detection). It can only make a
 // reset stricter: while it is inside the tenant's window, the identity's cases
 // need the extra approval, or are blocked. In production the IdP log connectors
-// feed this; until they do, POST /api/helpdesk/risk-signals does.
+// feed this; until they do, POST /api/helpdesk/risk-signals does, for an admin
+// holding helpdesk.risk with step-up. The signal records who posted it: the
+// source stays a free label and is shown as unverified. occurred_at must lie
+// inside the window the rule looks at (never in the future, never older), so a
+// signal cannot be backdated to block resets for longer, and a wrong one can
+// be dismissed by a different admin (DismissRisk).
 func (s *Service) IngestRisk(c *store.TenantTx, in RiskInput, by store.UserRef, now time.Time) (*store.HelpdeskIdPRisk, error) {
 	src := strings.TrimSpace(in.Source)
 	if src == "" || len(src) > 60 {
@@ -167,16 +185,62 @@ func (s *Service) IngestRisk(c *store.TenantTx, in RiskInput, by store.UserRef, 
 	if in.OccurredAt.IsZero() || in.OccurredAt.After(now.Add(5*time.Minute)) {
 		return nil, fail(CodeInvalid, "occurred_at is required and cannot be in the future")
 	}
+	st, err := c.HelpdeskSettings()
+	if err != nil {
+		return nil, err
+	}
+	if in.OccurredAt.Before(now.Add(-time.Duration(st.RecentMethodDays) * 24 * time.Hour)) {
+		return nil, fail(CodeInvalid, "occurred_at is older than the rule's window (%d days)", st.RecentMethodDays)
+	}
 	if _, err := c.Identity(in.IdentityID); errors.Is(err, store.ErrNotFound) {
 		return nil, fail(CodeNotFound, "identity not found")
 	} else if err != nil {
 		return nil, err
 	}
 	r := &store.HelpdeskIdPRisk{IdentityID: in.IdentityID, Kind: "auth_method_added", Source: src,
-		Detail: strings.TrimSpace(in.Detail), OccurredAt: in.OccurredAt.UTC()}
+		Detail: strings.TrimSpace(in.Detail), OccurredAt: in.OccurredAt.UTC(), SubmittedBy: actorName(by), SubmittedByUser: userString(by)}
 	if err := c.InsertHelpdeskIdPRisk(r, now); err != nil {
 		return nil, err
 	}
 	return r, c.Audit(now, actorName(by), "helpdesk.risk_signal.ingested", ojson.Object{{Key: "identity_id", Value: in.IdentityID},
-		{Key: "source", Value: src}, {Key: "occurred_at", Value: r.OccurredAt}})
+		{Key: "source_label_unverified", Value: src}, {Key: "risk_id", Value: r.ID}, {Key: "occurred_at", Value: r.OccurredAt}})
+}
+
+func userString(by store.UserRef) string {
+	if by.ID == uuid.Nil {
+		return ""
+	}
+	return by.ID.String()
+}
+
+// DismissRisk removes a risk signal's effect (a wrong or stale one). A different admin than the one who posted it
+// must do it, with a reason; both are audited. The row stays, marked dismissed, so the record is kept.
+func (s *Service) DismissRisk(c *store.TenantTx, id, reason string, by store.UserRef, now time.Time) (*store.HelpdeskIdPRisk, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" || len([]rune(reason)) > 300 {
+		return nil, fail(CodeInvalid, "reason is required: at most 300 characters")
+	}
+	if by.ID == uuid.Nil {
+		return nil, forbid(ReasonOperatorRequired, "only a signed-in admin can dismiss a risk signal")
+	}
+	r, err := c.HelpdeskIdPRisk(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, fail(CodeNotFound, "risk signal not found")
+	} else if err != nil {
+		return nil, err
+	}
+	if r.DismissedAt != nil {
+		return nil, fail(CodeConflict, "the risk signal is already dismissed")
+	}
+	if r.SubmittedByUser != "" && r.SubmittedByUser == by.ID.String() {
+		return nil, forbid("different_admin_required", "a risk signal is dismissed by a different admin than the one who posted it")
+	}
+	if err := c.DismissHelpdeskIdPRisk(id, by.ID.String(), actorName(by), reason, now); err != nil {
+		return nil, err
+	}
+	if err := c.Audit(now, actorName(by), "helpdesk.risk_signal.dismissed", ojson.Object{{Key: "risk_id", Value: id},
+		{Key: "identity_id", Value: r.IdentityID}, {Key: "submitted_by", Value: r.SubmittedBy}, {Key: "reason", Value: reason}}); err != nil {
+		return nil, err
+	}
+	return c.HelpdeskIdPRisk(id)
 }
