@@ -231,20 +231,35 @@ func (s *Server) bindResource(tx *store.TenantTx, slug string, x *store.MCPResou
 	if err := mcpauth.ValidateBinding(issuer, audience); err != nil {
 		return mcpauth.Binding{}, badRequest("invalid_binding", err.Error())
 	}
+	if err := audienceFree(tx, x.ID, audience); err != nil {
+		return mcpauth.Binding{}, err
+	}
+	if err := tx.PutMCPResourceBinding(&store.MCPResourceBinding{ResourceID: x.ID, Issuer: issuer, Audience: audience, UpdatedBy: by, UpdatedAt: now}); err != nil {
+		return mcpauth.Binding{}, err
+	}
+	return mcpauth.Binding{Issuer: issuer, Audience: audience, Explicit: true}, nil
+}
+
+// audienceFree refuses (409 audience_in_use) an audience that another resource
+// (not selfID; "" for one not yet inserted) already has: its bound audience, or
+// its URI when it has no binding. Create and rebind both call it in the
+// request's transaction, so the effective audience stays unique per tenant
+// whichever of two resources is registered or bound first.
+func audienceFree(tx *store.TenantTx, selfID, audience string) error {
 	all, err := tx.MCPResources()
 	if err != nil {
-		return mcpauth.Binding{}, err
+		return err
 	}
 	bs, err := tx.MCPResourceBindings()
 	if err != nil {
-		return mcpauth.Binding{}, err
+		return err
 	}
 	explicit := map[string]string{}
 	for _, b := range bs {
 		explicit[b.ResourceID] = b.Audience
 	}
 	for _, o := range all {
-		if o.ID == x.ID {
+		if o.ID == selfID {
 			continue
 		}
 		aud := o.Resource
@@ -252,13 +267,10 @@ func (s *Server) bindResource(tx *store.TenantTx, slug string, x *store.MCPResou
 			aud = a
 		}
 		if aud == audience {
-			return mcpauth.Binding{}, &readiness.Error{Status: http.StatusConflict, Code: "audience_in_use", Msg: "another MCP resource already uses that audience"}
+			return &readiness.Error{Status: http.StatusConflict, Code: "audience_in_use", Msg: "another MCP resource already uses that audience"}
 		}
 	}
-	if err := tx.PutMCPResourceBinding(&store.MCPResourceBinding{ResourceID: x.ID, Issuer: issuer, Audience: audience, UpdatedBy: by, UpdatedAt: now}); err != nil {
-		return mcpauth.Binding{}, err
-	}
-	return mcpauth.Binding{Issuer: issuer, Audience: audience, Explicit: true}, nil
+	return nil
 }
 
 // mcpSlug is the principal's tenant slug (a read-only lookup, safe to call
@@ -315,6 +327,11 @@ func (s *Server) mcpCreateResource(r *http.Request, _ *params) (int, any, error)
 	if _, err := tx.MCPResourceByURI(b.Resource); err == nil {
 		return 0, nil, &readiness.Error{Status: http.StatusConflict, Code: "resource_exists", Msg: "that resource is already registered"}
 	} else if !errors.Is(err, store.ErrNotFound) {
+		return 0, nil, err
+	}
+	// The new resource's effective audience (its URI unless it asks for another)
+	// must not be another resource's, bound or default.
+	if err := audienceFree(tx, "", orDefault(b.Audience, b.Resource)); err != nil {
 		return 0, nil, err
 	}
 	slug, err := s.mcpSlug(r)

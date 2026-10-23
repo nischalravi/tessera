@@ -544,6 +544,21 @@ func (s *Server) retryQueueJob(_ http.ResponseWriter, r *http.Request, p *params
 	if j.Status != store.QueueDead {
 		return nil, &readiness.Error{Status: http.StatusConflict, Code: "not_dead", Msg: "only a dead job can be retried"}
 	}
+	// The retrier causes the run: a sync's holds name them as a contributor, so they cannot release
+	// them (#495).
+	if pr := principal(r); j.Kind == jobs.ConnectorSync && pr.UserID != nil {
+		var sp worker.SyncPayload
+		if j.Payload != "" && json.Unmarshal([]byte(j.Payload), &sp) != nil {
+			return nil, &readiness.Error{Status: http.StatusConflict, Code: "bad_payload", Msg: "the job's payload cannot be read"}
+		}
+		raw, err := json.Marshal(sp.WithRetrier(pr.UserID.String()))
+		if err != nil {
+			return nil, err
+		}
+		if err := c.SetDeadQueueJobPayload(id, string(raw), s.clock()); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.queue.Retry(c, id, actor(r)); err != nil {
 		return nil, err
 	}
