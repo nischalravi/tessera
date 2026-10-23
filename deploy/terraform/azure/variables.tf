@@ -114,6 +114,18 @@ variable "db_admin_password" {
   ephemeral   = true
 }
 
+variable "key_vault_public_network_access" {
+  description = "Allow the Key Vault public endpoint (still default-deny: only key_vault_allowed_ips and trusted Azure services get in). Default false: set secret values from a network that reaches a private endpoint, or turn this on temporarily."
+  type        = bool
+  default     = false
+}
+
+variable "key_vault_allowed_ips" {
+  description = "Public IPs or CIDRs (for example your workstation as a.b.c.d/32) allowed through the Key Vault firewall. Only effective when key_vault_public_network_access is true."
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   type    = map(string)
   default = {}
