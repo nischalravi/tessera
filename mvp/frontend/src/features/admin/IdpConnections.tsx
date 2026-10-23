@@ -4,6 +4,7 @@ import { AdminIdpConnection, adminChanges, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { Badge, Button, Callout, DataTable, Page, SidePanel, useConfirm, useSelected, useToast } from "../../components";
 import { Fact, errText, outcome, when } from "./common";
+import { FieldErrors, checkSAMLFields, serverFieldError } from "./idpFormChecks";
 
 const TONE = { active: "ok", pending: "warning", disabled: "neutral" } as const;
 
@@ -109,9 +110,13 @@ function NewConnection({ onDone, onCancel }: { onDone: () => void; onCancel: () 
   const [protocol, setProtocol] = useState<"oidc" | "saml">("oidc");
   const [f, setF] = useState({ name: "", profile: "okta", issuer: "", client_id: "", secret: "", entra: "", domains: "", entity: "", sso: "", cert: "" });
   const [busy, setBusy] = useState(false);
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const [errs, setErrs] = useState<FieldErrors>({});
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => { setF({ ...f, [k]: e.target.value }); if (k in errs) setErrs({ ...errs, [k as keyof FieldErrors]: undefined }); };
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    const local = protocol === "saml" ? checkSAMLFields(f.sso, f.cert) : {};
+    setErrs(local);
+    if (Object.keys(local).length) return;
     const domains = f.domains.split(/[\s,]+/).filter(Boolean);
     const common = { name: f.name.trim(), protocol, ...(domains.length ? { verified_domains: domains } : {}) };
     const payload = protocol === "oidc"
@@ -122,11 +127,16 @@ function NewConnection({ onDone, onCancel }: { onDone: () => void; onCancel: () 
       toast(outcome(await adminChanges.submit("idp_connection.create", payload, protocol === "oidc" ? f.secret : undefined)));
       onDone();
     } catch (err) {
-      toast(errText(err), { kind: "error" });
+      const msg = errText(err);
+      const field = serverFieldError(msg);
+      if (field) setErrs({ [field.key]: field.text });
+      else toast(msg, { kind: "error" });
     } finally {
       setBusy(false);
     }
   };
+  const inv = (k: keyof FieldErrors) => ({ "aria-invalid": !!errs[k], "aria-describedby": errs[k] ? `idp-new-${k}-err` : undefined });
+  const errLine = (k: keyof FieldErrors) => errs[k] && <span id={`idp-new-${k}-err`} className="err" role="alert">{errs[k]}</span>;
   return (
     <form className="card stack-sm" onSubmit={submit} aria-label="New connection request" autoComplete="off">
       <h2>New connection request</h2>
@@ -158,10 +168,13 @@ function NewConnection({ onDone, onCancel }: { onDone: () => void; onCancel: () 
       ) : (
         <>
           <div className="row">
-            <label className="field grow">IdP entity ID<input className="input sys" required value={f.entity} onChange={set("entity")} /></label>
-            <label className="field grow">IdP sign-in URL<input className="input sys" required placeholder="https://idp.example.com/sso" value={f.sso} onChange={set("sso")} /></label>
+            <label className="field grow">IdP entity ID<input className="input sys" required value={f.entity} onChange={set("entity")} {...inv("entity")} />{errLine("entity")}</label>
+            <label className="field grow">IdP sign-in URL<input className="input sys" required placeholder="https://idp.example.com/sso" value={f.sso} onChange={set("sso")} {...inv("sso")} />{errLine("sso")}</label>
           </div>
-          <label className="field">IdP signing certificate (PEM)<textarea className="input sys" rows={5} required value={f.cert} onChange={set("cert")} spellCheck={false} /></label>
+          <label className="field">IdP signing certificate (PEM)
+            <textarea className="input sys" rows={5} required value={f.cert} onChange={set("cert")} spellCheck={false} placeholder={"-----BEGIN CERTIFICATE-----\nMIIC…\n-----END CERTIFICATE-----"} {...inv("cert")} />
+            {errLine("cert") || <span className="xs faint">The token-signing certificate from your IdP's SAML metadata or admin console, including the BEGIN and END lines.</span>}
+          </label>
         </>
       )}
       <label className="field">Verified domains (optional, comma separated)<input className="input" placeholder="acme.example" value={f.domains} onChange={set("domains")} /></label>

@@ -115,6 +115,9 @@ var (
 		UPDATE queue_jobs SET status = 'queued', run_at = @now, attempts = 0, lease_owner = NULL, lease_expires_at = NULL,
 			finished_at = NULL, updated_at = @now
 		WHERE tenant_id = @tenant AND id = @id AND status = 'dead'`)
+	queueJobSetPayloadDead = tq("queue_jobs.set_payload_dead", `
+		UPDATE queue_jobs SET payload = @payload, updated_at = @now
+		WHERE tenant_id = @tenant AND id = @id AND status = 'dead'`)
 	queueJobHasDue = tq("queue_jobs.has_due", `
 		SELECT count(*) FROM queue_jobs q
 		WHERE q.tenant_id = @tenant AND instr(@kinds, ',' || q.kind || ',') > 0 AND `+queueDue)
@@ -316,6 +319,12 @@ func (tx *TenantTx) ReleaseQueueJob(id, owner string, now time.Time) error {
 // budget (the operator retry). ErrNotFound: no such dead job.
 func (tx *TenantTx) RetryDeadQueueJob(id string, now time.Time) error {
 	return tx.execOne(queueJobRetryDead, sql.Named("id", id), sql.Named("now", RT(now)))
+}
+
+// SetDeadQueueJobPayload replaces the payload of a dead job (before it is retried); any other
+// status is ErrNotFound.
+func (tx *TenantTx) SetDeadQueueJobPayload(id, payload string, now time.Time) error {
+	return tx.execOne(queueJobSetPayloadDead, sql.Named("id", id), sql.Named("payload", payload), sql.Named("now", RT(now)))
 }
 
 // PruneQueueJobs deletes succeeded jobs that finished before before.

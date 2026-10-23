@@ -25,6 +25,16 @@ import (
 //	POST /api/helpdesk/cases/{case_id}/cancel                 close the case
 //	GET  /api/helpdesk/findings                               post-reset takeover findings
 //	POST /api/helpdesk/signals                                {identity_id, kind, location, device, occurred_at}
+//	GET  /api/helpdesk/settings                               the recent authentication method rule (#477)
+//	PUT  /api/helpdesk/settings                               {recent_method_days, recent_method_action} (step-up)
+//	POST /api/helpdesk/risk-signals                           {identity_id, source, detail, occurred_at}: an IdP risk signal
+//
+// Recent authentication method rule (#477): when the identity gained an
+// authentication method in the last recent_method_days (1-90, default 7), or a
+// connected IdP reported a suspiciously added method, the case's policy decision
+// carries recent_auth_method and, per recent_method_action, needs the second
+// approver (require_approval, the default) or cannot execute (block); off
+// disables the rule. A case shows the reasons; settings changes are audited.
 //
 // Execute is a phased route like containment: it claims the case (policy
 // checked inside that transaction), then calls the IdP with no transaction
@@ -48,6 +58,9 @@ func (s *Server) registerHelpdeskRoutes() {
 	s.handle(http.MethodPost, "/api/helpdesk/cases/{case_id}/cancel", write, need(auth.PermHelpdeskReset), s.cancelHelpdeskCase)
 	s.handle(http.MethodGet, "/api/helpdesk/findings", read, need(auth.PermGraphRead), s.listHelpdeskFindings)
 	s.handle(http.MethodPost, "/api/helpdesk/signals", write, need(auth.PermHelpdeskApprove), s.ingestHelpdeskSignal)
+	s.handle(http.MethodGet, "/api/helpdesk/settings", read, need(auth.PermGraphRead), s.getHelpdeskSettings)
+	s.handle(http.MethodPut, "/api/helpdesk/settings", write, needStepUp(auth.PermHelpdeskApprove, auth.StepUpPolicy), s.putHelpdeskSettings)
+	s.handle(http.MethodPost, "/api/helpdesk/risk-signals", write, need(auth.PermHelpdeskApprove), s.ingestHelpdeskRisk)
 }
 
 // helpdeskErr renders a workflow refusal.
@@ -325,4 +338,60 @@ func (s *Server) ingestHelpdeskSignal(_ http.ResponseWriter, r *http.Request, _ 
 		out[i] = helpdesk.ViewFinding(f)
 	}
 	return statusBody{http.StatusCreated, ojson.Object{{Key: "recorded", Value: true}, {Key: "findings", Value: out}}}, nil
+}
+
+type helpdeskSettingsView struct {
+	RecentMethodDays   int     `json:"recent_method_days"`
+	RecentMethodAction string  `json:"recent_method_action"`
+	UpdatedBy          string  `json:"updated_by"`
+	UpdatedAt          *string `json:"updated_at"`
+}
+
+func viewHelpdeskSettings(h *store.HelpdeskSettings) helpdeskSettingsView {
+	return helpdeskSettingsView{h.RecentMethodDays, h.RecentMethodAction, h.UpdatedBy, isoPtr(h.UpdatedAt)}
+}
+
+func (s *Server) getHelpdeskSettings(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	h, err := store.TxFrom(r.Context()).HelpdeskSettings()
+	if err != nil {
+		return nil, err
+	}
+	return viewHelpdeskSettings(h), nil
+}
+
+func (s *Server) putHelpdeskSettings(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	var b struct {
+		Days   int    `json:"recent_method_days"`
+		Action string `json:"recent_method_action"`
+	}
+	if err := decodeBody(r, &b, false); err != nil {
+		return nil, err
+	}
+	h, err := s.helpdesk.UpdateSettings(store.TxFrom(r.Context()), helpdesk.SettingsInput{Days: b.Days, Action: b.Action},
+		principal(r).User(), s.clock())
+	if err != nil {
+		return nil, helpdeskErr(err)
+	}
+	return viewHelpdeskSettings(h), nil
+}
+
+func (s *Server) ingestHelpdeskRisk(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	var b struct {
+		IdentityID int64     `json:"identity_id"`
+		Source     string    `json:"source"`
+		Detail     string    `json:"detail"`
+		OccurredAt time.Time `json:"occurred_at"`
+	}
+	if err := decodeBody(r, &b, false); err != nil {
+		return nil, err
+	}
+	rk, err := s.helpdesk.IngestRisk(store.TxFrom(r.Context()), helpdesk.RiskInput{IdentityID: b.IdentityID, Source: b.Source,
+		Detail: b.Detail, OccurredAt: b.OccurredAt}, principal(r).User(), s.clock())
+	if err != nil {
+		return nil, helpdeskErr(err)
+	}
+	return statusBody{http.StatusCreated, ojson.Object{{Key: "recorded", Value: true}, {Key: "id", Value: rk.ID}}}, nil
 }

@@ -131,3 +131,42 @@ func TestMCP_ResourceBinding(t *testing.T) {
 		t.Errorf("policy denials audited = %d, %v", n, err)
 	}
 }
+
+// The effective audience (bound audience, or the URI) is unique at
+// registration too, whichever resource is registered first (#493).
+func TestMCP_AudienceUniqueAtRegistration(t *testing.T) {
+	x := newMCPFx(t, noRateLimits)
+	post := func(body string) *httptest.ResponseRecorder {
+		return corrDo(x.h, x.admin, "POST", "/api/mcp/resources", body)
+	}
+	// bound first, then a resource whose URI is that audience
+	if rec := post(`{"resource":"https://d.example/mcp","name":"d","issuer":"https://as.example/mcp","audience":"https://e.example/mcp"}`); rec.Code != 201 {
+		t.Fatalf("register D: %d %s", rec.Code, rec.Body)
+	}
+	if rec := post(`{"resource":"https://e.example/mcp","name":"e"}`); rec.Code != 409 || !strings.Contains(rec.Body.String(), "audience_in_use") {
+		t.Errorf("register E at D's audience: %d %s", rec.Code, rec.Body)
+	}
+	// default first, then a resource bound to that URI
+	if rec := post(`{"resource":"https://f.example/mcp","name":"f"}`); rec.Code != 201 {
+		t.Fatalf("register F: %d %s", rec.Code, rec.Body)
+	}
+	if rec := post(`{"resource":"https://g.example/mcp","name":"g","issuer":"https://as.example/mcp","audience":"https://f.example/mcp"}`); rec.Code != 409 || !strings.Contains(rec.Body.String(), "audience_in_use") {
+		t.Errorf("register G bound to F's URI: %d %s", rec.Code, rec.Body)
+	}
+	// the refused registrations left nothing behind
+	var list []resourceView
+	rec := corrDo(x.h, x.admin, "GET", "/api/mcp/resources", "")
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, v := range list {
+		if other, dup := seen[v.Audience]; dup {
+			t.Errorf("resources %s and %s share audience %s", other, v.Resource, v.Audience)
+		}
+		seen[v.Audience] = v.Resource
+		if v.Resource == "https://e.example/mcp" || v.Resource == "https://g.example/mcp" {
+			t.Errorf("refused resource %s was registered", v.Resource)
+		}
+	}
+}

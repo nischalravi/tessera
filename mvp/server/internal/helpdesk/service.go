@@ -244,6 +244,15 @@ func (s *Service) Start(c *store.TenantTx, in StartInput, by store.UserRef, now 
 		{Key: "system", Value: hc.System}, {Key: "privileged", Value: priv}}); err != nil {
 		return nil, err
 	}
+	if ra, err := RecentAuthFor(c, ident.ID, now); err != nil {
+		return nil, err
+	} else if ra.triggered() {
+		if err := c.Audit(now, actorName(by), "helpdesk.case.recent_auth_method", ojson.Object{{Key: "case_id", Value: hc.ID},
+			{Key: "identity_id", Value: ident.ID}, {Key: "action", Value: ra.Action}, {Key: "days", Value: ra.Days},
+			{Key: "reasons", Value: strings.Join(ra.Reasons, "; ")}}); err != nil {
+			return nil, err
+		}
+	}
 	return c.HelpdeskCase(hc.ID)
 }
 
@@ -315,7 +324,11 @@ func policyInput(k *Checker, hc *store.HelpdeskCase) (Input, []*store.HelpdeskVe
 	if err != nil {
 		return Input{}, nil, err
 	}
-	in := Input{Privileged: priv || hc.Privileged, RequestedBy: hc.RequestedByUserID, SecondApprover: hc.SecondApproverUserID,
+	recent, err := RecentAuthFor(c, hc.IdentityID, k.now)
+	if err != nil {
+		return Input{}, nil, err
+	}
+	in := Input{Privileged: priv || hc.Privileged, RecentAuth: recent, RequestedBy: hc.RequestedByUserID, SecondApprover: hc.SecondApproverUserID,
 		SubjectUsers: subj, RequesterUsers: reqUsers}
 	for _, v := range vs {
 		in.Verifications = append(in.Verifications, Verification{Method: v.Method, Outcome: v.Outcome,
@@ -570,8 +583,8 @@ func (s *Service) SecondApprove(c *store.TenantTx, caseID string, by store.UserR
 		return err
 	}
 	switch {
-	case !in.Privileged:
-		return fail(CodeConflict, "the identity is not privileged; no second approver is needed")
+	case !in.needsSecond():
+		return fail(CodeConflict, "the identity is not privileged and gained no authentication method recently; no second approver is needed")
 	case by.ID == uuid.Nil:
 		return fail(CodeForbidden, "a second approval needs a signed-in platform user")
 	case isRequester:
