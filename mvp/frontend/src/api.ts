@@ -2552,9 +2552,18 @@ export interface HelpdeskPolicy {
   counted_methods: HelpdeskMethod[];
   needs_second_approver: boolean;
   second_approved: boolean;
+  /** Set when an authentication method was added recently or an IdP reported a risk signal (issue #477). */
+  recent_auth_method?: { action: "require_approval" | "block"; days: number; reasons: string[] };
+  /** True when the tenant's action is block: the case cannot run until the window has passed. */
+  blocked: boolean;
   allowed_methods: HelpdeskMethod[];
   missing: string[];
 }
+/** The recent authentication method rule (issue #477). */
+export type HelpdeskRecentAction = "off" | "require_approval" | "block";
+export interface HelpdeskSettings { recent_method_days: number; recent_method_action: HelpdeskRecentAction; updated_by: string; updated_at: string | null }
+export const saveHelpdeskSettings = (b: { recent_method_days: number; recent_method_action: HelpdeskRecentAction }) =>
+  api<HelpdeskSettings>("/helpdesk/settings", b, "PUT");
 export interface HelpdeskVerification {
   id: string;
   method: HelpdeskMethod;
@@ -4841,6 +4850,30 @@ export const oauthApps = {
   /** Acknowledges a detected change (an owner change stays open until a person does). */
   resolveChange: (id: string, changeId: string, note: string) =>
     api(`/oauth-apps/${encodeURIComponent(id)}/changes/${encodeURIComponent(changeId)}/resolve`, { note }),
+};
+
+// ---- GitHub and CI tokens (issue #476): metadata only, GitHub never returns a token or secret value
+
+export type GitHubTokenKind = "classic_pat" | "fine_grained_pat" | "oauth_app_token" | "actions_secret";
+
+export interface GitHubToken {
+  id: string; kind: GitHubTokenKind; name: string; owner_login: string;
+  owner: { id: number; name: string; status: string } | null;
+  scopes: string[]; visibility?: string;
+  created_at: string | null; last_rotated_at: string | null; expires_at: string | null; last_used_at: string | null;
+  /** Days since the last rotation, else since creation or authorization. */
+  age_days: number; flags: string[]; risk: number; status: string; last_seen: string;
+}
+
+export interface GitHubTokenList {
+  tokens: GitHubToken[];
+  summary: { total: number; by_kind: Record<string, number> | null; stale: number; risky: number; no_owner: number };
+  stale_days: number; unused_days: number;
+}
+
+export const githubTokens = {
+  listPath: "/github-tokens",
+  sync: () => api<{ status: "ok" | "failed" | "skipped"; tokens: number; error?: string; notes?: string[] }>("/github-tokens/sync", {}),
 };
 
 // ------------------------------------------------------------ deletion threshold guard (internal/deleteguard)

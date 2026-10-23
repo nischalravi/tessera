@@ -520,6 +520,20 @@ type GitHubCredential struct {
 	Login, Type          string
 	Authorized, Accessed string
 	Scopes               []string
+	Title, Expires       string // the credential's title (the GitHub CLI's is "GitHub CLI") and expiry
+}
+
+// GitHubPAT is a fine-grained personal access token the organization approved.
+type GitHubPAT struct {
+	ID                         int64
+	Owner, Name                string
+	Permissions                map[string]string // name -> level, served under "repository"
+	Granted, Expires, LastUsed string
+}
+
+// GitHubSecret is an organization Actions secret (metadata only: GitHub never returns a value).
+type GitHubSecret struct {
+	Name, Created, Updated, Visibility string
 }
 
 // GitHub fakes the organization installation and credential authorization calls.
@@ -529,6 +543,8 @@ type GitHub struct {
 	Installs    []*GitHubInstall
 	Credentials []*GitHubCredential
 	NoSAML      bool // credential-authorizations answers 404, as an org without SAML SSO does
+	FineGrained []*GitHubPAT
+	Secrets     []*GitHubSecret
 }
 
 func (g *GitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -571,9 +587,28 @@ func (g *GitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		items := []map[string]any{}
 		for _, c := range g.Credentials[from:to] {
 			items = append(items, map[string]any{"login": c.Login, "credential_id": c.ID, "credential_type": c.Type,
-				"credential_authorized_at": c.Authorized, "credential_accessed_at": c.Accessed, "scopes": c.Scopes})
+				"credential_authorized_at": c.Authorized, "credential_accessed_at": c.Accessed, "scopes": c.Scopes,
+				"authorized_credential_title": c.Title, "authorized_credential_expires_at": nilIfEmpty(c.Expires),
+				// what GitHub also sends, so a test can prove the reader never keeps it
+				"token_last_eight": "SECRET00", "fingerprint": "SHA256:secret"})
 		}
 		writeJSON(w, items)
+	case r.URL.Path == base+"/personal-access-tokens" && r.Method == http.MethodGet:
+		from, to := bounds(page, per, len(g.FineGrained))
+		items := []map[string]any{}
+		for _, p := range g.FineGrained[from:to] {
+			items = append(items, map[string]any{"id": p.ID, "owner": map[string]any{"login": p.Owner}, "token_name": p.Name,
+				"permissions": map[string]any{"repository": p.Permissions}, "access_granted_at": p.Granted,
+				"token_expires_at": nilIfEmpty(p.Expires), "token_last_used_at": nilIfEmpty(p.LastUsed)})
+		}
+		writeJSON(w, items)
+	case r.URL.Path == base+"/actions/secrets" && r.Method == http.MethodGet:
+		from, to := bounds(page, per, len(g.Secrets))
+		items := []map[string]any{}
+		for _, s := range g.Secrets[from:to] {
+			items = append(items, map[string]any{"name": s.Name, "created_at": s.Created, "updated_at": s.Updated, "visibility": s.Visibility})
+		}
+		writeJSON(w, map[string]any{"total_count": len(g.Secrets), "secrets": items})
 	case strings.HasPrefix(r.URL.Path, base+"/credential-authorizations/") && r.Method == http.MethodDelete:
 		id, _ := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, base+"/credential-authorizations/"), 10, 64)
 		for i, c := range g.Credentials {
@@ -589,6 +624,13 @@ func (g *GitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		notFound(w)
 	}
+}
+
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func bounds(page, per, n int) (from, to int) {

@@ -101,6 +101,7 @@ export const RAIL: RailGroup[] = [
     items: [
       { id: "alerts", label: "Alerts", icon: BellRing, path: "/alerts", keywords: "alerting notifications incidents detections break glass sign-in failures webhook slack teams email" },
       { id: "oauthapps", label: "OAuth apps", icon: AppWindow, path: "/security/oauth-apps", keywords: "third-party oauth apps grants scopes consent connected apps vendor breach revoke salesloft drift gainsight token theft saas risk" },
+      { id: "githubtokens", label: "GitHub & CI tokens", icon: KeyRound, path: "/security/github-tokens", keywords: "github personal access tokens pat fine-grained classic cli oauth actions secrets ci pipeline litellm ghostaction rotation stale non-human" },
       { id: "policies", label: "Policies & SoD", icon: ShieldCheck, path: "/governance/policies", keywords: "policy as code yaml simulation what-if violations" },
       { id: "agentauth", label: "Agent authorization", icon: LockKeyhole, path: "/agents/authorization", also: ["/agent-authorization"], keywords: "mcp oauth tokens agents delegation act token exchange consent clients resource servers decisions kill switch" },
       { id: "mitigations", label: "Mitigating controls", icon: ShieldHalf, path: "/governance/mitigations", keywords: "sod mitigation control accept risk expiring approve evidence separation of duties" },

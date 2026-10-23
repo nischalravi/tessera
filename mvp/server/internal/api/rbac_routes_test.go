@@ -119,6 +119,8 @@ POST   /api/oauth-apps/{app_id}/revoke               oauthapps.revoke STEP_UP_PO
 POST   /api/oauth-apps/{app_id}/grants/{grant_id}/revoke oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/oauth-apps/{app_id}/credentials/{credential_id}/remove oauthapps.revoke STEP_UP_POLICY  # issue #474
 POST   /api/oauth-apps/{app_id}/changes/{change_id}/resolve oauthapps.manage -  # issue #474
+GET    /api/github-tokens                            graph.read      -  # issue #476
+POST   /api/github-tokens/sync                       oauthapps.manage -  # issue #476
 GET    /api/vms/sources                              connections.read -  # issue #304
 POST   /api/vms/sources                              connections.manage -  # issue #304
 PUT    /api/vms/sources/{source_id}                  connections.manage -  # issue #304
@@ -381,6 +383,9 @@ POST   /api/helpdesk/cases/{case_id}/execute         helpdesk.reset  STEP_UP_POL
 POST   /api/helpdesk/cases/{case_id}/cancel          helpdesk.reset  -  # issue #108
 GET    /api/helpdesk/findings                        graph.read      -  # issue #108
 POST   /api/helpdesk/signals                         helpdesk.approve -  # issue #108
+GET    /api/helpdesk/settings                        graph.read      -  # issue #477
+PUT    /api/helpdesk/settings                        helpdesk.approve STEP_UP_POLICY  # issue #477
+POST   /api/helpdesk/risk-signals                    helpdesk.approve -  # issue #477
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

@@ -48,6 +48,16 @@ func NewDevHandler(base string) http.Handler {
 			{ID: 21, Login: "octocat", Type: "OAuth app token", Authorized: "2026-06-01T00:00:00Z", Accessed: "2026-10-10T00:00:00Z", Scopes: []string{"repo"}},
 			{ID: 22, Login: "hubot", Type: "personal access token", Authorized: "2026-06-02T00:00:00Z", Scopes: []string{"read:user"}},
 			{ID: 23, Login: "mona", Type: "OAuth app token", Authorized: "2026-06-03T00:00:00Z", Scopes: []string{"read:org"}},
+			{ID: 24, Login: "octocat", Type: "OAuth app token", Title: "GitHub CLI", Authorized: "2026-05-01T00:00:00Z",
+				Accessed: "2026-10-20T00:00:00Z", Scopes: []string{"repo", "workflow", "read:org"}},
+		},
+		FineGrained: []*GitHubPAT{
+			{ID: 31, Owner: "octocat", Name: "release-bot", Permissions: map[string]string{"contents": "write", "metadata": "read"},
+				Granted: "2026-09-01T00:00:00Z", Expires: "2026-12-01T00:00:00Z", LastUsed: "2026-10-18T00:00:00Z"},
+		},
+		Secrets: []*GitHubSecret{
+			{Name: "NPM_TOKEN", Created: "2025-11-01T00:00:00Z", Updated: "2025-11-01T00:00:00Z", Visibility: "all"},
+			{Name: "AWS_DEPLOY_KEY", Created: "2026-03-01T00:00:00Z", Updated: "2026-10-01T00:00:00Z", Visibility: "selected"},
 		}}
 	mux := http.NewServeMux()
 	for name, fake := range map[string]http.Handler{"google": g, "entra": e, "salesforce": s, "github": h} {

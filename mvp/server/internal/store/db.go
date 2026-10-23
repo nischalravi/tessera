@@ -201,6 +201,8 @@ var tables = []string{
 	"review_populations", "review_population_rows", "review_auto_decisions", "tenant_settings",
 	// verified help-desk resets (schema/0254_helpdesk.sql)
 	"helpdesk_cases", "helpdesk_verifications", "helpdesk_signals", "helpdesk_findings",
+	// recent authentication method rule settings and IdP risk signals (schema/0720_helpdesk_auth_method_risk.sql)
+	"helpdesk_settings", "helpdesk_idp_risks",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// certificates and rotation state, tenant branding (schema/0410_certificates.sql, 0411_branding.sql)
@@ -247,6 +249,8 @@ var tables = []string{
 	"oauth_revoke_requests",
 	// credential, permission and owner changes of OAuth apps (schema/0680_oauth_app_changes.sql)
 	"oauth_app_facts", "oauth_app_changes",
+	// GitHub and CI token inventory (schema/0710_github_tokens.sql)
+	"github_tokens",
 	// guest lifecycle (schema/0371_guest_lifecycle.sql)
 	"guest_lifecycle_settings", "guest_reminders", "guest_renewal_tokens", "guest_lifecycle_tasks", "sponsorship_stepups",
 	"guest_deprovisioning",
