@@ -237,3 +237,80 @@ func TestNewRefusesBadConfig(t *testing.T) {
 		t.Error("accepted without a safehttp client")
 	}
 }
+
+// A mapping takes a custom field from the worker's own JSON in place of the documented one, and without a
+// mapping nothing changes (the event ids of existing sources stay as they were).
+func TestRESTFieldMapping(t *testing.T) {
+	custom := func(ws []vmsfake.Worker) []vmsfake.Worker {
+		ws[0].Custom = map[string]any{"sponsor": map[string]any{"mail": "erin@corp.example", "emp": 4711}, "term_end": "2027-03-31", "active": true,
+			"blank": "", "obj": map[string]any{"x": 1}}
+		ws[0].ManagerEmail, ws[0].ManagerID = "", ""
+		return ws
+	}
+	for _, vendor := range []string{store.VmsFieldglass, store.VmsBeeline} {
+		t.Run(vendor, func(t *testing.T) {
+			fk := vmsfake.New(vendor, "client-1", "s3cret-value")
+			fk.Set(custom(workers())...)
+			srv := connsynctest.New(t, fk)
+			hc, err := safehttp.NewForTest(t, srv.Options(0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			read := func(m map[string]string) []*connectors.VmsRecord {
+				t.Helper()
+				c, err := New(Config{Vendor: vendor, BaseURL: srv.URL, Credential: credential, Settings: Settings{Mapping: m}}, connsynctest.Runtime, hc, func() time.Time { return t0 })
+				if err != nil {
+					t.Fatal(err)
+				}
+				var out []*connectors.VmsRecord
+				if err := c.VmsRecords(context.Background(), nil, func(x *connectors.VmsRecord) error { out = append(out, x); return nil }); err != nil {
+					t.Fatal(err)
+				}
+				return out
+			}
+			plain := read(nil)
+			if plain[0].SponsorEmail != "" || plain[0].SponsorEmployeeID != "" {
+				t.Fatalf("unmapped record has a sponsor: %+v", plain[0])
+			}
+			mapped := read(map[string]string{"sponsor_email": "custom_fields.sponsor.mail", "sponsor_employee_id": "custom_fields.sponsor.emp",
+				"end_date": "custom_fields.term_end", "role": "custom_fields.blank", "supplier": "custom_fields.obj", "status": "custom_fields.nope"})
+			a := mapped[0]
+			if a.SponsorEmail != "erin@corp.example" || a.SponsorEmployeeID != "4711" || a.EndsAt == nil ||
+				!a.EndsAt.Equal(time.Date(2027, 3, 31, 0, 0, 0, 0, time.UTC)) {
+				t.Errorf("mapped record = %+v", a)
+			}
+			// an empty, missing or non-plain value leaves the documented field
+			if a.Role != "Analyst" || a.Supplier != "Acme Staffing" || a.Status != connectors.VmsActive {
+				t.Errorf("fallbacks: role %q supplier %q status %q", a.Role, a.Supplier, a.Status)
+			}
+			if a.EventID == plain[0].EventID {
+				t.Error("a mapped sponsor kept the event id of the unmapped record")
+			}
+			if again := read(nil); again[0].EventID != plain[0].EventID || again[1].EventID != plain[1].EventID {
+				t.Error("reading without a mapping changed event ids")
+			}
+			// records without the custom field are untouched by a mapping
+			if mapped[1].SponsorEmail != "lee@corp.example" || mapped[1].EventID != plain[1].EventID {
+				t.Errorf("record 2 changed: %+v", mapped[1])
+			}
+		})
+	}
+}
+
+func TestMappingValidation(t *testing.T) {
+	ok := Settings{Mapping: map[string]string{"sponsor_email": "custom_fields.sponsor.mail", "end_date": "term_end"}}
+	if err := ok.Validate(store.VmsFieldglass); err != nil {
+		t.Errorf("good REST mapping refused: %v", err)
+	}
+	for name, m := range map[string]map[string]string{
+		"first_name": {"first_name": "fn"}, "a path with a space": {"email": "custom fields.mail"}, "a leading dot": {"email": ".mail"},
+		"brackets": {"email": "a[0].b"}, "too deep": {"email": "a.b.c.d.e.f.g"}, "an unknown field": {"nope": "x"},
+	} {
+		if err := (&Settings{Mapping: m}).Validate(store.VmsBeeline); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if err := (&Settings{DateFormat: "2006-01-02"}).Validate(store.VmsFieldglass); err == nil {
+		t.Error("date_format on a REST vendor was accepted")
+	}
+}

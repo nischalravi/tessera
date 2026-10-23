@@ -2,12 +2,15 @@ package api
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -427,4 +430,100 @@ func TestCertificateExpiryAlerts(t *testing.T) {
 	if !contains(jobs.Kinds, jobs.CertificateExpiry) || !contains(srv.Queue().Kinds(), jobs.CertificateExpiry) {
 		t.Error("the certificate expiry job is not registered with the queue")
 	}
+}
+
+// testChain makes a root, an intermediate and a leaf signed by it (ECDSA P-256) and returns their PEM and the leaf key.
+func testChain(t *testing.T, now time.Time) (leaf, inter, root, leafKey string) {
+	t.Helper()
+	mk := func(cn string, isCA bool, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) (string, *x509.Certificate, *ecdsa.PrivateKey) {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpl := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: cn}, NotBefore: now.Add(-time.Hour),
+			NotAfter: now.AddDate(1, 0, 0), BasicConstraintsValid: true, IsCA: isCA, DNSNames: []string{cn + ".example"}}
+		issuer, signer := tmpl, key
+		if parent != nil {
+			issuer, signer = parent, parentKey
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, issuer, key.Public(), signer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, _ := x509.ParseCertificate(der)
+		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), c, key
+	}
+	rootPEM, rootC, rootK := mk("root", true, nil, nil)
+	interPEM, interC, interK := mk("inter", true, rootC, rootK)
+	leafPEM, _, leafK := mk("leaf", false, interC, interK)
+	kb, err := x509.MarshalPKCS8PrivateKey(leafK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return leafPEM, interPEM, rootPEM, string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kb}))
+}
+
+// An mTLS upload may be a chain with trust anchors; it is handed to the connection it names, shows its chain and
+// anchors in the inventory, and the audit event records counts but no PEM or key.
+func TestCertificatesAPI_MTLSChainAndTrustAnchors(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	sl := testSealer()
+	h := newIsolationServerWith(f, func(c *Config) { c.Sealer = sl }).Handler()
+	now := storetest.Now
+	admin := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ta@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, now)
+	leaf, inter, root, key := testChain(t, now)
+	connB := f.B.Refs["connection:ad"]
+	post := func(m map[string]any) *httptest.ResponseRecorder {
+		return reqDo(h, admin, "POST", "/api/admin/certificates", jsonStr(m))
+	}
+	// trust anchors belong to mutual-TLS uploads only; a broken chain is refused
+	if rec := post(map[string]any{"purpose": "signing", "label": "x", "certificate_pem": leaf, "private_key_pem": key, "trust_anchors_pem": root}); rec.Code != 422 ||
+		!strings.Contains(rec.Body.String(), "invalid_trust_anchors") {
+		t.Errorf("trust anchors on a signing certificate: %d %s", rec.Code, rec.Body)
+	}
+	if rec := post(map[string]any{"purpose": "mtls_client", "label": "x", "certificate_pem": inter + leaf, "private_key_pem": key}); rec.Code != 422 ||
+		!strings.Contains(rec.Body.String(), "bad_chain") {
+		t.Errorf("a chain with the issuer first: %d %s", rec.Code, rec.Body)
+	}
+	if rec := post(map[string]any{"purpose": "mtls_client", "label": "x", "certificate_pem": leaf, "private_key_pem": key, "trust_anchors_pem": leaf}); rec.Code != 422 ||
+		!strings.Contains(rec.Body.String(), "bad_trust_anchor") {
+		t.Errorf("a leaf as trust anchor: %d %s", rec.Code, rec.Body)
+	}
+	rec := post(map[string]any{"purpose": "mtls_client", "label": "SCIM mTLS", "certificate_pem": leaf + inter, "private_key_pem": key,
+		"trust_anchors_pem": root, "connection_id": connB})
+	if rec.Code != 201 || strings.Contains(rec.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("upload: %d %s", rec.Code, rec.Body)
+	}
+	var v certView
+	_ = json.Unmarshal(rec.Body.Bytes(), &v)
+	if v.ChainLength != 2 || len(v.TrustAnchors) != 1 || v.TrustAnchors[0] != "CN=root" || v.Subject != "CN=leaf" || v.Status != "active" ||
+		!strings.Contains(v.UsedBy, "connection") {
+		t.Errorf("view = %+v", v)
+	}
+	_ = f.DB.ReadTenant(context.Background(), f.B.ID, func(tx *store.TenantTx) error {
+		c, err := tx.ActiveMTLSCertificate(connB)
+		if err != nil || strings.Count(c.CertPEM, "BEGIN CERTIFICATE") != 2 || strings.Count(c.TrustPEM, "BEGIN CERTIFICATE") != 1 {
+			t.Errorf("the connection's certificate = %+v, %v", c, err)
+		}
+		evs, err := tx.AuditEvents(store.AuditFilter{Action: "certificate.uploaded"})
+		for _, e := range evs {
+			d := string(e.Detail)
+			if strings.Contains(d, "BEGIN") || !strings.Contains(d, `"chain_length":2`) || !strings.Contains(d, `"trust_anchors":1`) {
+				t.Errorf("audit detail = %s", d)
+			}
+		}
+		return err
+	})
+	// another tenant's connection cannot receive a certificate, and sees none of it
+	adminA := signIn(t, f.DB, f.A.ID, authtest.User{Email: "ta@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, now)
+	if rec := reqDo(h, adminA, "POST", "/api/admin/certificates", jsonStr(map[string]any{"purpose": "mtls_client", "label": "x", "certificate_pem": leaf,
+		"private_key_pem": key, "connection_id": connB})); rec.Code != 404 {
+		t.Errorf("tenant A hands a certificate to B's connection: %d %s", rec.Code, rec.Body)
+	}
+	_ = f.DB.ReadTenant(context.Background(), f.A.ID, func(tx *store.TenantTx) error {
+		if _, err := tx.ActiveMTLSCertificate(connB); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("tenant A reads B's connection certificate: %v", err)
+		}
+		return nil
+	})
 }

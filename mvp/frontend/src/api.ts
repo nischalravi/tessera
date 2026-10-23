@@ -3765,6 +3765,9 @@ export interface CertificateEntry {
   signature_algorithm: string;
   /** The SAML connection of a saml_sp entry. */
   connection_id: string | null;
+  /** Mutual TLS: how many certificates were uploaded (the leaf and its intermediates), and the subjects of the trust anchors. */
+  chain_length: number;
+  trust_anchors: string[];
   can_promote: boolean;
   can_retire: boolean;
 }
@@ -3774,7 +3777,9 @@ export interface CertificateUpload {
   label: string;
   certificate_pem: string;
   private_key_pem: string;
-  /** saml_sp: the SAML connection; mtls_client: the connector (optional). */
+  /** mtls_client: CA certificates (PEM) the target's server certificate must chain to; omitted uses the system roots. */
+  trust_anchors_pem?: string;
+  /** saml_sp: the SAML connection; mtls_client: the connection whose provisioning target presents it (optional). */
   connection_id?: string;
 }
 
@@ -4136,14 +4141,20 @@ export interface ProvOpDetail extends ProvOp { payload: { account?: Record<strin
 
 export interface ProvTarget {
   connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle"; base_url: string; api_root?: string;
-  dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
+  dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; agent_id?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
 /** token is write-only: omit it to keep the stored credential. A change of kind or origin (scheme, host, port) needs a new token (422 credential_required). */
 export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; api_root?: string; dialect?: string; fault?: string; token?: string; write_back: boolean; on_deprovision?: "disable" | "delete" }
 
+export interface ProvDryRunInput { kind: ProvKind; username: string; email?: string; display_name?: string; group_name?: string; group_external_id?: string }
+export interface ProvDryRunStep { method: string; url: string; /** A read that went to the target; false is a write that was held back. */ sent: boolean; status: number; body?: string }
+export interface ProvDryRun { connection_id: string; kind: ProvKind; write_back: boolean; steps: ProvDryRunStep[]; writes: number; error: string }
+
 export const provisioning = {
   targets: () => api<ProvTarget[]>("/provisioning/targets"),
+  /** What a change would send to the target: reads happen, writes are listed and held back. */
+  dryRun: (connectionId: string, body: ProvDryRunInput) => api<ProvDryRun>(`/provisioning/targets/${connectionId}/dry-run`, body),
   putTarget: (connectionId: string, body: ProvTargetInput) => apiNoResume<ProvTarget>(`/provisioning/targets/${connectionId}`, body, "PUT"),
   deleteTarget: (connectionId: string) => api<{ removed: boolean }>(`/provisioning/targets/${connectionId}`, undefined, "DELETE"),
   get: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}`),

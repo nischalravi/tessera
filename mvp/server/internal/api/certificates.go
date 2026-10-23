@@ -16,7 +16,9 @@ import (
 // Certificates (Admin > Certificates):
 //
 //	GET  /api/admin/certificates                      every certificate and key Tessera holds, with where it is used
-//	POST /api/admin/certificates                      upload a PEM certificate with its private key (sealed; never returned)
+//	POST /api/admin/certificates                      upload a PEM certificate with its private key (sealed; never returned);
+//	                                                  an mtls_client upload may be a chain (the leaf first) and carry trust_anchors_pem,
+//	                                                  and with connection_id it is presented by that connection's provisioning target
 //	POST /api/admin/certificates/generate             {connection_id}: a new SAML SP key pair, published beside the active one
 //	POST /api/admin/certificates/{certificate_id}/promote   make a waiting SAML SP certificate the signing one; retires the old
 //	POST /api/admin/certificates/{certificate_id}/retire    retire a certificate (or discard a waiting one) and destroy its key
@@ -68,6 +70,8 @@ type certView struct {
 	KeyAlgorithm  string     `json:"key_algorithm"`
 	SigAlgorithm  string     `json:"signature_algorithm"`
 	ConnectionID  *string    `json:"connection_id"`
+	ChainLength   int        `json:"chain_length"`  // mtls_client: certificates uploaded (the leaf and its intermediates)
+	TrustAnchors  []string   `json:"trust_anchors"` // mtls_client: subjects of the CA certificates the target must chain to
 	CanPromote    bool       `json:"can_promote"`
 	CanRetire     bool       `json:"can_retire"`
 }
@@ -75,7 +79,8 @@ type certView struct {
 func viewCert(e certs.Entry, now time.Time) certView {
 	v := certView{ID: e.ID, Source: e.Source, Purpose: e.Purpose, Label: e.Label, Status: e.Status, UsedBy: e.UsedBy, Subject: e.Subject,
 		Issuer: e.Issuer, SANs: append([]string{}, e.SANs...), NotBefore: e.NotBefore, NotAfter: e.NotAfter, Fingerprint: e.Fingerprint,
-		KeyAlgorithm: e.KeyAlgorithm, SigAlgorithm: e.SigAlgorithm, ConnectionID: e.IdPConnID}
+		KeyAlgorithm: e.KeyAlgorithm, SigAlgorithm: e.SigAlgorithm, ConnectionID: e.IdPConnID, ChainLength: e.Chain,
+		TrustAnchors: append([]string{}, e.Anchors...)}
 	if e.NotAfter != nil {
 		d := certs.DaysLeft(now, *e.NotAfter)
 		v.DaysLeft = &d
@@ -125,10 +130,12 @@ func (s *Server) listCertificates(_ http.ResponseWriter, r *http.Request, _ *par
 }
 
 type uploadCertBody struct {
-	Purpose      string  `json:"purpose"`
-	Label        string  `json:"label"`
-	Certificate  string  `json:"certificate_pem"`
-	PrivateKey   string  `json:"private_key_pem"`
+	Purpose     string `json:"purpose"`
+	Label       string `json:"label"`
+	Certificate string `json:"certificate_pem"`
+	PrivateKey  string `json:"private_key_pem"`
+	// TrustAnchors is an mtls_client upload's CA bundle (PEM): the target's server certificate must chain to one of them.
+	TrustAnchors string  `json:"trust_anchors_pem"`
 	ConnectionID *string `json:"connection_id"` // saml_sp: the SAML connection; mtls_client: the connector (optional)
 }
 
@@ -141,7 +148,7 @@ func (s *Server) uploadCertificate(_ http.ResponseWriter, r *http.Request, _ *pa
 	if err := decodeBody(r, &b, false); err != nil {
 		return nil, err
 	}
-	u := certs.Upload{Purpose: b.Purpose, Label: b.Label, CertPEM: b.Certificate, KeyPEM: b.PrivateKey}
+	u := certs.Upload{Purpose: b.Purpose, Label: b.Label, CertPEM: b.Certificate, TrustPEM: b.TrustAnchors, KeyPEM: b.PrivateKey}
 	if b.ConnectionID != nil {
 		switch b.Purpose {
 		case store.CertSAMLSP:

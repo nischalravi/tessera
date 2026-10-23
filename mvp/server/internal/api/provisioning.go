@@ -37,6 +37,8 @@ func (s *Server) registerProvisioningRoutes() {
 	// connections.manage with step-up, like the connection credential.
 	s.handle(http.MethodPut, "/api/provisioning/targets/{id}", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.putTarget))
 	s.handle(http.MethodDelete, "/api/provisioning/targets/{id}", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.deleteTarget))
+	// phased: the dry run reads from the target, so it holds no transaction open while it waits.
+	s.handle(P, "/api/provisioning/targets/{id}/dry-run", phased, need(auth.PermProvisioningManage), s.dryRunTarget)
 	s.handle(G, "/api/provisioning/ops", read, need(auth.PermProvisioningRead), s.rd(s.listOps))
 	s.handle(G, "/api/provisioning/ops/{op_id}", read, need(auth.PermProvisioningRead), s.rd(s.getOp))
 	s.handle(P, "/api/provisioning/ops/{op_id}/retry", write, need(auth.PermProvisioningManage), s.rd(s.retryOp))
@@ -469,6 +471,64 @@ func (s *Server) deleteTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, map[string]any{"removed": true}, nil
+}
+
+// dryRunInput is POST /api/provisioning/targets/{id}/dry-run: the change to preview.
+type dryRunInput struct {
+	Kind            string `json:"kind"`
+	Username        string `json:"username"`
+	Email           string `json:"email"`
+	DisplayName     string `json:"display_name"`
+	GroupExternalID string `json:"group_external_id"`
+	GroupName       string `json:"group_name"`
+}
+
+// dryRunTarget shows what a change would send to the target of a connection: the target is read, and every
+// request that would change it is listed instead of sent (issue #498). It works with write-back on or off,
+// and it is audited (provision.dry_run) because it calls the target with the stored credential.
+func (s *Server) dryRunTarget(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return nil, err
+	}
+	var in dryRunInput
+	if err := decodeBody(r, &in, false); err != nil {
+		return nil, err
+	}
+	in.Username, in.GroupName, in.GroupExternalID = strings.TrimSpace(in.Username), strings.TrimSpace(in.GroupName), strings.TrimSpace(in.GroupExternalID)
+	switch {
+	case !slices.Contains(target.Kinds, in.Kind):
+		return nil, badRequest("invalid_kind", "kind must be one of "+strings.Join(target.Kinds, ", "))
+	case in.Username == "" || len(in.Username) > 200:
+		return nil, badRequest("invalid_account", "username is required (at most 200 characters)")
+	case len(in.Email) > 320 || len(in.DisplayName) > 200 || len(in.GroupName) > 200 || len(in.GroupExternalID) > 200:
+		return nil, badRequest("invalid_account", "a field is too long")
+	case (in.Kind == target.AddEntitlement || in.Kind == target.RemoveEntitlement) && in.GroupName == "" && in.GroupExternalID == "":
+		return nil, badRequest("invalid_group", "an entitlement change needs a group name or id")
+	}
+	req := target.Request{Kind: in.Kind, Key: "dry-run:" + id,
+		Account: target.Account{Username: in.Username, Email: in.Email, DisplayName: in.DisplayName},
+		Group:   target.Group{ExternalID: in.GroupExternalID, Name: in.GroupName}}
+	res, err := s.prov.DryRun(r.Context(), p.scope.Tenant, id, req)
+	if err != nil {
+		return nil, provErr(err)
+	}
+	var writeBack bool
+	if err := p.scope.Write(r.Context(), func(tx *store.TenantTx) error {
+		t, err := tx.ProvTarget(id)
+		if err != nil {
+			return err
+		}
+		writeBack = t.WriteBack
+		det := ojson.Object{{Key: "connection_id", Value: id}, {Key: "kind", Value: in.Kind}, {Key: "target", Value: in.Username},
+			{Key: "writes", Value: res.Writes()}, {Key: "reads", Value: len(res.Steps) - res.Writes()}, {Key: "stopped", Value: res.Error != ""}}
+		return tx.Audit(s.clock(), actor(r), "provision.dry_run", det)
+	}); errors.Is(err, store.ErrNotFound) {
+		return nil, notFoundErr("target")
+	} else if err != nil {
+		return nil, err
+	}
+	return map[string]any{"connection_id": id, "kind": in.Kind, "write_back": writeBack, "steps": res.Steps, "writes": res.Writes(), "error": res.Error}, nil
 }
 
 // ---------------------------------------------------------------- operations

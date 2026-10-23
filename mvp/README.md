@@ -685,7 +685,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET|POST /api/auth/dev-login` (dev and test only) ·
 `GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
 `POST /api/jobs/{job_id}/retry` ·
-`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` ·
+`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` · `POST /api/provisioning/targets/{connection_id}/dry-run` ·
 `GET /api/provisioning/ops[?status=&kind=&connection_id=&limit=]` · `GET /api/provisioning/ops/{op_id}` ·
 `POST /api/provisioning/ops/{op_id}/retry|cancel` · `POST /api/provisioning/run` ·
 `GET /api/provisioning/findings[?status=open|resolved]` ·
@@ -932,6 +932,15 @@ connection (`idp_connections`), uploaded and rotating certificates (`tenant_cert
   signature, and each field is at most 16 KiB. A SAML key must be RSA. The key is re-encoded as PKCS#8 and sealed with
   `internal/seal` (AAD binds tenant, table, column and row id). Refusals are 422 with a code (`cert_expired`, `weak_key`,
   `weak_signature`, `key_mismatch`, `bad_pem`, `bad_key`, `key_not_rsa`), 413 `cert_too_large`, 409 `duplicate_certificate`.
+* **Mutual TLS for a connection (issue #498).** An `mtls_client` upload may be a **chain** (`certificate_pem` holds the leaf first,
+  then up to 4 intermediates, each signing the one before it; `bad_chain` otherwise) and may carry **trust anchors**
+  (`trust_anchors_pem`: up to 10 CA certificates, stored in `tenant_certificates.trust_pem`; `bad_trust_anchor` for a
+  certificate that is not a CA). With `connection_id` the certificate is **handed to that connection**: its provisioning
+  target (SCIM, Okta; `internal/provision`, `Engine.httpFor`) presents the chain on every call and, when trust anchors are
+  given, trusts only those instead of the system roots (`safehttp.WithClientTLS`: the copy of the guarded client keeps every
+  address, port and redirect rule). The newest active certificate that names the connection is used; retiring it stops it.
+  A target reached through a Directory Agent does not use it (the agent holds its own identity). Expiry alerts cover the leaf
+  only. `chain_length` and `trust_anchors` (subjects) are in the listing; the audit event records counts, never PEM.
 * **SAML SP rotation.** `POST /api/admin/certificates/generate {connection_id}` (or an upload with purpose `saml_sp`) adds a
   `next` key. While it waits, `GET /api/auth/saml/{id}/metadata` lists both certificates (the overlap window), so the identity
   provider can trust the new one before it is used; sign-in keeps signing with the active key. `POST .../{id}/promote` copies the
@@ -1231,6 +1240,16 @@ change in the target system and checks that it happened.
   `0224`, one per connection) has a `write_back` switch. Off: the change edits the graph at once, as
   before, and nothing reaches the target (so the parity fixtures are unchanged). On: the change goes
   through the engine. Routing is by the connection's `system` (`provision.Submit`).
+* **Dry run (issue #498).** `POST /api/provisioning/targets/{connection_id}/dry-run {kind, username, group_name?}`
+  (`provisioning.manage`) shows what a change would send to the target before write-back is turned on, or at any time:
+  the connector runs against the real target with a transport that lets reads (GET, HEAD) through and records every other
+  request (method, URL, body without credentials) instead of sending it. A held-back write gets an empty success so later
+  steps show; a connector that needs the answer to its first write (a new account's id) may stop after it, and the result
+  says so. SCIM and Okta targets only (not vault or ERP targets, which sign in with a POST, and not agent-reached ones).
+  Audited as `provision.dry_run`; nothing is queued or stored.
+* **Alert rules (issue #498).** `provision_failed` (an operation ran out of attempts, event `provision.failed`) and
+  `provision_mismatch` (a re-read showed the target did not apply it, event `provision.mismatch`) raise a high alert, one
+  per operation, through the alert channels (Admin > Alerts).
 * **Connectors.** `internal/provision/scim` is a SCIM 2.0 client (filtered, paginated lists; group
   members read page by page; PATCH add/replace/remove, where a member is removed with the RFC 7644
   filter path and, if the server refuses it, with a value list; `dialect: entra` sends capitalised
@@ -2400,6 +2419,11 @@ and the review queue are shared.
   `text/csv`, at most 1 MiB through the API) or fetched over HTTPS (`base_url` + `settings.csv_path`). CSV columns:
   `worker_id, name|first_name+last_name, email, supplier, role, sponsor_email, sponsor_employee_id, status,
   start_date, end_date, updated_at`; `settings.mapping` renames them, `settings.date_format` is a Go layout.
+  For `fieldglass` and `beeline`, `settings.mapping` takes a field from the worker's own JSON in place of the
+  documented one (issue #498): canonical field to a dotted path, for example
+  `{"sponsor_email": "custom_fields.hiring_manager", "end_date": "custom_fields.contract_end"}`. A path that is
+  missing, empty or not a plain value keeps the documented field; `first_name` and `last_name` are mapped through
+  `name`. Without a mapping nothing changes, event ids included.
   Every call goes through `internal/safehttp`; a paging link must stay on the configured host; the credential
   (`client_id:client_secret`, or a bearer token for a fetched CSV) is sealed under the KEK, bound to its row,
   write-only, and a change of base URL needs a new one.

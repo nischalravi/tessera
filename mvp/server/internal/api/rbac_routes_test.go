@@ -483,6 +483,7 @@ DELETE /api/queue/limits                             connections.manage  STEP_UP
 GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
 PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
 DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
+POST   /api/provisioning/targets/{id}/dry-run        provisioning.manage -  # issue #498
 GET    /api/provisioning/ops                         provisioning.read   -
 GET    /api/provisioning/ops/{op_id}                 provisioning.read   -
 POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -

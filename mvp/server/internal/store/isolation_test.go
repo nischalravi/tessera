@@ -685,7 +685,7 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		// HasPendingRequest has its own test (TestIsolation_PendingRequestUniquePerTenant).
 		"HasPendingRequest": true,
 		// Certificates and branding: TestIsolation_Certificates, TestCertificateLifecycleStore, TestIsolation_Branding.
-		"InsertCertificate": true, "Certificates": true, "Certificate": true, "CertificateKey": true, "NextSAMLCertificate": true,
+		"InsertCertificate": true, "Certificates": true, "Certificate": true, "CertificateKey": true, "NextSAMLCertificate": true, "ActiveMTLSCertificate": true,
 		"ActivateCertificate": true, "RetireCertificate": true, "SetIdPSPKey": true,
 		// Pending four-eyes OAuth revokes: TestIsolation_OAuthRevokeRequests, TestOAuthRevokeRequestLifecycle.
 		"InsertOAuthRevokeRequest": true, "PendingOAuthRevokeRequest": true, "PendingOAuthRevokeRequests": true,
