@@ -251,6 +251,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return serve(ctx, o, cfg, sealer, clock, loader, logger)
 }
 
+// newLogger builds the process logger: JSON lines on stdout (the default in
+// prod and test, where a log collector reads the container's stdout) or the
+// human-readable text form on stderr (the dev default). TESSERA_LOG_FORMAT
+// picks either.
+func newLogger(format string, stdout, stderr io.Writer) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	if format == "json" {
+		return slog.New(slog.NewJSONHandler(stdout, opts))
+	}
+	return slog.New(slog.NewTextHandler(stderr, opts))
+}
+
 // needsSeed reports whether serve must seed the demo tenants first: on
 // --reseed, or when there is nothing yet. For SQLite "nothing" is a missing
 // file. A Postgres database always exists, so there it is a database with no
@@ -422,7 +434,6 @@ const (
 	readTimeout       = 15 * time.Second
 	writeTimeout      = api.DefaultHandlerTimeout + 15*time.Second
 	idleTimeout       = 60 * time.Second
-	shutdownTimeout   = 10 * time.Second
 	reviewInterval    = 5 * time.Minute  // scheduled access reviews (issue #166)
 	provisionInterval = 5 * time.Second  // provisioning worker: sends queued operations and re-reads targets
 	keysInterval      = 24 * time.Hour   // keys.EnsureAll: rotation runs daily (design §10.6)
@@ -815,6 +826,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(sinksDone)
 		sinksRunner.Loop(ctx)
 	}()
+	loopsDone := func() []chan struct{} {
+		return []chan struct{}{sweepDone, reviewsDone, provDone, keysDone, ckptDone, rdyDone, siemDone, alertsDone, backupDone, groupsDone, historyDone, notifyDone, rotationDone, rulesDone, govDone, loadersDone, provisioningDone, sinksDone}
+	}
 	errc := make(chan error, 2)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -833,29 +847,20 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 			_ = agentSrv.Close()
 		}
 		_ = httpSrv.Close()
-		<-sweepDone
-		<-reviewsDone
-		<-provDone
-		<-keysDone
-		<-ckptDone
-		<-rdyDone
-		<-siemDone
-		<-alertsDone
-		<-backupDone
-		<-groupsDone
-		<-historyDone
-		<-notifyDone
-		<-rotationDone
-		<-rulesDone
-		<-govDone
-		<-loadersDone
-		<-provisioningDone
-		<-sinksDone
+		waitLoops(loopsDone(), cfg.ShutdownGrace, logger)
 		return err
 	case <-ctx.Done():
 	}
-	logger.Info("shutting down")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	// SIGTERM: /readyz fails first (a load balancer stops sending traffic),
+	// then the listeners stop accepting and in-flight requests drain, and the
+	// loops (already told to stop through ctx) finish: all within the grace.
+	logger.Info("shutting down", "grace", cfg.ShutdownGrace.String())
+	deadline := time.Now().Add(cfg.ShutdownGrace)
+	checker.SetDraining()
+	if d := min(cfg.ShutdownDrainDelay, cfg.ShutdownGrace/2); d > 0 {
+		time.Sleep(d)
+	}
+	shutdownCtx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	if metrics != nil {
 		_ = metrics.srv.Shutdown(shutdownCtx)
@@ -866,30 +871,28 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 			err = aerr
 		}
 	}
-	<-sweepDone
-	<-reviewsDone
-	<-provDone
-	<-keysDone
-	<-ckptDone
-	<-rdyDone
-	<-siemDone
-	<-alertsDone
-	<-backupDone
-	<-groupsDone
-	<-historyDone
-	<-notifyDone
-	<-rotationDone
-	<-rulesDone
-	<-govDone
-	<-loadersDone
-	<-provisioningDone
-	<-sinksDone
+	waitLoops(loopsDone(), time.Until(deadline), logger)
 	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
 		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			return serveErr
 		}
 	}
 	return err
+}
+
+// waitLoops waits for the background loops to return, at most d. A loop still
+// running after that is abandoned (the process is about to exit) and logged.
+func waitLoops(loops []chan struct{}, d time.Duration, logger *slog.Logger) {
+	t := time.NewTimer(max(d, 0))
+	defer t.Stop()
+	for i, ch := range loops {
+		select {
+		case <-ch:
+		case <-t.C:
+			logger.Warn("shutdown grace ended with background loops still running", "loops_pending", len(loops)-i)
+			return
+		}
+	}
 }
 
 // startFakeTarget starts the in-process fake SCIM target on a loopback port
