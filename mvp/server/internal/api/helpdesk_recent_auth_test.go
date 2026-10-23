@@ -37,6 +37,11 @@ func (e *helpdeskEnv) addMethod(daysAgo *int) {
 
 func days(n int) *int { return &n }
 
+func (e *helpdeskEnv) admin() authtest.Login {
+	return signIn(e.t, e.f.DB, e.f.A.ID, authtest.User{Email: "rule-admin@a.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, *e.now)
+}
+
+// setRecent saves the rule as the given user (use e.admin() for a change that weakens it: that needs helpdesk.risk).
 func (e *helpdeskEnv) setRecent(l authtest.Login, n int, action string) (int, string) {
 	return e.do(l, "PUT", "/api/helpdesk/settings", fmt.Sprintf(`{"recent_method_days":%d,"recent_method_action":%q}`, n, action))
 }
@@ -91,7 +96,7 @@ func TestHelpdeskRecentMethodWindow(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newHelpdeskEnv(t, nil)
-			if code, body := e.setRecent(e.agent, tc.days, "require_approval"); code != 200 {
+			if code, body := e.setRecent(e.admin(), tc.days, "require_approval"); code != 200 {
 				t.Fatalf("settings: %d %s", code, body)
 			}
 			e.addMethod(tc.daysAgo)
@@ -105,7 +110,7 @@ func TestHelpdeskRecentMethodWindow(t *testing.T) {
 
 func TestHelpdeskRecentMethodBlock(t *testing.T) {
 	e := newHelpdeskEnv(t, nil)
-	if code, body := e.setRecent(e.agent, 7, "block"); code != 200 {
+	if code, body := e.setRecent(e.admin(), 7, "block"); code != 200 {
 		t.Fatalf("settings: %d %s", code, body)
 	}
 	e.addMethod(days(2))
@@ -128,7 +133,7 @@ func TestHelpdeskRecentMethodBlock(t *testing.T) {
 		t.Fatalf("the IdP was called for a blocked case: %v", e.fake.Calls())
 	}
 	// the window no longer covers the method (an admin shortens it): the case can run
-	if code, body := e.setRecent(e.agent, 1, "block"); code != 200 {
+	if code, body := e.setRecent(e.admin(), 1, "block"); code != 200 {
 		t.Fatalf("settings: %d %s", code, body)
 	}
 	if got := e.view(v.ID).Policy; got.Blocked || got.RecentAuthMethod != nil {
@@ -141,7 +146,7 @@ func TestHelpdeskRecentMethodBlock(t *testing.T) {
 
 func TestHelpdeskRecentMethodOff(t *testing.T) {
 	e := newHelpdeskEnv(t, nil)
-	if code, body := e.setRecent(e.agent, 7, "off"); code != 200 {
+	if code, body := e.setRecent(e.admin(), 7, "off"); code != 200 {
 		t.Fatalf("settings: %d %s", code, body)
 	}
 	e.addMethod(days(1))
@@ -292,7 +297,7 @@ func TestHelpdeskSettingsAPI(t *testing.T) {
 	if code, out := e.do(viewer, "GET", "/api/helpdesk/settings", ""); code != 200 {
 		t.Errorf("viewer reading the settings: %d %s", code, out)
 	}
-	if code, out := e.setRecent(e.agent, 14, "block"); code != 200 || !strings.Contains(out, `"recent_method_days":14`) {
+	if code, out := e.setRecent(e.admin(), 14, "block"); code != 200 || !strings.Contains(out, `"recent_method_days":14`) {
 		t.Fatalf("update: %d %s", code, out)
 	}
 	if got := auditActions(t, e.f, e.f.A.ID); got["helpdesk.settings.updated"] != 1 {
@@ -302,5 +307,62 @@ func TestHelpdeskSettingsAPI(t *testing.T) {
 	loginB := signIn(t, e.f.DB, e.f.B.ID, authtest.User{Email: "ops@b.example", Roles: []auth.Role{auth.RoleOperator}}, authtest.Phr, *e.now)
 	if code, out := e.do(loginB, "GET", "/api/helpdesk/settings", ""); code != 200 || !strings.Contains(out, `"recent_method_days":7`) {
 		t.Errorf("tenant B settings: %d %s", code, out)
+	}
+}
+
+// A tenant B admin dismissing tenant A's risk signal gets 404 and nothing changes (issue #510).
+func TestHelpdeskRiskDismissCrossTenant(t *testing.T) {
+	e := newHelpdeskEnv(t, nil)
+	adminA := signIn(t, e.f.DB, e.f.A.ID, authtest.User{Email: "ta@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, *e.now)
+	adminB := signIn(t, e.f.DB, e.f.B.ID, authtest.User{Email: "ta@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, *e.now)
+	when := e.now.Add(-time.Hour).Format(time.RFC3339)
+	code, out := e.do(adminA, "POST", "/api/helpdesk/risk-signals",
+		fmt.Sprintf(`{"identity_id":%d,"source":"entra","occurred_at":%q}`, e.alice, when))
+	var made struct {
+		ID string `json:"id"`
+	}
+	if code != http.StatusCreated || json.Unmarshal([]byte(out), &made) != nil || made.ID == "" {
+		t.Fatalf("ingest: %d %s", code, out)
+	}
+	if code, out := e.do(adminB, "POST", "/api/helpdesk/risk-signals/"+made.ID+"/dismiss", `{"reason":"not mine"}`); code != 404 {
+		t.Errorf("tenant B dismissing: %d %s", code, out)
+	}
+	if code, out := e.do(adminB, "GET", "/api/helpdesk/risk-signals", ""); code != 200 || strings.Contains(out, made.ID) {
+		t.Errorf("tenant B lists A's signal: %d %s", code, out)
+	}
+	_ = e.f.DB.ReadTenant(context.Background(), e.f.A.ID, func(c *store.TenantTx) error {
+		if r, err := c.HelpdeskIdPRisk(made.ID); err != nil || r.DismissedAt != nil {
+			t.Errorf("A's signal changed: %+v %v", r, err)
+		}
+		return nil
+	})
+	if got := auditActions(t, e.f, e.f.A.ID); got["helpdesk.risk_signal.dismissed"] != 0 {
+		t.Errorf("audit: %v", got)
+	}
+}
+
+// Weakening the recent method rule needs an admin (helpdesk.risk); an operator can still tighten it.
+func TestHelpdeskSettingsLooseningNeedsAdmin(t *testing.T) {
+	e := newHelpdeskEnv(t, nil)
+	admin := signIn(t, e.f.DB, e.f.A.ID, authtest.User{Email: "pa@a.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, *e.now)
+	if code, out := e.setRecent(e.other, 14, "block"); code != 200 { // default 7/require_approval: tightening
+		t.Fatalf("operator tightening: %d %s", code, out)
+	}
+	for name, tc := range map[string]struct {
+		days   int
+		action string
+	}{"off": {14, "off"}, "to require_approval": {14, "require_approval"}, "shorter window": {3, "block"}} {
+		if code, out := e.setRecent(e.other, tc.days, tc.action); code != http.StatusForbidden {
+			t.Errorf("operator loosening (%s): %d %s", name, code, out)
+		}
+	}
+	if code, out := e.do(e.other, "GET", "/api/helpdesk/settings", ""); code != 200 || !strings.Contains(out, `"recent_method_action":"block"`) {
+		t.Errorf("settings changed: %d %s", code, out)
+	}
+	if code, out := e.setRecent(e.other, 30, "block"); code != 200 { // a longer window is tightening
+		t.Errorf("operator lengthening: %d %s", code, out)
+	}
+	if code, out := e.setRecent(admin, 7, "off"); code != 200 {
+		t.Errorf("admin loosening: %d %s", code, out)
 	}
 }

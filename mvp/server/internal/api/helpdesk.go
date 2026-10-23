@@ -377,6 +377,18 @@ func (s *Server) putHelpdeskSettings(_ http.ResponseWriter, r *http.Request, _ *
 	if err := decodeBody(r, &b, false); err != nil {
 		return nil, err
 	}
+	// Loosening the rule (a weaker action or a shorter window) undoes what risk signals and the rule protect, so it
+	// needs helpdesk.risk (admins), not only helpdesk.approve (operators); tightening needs only helpdesk.approve.
+	cur, err := store.TxFrom(r.Context()).HelpdeskSettings()
+	if err != nil {
+		return nil, err
+	}
+	rank := map[string]int{store.HelpdeskRecentOff: 0, store.HelpdeskRecentRequireApproval: 1, store.HelpdeskRecentBlock: 2}
+	na, oa := rank[b.Action], rank[cur.RecentMethodAction]
+	if _, known := rank[b.Action]; known && (na < oa || (na > 0 && b.Days > 0 && b.Days < cur.RecentMethodDays)) && !s.can(r, auth.PermHelpdeskRisk) {
+		return nil, &readiness.Error{Status: http.StatusForbidden, Code: "forbidden",
+			Msg: "weakening the recent method rule (a weaker action or a shorter window) needs an admin with helpdesk.risk"}
+	}
 	h, err := s.helpdesk.UpdateSettings(store.TxFrom(r.Context()), helpdesk.SettingsInput{Days: b.Days, Action: b.Action},
 		principal(r).User(), s.clock())
 	if err != nil {

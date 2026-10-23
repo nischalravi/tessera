@@ -3061,8 +3061,8 @@ IdP is never called.
   decision answers `recent_auth_method {action, days, reasons}` and `blocked`; reasons name the
   system, the method kind and label and its age, never a factor value. Settings (schema 0720,
   `helpdesk_settings`, one row per tenant): `GET /api/helpdesk/settings` (`graph.read`) and
-  `PUT /api/helpdesk/settings {recent_method_days, recent_method_action}` (`helpdesk.approve`,
-  step-up, audited as `helpdesk.settings.updated` with the old values). IdP risk signals
+  `PUT /api/helpdesk/settings {recent_method_days, recent_method_action}` (`helpdesk.approve`;
+  weakening the rule, a weaker action or a shorter window, also needs `helpdesk.risk`, i.e. an admin; step-up, audited as `helpdesk.settings.updated` with the old values). IdP risk signals
   (`helpdesk_idp_risks`): `POST /api/helpdesk/risk-signals {identity_id, source, detail,
   occurred_at}` records that a connected IdP reported a suspicious method (audited
   `helpdesk.risk_signal.ingested`). It can block account recovery, so since issue #510 it needs the admin-only

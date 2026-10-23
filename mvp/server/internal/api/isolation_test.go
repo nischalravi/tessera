@@ -404,7 +404,7 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 			continue // TestHelpdeskTenantIsolation (a UUID, not a fixture id)
 		}
 		if rt.Pattern == "/api/helpdesk/risk-signals/{risk_id}/dismiss" {
-			continue // TestHelpdeskIdPRiskSignal (tenant B gets 404 on A's signal), store.TestIsolation_HelpdeskRiskDismissal
+			continue // TestHelpdeskRiskDismissCrossTenant (a UUID, not a fixture id), store.TestIsolation_HelpdeskRiskDismissal
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/groups/") || rt.Pattern == "/scim/v2/Groups/{id}" {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
