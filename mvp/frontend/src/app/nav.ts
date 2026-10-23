@@ -58,6 +58,7 @@ export const RAIL: RailGroup[] = [
           { path: "/rotation/jobs", label: "Rotation jobs", keywords: "rotate history failed retry verify old credential" },
           { path: "/rotation/policies", label: "Rotation policies & adapters", keywords: "max age grace period vault aws github adapter" },
           { path: "/rotation/vendor", label: "Vendor compromised", keywords: "breach bulk rotate integration incident" },
+          { path: "/rotation/breach", label: "Breach response", keywords: "vendor breach railway ghostaction rotate revoke every credential oauth grants pat service accounts verify evidence plan" },
         ],
       },
       { id: "apps", label: "Applications", icon: AppWindow, path: "/directory/apps", keywords: "apps systems endpoints connectors resources" },

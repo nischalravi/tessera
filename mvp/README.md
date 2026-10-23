@@ -256,6 +256,26 @@ change writes its audit event in the same transaction (`rotation.adapter.*`, `ro
 `rotation.completed`, `rotation.bulk.executed`, `rotation.owner_notified`); the worker acts as the system
 actor `rotation.worker`.
 
+**Vendor breach response** (issue #475, **Secret rotation > Breach response**, `/rotation/breach`). When a
+vendor or integration is breached, Tessera lists every credential tied to it and runs the response as one
+tracked plan. `POST /api/breach/inventory {vendor}` is the dry run: the vendor's secrets (rotate), live OAuth
+grants of apps it publishes (revoke), and for `github` the GitHub tokens and service accounts of the system
+(by hand). `POST /api/breach/plans {vendor, reason}` records the plan, one item per credential.
+`POST /api/breach/plans/{id}/run` queues the rotation of the vendor's secrets (the same bulk run as *Vendor
+compromised*: no grace period, owners told), revokes the OAuth grants through the OAuth app revoke (provider
+call, provider re-read, four-eyes rule kept: the plan stays running until a second admin runs it too), then
+re-reads everything. `POST .../verify` re-reads again: a secret is verified when its rotation job reached
+`verified` (the old credential re-read as disabled), a grant when its record is revoked or removed, a token or
+service account when it is gone or disabled. What no API can do (GitHub PATs, service accounts) stays open until
+a re-read shows it done or a person attests it (`POST .../items/{item}/attest {note}`); a failed item is never
+attestable. The plan completes only when nothing is open. `GET /api/breach/plans[/{id}]` return the plans and
+the completion report; `GET /api/breach/plans/{id}/evidence` (`audit.read`) downloads the hashed JSON export
+(plan, report, rotation run and jobs with their verification). Reading needs `graph.read`; changing needs
+`secrets.rotate` (policy admin) and a fresh phishing-resistant sign-in, and running a plan with OAuth grants also
+needs `oauthapps.revoke`. Audit events in the changing transaction: `breach.plan.created|started|verified|completed`
+and `breach.item.attested`, next to the rotation and OAuth events of the work. Tables `breach_plans` and
+`breach_items` (schema 0800) hold references and labels only, never secret material.
+
 **Owner notifications** go through `rotation.Notifier` (`internal/rotation/notify.go`): `Notify(ctx, tx,
 Notification)` runs in the tenant transaction that records the change, must not do network I/O, and an error
 rolls the change back. The default, `AuditNotifier`, writes a `rotation.owner_notified` audit event naming the
@@ -722,6 +742,8 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `POST /api/rotation/plan {secret_ids}` · `GET|POST /api/rotation/jobs` · `GET /api/rotation/jobs/{id}` ·
 `POST /api/rotation/jobs/{id}/retry|cancel` · `POST /api/rotation/bulk/plan {system}` ·
 `GET|POST /api/rotation/bulk` · `GET /api/rotation/bulk/{id}` ·
+`POST /api/breach/inventory {vendor}` · `GET|POST /api/breach/plans` · `GET /api/breach/plans/{id}[/evidence]` ·
+`POST /api/breach/plans/{id}/run|verify` · `POST /api/breach/plans/{id}/items/{item}/attest {note}` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` (pin and release need two admins with `identities.correlate`, #376: the first
@@ -4631,7 +4653,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles (with a *Mining* tab), Organizations (live, read-only, derived from departments) |
+| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised, Breach response), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles (with a *Mining* tab), Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle*, *Questionnaires* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*, *Request settings*, *Step-up per action* and *SoD page*) |
