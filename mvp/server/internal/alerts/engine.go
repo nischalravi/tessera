@@ -374,8 +374,10 @@ type RuleSpec struct {
 	WindowMinutes int
 }
 
-// SetRule stores a tenant's settings for a built-in rule.
-func SetRule(tx *store.TenantTx, id string, s RuleSpec, by Actor, now time.Time) error {
+// CheckRule validates a tenant's settings for the built-in rule id (404
+// rule_not_found, 422 for a bad value). SetRule and the configuration import
+// (internal/transport) both apply it.
+func CheckRule(id string, s RuleSpec) error {
 	r := RuleByID(id)
 	if r == nil {
 		return refuse(404, "rule_not_found", "no rule %q", id)
@@ -388,6 +390,14 @@ func SetRule(tx *store.TenantTx, id string, s RuleSpec, by Actor, now time.Time)
 	}
 	if s.WindowMinutes < 1 || s.WindowMinutes > 10080 {
 		return refuse(422, "invalid_window", "the window is 1 minute to 7 days")
+	}
+	return nil
+}
+
+// SetRule stores a tenant's settings for a built-in rule.
+func SetRule(tx *store.TenantTx, id string, s RuleSpec, by Actor, now time.Time) error {
+	if err := CheckRule(id, s); err != nil {
+		return err
 	}
 	if err := tx.PutAlertRuleSetting(&store.AlertRuleSetting{RuleID: id, Enabled: s.Enabled, Severity: s.Severity,
 		Threshold: s.Threshold, WindowMinutes: s.WindowMinutes, UpdatedBy: &by.UserID, UpdatedAt: now}); err != nil {

@@ -81,7 +81,9 @@ func (s *Server) configExport(r *http.Request, _ *params) (int, any, error) {
 		}
 		if err := c.Audit(now, actor(r), "config.exported", ojson.Object{{Key: "bundle_hash", Value: signed.Hash},
 			{Key: "signer_kid", Value: signed.KID}, {Key: "connections", Value: len(b.Connections)},
-			{Key: "overlays", Value: len(b.Overlays)}, {Key: "identity_providers", Value: len(b.IdentityProviders)}}); err != nil {
+			{Key: "overlays", Value: len(b.Overlays)}, {Key: "identity_providers", Value: len(b.IdentityProviders)},
+			{Key: "catalog_items", Value: len(b.CatalogItems)}, {Key: "review_schedules", Value: len(b.ReviewSchedules)},
+			{Key: "alert_rules", Value: len(b.AlertRules)}, {Key: "siem_sinks", Value: len(b.SiemSinks)}}); err != nil {
 			return err
 		}
 		out = map[string]any{"hash": signed.Hash, "kid": signed.KID,

@@ -1,6 +1,7 @@
 package audit_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -462,4 +463,51 @@ func FuzzEventHash(f *testing.F) {
 func ExampleGenesis() {
 	fmt.Println(len(audit.Genesis(tenancy.Platform)))
 	// Output: 64
+}
+
+// TestVerifyInclusionGolden: the golden vector's records form a path that
+// VerifyInclusion accepts from any starting event to the last hash (the
+// checkpoint head of an inclusion proof), and refuses once altered, gapped,
+// reordered or ended at another head.
+func TestVerifyInclusionGolden(t *testing.T) {
+	raw, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g golden
+	if err := json.Unmarshal(raw, &g); err != nil {
+		t.Fatal(err)
+	}
+	var recs [][]byte
+	for _, e := range g.Events {
+		recs = append(recs, e.Record)
+	}
+	head := g.Events[len(g.Events)-1].Hash
+	for from := range recs {
+		if got, err := audit.VerifyInclusion(recs[from:], head); err != nil || got != head {
+			t.Errorf("from event %d: %q %v", from, got, err)
+		}
+	}
+	if _, err := audit.VerifyInclusion(recs, ""); err != nil {
+		t.Errorf("no head given: %v", err)
+	}
+	altered := append([][]byte(nil), recs...)
+	altered[1] = bytes.Replace(altered[1], []byte(`"action": "http.request"`), []byte(`"action": "http.requesx"`), 1)
+	if bytes.Equal(altered[1], recs[1]) {
+		altered[1] = bytes.Replace(altered[1], []byte(`"http.request"`), []byte(`"http.requesx"`), 1)
+	}
+	cases := map[string][][]byte{
+		"altered":  altered,
+		"gap":      {recs[0], recs[2]},
+		"reversed": {recs[1], recs[0]},
+		"empty":    nil,
+	}
+	for name, in := range cases {
+		if _, err := audit.VerifyInclusion(in, head); err == nil {
+			t.Errorf("%s verified", name)
+		}
+	}
+	if _, err := audit.VerifyInclusion(recs, g.GenesisHash); err == nil {
+		t.Error("a wrong head verified")
+	}
 }

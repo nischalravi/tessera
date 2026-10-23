@@ -4,8 +4,9 @@
 // A bundle holds the tenant's connections (configuration and owners, never
 // credentials: an external secret reference such as vault:<path> travels as
 // a reference, a secret Tessera holds is marked "set in the target"),
-// readiness overlays, and sign-in connections (never client secrets or SP
-// keys). It is a JWS (flattened JSON, EdDSA) signed with the tenant's config
+// readiness overlays, sign-in connections (never client secrets or SP
+// keys), and, from version 2, catalog items, review schedules, alert rules
+// and SIEM sinks (sections.go says what an import does with each). It is a JWS (flattened JSON, EdDSA) signed with the tenant's config
 // signing key; the target accepts it only from a signer it trusts.
 //
 // Import is two steps: Plan shows what would be added, changed or removed,
@@ -41,8 +42,12 @@ import (
 
 // Format and Version identify bundles.
 const (
-	Format  = "tessera-config-bundle"
-	Version = 1
+	Format = "tessera-config-bundle"
+	// Version 2 added catalog items, review schedules, alert rules and SIEM sinks (issue #497);
+	// a version 1 bundle is still accepted and has none of them.
+	Version = 2
+	// MinVersion is the oldest bundle version an import accepts.
+	MinVersion = 1
 	// MediaType is the JWS "typ".
 	MediaType = "tessera-config-bundle+json"
 	// MaxBundleBytes caps an uploaded bundle.
@@ -72,6 +77,11 @@ type Bundle struct {
 	Overlays          []Overlay     `json:"overlays"`
 	IdentityProviders []IdP         `json:"identity_providers"`
 	Excluded          []ExcludedRef `json:"excluded,omitempty"`
+	// Sections of version 2: nil when the bundle predates them (an import then leaves them alone).
+	CatalogItems    []CatalogItem    `json:"catalog_items"`
+	ReviewSchedules []ReviewSchedule `json:"review_schedules"`
+	AlertRules      []AlertRule      `json:"alert_rules"`
+	SiemSinks       []SiemSink       `json:"siem_sinks"`
 }
 
 // Source is where a bundle came from.
@@ -239,6 +249,11 @@ func Collect(tx *store.TenantTx, rd *readiness.Service, now time.Time) (*Bundle,
 		}
 		b.IdentityProviders = append(b.IdentityProviders, idpOf(c))
 	}
+	for _, collect := range []func(*store.TenantTx, *Bundle) error{collectCatalog, collectReviewSchedules, collectAlertRules, collectSiemSinks} {
+		if err := collect(tx, b); err != nil {
+			return nil, err
+		}
+	}
 	return b, nil
 }
 
@@ -368,8 +383,8 @@ func Verify(tx *store.TenantTx, raw []byte) (*Verified, error) {
 	if err := dec.Decode(&b); err != nil {
 		return nil, refuse(422, "invalid_bundle", "the bundle content is not valid: %v", err)
 	}
-	if b.Format != Format || b.Version != Version {
-		return nil, refuse(422, "unsupported_bundle", "bundle format %s v%d is not supported (want %s v%d)", b.Format, b.Version, Format, Version)
+	if b.Format != Format || b.Version < MinVersion || b.Version > Version {
+		return nil, refuse(422, "unsupported_bundle", "bundle format %s v%d is not supported (want %s v%d to v%d)", b.Format, b.Version, Format, MinVersion, Version)
 	}
 	sum := sha256.Sum256(payload)
 	return &Verified{Bundle: &b, Hash: hex.EncodeToString(sum[:]), Signer: signer}, nil
