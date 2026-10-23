@@ -237,6 +237,8 @@ var tables = []string{
 	// group events and point-in-time history (schema/0285_group_events.sql)
 	"grp_event_heads", "grp_events", "grp_event_cursors", "grp_pit_objects", "grp_pit_direct", "grp_pit_effective",
 	"grp_pit_privileges", "grp_pit_digests",
+	// permission and limit history (schema/0810_group_pit_assigns.sql)
+	"grp_pit_assigns",
 	// group privileges (schema/0286_group_privs.sql)
 	"grp_privileges", "grp_priv_settings",
 	// guest access bundles, assurance and catalog populations (schema/0369_guest_access.sql)

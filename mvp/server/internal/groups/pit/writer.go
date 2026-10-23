@@ -45,6 +45,14 @@ type objectData struct {
 }
 
 // directData is the data of a direct membership event.
+// assignData is the part of an attribute event the PIT table indexes (the whole
+// event data is kept as the snapshot).
+type assignData struct {
+	DefID     string `json:"def_id"`
+	OwnerType string `json:"owner_type"`
+	OwnerID   string `json:"owner_id"`
+}
+
 type directData struct {
 	MemberType  string  `json:"member_type"`
 	Source      string  `json:"source"`
@@ -118,6 +126,19 @@ func Apply(tx *store.TenantTx, e *events.Event) error {
 
 	case events.PrivilegeRevoked:
 		return tx.ClosePitPrivilege(e.ObjectID, at, seq)
+
+	case events.AttributeAssigned, events.AttributeValueChanged:
+		var d assignData
+		if err := json.Unmarshal(e.Data, &d); err != nil || d.DefID == "" || d.OwnerType == "" {
+			return fmt.Errorf("%s carries no assignment", e.Type)
+		}
+		if err := tx.ClosePitAssign(e.ObjectID, at, seq); err != nil {
+			return err
+		}
+		return tx.OpenPitAssign(e.ObjectID, d.DefID, d.OwnerType, d.OwnerID, e.Data, at, seq)
+
+	case events.AttributeRemoved:
+		return tx.ClosePitAssign(e.ObjectID, at, seq)
 	}
 	return nil
 }

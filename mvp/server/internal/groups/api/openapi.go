@@ -114,6 +114,13 @@ var docList = []opDoc{
 	{Key: "POST /api/groups/pit/rebuild", Summary: "Rebuild the point-in-time rows from the events", Tag: "history"},
 	{Key: "POST /api/groups/engine/verify", Summary: "Recompute and repair the membership engine's tables", Tag: "engine"},
 	{Key: "GET /api/groups/engine/ops/{seq}", Summary: "Progress of a queued recompute (the op of a 202 answer)", Tag: "engine"},
+	// permissions and limits (GR-19)
+	{Key: "GET /api/groups/permissions/effective", Summary: "What an identity can do now or as of a past instant", Tag: "permissions", Query: pairs("identity:identity id|as_of:RFC 3339 time (default: now)")},
+	{Key: "GET /api/groups/permissions/check", Summary: "The decision for one resource and action, with limits evaluated against ctx.<name> values", Tag: "permissions", Query: pairs("identity:identity id|resource:full name of the permission resource|action:action name (default assign)|as_of:RFC 3339 time (default: now)")},
+	{Key: "GET /api/groups/permissions/cedar", Summary: "The permission assignments and their limits as Cedar policy text", Tag: "permissions"},
+	{Key: "GET /api/groups/permissions/export", Summary: "The permission assignments as a Grouper-shaped document", Tag: "permissions"},
+	{Key: "POST /api/groups/permissions/import", Summary: "Apply a Grouper-shaped permission document (audited; all or nothing)", Tag: "permissions"},
+	{Key: "GET /api/groups/{id}/permissions", Summary: "The permission assignments on a role and on its memberships", Tag: "permissions"},
 	// the attribute framework, object types and services (GR-7)
 	{Key: "GET /api/groups/object-types", Summary: "The object type vocabulary of groups and folders", Tag: "attributes"},
 	{Key: "GET /api/groups/services", Summary: "The services whose policy groups the caller belongs to", Tag: "attributes"},

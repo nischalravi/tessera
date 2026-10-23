@@ -3576,6 +3576,56 @@ calls it `0104`; `0280`..`0285` are taken and `0286` belongs to another change):
   `TestEvents_InTheChangeTransaction`), `internal/api` (`TestGroupsRoutesRequirePrivilege` covers every
   attribute route, `TestGroupsAttrsFlow`, `TestGroupsAttrsPrivileges`, `TestGroupsAttrsTenantIsolation`,
   ...), `TestIsolation_GroupAttrTables` and `TestValues_NoFloatColumns` in `internal/store`.
+
+#### Group permissions and limits (GR-19, issue #62)
+
+Design `docs/design/groups-grouper-parity.md` §10.10. Schema `0810_group_pit_assigns.sql` (with its
+Postgres variant): `grp_pit_assigns`, the point-in-time history of attribute assignments. Package
+`internal/groups/perms`. There is no new storage for permissions: they are GR-7 attribute assignments.
+
+- **Model.** A permission *resource* is a name of a definition of type `perm`, an *action* is one of
+  that definition's actions, and an assignment sits on a role (a group) or on a role's membership (the
+  `(role, identity)` pair). Resource and action inheritance are the definition's implication closures
+  (assigning `ledger`, which implies `entry`, also covers `entry`; `write` implying `read` likewise).
+  A *limit* is an assignment of a definition of type `limit` on a permission assignment; make both
+  through `/api/groups/attr-assignments`.
+- **Heuristics** (`perms.Decide`). Of the assignments that reach the identity (through the roles it is
+  effectively in), cover the resource and action, are inside their dates and have all limits holding,
+  the more specific wins: the named resource over one that only implies it, then the named action, then
+  how directly it reaches the subject (`(role, identity)` pair, then a role the identity is a direct
+  member of, then a role reached through nesting). Among equals a disallow beats an allow; with none the
+  answer is `no_permission`. `[to be confirmed against Grouper's PermissionHeuristics on import]`.
+- **Limits** compile to Cedar `when` conditions over `context`, by the extension of the limit's name:
+  `amountLessThan` (integers, `context.amount < N`), `ipOnNetwork` (CIDRs, `ip(context.ip).isInRange(...)`),
+  `timeWindow` (`"9-17"`, UTC hours, end exclusive, `context.hour`) and `expression`
+  (`"attr op literal"`, ops `== != < <= > >=`, an integer or a double-quoted string). A missing context value
+  fails the limit; several limits on one assignment must all hold; several values of one `ipOnNetwork` or
+  `timeWindow` are alternatives. The same condition tree is rendered as Cedar text and evaluated by the
+  decision point (`TestLimits_EvaluatedByPDP`).
+- **PIT view.** `grp_pit_assigns` is filled from the `attribute.*` events (and rebuilt by
+  `POST /api/groups/pit/rebuild`, pruned by retention). `as_of=T` answers from it and from the effective
+  membership history. What the history does not keep is read as it is now: the implication closures, and
+  whether a role was direct (every role the identity held counts as direct).
+- **Grouper shape.** `GET /api/groups/permissions/export` and `POST .../import` use
+  `{permissions: [{role, subject?, resource, action, disallowed?, enabled_at?, disabled_at?, limits: [{name, values}]}]}`
+  (full names; `subject` is an identity's external id and needs a direct membership). Import checks the
+  whole document first (422 `invalid_import` with every problem, nothing applied), leaves held entries
+  alone, replaces changed ones and removes nothing; each change is audited and evented by
+  `attrs.Assign`, plus one `groups.permissions.imported`. The Grouper connector (GR-15, #58) is not on
+  `dev` yet; it is expected to hand its reads to this document.
+
+| Route | Needs |
+|---|---|
+| `GET /api/groups/permissions/effective?identity=&as_of=` | `groups.admin`; every (resource, action) the identity's assignments cover, with the verdict and the assignments behind it; limits are reported (`conditional`), not evaluated |
+| `GET /api/groups/permissions/check?identity=&resource=&action=&as_of=&ctx.<name>=<value>` | `groups.admin`; the decision with limits evaluated (`hour`, UTC, defaults to the clock's) |
+| `GET /api/groups/permissions/cedar` | `groups.admin`; the assignments as Cedar text. Cedar's forbid overrides any permit while the heuristics let a more specific allow win, so the text is exact only when no allow overrides a disallow; `check` is the authority |
+| `GET /api/groups/permissions/export`, `POST .../import` | `groups.admin` (import also needs the tenant_admin role) |
+| `GET /api/groups/{id}/permissions` | `groups.read` and the role's `read` privilege |
+
+- Tests: `go test ./internal/groups/perms` (`TestHeuristics_Table`, `TestCompileLimit_Table`,
+  `TestLimits_EvaluatedByPDP`, `TestPermissions_PITView`, `TestGrouperImport_RoundTrip`), `internal/api`
+  (`TestGroupsPermissionsAPI`), `TestIsolation_GroupPermissionTables` in `internal/store`.
+
 #### Group rules and membership constraints (GR-13, issue #56)
 
 Design `docs/design/groups-grouper-parity.md` §10.3, K6. Schema `0288_group_rules.sql` (the design's
