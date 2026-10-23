@@ -1,0 +1,138 @@
+{{- $_ := required "config.publicUrl is required (https://...)" .Values.config.publicUrl -}}
+{{- if not (hasPrefix "https://" .Values.config.publicUrl) }}{{ fail "config.publicUrl must start with https:// (TESSERA_ENV=prod refuses http)" }}{{ end -}}
+{{- $_ := required "config.auditAnchor is required in prod (s3://bucket/prefix)" .Values.config.auditAnchor -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tessera.fullname" . }}
+  labels: {{- include "tessera.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: {{- include "tessera.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tessera.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "tessera.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{- include "tessera.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "tessera.image" .Values.image.api }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve", "-addr", "0.0.0.0:8000"]
+          ports:
+            - { name: api, containerPort: 8000 }
+            {{- if .Values.metrics.enabled }}
+            - { name: metrics, containerPort: {{ .Values.metrics.port }} }
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "tessera.secretName" . }}
+          env:
+            - { name: TESSERA_ENV, value: prod }
+            - { name: TESSERA_PUBLIC_URL, value: {{ .Values.config.publicUrl | quote }} }
+            - { name: TESSERA_COOKIE_SECURE, value: "true" }
+            - { name: TESSERA_TRUSTED_PROXIES, value: {{ include "tessera.trustedProxies" . | quote }} }
+            - { name: TESSERA_AUDIT_ANCHOR, value: {{ .Values.config.auditAnchor | quote }} }
+            {{- if .Values.config.awsRegion }}
+            - { name: AWS_REGION, value: {{ .Values.config.awsRegion | quote }} }
+            {{- end }}
+            {{- if .Values.metrics.enabled }}
+            - { name: TESSERA_METRICS_ADDR, value: "0.0.0.0:{{ .Values.metrics.port }}" }
+            - { name: TESSERA_METRICS_ALLOW_WILDCARD, value: "true" }
+            {{- end }}
+            {{- range $k, $v := .Values.config.extraEnv }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+            {{- with .Values.extraEnv }}{{ toYaml . | nindent 12 }}{{ end }}
+          startupProbe:
+            httpGet: { path: {{ .Values.probes.livenessPath }}, port: api }
+            {{- toYaml .Values.probes.startup | nindent 12 }}
+          livenessProbe:
+            httpGet: { path: {{ .Values.probes.livenessPath }}, port: api }
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: {{ .Values.probes.readinessPath }}, port: api }
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          resources: {{- toYaml .Values.resources.api | nindent 12 }}
+          securityContext: {{- include "tessera.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/tessera }
+            - { name: tmp, mountPath: /tmp }
+            {{- if .Values.csi.enabled }}
+            - { name: secrets-store, mountPath: /mnt/secrets-store, readOnly: true }
+            {{- end }}
+            {{- if .Values.database.caConfigMap }}
+            - { name: db-ca, mountPath: /etc/tessera/db-ca, readOnly: true }
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}{{ toYaml . | nindent 12 }}{{ end }}
+        - name: ui
+          image: {{ include "tessera.image" .Values.image.ui }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: API_UPSTREAM, value: "127.0.0.1:8000" }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources: {{- toYaml .Values.resources.ui | nindent 12 }}
+          securityContext: {{- include "tessera.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - { name: ui-tmp, mountPath: /tmp }
+      volumes:
+        - name: data
+          emptyDir: { sizeLimit: 256Mi }
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+        - name: ui-tmp
+          emptyDir: { sizeLimit: 64Mi }
+        {{- if .Values.csi.enabled }}
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ include "tessera.fullname" . }}
+        {{- end }}
+        {{- if .Values.database.caConfigMap }}
+        - name: db-ca
+          configMap: { name: {{ .Values.database.caConfigMap }} }
+        {{- end }}
+        {{- with .Values.extraVolumes }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- if .Values.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.topologySpreadConstraints.maxSkew }}
+          topologyKey: {{ .Values.topologySpreadConstraints.topologyKey }}
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "tessera.selectorLabels" . | nindent 14 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}

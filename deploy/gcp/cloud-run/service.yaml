@@ -1,0 +1,77 @@
+# Google Cloud Run (reference), multi-container service (gcloud run services replace service.yaml).
+# Replace PROJECT, REGION, TAG, SERVICE_ACCOUNT, the VPC network/subnet and the hostnames.
+# Postgres is required: Cloud SQL with a PRIVATE IP reached through Direct VPC egress, ssl_mode=ENCRYPTED_ONLY
+# (deploy/terraform/gcp creates it). The Cloud SQL Auth Proxy unix socket is not used: the production guard rails
+# require sslmode=require in the DSN, which does not apply to a unix socket.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: tessera
+  labels: { cloud.googleapis.com/location: REGION }
+  annotations:
+    run.googleapis.com/ingress: internal-and-cloud-load-balancing   # reach it through the external HTTPS LB
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "2"
+        autoscaling.knative.dev/maxScale: "6"
+        run.googleapis.com/cpu-throttling: "false"        # background loops need CPU outside requests
+        run.googleapis.com/startup-cpu-boost: "true"
+        run.googleapis.com/network-interfaces: '[{"network":"tessera","subnetwork":"tessera-run"}]'
+        run.googleapis.com/vpc-access-egress: private-ranges-only
+        run.googleapis.com/container-dependencies: '{"ui":["api"]}'
+    spec:
+      serviceAccountName: tessera@PROJECT.iam.gserviceaccount.com
+      containerConcurrency: 80
+      timeoutSeconds: 60
+      containers:
+        - name: ui                       # the ingress container
+          image: REGION-docker.pkg.dev/PROJECT/tessera/tessera-ui:TAG
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: API_UPSTREAM, value: "127.0.0.1:8000" }
+          resources: { limits: { cpu: "1", memory: 256Mi } }
+          volumeMounts: [{ name: ui-tmp, mountPath: /tmp }]
+          startupProbe:
+            httpGet: { path: /api/health, port: 8080 }
+            periodSeconds: 5
+            failureThreshold: 30
+        - name: api
+          image: REGION-docker.pkg.dev/PROJECT/tessera/tessera-api:TAG
+          args: ["serve", "-addr", "0.0.0.0:8000"]
+          resources: { limits: { cpu: "1", memory: 1Gi } }
+          env:
+            - { name: TESSERA_ENV, value: prod }
+            - { name: TESSERA_PUBLIC_URL, value: "https://tessera.example.com" }
+            - { name: TESSERA_COOKIE_SECURE, value: "true" }
+            # nginx sidecar only: Cloud Run's front end puts the client address in X-Forwarded-For, which nginx
+            # appends to. Confirm on your service before relying on it.
+            - { name: TESSERA_TRUSTED_PROXIES, value: "127.0.0.1/32" }
+            - { name: TESSERA_AUDIT_ANCHOR, value: "s3://example-tessera-anchors/prod" }
+            - { name: AWS_REGION, value: us-east-1 }
+            - { name: TESSERA_METRICS_ADDR, value: "off" }
+            - name: TESSERA_DB
+              valueFrom: { secretKeyRef: { name: tessera-db-owner-dsn, key: latest } }
+            - name: TESSERA_DB_APP
+              valueFrom: { secretKeyRef: { name: tessera-db-app-dsn, key: latest } }
+            - name: TESSERA_KEK
+              valueFrom: { secretKeyRef: { name: tessera-kek, key: latest } }
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: tessera-aws-access-key-id, key: latest } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: tessera-aws-secret-access-key, key: latest } }
+          volumeMounts:
+            - { name: tessera-data, mountPath: /var/lib/tessera }
+            - { name: api-tmp, mountPath: /tmp }
+          startupProbe:
+            httpGet: { path: /api/health, port: 8000 }
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /api/health, port: 8000 }
+            periodSeconds: 15
+      volumes:
+        - { name: tessera-data, emptyDir: { medium: Memory, sizeLimit: 128Mi } }
+        - { name: api-tmp, emptyDir: { medium: Memory, sizeLimit: 64Mi } }
+        - { name: ui-tmp, emptyDir: { medium: Memory, sizeLimit: 64Mi } }

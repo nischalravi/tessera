@@ -1,0 +1,10 @@
+apiVersion: v2
+name: tessera
+description: Tessera IAM platform (API + web UI) for Kubernetes, OpenShift, EKS, AKS and GKE. Reference chart.
+type: application
+version: 0.1.0
+appVersion: "latest"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/nischalravi/tessera
+sources:
+  - https://github.com/nischalravi/tessera

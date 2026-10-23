@@ -1,0 +1,12 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "tessera.fullname" . }}
+  labels:
+    {{- include "tessera.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+spec:
+  {{- /* files/tessera-rules.yml is a copy of deploy/prometheus/tessera-rules.yml */}}
+  groups: {{- (.Files.Get "files/tessera-rules.yml" | fromYaml).groups | toYaml | nindent 4 }}
+{{- end }}
