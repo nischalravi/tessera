@@ -1,0 +1,73 @@
+# Google GKE: GKE Ingress (Google-managed certificate), Workload Identity, Cloud SQL for PostgreSQL (private IP),
+# Secret Manager via the CSI driver (gcp provider).
+image:
+  api: { repository: us-docker.pkg.dev/example-project/tessera/tessera-api, tag: "v0.1.0" }
+  ui: { repository: us-docker.pkg.dev/example-project/tessera/tessera-ui, tag: "v0.1.0" }
+
+config:
+  publicUrl: https://tessera.example.com
+  auditAnchor: s3://example-tessera-anchors/prod     # prod needs an S3 anchor bucket (docs/deploy/README.md)
+  awsRegion: us-east-1
+  # Google front ends are not predictable addresses: GKE Ingress forwards from the proxy-only/health-check
+  # ranges 130.211.0.0/22 and 35.191.0.0/16 plus the node/pod range. Verify X-Forwarded-For in your cluster.
+  trustedProxies: ["127.0.0.1/32", "130.211.0.0/22", "35.191.0.0/16", "10.8.0.0/14"]
+
+serviceAccount:
+  annotations:
+    iam.gke.io/gcp-service-account: tessera@example-project.iam.gserviceaccount.com
+automountServiceAccountToken: true
+
+extraEnv:
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom: { secretKeyRef: { name: tessera-env, key: AWS_ACCESS_KEY_ID } }
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom: { secretKeyRef: { name: tessera-env, key: AWS_SECRET_ACCESS_KEY } }
+
+csi:
+  enabled: true
+  provider: gcp
+  syncedSecretName: tessera-env
+  parameters:
+    secrets: |
+      - resourceName: "projects/example-project/secrets/tessera-db-owner-dsn/versions/latest"
+        path: "db-owner"
+      - resourceName: "projects/example-project/secrets/tessera-db-app-dsn/versions/latest"
+        path: "db-app"
+      - resourceName: "projects/example-project/secrets/tessera-kek/versions/latest"
+        path: "kek"
+      - resourceName: "projects/example-project/secrets/tessera-aws-access-key-id/versions/latest"
+        path: "aws-key-id"
+      - resourceName: "projects/example-project/secrets/tessera-aws-secret-access-key/versions/latest"
+        path: "aws-secret"
+  objects:
+    - { objectName: db-owner, key: TESSERA_DB }
+    - { objectName: db-app, key: TESSERA_DB_APP }
+    - { objectName: kek, key: TESSERA_KEK }
+    - { objectName: aws-key-id, key: AWS_ACCESS_KEY_ID }
+    - { objectName: aws-secret, key: AWS_SECRET_ACCESS_KEY }
+migration:
+  enabled: false
+
+database:
+  caConfigMap: cloudsql-ca   # server CA of the instance (key ca.crt); with Cloud SQL use sslmode=verify-ca unless the
+                             # instance has a per-instance server CA whose name matches (verify-full needs the host to match)
+
+ingress:
+  className: gce
+  annotations:
+    kubernetes.io/ingress.global-static-ip-name: tessera-ip
+    networking.gke.io/managed-certificates: tessera-cert
+  tls: { enabled: true }
+
+service:
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+
+networkPolicy:
+  ingressFrom:
+    - ipBlock: { cidr: 130.211.0.0/22 }
+    - ipBlock: { cidr: 35.191.0.0/16 }
+  databaseCIDRs: ["10.20.0.0/16"]
+
+metrics:
+  serviceMonitor: { enabled: false }   # GKE Managed Prometheus uses a PodMonitoring resource instead

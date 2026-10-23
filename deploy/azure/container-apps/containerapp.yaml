@@ -1,0 +1,97 @@
+# Azure Container Apps (reference). Create/update with:
+#   az containerapp create -g RG -n tessera --environment ENV --yaml containerapp.yaml
+# Replace SUBSCRIPTION, RG, ACR, KEYVAULT, IDENTITY and the hostnames. The Terraform module deploy/terraform/azure
+# creates the environment, the identity, Key Vault and PostgreSQL Flexible Server this file refers to.
+# Postgres is required (minReplicas 2): no SQLite.
+location: eastus
+identity:
+  type: UserAssigned
+  userAssignedIdentities:
+    /subscriptions/SUBSCRIPTION/resourceGroups/RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/tessera: {}
+properties:
+  environmentId: /subscriptions/SUBSCRIPTION/resourceGroups/RG/providers/Microsoft.App/managedEnvironments/ENV
+  configuration:
+    activeRevisionsMode: Single
+    ingress:
+      external: true
+      targetPort: 8080          # the ui container; it proxies the API on localhost:8000
+      transport: auto
+      allowInsecure: false      # TLS is terminated by the environment (managed certificate on a custom domain)
+      customDomains:
+        - name: tessera.example.com
+          bindingType: SniEnabled
+          certificateId: /subscriptions/SUBSCRIPTION/resourceGroups/RG/providers/Microsoft.App/managedEnvironments/ENV/managedCertificates/tessera
+    registries:
+      - server: ACR.azurecr.io
+        identity: /subscriptions/SUBSCRIPTION/resourceGroups/RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/tessera
+    secrets:                    # Key Vault references, resolved with the managed identity
+      - name: db-owner-dsn
+        keyVaultUrl: https://KEYVAULT.vault.azure.net/secrets/db-owner-dsn
+        identity: /subscriptions/SUBSCRIPTION/resourceGroups/RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/tessera
+      - name: db-app-dsn
+        keyVaultUrl: https://KEYVAULT.vault.azure.net/secrets/db-app-dsn
+        identity: /subscriptions/SUBSCRIPTION/resourceGroups/RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/tessera
+      - name: kek
+        keyVaultUrl: https://KEYVAULT.vault.azure.net/secrets/kek
+        identity: /subscriptions/SUBSCRIPTION/resourceGroups/RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/tessera
+      - name: aws-access-key-id
+        keyVaultUrl: https://KEYVAULT.vault.azure.net/secrets/aws-access-key-id
+        identity: /subscriptions/SUBSCRIPTION/resourceGroups/RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/tessera
+      - name: aws-secret-access-key
+        keyVaultUrl: https://KEYVAULT.vault.azure.net/secrets/aws-secret-access-key
+        identity: /subscriptions/SUBSCRIPTION/resourceGroups/RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/tessera
+  template:
+    scale:
+      minReplicas: 2
+      maxReplicas: 6
+      rules:
+        - name: http
+          http: { metadata: { concurrentRequests: "80" } }
+    volumes:
+      - { name: tessera-data, storageType: EmptyDir }
+      - { name: api-tmp, storageType: EmptyDir }
+      - { name: ui-tmp, storageType: EmptyDir }
+    containers:
+      - name: ui
+        image: ACR.azurecr.io/tessera-ui:TAG
+        resources: { cpu: 0.25, memory: 0.5Gi }
+        env:
+          - { name: API_UPSTREAM, value: "127.0.0.1:8000" }
+        volumeMounts: [{ volumeName: ui-tmp, mountPath: /tmp }]
+        probes:
+          - type: Readiness
+            httpGet: { path: /api/health, port: 8080 }
+            periodSeconds: 10
+      - name: api
+        image: ACR.azurecr.io/tessera-api:TAG
+        args: ["serve", "-addr", "0.0.0.0:8000"]
+        resources: { cpu: 0.75, memory: 1.5Gi }
+        env:
+          - { name: TESSERA_ENV, value: prod }
+          - { name: TESSERA_PUBLIC_URL, value: "https://tessera.example.com" }
+          - { name: TESSERA_COOKIE_SECURE, value: "true" }
+          # nginx sidecar plus the environment's ingress hop. Check the real X-Forwarded-For chain of your
+          # environment and list the peer ranges you see (none broader than /8).
+          - { name: TESSERA_TRUSTED_PROXIES, value: "127.0.0.1/32,100.64.0.0/10,10.0.0.0/16" }
+          - { name: TESSERA_AUDIT_ANCHOR, value: "s3://example-tessera-anchors/prod" }
+          - { name: AWS_REGION, value: us-east-1 }
+          - { name: TESSERA_METRICS_ADDR, value: "off" }
+          - { name: TESSERA_DB, secretRef: db-owner-dsn }
+          - { name: TESSERA_DB_APP, secretRef: db-app-dsn }
+          - { name: TESSERA_KEK, secretRef: kek }
+          - { name: AWS_ACCESS_KEY_ID, secretRef: aws-access-key-id }
+          - { name: AWS_SECRET_ACCESS_KEY, secretRef: aws-secret-access-key }
+        volumeMounts:
+          - { volumeName: tessera-data, mountPath: /var/lib/tessera }
+          - { volumeName: api-tmp, mountPath: /tmp }
+        probes:
+          - type: Startup
+            httpGet: { path: /api/health, port: 8000 }
+            periodSeconds: 5
+            failureThreshold: 30
+          - type: Liveness
+            httpGet: { path: /api/health, port: 8000 }
+            periodSeconds: 15
+          - type: Readiness
+            httpGet: { path: /api/health, port: 8000 }
+            periodSeconds: 10
