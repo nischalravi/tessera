@@ -2166,6 +2166,20 @@ CREATE POLICY tenant_isolation ON deletion_hold_items
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE oauth_app_facts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE oauth_app_facts FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON oauth_app_facts;
+CREATE POLICY tenant_isolation ON oauth_app_facts
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE oauth_app_changes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE oauth_app_changes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON oauth_app_changes;
+CREATE POLICY tenant_isolation ON oauth_app_changes
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE deletion_guard_source_policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE deletion_guard_source_policies FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON deletion_guard_source_policies;
@@ -2184,5 +2198,12 @@ ALTER TABLE deletion_guard_source_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE deletion_guard_source_ledger FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON deletion_guard_source_ledger;
 CREATE POLICY tenant_isolation ON deletion_guard_source_ledger
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE mcp_resource_bindings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mcp_resource_bindings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON mcp_resource_bindings;
+CREATE POLICY tenant_isolation ON mcp_resource_bindings
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

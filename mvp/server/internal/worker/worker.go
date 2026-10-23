@@ -22,7 +22,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/queue"
@@ -64,6 +67,9 @@ const maxAttempts = 3
 type SyncPayload struct {
 	// Mode is "incremental" (default) or "full" (ignore checkpoints).
 	Mode string `json:"mode,omitempty"`
+	// RequestedBy is the platform user who queued the sync ("" for a schedule). The holds of the run
+	// record them as a contributor, so they cannot release them (#487). A retry keeps the payload.
+	RequestedBy string `json:"requested_by,omitempty"`
 }
 
 // Deps is what the handlers need.
@@ -166,6 +172,12 @@ func (d *Deps) connectorSync(ctx context.Context, j queue.Job) (any, error) {
 		if err := json.Unmarshal([]byte(j.Payload), &p); err != nil || (p.Mode != "" && p.Mode != "incremental" && p.Mode != "full") {
 			return nil, queue.Permanent(errors.New("connector_sync: bad payload"))
 		}
+	}
+	if p.RequestedBy != "" {
+		if _, err := uuid.Parse(p.RequestedBy); err != nil {
+			return nil, queue.Permanent(errors.New("connector_sync: bad payload"))
+		}
+		ctx = deleteguard.WithRequester(ctx, p.RequestedBy)
 	}
 	now := d.now()
 	conns, err := d.Connectors(now)

@@ -150,7 +150,7 @@ func (e *env) authorize(resource string, scope ...string) (string, []string) {
 		if err != nil {
 			return err
 		}
-		req, _, oe, err := e.svc.BeginAuthorization(tx, g, NewAuthRequest{Client: e.client, RedirectURI: testRedirect, State: "st",
+		req, _, oe, err := e.svc.BeginAuthorization(tx, g, NewAuthRequest{Issuer: testIssuer, Client: e.client, RedirectURI: testRedirect, State: "st",
 			CodeChallenge: ChallengeS256(testVerif), Resource: resource, Scope: scope, UserIdentity: e.alice})
 		if err != nil || oe != nil {
 			e.t.Fatalf("BeginAuthorization = %v, %v", oe, err)

@@ -330,6 +330,11 @@ func (tx *TenantTx) UpsertOAuthGrant(g *OAuthGrant, now time.Time) error {
 	return nil
 }
 
+// OAuthGrantByKey returns the grant of an app with this grant key, or ErrNotFound.
+func (tx *TenantTx) OAuthGrantByKey(appID, grantKey string) (*OAuthGrant, error) {
+	return one(tx, scanOAuthGrant, oauthGrantsByKey, sql.Named("app_id", appID), sql.Named("grant_key", grantKey))
+}
+
 // OAuthGrant returns one grant or ErrNotFound.
 func (tx *TenantTx) OAuthGrant(id string) (*OAuthGrant, error) {
 	return one(tx, scanOAuthGrant, oauthGrantsGet, sql.Named("id", id))

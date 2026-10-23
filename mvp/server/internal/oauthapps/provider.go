@@ -28,6 +28,16 @@ type Provider interface {
 	Present(ctx context.Context, clientID string, g Grant) (bool, error)
 }
 
+// CredentialRemover is a Provider that can also remove a secret or certificate
+// of an app (only Entra today; for the others removal is a manual task).
+type CredentialRemover interface {
+	// RemoveCredential removes the credential; a credential that is already
+	// gone is not an error. One no API can remove returns a *ManualError.
+	RemoveCredential(ctx context.Context, c Credential) error
+	// CredentialPresent re-reads the provider and reports whether the credential still exists.
+	CredentialPresent(ctx context.Context, c Credential) (bool, error)
+}
+
 // ManualError means no provider API revokes the grant: a person must, and the
 // message says how. It is never reported as a success.
 type ManualError struct{ Msg string }

@@ -243,6 +243,8 @@ var tables = []string{
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
 	// pending four-eyes OAuth app revokes (schema/0470_oauth_revoke_requests.sql)
 	"oauth_revoke_requests",
+	// credential, permission and owner changes of OAuth apps (schema/0680_oauth_app_changes.sql)
+	"oauth_app_facts", "oauth_app_changes",
 	// guest lifecycle (schema/0371_guest_lifecycle.sql)
 	"guest_lifecycle_settings", "guest_reminders", "guest_renewal_tokens", "guest_lifecycle_tasks", "sponsorship_stepups",
 	"guest_deprovisioning",
@@ -254,6 +256,8 @@ var tables = []string{
 	"auth_methods", "auth_method_sources", "account_auth_signals", "mfa_posture_snapshots",
 	// AI agent discovery (schema/0375_agent_discovery.sql)
 	"agent_profiles", "mcp_findings",
+	// MCP resource bindings to an issuer and audience (schema/0700_mcp_resource_bindings.sql)
+	"mcp_resource_bindings",
 	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)
 	"identity_link_requests",
 	// pending account pins and releases, the four-eyes step (schema/0500_account_link_requests.sql)

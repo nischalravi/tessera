@@ -186,6 +186,17 @@ var Rules = []*Rule{
 		},
 	},
 	{
+		ID: "oauth_app_change", Name: "OAuth app credential or permission added", Kind: "event", Severity: "high", Threshold: 1, Window: time.Hour,
+		Description: "A sync found a new secret or certificate on an OAuth app, a new application permission or tenant-wide consent, or an owner change (#474). Contain it from the OAuth apps panel.",
+		Match: func(e *store.AuditEvent) (Hit, bool) {
+			if e.Action != "oauthapps.change_detected" || e.Outcome != store.OutcomeSuccess {
+				return Hit{}, false
+			}
+			d := detailOf(e)
+			return Hit{Key: orStr(str(d, "change_id"), "change"), Title: orStr(str(d, "summary"), "An OAuth app changed")}, true
+		},
+	},
+	{
 		ID: "audit_anchor_failed", Name: "Audit anchoring failing", Kind: "detection", Severity: "critical", Threshold: 3,
 		Description: "Audit checkpoints could not be anchored outside the database, so tampering might go unnoticed.",
 		Detect: func(tx *store.TenantTx, _ time.Time) ([]Finding, error) {

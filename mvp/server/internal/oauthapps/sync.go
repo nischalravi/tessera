@@ -79,6 +79,7 @@ type ProviderReport struct {
 	Apps     int      `json:"apps"`
 	Grants   int      `json:"grants"`
 	Removed  int      `json:"removed"`
+	Changes  int      `json:"changes,omitempty"`
 	Error    string   `json:"error,omitempty"`
 	Notes    []string `json:"notes,omitempty"`
 }
@@ -189,6 +190,7 @@ func Apply(tx *store.TenantTx, snap *Snapshot, now time.Time, actor string) (Pro
 		if err := tx.UpsertOAuthApp(app, now); err != nil {
 			return pr, err
 		}
+		var newGrants []*store.OAuthGrant
 		for _, g := range a.Grants {
 			row := &store.OAuthGrant{AppID: app.ID, Provider: snap.Provider, GrantKey: g.Key, ProviderRef: g.Ref, Kind: g.Kind,
 				UserRef: g.UserRef, GranterAdmin: g.GranterAdmin, Scopes: g.Scopes, ConsentType: g.Consent, GrantedAt: g.GrantedAt,
@@ -204,14 +206,30 @@ func Apply(tx *store.TenantTx, snap *Snapshot, now time.Time, actor string) (Pro
 				id := acct.ID
 				row.AccountID, row.IdentityID = &id, acct.IdentityID
 			}
+			_, err := tx.OAuthGrantByKey(app.ID, g.Key)
+			isNew := errors.Is(err, store.ErrNotFound)
+			if err != nil && !isNew {
+				return pr, err
+			}
 			if err := tx.UpsertOAuthGrant(row, now); err != nil {
 				return pr, err
 			}
+			if isNew {
+				newGrants = append(newGrants, row)
+			}
 			pr.Grants++
 		}
+		n, err := track(tx, app, &a, newGrants, now, actor)
+		if err != nil {
+			return pr, err
+		}
+		pr.Changes += n
 		pr.Apps++
 	}
 	if pr.Removed, err = tx.RemoveUnseenOAuthGrants(snap.Provider, now); err != nil {
+		return pr, err
+	}
+	if err = tx.RemoveUnseenOAuthFacts(snap.Provider, now); err != nil {
 		return pr, err
 	}
 	apps, err := tx.OAuthApps()
@@ -226,13 +244,16 @@ func Apply(tx *store.TenantTx, snap *Snapshot, now time.Time, actor string) (Pro
 			return pr, err
 		}
 	}
+	if err := resolveChanges(tx, snap.Provider, now); err != nil {
+		return pr, err
+	}
 	if err := tx.PutOAuthSyncState(&store.OAuthSyncState{Provider: snap.Provider, Status: "ok", AttemptedAt: now, SucceededAt: &now,
 		Apps: pr.Apps, Grants: pr.Grants, Removed: pr.Removed}); err != nil {
 		return pr, err
 	}
 	return pr, tx.Audit(now, actor, "oauthapps.synced", ojson.Object{{Key: "provider", Value: snap.Provider},
 		{Key: "apps", Value: pr.Apps}, {Key: "grants", Value: pr.Grants}, {Key: "removed", Value: pr.Removed},
-		{Key: "catalog_version", Value: CatalogVersion}})
+		{Key: "changes", Value: pr.Changes}, {Key: "catalog_version", Value: CatalogVersion}})
 }
 
 // live reports whether a grant still exists at the provider as far as Tessera knows.

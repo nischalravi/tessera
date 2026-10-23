@@ -272,9 +272,14 @@ func ValidateResource(uri string) error {
 func (s *Service) issue(tx *store.TenantTx, issuer string, c *store.MCPClient, user, agent *store.Identity,
 	res *store.MCPResource, scope []string, requested string, act *Actor, grant string) (*TokenResponse, *OAuthError, error) {
 	now := s.now()
+	b, err := BindingOf(tx, res, issuer)
+	if err != nil {
+		return nil, nil, err
+	}
+	aud := b.Audience
 	ttl := s.ttl()
 	jti := uuid.NewString()
-	claims := Claims{Issuer: issuer, Subject: SubjectOf(user.ID), Audience: jwt.Audience{res.Resource},
+	claims := Claims{Issuer: issuer, Subject: SubjectOf(user.ID), Audience: jwt.Audience{aud},
 		Expiry: jwt.NewNumericDate(now.Add(ttl)), NotBefore: jwt.NewNumericDate(now), IssuedAt: jwt.NewNumericDate(now),
 		ID: jti, Scope: JoinScope(scope), ClientID: c.ClientID, Act: act, PolicyVersion: s.policyVersion()}
 	raw, err := Mint(tx, s.Sealer, claims)
@@ -304,6 +309,8 @@ func (s *Service) issue(tx *store.TenantTx, issuer string, c *store.MCPClient, u
 
 // NewAuthRequest is a validated authorization request from the browser.
 type NewAuthRequest struct {
+	// Issuer is this tenant's MCP authorization server, checked against the resource's binding.
+	Issuer        string
 	Client        *store.MCPClient
 	RedirectURI   string
 	State         string
@@ -333,8 +340,16 @@ func (s *Service) BeginAuthorization(tx *store.TenantTx, g *graph.Snapshot, in N
 	if !ok {
 		return d(oerr(403, "access_denied", "your account is not an active user identity"))
 	}
-	if _, ok := resourceFor(tx, in.Resource); !ok {
-		return d(oerr(400, "invalid_target", "resource is not a registered MCP resource"))
+	res, ok := resourceFor(tx, in.Resource)
+	if !ok {
+		t.action = ActionUnregistered
+		return d(oerr(400, "invalid_target", msgUnregistered))
+	}
+	if _, e, err := bound(tx, res, in.Issuer); err != nil {
+		return nil, nil, nil, err
+	} else if e != nil {
+		t.action = ActionIssuerMismatch
+		return d(e)
 	}
 	if del, err := hasDelegation(tx, agent.ID, user.ID, now); err != nil {
 		return nil, nil, nil, err
@@ -478,7 +493,12 @@ func (s *Service) RedeemCode(tx *store.TenantTx, g *graph.Snapshot, issuer strin
 	}
 	res, ok := resourceFor(tx, req.Resource)
 	if !ok {
-		return d(oerr(400, "invalid_target", "resource is not a registered MCP resource"))
+		return s.deny(tx, store.MCPDecisionIssue, ActionUnregistered, t, oerr(400, "invalid_target", msgUnregistered))
+	}
+	if _, e, err := bound(tx, res, issuer); err != nil {
+		return nil, nil, err
+	} else if e != nil {
+		return s.deny(tx, store.MCPDecisionIssue, ActionIssuerMismatch, t, e)
 	}
 	if del, err := hasDelegation(tx, agent.ID, user.ID, now); err != nil {
 		return nil, nil, err
@@ -535,12 +555,17 @@ func (s *Service) Exchange(tx *store.TenantTx, g *graph.Snapshot, issuer string,
 	}
 	res, ok := resourceFor(tx, in.Resource)
 	if !ok {
-		return d(oerr(400, "invalid_target", "resource is not a registered MCP resource"))
+		return s.deny(tx, store.MCPDecisionExchange, ActionUnregistered, t, oerr(400, "invalid_target", msgUnregistered))
+	}
+	if _, e, err := bound(tx, res, issuer); err != nil {
+		return nil, nil, err
+	} else if e != nil {
+		return s.deny(tx, store.MCPDecisionExchange, ActionIssuerMismatch, t, e)
 	}
 
 	// the subject token: signature, type, lifetime, then the live record
 	sc, err := Verify(tx, in.SubjectToken, issuer, now)
-	if errors.Is(err, ErrTokenInvalid) || errors.Is(err, ErrTokenExpired) {
+	if errors.Is(err, ErrTokenInvalid) || errors.Is(err, ErrTokenExpired) || errors.Is(err, ErrIssuerMismatch) {
 		return d(oerr(400, "invalid_grant", "subject_token is "+map[bool]string{true: "expired", false: "not valid"}[errors.Is(err, ErrTokenExpired)]))
 	} else if err != nil {
 		return nil, nil, err
@@ -723,20 +748,30 @@ type Introspection struct {
 // Introspect checks a token for the resource server res. It writes nothing.
 func (s *Service) Introspect(tx *store.TenantTx, issuer, raw string, res *store.MCPResource) (*Introspection, string, error) {
 	now := s.now()
-	c, err := Verify(tx, raw, issuer, now)
-	if errors.Is(err, ErrTokenInvalid) || errors.Is(err, ErrTokenExpired) {
-		return &Introspection{}, err.Error(), nil
-	} else if err != nil {
+	b, err := BindingOf(tx, res, issuer)
+	if err != nil {
 		return nil, "", err
 	}
-	if c.Audience[0] != res.Resource {
-		return &Introspection{}, "token is for another audience", nil
+	c, err := Verify(tx, raw, b.Issuer, now)
+	switch {
+	case errors.Is(err, ErrIssuerMismatch):
+		return &Introspection{}, msgIssuerWrong, nil
+	case errors.Is(err, ErrTokenInvalid) || errors.Is(err, ErrTokenExpired):
+		return &Introspection{}, err.Error(), nil
+	case err != nil:
+		return nil, "", err
+	}
+	if c.Audience[0] != b.Audience {
+		return &Introspection{}, msgAudWrong, nil
 	}
 	row, err := tx.MCPToken(c.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return &Introspection{}, "token is unknown", nil
 	} else if err != nil {
 		return nil, "", err
+	}
+	if row.Audience != res.Resource { // issued for another registered server
+		return &Introspection{}, msgAudWrong, nil
 	}
 	if why := liveRow(tx, row, now); why != "" {
 		return &Introspection{}, why, nil

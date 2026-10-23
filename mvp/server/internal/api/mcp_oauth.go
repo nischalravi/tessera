@@ -190,10 +190,13 @@ func (s *Server) mcpPRM(w http.ResponseWriter, r *http.Request, p *params) (any,
 	}
 	id := p.path["resource_id"]
 	var res *store.MCPResource
+	var bind mcpauth.Binding
 	if idRE.MatchString(id) {
 		_ = s.store.ReadTenant(r.Context(), t.ID, func(tx *store.TenantTx) error {
 			if x, err := tx.MCPResource(id); err == nil && x.Status == "active" {
-				res = x
+				if b, err := mcpauth.BindingOf(tx, x, iss); err == nil {
+					res, bind = x, b
+				}
 			}
 			return nil
 		})
@@ -204,7 +207,7 @@ func (s *Server) mcpPRM(w http.ResponseWriter, r *http.Request, p *params) (any,
 	}
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	writeJSON(w, http.StatusOK, map[string]any{"resource": res.Resource, "resource_name": res.Name,
-		"authorization_servers": []string{iss}, "bearer_methods_supported": []string{"header"}})
+		"authorization_servers": []string{bind.Issuer}, "bearer_methods_supported": []string{"header"}})
 	return nil, nil
 }
 
@@ -341,7 +344,7 @@ func (s *Server) mcpRevoke(w http.ResponseWriter, r *http.Request, p *params) (a
 		err := s.store.InTenant(r.Context(), t.ID, func(tx *store.TenantTx) error {
 			c, err := mcpauth.Verify(tx, raw, iss, s.clock())
 			if err != nil {
-				if errors.Is(err, mcpauth.ErrTokenInvalid) || errors.Is(err, mcpauth.ErrTokenExpired) {
+				if errors.Is(err, mcpauth.ErrTokenInvalid) || errors.Is(err, mcpauth.ErrTokenExpired) || errors.Is(err, mcpauth.ErrIssuerMismatch) {
 					return nil
 				}
 				return err
@@ -528,7 +531,7 @@ func (s *Server) mcpAuthorize(w http.ResponseWriter, r *http.Request, p *params)
 		if err != nil {
 			return err
 		}
-		req, _, oe, err = s.mcp.BeginAuthorization(tx, g, mcpauth.NewAuthRequest{Client: client, RedirectURI: ru, State: state,
+		req, _, oe, err = s.mcp.BeginAuthorization(tx, g, mcpauth.NewAuthRequest{Issuer: iss, Client: client, RedirectURI: ru, State: state,
 			CodeChallenge: q.Get("code_challenge"), Resource: resource, Scope: scope, UserIdentity: uid})
 		return err
 	})

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -31,6 +32,34 @@ type entraSP struct {
 	VerifiedPublisher *struct {
 		ID string `json:"verifiedPublisherId"`
 	} `json:"verifiedPublisher"`
+	entraSecrets
+}
+
+// entraKey is a client secret (passwordCredential) or a certificate
+// (keyCredential). Graph never returns a secret's value after creation, and
+// the reader would not store it: only the id, name and start date are read.
+type entraKey struct {
+	KeyID       string `json:"keyId"`
+	DisplayName string `json:"displayName"`
+	Start       string `json:"startDateTime"`
+}
+
+// entraSecrets are the credentials and owners an application or service
+// principal carries.
+type entraSecrets struct {
+	Passwords []entraKey `json:"passwordCredentials"`
+	Keys      []entraKey `json:"keyCredentials"`
+	Owners    []struct {
+		ID   string `json:"id"`
+		UPN  string `json:"userPrincipalName"`
+		Name string `json:"displayName"`
+	} `json:"owners"`
+}
+
+type entraApplication struct {
+	ID    string `json:"id"`
+	AppID string `json:"appId"`
+	entraSecrets
 }
 
 type entraDelegated struct {
@@ -123,7 +152,14 @@ func (e *entraProv) upn(ctx context.Context, id string) (string, error) {
 // the beta API, so those stay empty.
 func (e *entraProv) Read(ctx context.Context) (*Snapshot, error) {
 	sps, err := entraAll[entraSP](ctx, e, "/v1.0/servicePrincipals",
-		url.Values{"$select": {"id,appId,displayName,publisherName,verifiedPublisher"}, "$top": {"999"}})
+		url.Values{"$select": {"id,appId,displayName,publisherName,verifiedPublisher,passwordCredentials,keyCredentials"},
+			"$expand": {"owners($select=id,userPrincipalName,displayName)"}, "$top": {"999"}})
+	if err != nil {
+		return nil, err
+	}
+	appRegs, err := entraAll[entraApplication](ctx, e, "/v1.0/applications",
+		url.Values{"$select": {"id,appId,passwordCredentials,keyCredentials"},
+			"$expand": {"owners($select=id,userPrincipalName,displayName)"}, "$top": {"999"}})
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +220,25 @@ func (e *entraProv) Read(ctx context.Context) (*Snapshot, error) {
 				Scopes: []string{val}, Consent: ConsentAdmin, GrantedAt: parseTime(ra.CreatedDateTime)})
 		}
 	}
+	// Credentials and owners of the apps the inventory holds, from the app
+	// registration and from the service principal (issue #474).
+	for i := range sps {
+		if a := set.byID[sps[i].AppID]; a != nil {
+			if err := a.addSecrets("servicePrincipals", sps[i].ID, "sp:", &sps[i].entraSecrets); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for i := range appRegs {
+		if !idRE.MatchString(appRegs[i].ID) {
+			return nil, errors.New("entra returned an unexpected application id")
+		}
+		if a := set.byID[appRegs[i].AppID]; a != nil {
+			if err := a.addSecrets("applications", appRegs[i].ID, "app:", &appRegs[i].entraSecrets); err != nil {
+				return nil, err
+			}
+		}
+	}
 	for _, a := range set.byID { // stable scope order per grant
 		for i := range a.Grants {
 			sort.Strings(a.Grants[i].Scopes)
@@ -191,6 +246,89 @@ func (e *entraProv) Read(ctx context.Context) (*Snapshot, error) {
 	}
 	return set.snapshot(Entra, "entra does not report when a delegated consent was given or when an app was last used",
 		"entra does not report whether the user who consented is an administrator"), nil
+}
+
+// addSecrets adds the credentials and owners of one object (collection is
+// applications or servicePrincipals) to the app.
+func (a *App) addSecrets(collection, objectID, prefix string, x *entraSecrets) error {
+	if !idRE.MatchString(objectID) {
+		return errors.New("entra returned an unexpected object id")
+	}
+	add := func(kind string, keys []entraKey) error {
+		for _, k := range keys {
+			if !idRE.MatchString(k.KeyID) {
+				return errors.New("entra returned an unexpected credential id")
+			}
+			a.Credentials = append(a.Credentials, Credential{Key: prefix + k.KeyID, Ref: collection + "/" + objectID + "/" + k.KeyID,
+				Kind: kind, Label: orStr(k.DisplayName, k.KeyID), AddedAt: parseTime(k.Start)})
+		}
+		return nil
+	}
+	if err := add(CredSecret, x.Passwords); err != nil {
+		return err
+	}
+	if err := add(CredCertificate, x.Keys); err != nil {
+		return err
+	}
+	for _, o := range x.Owners {
+		if !idRE.MatchString(o.ID) {
+			return errors.New("entra returned an unexpected owner id")
+		}
+		if !slices.ContainsFunc(a.Owners, func(c Owner) bool { return c.Ref == o.ID }) {
+			a.Owners = append(a.Owners, Owner{Ref: o.ID, Label: orStr(o.UPN, o.Name)})
+		}
+	}
+	return nil
+}
+
+// entraCredPath splits a credential reference into its object path.
+func entraCredPath(c Credential) (path, keyID string, err error) {
+	parts := strings.Split(c.Ref, "/")
+	if len(parts) != 3 || (parts[0] != "applications" && parts[0] != "servicePrincipals") ||
+		!idRE.MatchString(parts[1]) || !idRE.MatchString(parts[2]) {
+		return "", "", errors.New("oauthapps: invalid entra credential reference")
+	}
+	return "/v1.0/" + parts[0] + "/" + containment.Esc(parts[1]), parts[2], nil
+}
+
+// RemoveCredential removes a client secret (removePassword). Graph removes a
+// certificate only with a proof-of-possession token Tessera cannot make, so a
+// certificate is a manual task, never reported as done.
+func (e *entraProv) RemoveCredential(ctx context.Context, c Credential) error {
+	path, keyID, err := entraCredPath(c)
+	if err != nil {
+		return err
+	}
+	if c.Kind != CredSecret {
+		return &ManualError{Msg: "Microsoft Graph removes a certificate only with a proof-of-possession token: remove it in the Entra admin center (App registrations, Certificates and secrets)"}
+	}
+	err = e.c.Do(ctx, http.MethodPost, path+"/removePassword", nil, map[string]string{"keyId": keyID}, nil)
+	if errors.Is(err, containment.ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
+// CredentialPresent re-reads the object and reports whether the credential is still on it.
+func (e *entraProv) CredentialPresent(ctx context.Context, c Credential) (bool, error) {
+	path, keyID, err := entraCredPath(c)
+	if err != nil {
+		return false, err
+	}
+	var x entraSecrets
+	err = e.c.Do(ctx, http.MethodGet, path, url.Values{"$select": {"id,passwordCredentials,keyCredentials"}}, nil, &x)
+	if errors.Is(err, containment.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, k := range append(x.Passwords, x.Keys...) {
+		if k.KeyID == keyID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (e *entraProv) RevokeGrant(ctx context.Context, _ string, g Grant) error {

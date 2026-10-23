@@ -112,20 +112,22 @@ func TestSourceDrivenDefaultIsHoldAllUnlessTheSourceSetsAMode(t *testing.T) {
 		if err := deleteguard.Set(tx, deleteguard.Policy{Category: deleteguard.CatAccounts, MaxCount: ten(3), WindowMinutes: 60, Mode: deleteguard.ModeHoldExcess}, nil, now); err != nil {
 			return err
 		}
-		// a tenant-set mode is explicit: hold_excess applies the part that fits
-		d, err := deleteguard.Admit(tx, now, req("c-plain"))
-		if err != nil {
-			return err
-		}
-		if d.NApplied() != 3 || d.NHeld() != 2 {
-			t.Errorf("tenant-set hold_excess: applied %d held %d", d.NApplied(), d.NHeld())
-		}
-		d, err = deleteguard.Admit(tx, now, req("c-explicit"))
+		// an explicit source mode holds the excess of the source's own limit
+		d, err := deleteguard.Admit(tx, now, req("c-explicit"))
 		if err != nil {
 			return err
 		}
 		if d.NApplied() != 2 || d.NHeld() != 3 || d.Mode != deleteguard.ModeHoldExcess {
 			t.Errorf("explicit source override: applied %d held %d mode %s", d.NApplied(), d.NHeld(), d.Mode)
+		}
+		// a tenant-set mode is explicit too: hold_excess applies the part that fits, and the 2 the
+		// overridden source applied count against the tenant's 3 (#485)
+		d, err = deleteguard.Admit(tx, now, req("c-plain"))
+		if err != nil {
+			return err
+		}
+		if d.NApplied() != 1 || d.NHeld() != 4 {
+			t.Errorf("tenant-set hold_excess: applied %d held %d", d.NApplied(), d.NHeld())
 		}
 		return nil
 	})
@@ -406,6 +408,31 @@ func TestHoldOpensAnInboxTaskThatFollowsTheHold(t *testing.T) {
 	in(t, f, f.B, func(tx *store.TenantTx) error {
 		if ts, err := tx.GrpTasks(store.GrpTaskFilter{Kind: store.TaskDeletionHeld, Limit: 10}); err != nil || len(ts) != 0 {
 			t.Errorf("tenant B sees tasks %v %v", ts, err)
+		}
+		return nil
+	})
+}
+
+// An override that copies or tightens the category threshold takes one admin to set, so it must not
+// move its source out of the tenant-wide budget (#485).
+func TestEqualOverridesShareTheCategoryBudget(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	setPolicy(t, f, f.A, deleteguard.Policy{Category: deleteguard.CatMembers, MaxCount: ten(10), WindowMinutes: 60, Mode: deleteguard.ModeHoldExcess})
+	for _, id := range []string{"L1", "L2", "L3", "L4"} {
+		setSource(t, f, f.A, deleteguard.SourcePolicy{Kind: "loader", SourceID: id, Category: deleteguard.CatMembers,
+			Mode: deleteguard.ModeHoldExcess, MaxCount: ten(10), WindowMinutes: 60})
+	}
+	in(t, f, f.A, func(tx *store.TenantTx) error {
+		applied := 0
+		for _, id := range []string{"L1", "L2", "L3", "L4"} {
+			d, err := deleteguard.Admit(tx, now, loaderReq(id, 10))
+			if err != nil {
+				return err
+			}
+			applied += d.NApplied()
+		}
+		if applied != 10 {
+			t.Errorf("4 sources applied %d in one window, want the category's 10", applied)
 		}
 		return nil
 	})

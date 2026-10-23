@@ -4,7 +4,7 @@
 // UNC6040, Context.ai, Klue) are the reason: the app's grants, not a
 // password, are the access.
 //
-// The package has four parts:
+// The package has five parts:
 //
 //   - Readers (google.go, entra.go, salesforce.go, github.go) read one
 //     provider through an internal/safehttp client and return a Snapshot.
@@ -15,6 +15,11 @@
 //   - Sync (sync.go): readers run with no transaction open, then Apply writes
 //     the snapshots in one transaction (upsert, removal marking, risk, owner,
 //     correlation of the granting user, audit).
+//   - Changes (changes.go, issue #474): a sync compares what an app holds with
+//     the last sync and records a new secret or certificate, a new app role or
+//     admin consent, and an owner change as an open change with an audit event
+//     (the oauth_app_change alert rule raises on it). Removing a credential
+//     (credentials.go) contains it.
 //   - Revoke (revoke.go): revoke one grant, one app, or every app of a vendor,
 //     re-read the provider to verify, and audit. What no API can do is a
 //     manual task, never a success.
@@ -77,15 +82,40 @@ type Grant struct {
 	LastUsed     *time.Time
 }
 
-// App is one app as a provider reports it, with its grants.
+// Credential kinds (a client secret or a certificate of an app).
+const (
+	CredSecret      = store.OAuthFactSecret
+	CredCertificate = store.OAuthFactCertificate
+)
+
+// Credential is a secret or certificate an app can sign in with (issue #474).
+// The secret value is never read: only its id and display name.
+type Credential struct {
+	Key     string // stable per credential at the provider (its key id, prefixed by where it lives)
+	Ref     string // what a removal names: "collection/object/key id"
+	Kind    string // CredSecret or CredCertificate
+	Label   string
+	AddedAt *time.Time
+}
+
+// Owner is an owner of an app as a provider reports it.
+type Owner struct {
+	Ref   string
+	Label string
+}
+
+// App is one app as a provider reports it, with its grants. Credentials and
+// Owners are what the provider reports besides grants (only Entra does).
 type App struct {
-	Provider  string
-	ClientID  string
-	Name      string
-	Publisher string
-	Verified  bool
-	LastUsed  *time.Time
-	Grants    []Grant
+	Provider    string
+	ClientID    string
+	Name        string
+	Publisher   string
+	Verified    bool
+	LastUsed    *time.Time
+	Grants      []Grant
+	Credentials []Credential
+	Owners      []Owner
 }
 
 // Snapshot is everything one provider reports. It is complete: a grant that

@@ -2414,7 +2414,8 @@ Security's SaaS-to-SaaS token theft (Salesloft Drift, Gainsight, Klue) is access
 grant, not a password. Protection → **OAuth apps** lists every third-party app and grant at Google
 Workspace, Microsoft Entra ID, Salesforce and GitHub, scores each app by the scopes it holds, and
 revokes a grant, an app, or every app of a breached vendor (package `server/internal/oauthapps`,
-schema 0361 for apps, grants and sync state and 0470 for pending four-eyes revokes).
+schema 0361 for apps, grants and sync state, 0470 for pending four-eyes revokes and 0680 for credential and
+owner changes).
 
 - **Readers.** One per provider, read-only, through `internal/safehttp` with the **containment
   credential** of the provider's live connection (set it with `PUT /api/connections/{id}/containment-credential`;
@@ -2447,6 +2448,27 @@ schema 0361 for apps, grants and sync state and 0470 for pending four-eyes revok
   the grant and app statuses).
 - **Read API.** `GET /api/oauth-apps?provider=&severity=&status=&flag=&vendor=&q=&unused_days=` and
   `GET /api/oauth-apps/{id}` (graph.read).
+- **Credential, permission and owner changes (issue #474, schema 0680).** Storm-0940 used compromised vendor
+  cloud-app identities to add credentials to customers' OAuth apps, so each sync also compares what an app
+  holds with the last sync. Entra reports the client secrets and certificates of the app registration and of
+  its service principal (id, name and start date only; a secret value is never read) and their owners
+  (`$expand=owners`); the other providers report no credentials. Three changes are recorded as open rows of
+  `oauth_app_changes` and audited as `oauthapps.change_detected`: **credential added** (a new secret or
+  certificate), **permission granted** (a new application permission, or a new tenant-wide admin consent;
+  one user's consent is not reported) and **owner changed** (added or removed). The first sync that sees an
+  app only records a baseline (`oauth_app_facts`), so a tenant's first sync raises nothing. The built-in
+  alert rule `oauth_app_change` (high; `internal/alerts`) raises on each event. The OAuth apps page lists
+  the open changes and the app panel shows them with the app's credentials. **Containment:**
+  `POST /api/oauth-apps/{id}/credentials/{credential_id}/remove {reason}` (`oauthapps.revoke`, step-up) removes a
+  secret at the provider (`removePassword`), re-reads it and answers `200`, or `502 oauth_credential_failed`;
+  an Entra certificate cannot be removed by API (Graph needs a proof-of-possession token), so it answers `502
+  oauth_credential_manual`, never a success. A permission is revoked with the grant revoke above.
+  `POST /api/oauth-apps/{id}/changes/{change_id}/resolve {note?}` (`oauthapps.manage`) acknowledges a change
+  (an owner change stays open until a person does). A credential change closes itself when the credential
+  is gone at the provider, a permission change when the grant is no longer live. Audit events:
+  `oauthapps.change_detected|change_resolved|credential_remove_started|credential_removed`. Only apps the
+  inventory already holds (apps with at least one grant) get credentials and owners read. `GET /api/oauth-apps`
+  also answers `changes` (the open ones) and `GET /api/oauth-apps/{id}` the app's `credentials` and `changes`.
 - **Tests and fakes.** `internal/oauthapps/oauthfake` holds stateful fakes of the four provider APIs (paging, a
   delete that really deletes, and switches for refusing, ignoring a delete and failing reads); the reader,
   sync, revoke and four-eyes tests run them through a real safehttp client. The Salesforce `OauthToken`
@@ -2507,6 +2529,27 @@ signed with the tenant's `access_token` key from `internal/keys`; there are no r
   first when its one-hour cache has expired (`RefreshActorClient`; a failed refresh fails closed).
 - **Resource servers** (`/api/mcp/resources`) must be registered; a token is only issued for one.
   Registration shows a secret once; only its SHA-256 is stored.
+- **Issuer and audience binding, unregistered servers (issue #479, schema 0700).** A rogue MCP server steals an
+  agent's OAuth credentials by posing as the server the agent was set up for (the MCP Python SDK flaw of 29 Sep,
+  the OpenCode flaw of 22 Oct), so each registered resource is **bound** to the authorization server issuer it
+  expects its tokens from and the audience they carry. With no explicit binding the defaults apply: this tenant's
+  MCP issuer and the resource URI. Bind with `PUT /api/mcp/resources/{id} {issuer, audience}` (both together;
+  `agents.manage`, step-up) or at registration (`POST` with the same two optional fields). Both are absolute https
+  URIs (http for loopback), the issuer without a query, and the audience is unique per tenant (`409
+  audience_in_use`). Changing the binding revokes the resource's live tokens (`mcp.resource.bind`). The
+  list shows `issuer`, `audience` and `bound`; the RFC 9728 metadata names the bound issuer in
+  `authorization_servers`. Enforced: (1) **issuing** (authorization, code redemption and token exchange) is
+  refused with `invalid_target` unless the bound issuer is this tenant's authorization server, and the token's
+  `aud` is the bound audience (`mcp.policy.issuer_mismatch`); (2) **introspection and tool-call decisions**
+  answer inactive, with a reason in the decision log, for a token whose issuer differs from the bound one
+  ("token issuer does not match ...") or whose audience is not the bound audience or was issued for another
+  resource ("token is for another audience"). A resource bound to another authorization server therefore gets no
+  token from Tessera, and its old tokens stop working. **Policy: no unregistered MCP servers.** A token is issued
+  only for a registered, active resource; a request for any other (unknown or disabled) is refused with
+  `invalid_target` ("blocked by policy ...") and recorded as the audit event and decision
+  `mcp.policy.unregistered_server`, so an agent cannot use an unregistered MCP server through Tessera. The policy is
+  built in and cannot be switched off; it is not a policy document. Tessera cannot stop an agent connecting to a
+  server directly: the repo scan of `GET /api/ai-agents/mcp-findings` still lists what agents are configured with.
 - **Decisions**: every issue, exchange, denial, revocation and tool-call decision is a row in
   `mcp_decisions` and an audit event (`mcp.token.issue`, `mcp.token.exchange`, `mcp.token.deny`,
   `mcp.token.revoke`, `mcp.tool_call.decision`, `mcp.authorize.*`, `mcp.client.*`, `mcp.resource.*`)
