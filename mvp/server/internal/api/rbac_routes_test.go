@@ -327,6 +327,23 @@ PUT    /api/notifications/preferences                auth.self       -  # issue 
 GET    /api/email/messages                           email.read      -  # issue #189
 GET    /api/email/messages/{message_id}              email.read      -  # issue #189
 POST   /api/email/messages/{message_id}/retry        email.manage    -  # issue #189
+GET    /api/admin/mail-relay                         email.read      -  # Admin > Notifications
+PUT    /api/admin/mail-relay                         email.manage    STEP_UP_POLICY
+DELETE /api/admin/mail-relay                         email.manage    STEP_UP_POLICY
+POST   /api/admin/mail-relay/test                    email.manage    STEP_UP_POLICY
+GET    /api/admin/chat                               email.read      -  # Admin > Notifications
+PUT    /api/admin/chat                               email.manage    STEP_UP_POLICY
+DELETE /api/admin/chat                               email.manage    STEP_UP_POLICY
+POST   /api/admin/chat/test                          email.manage    STEP_UP_POLICY
+GET    /api/admin/notification-policy                email.read      -  # Admin > Notifications
+PUT    /api/admin/notification-policy                email.manage    STEP_UP_POLICY
+GET    /api/admin/notification-templates             email.read      -  # Admin > Notifications
+PUT    /api/admin/notification-templates/{kind}      email.manage    STEP_UP_POLICY
+DELETE /api/admin/notification-templates/{kind}      email.manage    STEP_UP_POLICY
+GET    /api/email/suppressions                       email.read      -  # Admin > Email delivery
+POST   /api/email/suppressions                       email.manage    -
+DELETE /api/email/suppressions/{address}             email.manage    -
+POST   /api/email/dsn                                email.manage    -  # a delivery status report (RFC 3464)
 POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
 POST   /api/identities/{identity_id}/disable         identities.contain STEP_UP_POLICY  # wire-previews: containment, then disabled

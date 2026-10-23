@@ -2236,6 +2236,41 @@ CREATE POLICY tenant_isolation ON deletion_guard_source_approvals
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE tenant_mail_relay ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_mail_relay FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON tenant_mail_relay;
+CREATE POLICY tenant_isolation ON tenant_mail_relay
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE tenant_chat_webhook ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_chat_webhook FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON tenant_chat_webhook;
+CREATE POLICY tenant_isolation ON tenant_chat_webhook
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE notification_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_templates FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON notification_templates;
+CREATE POLICY tenant_isolation ON notification_templates
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE notification_policy ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_policy FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON notification_policy;
+CREATE POLICY tenant_isolation ON notification_policy
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE email_suppressions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_suppressions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON email_suppressions;
+CREATE POLICY tenant_isolation ON email_suppressions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE tenant_label_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_label_settings FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON tenant_label_settings;

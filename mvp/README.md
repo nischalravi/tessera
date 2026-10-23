@@ -782,6 +782,9 @@ when a second reviewer is needed) ·
 `GET|PUT /api/notifications/preferences {prefs:{kind:channel}}` ·
 `GET /api/email/messages[?status=&kind=&recipient=&limit=]` · `GET /api/email/messages/{id}` ·
 `POST /api/email/messages/{id}/retry` ·
+`GET|PUT|DELETE /api/admin/mail-relay` · `POST /api/admin/mail-relay/test` · `GET|PUT|DELETE /api/admin/chat` · `POST /api/admin/chat/test` ·
+`GET|PUT /api/admin/notification-policy` · `GET /api/admin/notification-templates` · `PUT|DELETE /api/admin/notification-templates/{kind}` ·
+`GET|POST /api/email/suppressions` · `DELETE /api/email/suppressions/{address}` · `POST /api/email/dsn` (see "Notifications and email administration") ·
 `GET /api/admin/users` · `POST /api/admin/users/{id}/disable {reason}` · `GET /api/admin/idp-connections` ·
 `POST /api/admin/idp-connections/{id}/activate` · `GET|POST /api/admin/change-requests` ·
 `GET /api/admin/change-requests/{id}` · `POST /api/admin/change-requests/{id}/approve|reject|cancel|apply` ·
@@ -2214,7 +2217,7 @@ entry (the top-bar bell: unread count, mark as read) and, if they want it, an em
 | `approval.escalated` | deciders and the stage's assignee | a stage passes its due time (not when it was due at once) |
 | `approval.delegated` | the delegate | someone delegates their approvals |
 | `review.launched`, `review.closed` | each reviewer of the campaign | campaign created, campaign complete |
-| `review.reminder` | reviewers with open items | once a week from the campaign's seventh day |
+| `review.reminder` | reviewers with open items | after 7 days, then weekly (the tenant sets both, see below) |
 | `jit.granted`, `jit.denied`, `jit.expiring` | the requester and the person | decision; access ends within the hour |
 | `access.ending` | the person (and others you name) | `notify.Expiring`, below |
 | `security.alert` | whoever the producer names | `notify.SecurityAlert`; **cannot be turned off** |
@@ -2266,13 +2269,14 @@ status code. The SMTP client is a small one on `net/textproto` so it can record 
 | `deferred` | a 4xx reply | yes, with backoff |
 | `rejected` | a 5xx reply, or an address that can never work | no |
 | `failed` | a network or TLS error, or a timeout | yes, with backoff |
-| `bounced` | reserved for bounce and DSN processing, a later step; nothing sets it yet | |
+| `bounced` | a delivery status report (DSN) said the address cannot be reached; the address is suppressed | only after the suppression is lifted |
 
 **Accepted means accepted by the relay, not delivered to the inbox.** The UI says so. After the
 attempts run out a deferred or failed message is a dead letter; `POST /api/email/messages/{id}/retry`
 (audited as `email.message.retry`) queues one more attempt. Reading needs `email.read` (auditor and
 tenant admin), retrying `email.manage` (tenant admin). The dev sink records its sends too, with a
-one-step transcript. Not yet: bounce and DSN processing, per-tenant relay settings.
+one-step transcript. Bounce processing, the tenant's own relay, suppression and "send again" are in "Notifications and
+email administration" below.
 
 **For other producers.** Write a notification from the transaction of your event:
 
@@ -2285,8 +2289,58 @@ notify.Expiring(tx, now, notify.Ending{Key: "identity:42", IdentityID: 42, Also:
 ```
 
 `notify.Identity`, `notify.User` and `notify.Deciders` build recipients. Add a kind to `notify.Kinds`
-(label, default, mandatory) and it appears in everyone's settings. Not yet: per-tenant SMTP and chat
-(the settings are server-wide), templates, per-kind digests.
+(label, default, mandatory) and it appears in everyone's settings. Not yet: per-kind digests.
+
+#### Notifications and email administration
+
+Admin > Notifications and Admin > Email delivery hold the tenant's own delivery settings. Reading needs `email.read`
+(auditor, tenant admin); every change needs `email.manage` (tenant admin) and, except for suppressions and delivery
+reports, a fresh phishing-resistant sign-in. Each change is audited in the same transaction with no secret in it, and a
+`version` in the body (0 when nothing is saved) makes a save a compare-and-set (409 `version_conflict`). Schema
+`0760` to `0764`, each with a Postgres variant and row-level security.
+
+* **Own SMTP relay** (`/api/admin/mail-relay`, `tenant_mail_relay`). Host, port, TLS (`starttls`, `tls`, `none`: `none`
+  only outside production), an optional login and a from address. When enabled, the tenant's notification email goes
+  through it and not the server's relay, and works even when the server has none. The password is **sealed under the KEK**
+  bound to the tenant (`seal.AAD(tenant, "tenant_mail_relay", "password_sealed")`), is write-only (the API says
+  `has_password`; an empty password keeps it, `clear_password` removes it) and is in no response or audit event. The host
+  is refused at save time when it is, or resolves to, a private, loopback, link-local or metadata address, or looks
+  internal (no dot, `.internal`, `.corp`, ...): 422 `internal_host`; the sender's guarded dialer (`safehttp.NewDialer`)
+  refuses it again at every connection. A relay whose sealed password cannot be opened fails visibly and is retried; it never
+  falls back to the server's relay. `POST /api/admin/mail-relay/test` sends one message to the signed-in admin's own
+  address and records the outcome (never to an address named in the request).
+* **Chat workspace** (`/api/admin/chat`, `tenant_chat_webhook`). A Slack or Microsoft Teams incoming webhook and the
+  notification kinds to post (default: approval needed, escalated, security alerts). The webhook URL is a credential: it is
+  sealed, write-only and never audited; only `https://` on the provider's own hosts is accepted (`hooks.slack.com`;
+  `*.webhook.office.com`, `*.logic.azure.com` and the Power Automate hosts for Teams; any host in development). Every post goes
+  through the SSRF-guarded client (`safehttp.ForConfig`). The dispatcher posts **one message per event**, however many
+  people it is for, from a cursor that starts when the webhook is turned on (no history is replayed) and stays 5 seconds
+  behind the clock. Slack text is escaped (`&`, `<`, `>`), so a notification cannot mention a channel. A failing event is
+  retried every pass and given up after five failures (`notification.chat`, status `dropped`), so one bad event does not
+  hold the rest back.
+* **Wording** (`/api/admin/notification-templates`, `notification_templates`). A subject and a text per notification kind
+  with `{{subject}}`, `{{body}}`, `{{link}}`, `{{product}}` and `{{recipient}}` and nothing else: no logic, no other data.
+  Only the kinds users can choose a channel for; the claim and recovery emails that carry a one-time secret are not
+  templatable. The subject stays one line. Without `{{link}}` in the text, the link line follows it; the footer is always
+  added. The inbox entry is not changed.
+* **Reminder cadence and SLAs** (`/api/admin/notification-policy`, `notification_policy`). First review reminder after N
+  days and every M days (default 7 and 7), how far ahead the end of requested access (24 hours) and of just-in-time
+  access (60 minutes) is announced, and the default approval escalation (48 hours) for a catalog item with no approval
+  policy of its own. An item's own policy, an organization's default stages and a workflow keep their own hours.
+* **Delivery status reports (DSN)** (`POST /api/email/dsn`). Post the raw RFC 3464 report (`multipart/report`, or just its
+  `message/delivery-status` part, at most 256 KiB) that the relay mails to the envelope sender; whatever collects that
+  mailbox calls it (for example with an API client holding `email.manage`). Each recipient block is matched to the email
+  Tessera sent through the `Message-ID` it set (the notification's id; Postfix's `X-Postfix-Queue-ID` is the fallback) and
+  the recipient must be the message's. `Action: failed` with a `5.x.x` status is a **hard bounce**: the message becomes
+  `bounced`, the report is added to its attempts, and the address is suppressed. `delayed` and a soft failure are recorded
+  without changing the status; `delivered` is recorded on the accepted message. A repeat report is `already_recorded`; one
+  that matches nothing of the tenant's is `not_matched` and records nothing. Audited as `email.dsn`.
+* **Suppression list** (`/api/email/suppressions`, `email_suppressions`). Addresses that are not emailed (they keep their
+  inbox entries); the delivery log says "on the suppression list". A hard bounce adds one; an admin can add or lift one
+  (`email.suppression.add` and `.lift`). **Send again** (`POST /api/email/messages/{id}/retry`) now also works for a
+  bounced message and for one skipped because of a suppression, once the suppression is lifted (409 `suppressed` until
+  then); a message the relay itself rejected stays final.
+* **Logo in emails** is set under Admin > Branding & labels (see Branding).
 
 ### SIS and HRIS intake (applicants, admits, pre-hires)
 

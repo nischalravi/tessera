@@ -1901,13 +1901,80 @@ export interface EmailMessage {
   attempt_count: number;
   created_at: string;
   updated_at: string;
-  /** Deferred or failed messages can be sent again. */
+  /** Deferred, failed and bounced messages, and ones skipped because the address is suppressed, can be sent again. */
   retryable: boolean;
   /** Only in the detail. */
   attempts?: EmailAttempt[];
 }
 export interface EmailList { statuses: EmailStatus[]; email_mode: string; messages: EmailMessage[] }
 export const retryEmail = (id: string) => api<EmailMessage>(`/email/messages/${encodeURIComponent(id)}/retry`, {});
+
+// ---- the tenant's mail relay, chat workspace, wording and timings (Admin > Notifications, Email delivery)
+
+/** The tenant's own SMTP relay (GET /api/admin/mail-relay). The password is never returned: only whether one is set. */
+export interface MailRelay {
+  configured: boolean; enabled: boolean; host: string; port: number; tls: "starttls" | "tls" | "none"; username: string; has_password: boolean;
+  from: string; last_test_at: string | null; last_test_result: string; version: number; updated_by?: string;
+  can_manage: boolean;
+  /** How the server's own relay is set up (off, dev or smtp): it sends when the tenant's is off. */
+  server_relay: string;
+}
+export interface MailRelayInput {
+  version: number; enabled: boolean; host: string; port: number; tls: string; username: string;
+  /** Write-only: empty keeps the stored one. */
+  password?: string; clear_password?: boolean; from: string;
+}
+export const mailRelayPath = "/admin/mail-relay";
+export const mailRelayApi = {
+  /** The password never goes through the resume-after-step-up store. */
+  save: (b: MailRelayInput) => apiNoResume<MailRelay>(mailRelayPath, b, "PUT"),
+  remove: (version: number) => api<MailRelay>(mailRelayPath, { version }, "DELETE"),
+  test: () => api<{ outcome: EmailStatus; error?: string; queue_id?: string; banner?: string; steps: EmailStep[] }>(`${mailRelayPath}/test`, {}),
+};
+
+export type ChatProvider = "slack" | "teams";
+/** The tenant's Slack or Teams incoming webhook (GET /api/admin/chat). The URL is never returned. */
+export interface ChatWorkspace {
+  configured: boolean; provider: ChatProvider; enabled: boolean; has_webhook: boolean; webhook_host: string; kinds: string[];
+  fail_count: number; last_error: string; last_post_at: string | null; version: number; updated_by?: string;
+  can_manage: boolean; providers: ChatProvider[]; available_kinds: { id: string; label: string; description: string }[];
+  hosts: Record<ChatProvider, string>;
+}
+export interface ChatInput { version: number; provider: ChatProvider; enabled: boolean; webhook_url?: string; kinds: string[] }
+export const chatPath = "/admin/chat";
+export const chatApi = {
+  save: (b: ChatInput) => apiNoResume<ChatWorkspace>(chatPath, b, "PUT"),
+  remove: (version: number) => api<ChatWorkspace>(chatPath, { version }, "DELETE"),
+  test: () => api<{ ok: boolean }>(`${chatPath}/test`, {}),
+};
+
+export interface NotificationPolicy {
+  review_remind_after_days: number; review_remind_every_days: number; request_warn_hours: number; jit_warn_minutes: number; escalate_after_hours: number;
+  version: number; can_manage: boolean; defaults: Omit<NotificationPolicy, "version" | "can_manage" | "defaults">;
+}
+export const notificationPolicyPath = "/admin/notification-policy";
+export const notificationPolicyApi = {
+  save: (b: Omit<NotificationPolicy, "can_manage" | "defaults">) => api<NotificationPolicy>(notificationPolicyPath, b, "PUT"),
+};
+
+export interface NotificationTemplate { kind: string; label: string; description: string; customized: boolean; subject_tpl: string; body_tpl: string; updated_by?: string }
+export interface NotificationTemplates {
+  templates: NotificationTemplate[]; variables: { name: string; help: string }[]; can_manage: boolean; max_subject: number; max_body: number;
+}
+export const notificationTemplatesPath = "/admin/notification-templates";
+export const notificationTemplatesApi = {
+  save: (kind: string, subject_tpl: string, body_tpl: string) =>
+    api<NotificationTemplates>(`${notificationTemplatesPath}/${encodeURIComponent(kind)}`, { subject_tpl, body_tpl }, "PUT"),
+  reset: (kind: string) => api<NotificationTemplates>(`${notificationTemplatesPath}/${encodeURIComponent(kind)}`, undefined, "DELETE"),
+};
+
+export interface EmailSuppression { address: string; reason: "hard_bounce" | "manual"; note: string; message_id?: string; created_by: string; created_at: string }
+export interface EmailSuppressions { suppressions: EmailSuppression[]; can_manage: boolean }
+export const emailSuppressionsPath = "/email/suppressions";
+export const emailSuppressionsApi = {
+  add: (address: string, note: string) => api<EmailSuppressions>(emailSuppressionsPath, { address, note }),
+  lift: (address: string) => api<EmailSuppressions>(`${emailSuppressionsPath}/${encodeURIComponent(address)}`, undefined, "DELETE"),
+};
 
 // ---------------------------------------------------------------- business roles (issue #161)
 
