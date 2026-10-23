@@ -115,6 +115,9 @@ var (
 		UPDATE queue_jobs SET status = 'queued', run_at = @now, attempts = 0, lease_owner = NULL, lease_expires_at = NULL,
 			finished_at = NULL, updated_at = @now
 		WHERE tenant_id = @tenant AND id = @id AND status = 'dead'`)
+	queueJobSetPayloadDead = tq("queue_jobs.set_payload_dead", `
+		UPDATE queue_jobs SET payload = @payload, updated_at = @now
+		WHERE tenant_id = @tenant AND id = @id AND status = 'dead'`)
 	queueJobHasDue = tq("queue_jobs.has_due", `
 		SELECT count(*) FROM queue_jobs q
 		WHERE q.tenant_id = @tenant AND instr(@kinds, ',' || q.kind || ',') > 0 AND `+queueDue)
@@ -127,6 +130,17 @@ var (
 		VALUES (@id, @tenant, @name, @kind, @payload, @spec, 1, @max_attempts, @next_run_at, @now, @now)
 		ON CONFLICT (tenant_id, name) DO UPDATE SET kind = excluded.kind, payload = excluded.payload,
 			spec = excluded.spec, max_attempts = excluded.max_attempts, updated_at = @now`)
+	// The tenant sets this one itself (a sync schedule): unlike ensure it also takes the enabled flag and the next
+	// due time, and a new spec starts counting from then.
+	queueScheduleSet = tq("queue_schedules.set", `
+		INSERT INTO queue_schedules (id, tenant_id, name, kind, payload, spec, enabled, max_attempts, next_run_at,
+			created_at, updated_at)
+		VALUES (@id, @tenant, @name, @kind, @payload, @spec, @enabled, @max_attempts, @next_run_at, @now, @now)
+		ON CONFLICT (tenant_id, name) DO UPDATE SET kind = excluded.kind, payload = excluded.payload,
+			spec = excluded.spec, enabled = excluded.enabled, max_attempts = excluded.max_attempts,
+			next_run_at = excluded.next_run_at, updated_at = @now`)
+	queueScheduleSetEnabled = tq("queue_schedules.set_enabled", `
+		UPDATE queue_schedules SET enabled = @enabled, updated_at = @now WHERE tenant_id = @tenant AND name = @name`)
 	queueScheduleGet = tq("queue_schedules.get", `
 		SELECT `+queueScheduleCols+` FROM queue_schedules s WHERE s.tenant_id = @tenant AND s.name = @name`)
 	queueScheduleList = tq("queue_schedules.list", `
@@ -316,6 +330,12 @@ func (tx *TenantTx) RetryDeadQueueJob(id string, now time.Time) error {
 	return tx.execOne(queueJobRetryDead, sql.Named("id", id), sql.Named("now", RT(now)))
 }
 
+// SetDeadQueueJobPayload replaces the payload of a dead job (before it is retried); any other
+// status is ErrNotFound.
+func (tx *TenantTx) SetDeadQueueJobPayload(id, payload string, now time.Time) error {
+	return tx.execOne(queueJobSetPayloadDead, sql.Named("id", id), sql.Named("payload", payload), sql.Named("now", RT(now)))
+}
+
 // PruneQueueJobs deletes succeeded jobs that finished before before.
 func (tx *TenantTx) PruneQueueJobs(before time.Time) (int64, error) {
 	res, err := tx.exec(queueJobPrune, sql.Named("before", RT(before)))
@@ -341,6 +361,21 @@ func (tx *TenantTx) EnsureQueueSchedule(s *QueueSchedule, now time.Time) error {
 	return err
 }
 
+// SetQueueSchedule creates or replaces the named schedule as the tenant configured it: kind, payload, spec,
+// attempt budget, the enabled flag, and the next time it is due (NextRunAt).
+func (tx *TenantTx) SetQueueSchedule(s *QueueSchedule, now time.Time) error {
+	if s.Payload == "" {
+		s.Payload = "{}"
+	}
+	if s.MaxAttempts <= 0 {
+		s.MaxAttempts = 5
+	}
+	_, err := tx.exec(queueScheduleSet, sql.Named("id", NewID()), sql.Named("name", s.Name), sql.Named("kind", s.Kind),
+		sql.Named("payload", s.Payload), sql.Named("spec", s.Spec), sql.Named("enabled", B(s.Enabled)),
+		sql.Named("max_attempts", s.MaxAttempts), sql.Named("next_run_at", RT(s.NextRunAt)), sql.Named("now", RT(now)))
+	return err
+}
+
 // QueueSchedule returns one schedule by name or ErrNotFound.
 func (tx *TenantTx) QueueSchedule(name string) (*QueueSchedule, error) {
 	return one(tx, scanQueueSchedule, queueScheduleGet, sql.Named("name", name))
@@ -349,6 +384,17 @@ func (tx *TenantTx) QueueSchedule(name string) (*QueueSchedule, error) {
 // QueueSchedules lists the tenant's schedules by name.
 func (tx *TenantTx) QueueSchedules() ([]*QueueSchedule, error) {
 	return collect(tx, scanQueueSchedule, queueScheduleList)
+}
+
+// SetQueueScheduleEnabled pauses (false) or resumes (true) the named schedule;
+// ErrNotFound when the tenant has none of that name. A paused schedule keeps
+// its due time, so a resumed one fires once and then keeps its cadence.
+func (tx *TenantTx) SetQueueScheduleEnabled(name string, enabled bool, now time.Time) error {
+	e := 0
+	if enabled {
+		e = 1
+	}
+	return tx.execOne(queueScheduleSetEnabled, sql.Named("name", name), sql.Named("enabled", e), sql.Named("now", RT(now)))
 }
 
 // DueQueueSchedules lists enabled schedules whose next_run_at has passed.

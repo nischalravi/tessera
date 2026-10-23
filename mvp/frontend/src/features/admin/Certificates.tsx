@@ -143,6 +143,12 @@ export function Certificates() {
             <Fact label="Valid">{shown.not_before ? `${day(shown.not_before)} to ${day(shown.not_after)}` : "No validity period (a key, not a certificate)"}</Fact>
             <Fact label="Fingerprint (SHA-256)"><code className="sys" style={{ wordBreak: "break-all" }}>{shown.fingerprint_sha256}</code></Fact>
             <Fact label="Key">{shown.key_algorithm}{shown.signature_algorithm ? ` · signed ${shown.signature_algorithm}` : ""}</Fact>
+            {shown.purpose === "mtls_client" && shown.chain_length > 0 && (
+              <>
+                <Fact label="Chain presented">{shown.chain_length === 1 ? "The certificate alone" : `The certificate and ${shown.chain_length - 1} intermediate${shown.chain_length === 2 ? "" : "s"}`}</Fact>
+                <Fact label="Trust anchors">{shown.trust_anchors.length === 0 ? "None: the target's certificate is checked against the system roots" : shown.trust_anchors.join("; ")}</Fact>
+              </>
+            )}
             {manage && (
               <div className="row">
                 {shown.source === "saml_connection" && shown.connection_id && (
@@ -174,7 +180,7 @@ export function Certificates() {
 function UploadForm({ saml, start, onClose, onSaved }: { saml: CertificateEntry[]; start: { purpose?: CertificateUpload["purpose"]; connection?: string }; onClose: () => void; onSaved: () => void }) {
   const connectors = useApi<Connection[]>("/connections");
   const [f, setF] = useState({
-    purpose: (start.purpose ?? "mtls_client") as CertificateUpload["purpose"], label: "", cert: "", key: "",
+    purpose: (start.purpose ?? "mtls_client") as CertificateUpload["purpose"], label: "", cert: "", key: "", anchors: "",
     saml: start.connection ?? saml[0]?.connection_id ?? "", connector: "",
   });
   const [error, setError] = useState<string | null>(null);
@@ -186,6 +192,7 @@ function UploadForm({ saml, start, onClose, onSaved }: { saml: CertificateEntry[
     const body: CertificateUpload = { purpose: f.purpose, label: f.label.trim(), certificate_pem: f.cert.trim(), private_key_pem: f.key.trim() };
     if (f.purpose === "saml_sp") body.connection_id = f.saml;
     if (f.purpose === "mtls_client" && f.connector) body.connection_id = f.connector;
+    if (f.purpose === "mtls_client" && f.anchors.trim()) body.trust_anchors_pem = f.anchors.trim();
     try {
       await certificatesApi.upload(body);
       setF({ ...f, key: "" }); // the key is not kept in the form
@@ -215,20 +222,28 @@ function UploadForm({ saml, start, onClose, onSaved }: { saml: CertificateEntry[
           </label>
         )}
         {f.purpose === "mtls_client" && (
-          <label className="field">Connector (optional)
+          <label className="field">Hand to connection (optional)
             <select className="input" value={f.connector} onChange={(e) => setF({ ...f, connector: e.target.value })}>
               <option value="">Not assigned yet</option>
-              {(connectors.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {(connectors.data ?? []).filter((c) => c.id && !c.legacy).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
+            <span className="hint">The provisioning target of that connection presents this certificate on every call. A target reached through a Directory Agent does not use it.</span>
           </label>
         )}
         <label className="field">Label<input className="input" value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} required maxLength={100} placeholder="e.g. Workday client certificate 2027" /></label>
-        <label className="field">Certificate (PEM)
+        <label className="field">{f.purpose === "mtls_client" ? "Certificate chain (PEM, the certificate first)" : "Certificate (PEM)"}
           <textarea className="input sys" rows={6} value={f.cert} onChange={(e) => setF({ ...f, cert: e.target.value })} required spellCheck={false} placeholder="-----BEGIN CERTIFICATE-----" />
+          {f.purpose === "mtls_client" && <span className="hint">Add the intermediate certificates after it, each one signing the one before. Up to 5 certificates.</span>}
         </label>
         <label className="field">Private key (PEM, unencrypted)
           <textarea className="input sys" rows={6} value={f.key} onChange={(e) => setF({ ...f, key: e.target.value })} required spellCheck={false} autoComplete="off" placeholder="-----BEGIN PRIVATE KEY-----" />
         </label>
+        {f.purpose === "mtls_client" && (
+          <label className="field">Trust anchors (PEM, optional)
+            <textarea className="input sys" rows={4} value={f.anchors} onChange={(e) => setF({ ...f, anchors: e.target.value })} spellCheck={false} placeholder="-----BEGIN CERTIFICATE-----" />
+            <span className="hint">CA certificates the target's server certificate must chain to. When given, only these are trusted for this connection; leave empty to use the system roots.</span>
+          </label>
+        )}
         {f.purpose === "saml_sp" && <Callout tone="info">It is published in the SP metadata beside the current certificate until you promote it. A SAML key must be RSA.</Callout>}
         <p className="small muted">The key is encrypted before it is stored and cannot be read back. Saving needs a recent strong sign-in; if it asks for one, sign in and submit again.</p>
         <div aria-live="polite">{error && <Callout tone="bad">{error}</Callout>}</div>

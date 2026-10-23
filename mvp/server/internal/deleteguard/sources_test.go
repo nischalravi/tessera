@@ -16,6 +16,15 @@ func setSource(t *testing.T, f *storetest.Fixture, tn storetest.Tenant, p delete
 	in(t, f, tn, func(tx *store.TenantTx) error { return deleteguard.SetSource(tx, p, nil, now) })
 }
 
+// setSourceApproved stores an override that two admins approved as looser than the category.
+func setSourceApproved(t *testing.T, f *storetest.Fixture, tn storetest.Tenant, p deleteguard.SourcePolicy) {
+	t.Helper()
+	setSource(t, f, tn, p)
+	in(t, f, tn, func(tx *store.TenantTx) error {
+		return deleteguard.SetSourceApproved(tx, p.Ref(), p.Category, true, nil, now)
+	})
+}
+
 func fp(v float64) *float64 { return &v }
 func bp(v bool) *bool       { return &v }
 
@@ -29,7 +38,7 @@ func TestSourceOverrideReplacesTheCategoryThresholdForThatSourceOnly(t *testing.
 	// members default to 500 or 10% an hour; loader L1 is held to 3, loader L2 is loosened to 1000
 	setSource(t, f, f.A, deleteguard.SourcePolicy{Kind: "loader", SourceID: "L1", Category: deleteguard.CatMembers, Mode: deleteguard.ModeHoldExcess,
 		MaxCount: ten(3), WindowMinutes: 60})
-	setSource(t, f, f.A, deleteguard.SourcePolicy{Kind: "loader", SourceID: "L2", Category: deleteguard.CatMembers, Mode: deleteguard.ModeHoldExcess,
+	setSourceApproved(t, f, f.A, deleteguard.SourcePolicy{Kind: "loader", SourceID: "L2", Category: deleteguard.CatMembers, Mode: deleteguard.ModeHoldExcess,
 		MaxCount: ten(1000), WindowMinutes: 60})
 	in(t, f, f.A, func(tx *store.TenantTx) error {
 		d, err := deleteguard.Admit(tx, now, loaderReq("L1", 7))
@@ -244,7 +253,7 @@ func TestPreviousCountIsPerSource(t *testing.T) {
 
 func TestScopedSourceUsesItsOwnSettings(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	setSource(t, f, f.A, deleteguard.SourcePolicy{Kind: "vms_source", SourceID: "V1", Category: deleteguard.CatIdentities,
+	setSourceApproved(t, f, f.A, deleteguard.SourcePolicy{Kind: "vms_source", SourceID: "V1", Category: deleteguard.CatIdentities,
 		Mode: deleteguard.ModeHoldExcess, MaxCount: ten(2), WindowMinutes: 60})
 	in(t, f, f.A, func(tx *store.TenantTx) error {
 		leaver := func(n int) *deleteguard.Decision {
@@ -433,6 +442,44 @@ func TestEqualOverridesShareTheCategoryBudget(t *testing.T) {
 		}
 		if applied != 10 {
 			t.Errorf("4 sources applied %d in one window, want the category's 10", applied)
+		}
+		return nil
+	})
+}
+
+// Whether an override escapes the category budget is fixed when two admins approve it, not judged
+// against whatever the category is later set to (#494): four single-admin overrides of 5, then the
+// category tightened to 2 per window, apply 2 in total.
+func TestOverridesStayInTheBudgetWhenTheCategoryIsTightenedLater(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	setPolicy(t, f, f.A, deleteguard.Policy{Category: deleteguard.CatMembers, MaxCount: ten(10), WindowMinutes: 60, Mode: deleteguard.ModeHoldExcess})
+	ids := []string{"L1", "L2", "L3", "L4"}
+	for _, id := range ids {
+		setSource(t, f, f.A, deleteguard.SourcePolicy{Kind: "loader", SourceID: id, Category: deleteguard.CatMembers,
+			Mode: deleteguard.ModeHoldExcess, MaxCount: ten(5), WindowMinutes: 60}) // tighter: one admin
+	}
+	setPolicy(t, f, f.A, deleteguard.Policy{Category: deleteguard.CatMembers, MaxCount: ten(2), WindowMinutes: 60, Mode: deleteguard.ModeHoldExcess})
+	in(t, f, f.A, func(tx *store.TenantTx) error {
+		applied := 0
+		for _, id := range ids {
+			d, err := deleteguard.Admit(tx, now, loaderReq(id, 10))
+			if err != nil {
+				return err
+			}
+			applied += d.NApplied()
+		}
+		if applied != 2 {
+			t.Errorf("4 single-admin overrides applied %d in one window after the category was tightened to 2, want 2", applied)
+		}
+		return nil
+	})
+	// the same overrides, one of them approved as looser, stay their own budget while they loosen
+	setPolicy(t, f, f.A, deleteguard.Policy{Category: deleteguard.CatMembers, MaxCount: ten(2), WindowMinutes: 60, Mode: deleteguard.ModeHoldExcess})
+	setSourceApproved(t, f, f.A, deleteguard.SourcePolicy{Kind: "loader", SourceID: "L5", Category: deleteguard.CatMembers,
+		Mode: deleteguard.ModeHoldExcess, MaxCount: ten(50), WindowMinutes: 60})
+	in(t, f, f.A, func(tx *store.TenantTx) error {
+		if d, err := deleteguard.Admit(tx, now, loaderReq("L5", 40)); err != nil || d.NApplied() != 40 {
+			t.Errorf("approved loosening override applied %v, %v, want 40", d, err)
 		}
 		return nil
 	})

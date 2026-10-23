@@ -34,6 +34,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/ghtokens"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/provisioning"
@@ -316,7 +317,9 @@ type Server struct {
 	containment *containment.Service
 	// oauthapps is the third-party OAuth app inventory (issue #107); never nil.
 	oauthapps *oauthapps.Service
-	vms       *vms.Service
+	// ghtokens is the GitHub and CI token inventory (issue #476); never nil.
+	ghtokens *ghtokens.Service
+	vms      *vms.Service
 	// mcp is the MCP authorization server (issue #115); never nil.
 	mcp *mcpauth.Service
 	// ssf is the Shared Signals receiver (issue #114); never nil.
@@ -421,6 +424,7 @@ func New(cfg Config) *Server {
 		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal, archive: cfg.Archive,
 		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.oauthapps = &oauthapps.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
+	s.ghtokens = &ghtokens.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
 	s.vms = &vms.Service{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound, Keyer: cfg.Identifiers,
 		RT: connsync.Runtime{Env: cfg.Env, AllowLoopback: cfg.Env == config.Dev}, Clock: func() time.Time { return s.clock() }}
 	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
@@ -504,9 +508,11 @@ func New(cfg Config) *Server {
 	s.registerArchiveRoutes()
 	s.registerDeletionGuardRoutes()
 	s.registerOAuthAppsRoutes()
+	s.registerGitHubTokenRoutes()
 	s.registerSiemRoutes()
 	s.registerCertificateRoutes()
 	s.registerBrandingRoutes()
+	s.registerLabelRoutes()
 	s.registerVmsRoutes()
 	s.registerIdentityRulesRoutes()
 	s.registerAlertRoutes()
@@ -543,6 +549,7 @@ func New(cfg Config) *Server {
 	s.registerRegistrationRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
+	s.registerNotifyAdminRoutes()
 	s.registerContainmentRoutes()
 	// the attribute routes name literal segments under /api/groups, so they come
 	// before the {id} routes (the first registered route that matches wins)

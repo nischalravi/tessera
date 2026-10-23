@@ -44,12 +44,18 @@ type Settings struct {
 	// PageSize is the page size asked of the vendor (default 100).
 	PageSize int `json:"page_size,omitempty"`
 	// Mapping renames CSV columns: canonical field -> the header of the file.
+	// For Fieldglass and Beeline it takes a field from the worker's own JSON
+	// instead of the documented one: canonical field -> a dotted path in the
+	// worker object ("custom_fields.cost_center_owner"). A path that is
+	// missing or empty leaves the documented field in place.
 	Mapping map[string]string `json:"mapping,omitempty"`
 	// DateFormat is the Go layout of CSV dates (default RFC 3339 or 2006-01-02).
 	DateFormat string `json:"date_format,omitempty"`
 	// CSVPath is the path under the base URL a CSV source is fetched from.
 	CSVPath string `json:"csv_path,omitempty"`
 }
+
+var fieldPathRE = regexp.MustCompile(`^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){0,5}$`)
 
 var pathRE = regexp.MustCompile(`^/[A-Za-z0-9._~/-]{0,200}$`)
 
@@ -63,8 +69,8 @@ func (s *Settings) Validate(vendor string) error {
 	if s.PageSize < 0 || s.PageSize > 1000 {
 		return errors.New("page_size must be between 1 and 1000")
 	}
-	if vendor != store.VmsCSV && (len(s.Mapping) > 0 || s.DateFormat != "" || s.CSVPath != "") {
-		return errors.New("mapping, date_format and csv_path apply to CSV sources only")
+	if vendor != store.VmsCSV && (s.DateFormat != "" || s.CSVPath != "") {
+		return errors.New("date_format and csv_path apply to CSV sources only")
 	}
 	if vendor == store.VmsCSV && (s.WorkersPath != "" || s.TokenPath != "") {
 		return errors.New("workers_path and token_path apply to Fieldglass and Beeline only")
@@ -76,6 +82,14 @@ func (s *Settings) Validate(vendor string) error {
 			}
 			if strings.TrimSpace(v) == "" || len(v) > 100 {
 				return fmt.Errorf("mapping: the column of %q is empty or too long", k)
+			}
+			if vendor != store.VmsCSV {
+				if k == "first_name" || k == "last_name" {
+					return errors.New("mapping: map name, not first_name or last_name, for Fieldglass and Beeline")
+				}
+				if !fieldPathRE.MatchString(v) {
+					return fmt.Errorf("mapping: the field of %q must be a dotted path of letters, digits, _ and - (for example custom_fields.sponsor)", k)
+				}
 			}
 		}
 	}

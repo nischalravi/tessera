@@ -25,6 +25,8 @@ const designRoutes = `
 GET    /api/health                                   public
 GET    /api/connectors                               graph.read      -
 POST   /api/connectors/sync                          connectors.sync -
+GET    /api/connectors/sync-status                   connections.read -  # issue #498
+PUT    /api/connectors/sync-schedule                 connections.manage -  # issue #498
 GET    /api/summary                                  graph.read      -
 GET    /api/identities                               graph.read      -
 GET    /api/identities/{identity_id}                 graph.read      -
@@ -76,6 +78,9 @@ POST   /api/admin/certificates/{certificate_id}/retire  connections.manage  STEP
 GET    /api/admin/branding                           admin.read      -  # Admin > Branding
 PUT    /api/admin/branding                           email.manage    STEP_UP_POLICY
 GET    /api/admin/identity-rules                     graph.read      -  # Admin > Identity rules
+PUT    /api/admin/identity-rules                     matching.configure STEP_UP_POLICY  # Admin > Identity rules
+GET    /api/admin/labels                             admin.read      -  # Admin > Branding & labels
+PUT    /api/admin/labels                             email.manage    STEP_UP_POLICY  # Admin > Branding & labels
 GET    /api/siem/sinks/{sink_id}/dead-letters        siem.read       -  # issue #169
 GET    /api/alerts                                   alerts.read     -  # issue #168
 GET    /api/alerts/summary                           alerts.read     -  # issue #168
@@ -119,6 +124,8 @@ POST   /api/oauth-apps/{app_id}/revoke               oauthapps.revoke STEP_UP_PO
 POST   /api/oauth-apps/{app_id}/grants/{grant_id}/revoke oauthapps.revoke STEP_UP_POLICY  # issue #107
 POST   /api/oauth-apps/{app_id}/credentials/{credential_id}/remove oauthapps.revoke STEP_UP_POLICY  # issue #474
 POST   /api/oauth-apps/{app_id}/changes/{change_id}/resolve oauthapps.manage -  # issue #474
+GET    /api/github-tokens                            graph.read      -  # issue #476
+POST   /api/github-tokens/sync                       oauthapps.manage -  # issue #476
 GET    /api/vms/sources                              connections.read -  # issue #304
 POST   /api/vms/sources                              connections.manage -  # issue #304
 PUT    /api/vms/sources/{source_id}                  connections.manage -  # issue #304
@@ -322,6 +329,23 @@ PUT    /api/notifications/preferences                auth.self       -  # issue 
 GET    /api/email/messages                           email.read      -  # issue #189
 GET    /api/email/messages/{message_id}              email.read      -  # issue #189
 POST   /api/email/messages/{message_id}/retry        email.manage    -  # issue #189
+GET    /api/admin/mail-relay                         email.read      -  # Admin > Notifications
+PUT    /api/admin/mail-relay                         email.manage    STEP_UP_POLICY
+DELETE /api/admin/mail-relay                         email.manage    STEP_UP_POLICY
+POST   /api/admin/mail-relay/test                    email.manage    STEP_UP_POLICY
+GET    /api/admin/chat                               email.read      -  # Admin > Notifications
+PUT    /api/admin/chat                               email.manage    STEP_UP_POLICY
+DELETE /api/admin/chat                               email.manage    STEP_UP_POLICY
+POST   /api/admin/chat/test                          email.manage    STEP_UP_POLICY
+GET    /api/admin/notification-policy                email.read      -  # Admin > Notifications
+PUT    /api/admin/notification-policy                email.manage    STEP_UP_POLICY
+GET    /api/admin/notification-templates             email.read      -  # Admin > Notifications
+PUT    /api/admin/notification-templates/{kind}      email.manage    STEP_UP_POLICY
+DELETE /api/admin/notification-templates/{kind}      email.manage    STEP_UP_POLICY
+GET    /api/email/suppressions                       email.read      -  # Admin > Email delivery
+POST   /api/email/suppressions                       email.manage    -
+DELETE /api/email/suppressions/{address}             email.manage    -
+POST   /api/email/dsn                                email.manage    -  # a delivery status report (RFC 3464)
 POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
 POST   /api/identities/{identity_id}/disable         identities.contain STEP_UP_POLICY  # wire-previews: containment, then disabled
@@ -381,6 +405,9 @@ POST   /api/helpdesk/cases/{case_id}/execute         helpdesk.reset  STEP_UP_POL
 POST   /api/helpdesk/cases/{case_id}/cancel          helpdesk.reset  -  # issue #108
 GET    /api/helpdesk/findings                        graph.read      -  # issue #108
 POST   /api/helpdesk/signals                         helpdesk.approve -  # issue #108
+GET    /api/helpdesk/settings                        graph.read      -  # issue #477
+PUT    /api/helpdesk/settings                        helpdesk.approve STEP_UP_POLICY  # issue #477
+POST   /api/helpdesk/risk-signals                    helpdesk.approve -  # issue #477
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
@@ -450,12 +477,15 @@ GET    /api/queue/jobs                               jobs.read       -  # issue 
 GET    /api/queue/schedules                          jobs.read       -  #
 GET    /api/queue/workers                            jobs.read       -  # issue #302
 POST   /api/queue/jobs/{job_id}/retry                jobs.manage     STEP_UP_POLICY  #
+POST   /api/queue/schedules/{name}/pause             jobs.manage     STEP_UP_POLICY  # issue #497
+POST   /api/queue/schedules/{name}/resume            jobs.manage     STEP_UP_POLICY  # issue #497
 GET    /api/queue/limits                             connections.read    -  # issue #302
 PUT    /api/queue/limits                             connections.manage  STEP_UP_POLICY
 DELETE /api/queue/limits                             connections.manage  STEP_UP_POLICY
 GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
 PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
 DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
+POST   /api/provisioning/targets/{id}/dry-run        provisioning.manage -  # issue #498
 GET    /api/provisioning/ops                         provisioning.read   -
 GET    /api/provisioning/ops/{op_id}                 provisioning.read   -
 POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -
@@ -694,6 +724,9 @@ POST   /api/admin/change-requests/{change_id}/apply  admin.change.approve STEP_U
 GET    /api/admin/notifications                      admin.read      -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #15
 GET    /api/admin/api-clients/{client_id}            admin.read      -  # issue #15
+POST   /api/admin/api-clients                        admin.change.request STEP_UP_ADMIN  # issue #498
+POST   /api/admin/api-clients/{client_id}/keys       admin.change.request STEP_UP_ADMIN  # issue #498
+POST   /api/admin/api-clients/{client_id}/revoke     admin.change.request STEP_UP_ADMIN  # issue #498
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16

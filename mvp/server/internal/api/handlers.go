@@ -47,6 +47,7 @@ func (s *Server) registerRoutes() {
 	s.handle(G, "/api/health", noTenant, publicRoute, s.health)
 	s.handle(G, "/api/connectors", read, need(auth.PermGraphRead), s.listConnectors)
 	s.handle(P, "/api/connectors/sync", write, need(auth.PermConnectorsSync), s.syncConnectors).asJob(jobs.Sync, "")
+	s.registerConnectorScheduleRoutes()
 	s.handle(G, "/api/summary", swept, need(auth.PermGraphRead), s.summary)
 	s.handle(G, "/api/identities", swept, need(auth.PermGraphRead), s.listIdentities)
 	s.handle(G, "/api/identities/{identity_id}", swept, need(auth.PermGraphRead), s.identityDetail)

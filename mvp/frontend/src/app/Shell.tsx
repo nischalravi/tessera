@@ -17,6 +17,7 @@ import { ResultList, rankEntries, useEntityEntries } from "./search";
 import { store } from "./storage";
 import { useSession } from "./auth";
 import { ThemePref, useTheme } from "./theme";
+import { applyLabels } from "../labels";
 
 
 function useInboxCount() {
@@ -67,10 +68,10 @@ function Rail({ counts, onNavigate, id }: { counts: Record<string, number | null
                 className={() => `rail-item ${on ? "active" : ""}`}
                 aria-current={on ? "page" : undefined}
                 onClick={onNavigate}
-                title={it.label}
+                title={applyLabels(it.label)}
               >
                 <Icon size={18} strokeWidth={1.7} aria-hidden />
-                <span className="rail-label">{it.label}</span>
+                <span className="rail-label">{applyLabels(it.label)}</span>
                 {n ? <span className="ct" aria-label={`${n} items`}>{n}</span> : null}
                 {n ? <span className="dot-ct" aria-hidden /> : null}
               </NavLink>

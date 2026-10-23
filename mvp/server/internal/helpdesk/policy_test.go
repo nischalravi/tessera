@@ -2,6 +2,7 @@ package helpdesk
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -118,5 +119,51 @@ func TestAllowed(t *testing.T) {
 		if got := Allowed(tt.method, tt.priv); got != tt.want {
 			t.Errorf("Allowed(%q, %v) = %v, want %v", tt.method, tt.priv, got, tt.want)
 		}
+	}
+}
+
+func TestEvaluateRecentAuthMethod(t *testing.T) {
+	requester, other, subject := u(), u(), u()
+	recent := func(action string) *RecentAuth {
+		return &RecentAuth{Action: action, Days: 7, Reasons: []string{"okta method \"totp\" added 2 days ago"}}
+	}
+	cb := []Verification{pass(MethodCallback, other)}
+	tests := []struct {
+		name                                         string
+		in                                           Input
+		satisfied, needsSecond, blocked, shownReason bool
+	}{
+		{"no recent method: unchanged", Input{RequestedBy: requester, Verifications: cb}, true, false, false, false},
+		{"rule found nothing", Input{RequestedBy: requester, Verifications: cb, RecentAuth: &RecentAuth{Action: "require_approval", Days: 7, Reasons: []string{}}},
+			true, false, false, false},
+		{"require_approval without a second approver", Input{RequestedBy: requester, Verifications: cb, RecentAuth: recent("require_approval")},
+			false, true, false, true},
+		{"require_approval with a second approver", Input{RequestedBy: requester, Verifications: cb, SecondApprover: other, RecentAuth: recent("require_approval")},
+			true, true, false, true},
+		{"require_approval: the requester cannot approve", Input{RequestedBy: requester, Verifications: cb, SecondApprover: requester, RecentAuth: recent("require_approval")},
+			false, true, false, true},
+		{"require_approval: the subject cannot approve", Input{RequestedBy: requester, Verifications: cb, SecondApprover: subject,
+			SubjectUsers: []uuid.UUID{*subject}, RecentAuth: recent("require_approval")}, false, true, false, true},
+		{"block holds even with a second approver", Input{RequestedBy: requester, Verifications: cb, SecondApprover: other, RecentAuth: recent("block")},
+			false, false, true, true},
+		{"off is ignored", Input{RequestedBy: requester, Verifications: cb, RecentAuth: recent("off")}, true, false, false, false},
+		{"unverified stays unverified", Input{RequestedBy: requester, SecondApprover: other, RecentAuth: recent("require_approval")}, false, true, false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Evaluate(tc.in)
+			if d.Satisfied != tc.satisfied || d.NeedsSecondApprover != tc.needsSecond || d.Blocked != tc.blocked || (d.RecentAuthMethod != nil) != tc.shownReason {
+				t.Errorf("decision = %+v", d)
+			}
+			if tc.blocked && (len(d.Missing) == 0 || !strings.Contains(d.Missing[len(d.Missing)-1], "blocked")) {
+				t.Errorf("missing = %v", d.Missing)
+			}
+		})
+	}
+	// a privileged identity still needs two methods and the approver; the rule adds nothing to approve twice
+	d := Evaluate(Input{Privileged: true, RequestedBy: requester, SecondApprover: other, RecentAuth: recent("require_approval"),
+		Verifications: []Verification{pass(MethodIDV, other), pass(MethodCallback, other)}})
+	if !d.Satisfied || d.Required != 2 {
+		t.Errorf("privileged = %+v", d)
 	}
 }

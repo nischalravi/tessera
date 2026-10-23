@@ -318,3 +318,68 @@ func TestRemoveCredentialManualWithoutAPI(t *testing.T) {
 		t.Errorf("google: %+v, %v", rep, err)
 	}
 }
+
+// Widening an existing tenant-wide consent keeps its grant id (#492).
+func TestChangesWidenedConsentDetected(t *testing.T) {
+	r := entraRig(t)
+	r.sync(t, oauthapps.Entra)
+	r.advance(time.Hour)
+	r.entra.With(func() { r.entra.Delegated[1].Scope = "User.Read Mail.ReadWrite Files.ReadWrite.All" })
+	rep := r.sync(t, oauthapps.Entra)
+	cs := r.changes(t)
+	if rep.Providers[0].Changes != 1 || len(cs) != 1 || cs[0].Kind != "permission_granted" {
+		t.Fatalf("report %+v, changes %v", rep.Providers[0], kinds(cs))
+	}
+	if !strings.Contains(cs[0].Summary, "Files.ReadWrite.All Mail.ReadWrite") || strings.Contains(cs[0].Summary, "User.Read ") {
+		t.Errorf("summary should name only the added scopes: %s", cs[0].Summary)
+	}
+	// the same widened state again, and narrowing, are not new changes
+	r.advance(time.Hour)
+	r.entra.With(func() { r.entra.Delegated[1].Scope = "User.Read" })
+	if rep := r.sync(t, oauthapps.Entra); rep.Providers[0].Changes != 0 {
+		t.Errorf("narrowing reported %d changes", rep.Providers[0].Changes)
+	}
+}
+
+// Re-consent after the grant disappeared reuses the grant id (#492).
+func TestChangesReconsentAfterRemovalDetected(t *testing.T) {
+	r := entraRig(t)
+	r.sync(t, oauthapps.Entra)
+	r.advance(time.Hour)
+	d2 := r.entra.Delegated[1]
+	r.entra.With(func() { r.entra.Delegated = append(r.entra.Delegated[:1:1], r.entra.Delegated[2:]...) })
+	r.sync(t, oauthapps.Entra)
+	if cs := r.changes(t); len(cs) != 0 {
+		t.Fatalf("removal raised %v", kinds(cs))
+	}
+	r.advance(time.Hour)
+	r.entra.With(func() { r.entra.Delegated = append(r.entra.Delegated, d2) })
+	rep := r.sync(t, oauthapps.Entra)
+	if cs := r.changes(t); rep.Providers[0].Changes != 1 || len(cs) != 1 || !strings.Contains(cs[0].Summary, "granted again") {
+		t.Fatalf("report %+v, changes %v", rep.Providers[0], kinds(cs))
+	}
+}
+
+// An app that first enters the inventory after the provider's baseline sync
+// with a new app role and secret is reported; state older than the previous
+// sync is still baseline (#492).
+func TestChangesNewAppAfterBaselineDetected(t *testing.T) {
+	r := entraRig(t)
+	r.sync(t, oauthapps.Entra)
+	r.advance(time.Hour)
+	r.entra.With(func() {
+		r.entra.Roles = append(r.entra.Roles, &oauthfake.EntraRole{ID: "ra-idle", ClientSP: "sp-idle", Resource: "sp-graph", RoleID: "role-dir"})
+		r.entra.Apps = append(r.entra.Apps, &oauthfake.EntraApplication{ID: "obj-idle", AppID: "app-idle",
+			Secrets: []oauthfake.EntraKey{{ID: "key-evil", Name: "evil"}, {ID: "key-old", Name: "old", Start: "2020-01-01T00:00:00Z"}}})
+	})
+	rep := r.sync(t, oauthapps.Entra)
+	cs := r.changes(t)
+	if rep.Providers[0].Changes != 2 || !slices.Equal(kinds(cs), []string{"credential_added", "permission_granted"}) {
+		t.Fatalf("report %+v, changes %v", rep.Providers[0], kinds(cs))
+	}
+	for _, c := range cs {
+		if strings.Contains(c.Summary, `"old"`) {
+			t.Errorf("a credential that predates the last sync was reported: %s", c.Summary)
+		}
+	}
+}

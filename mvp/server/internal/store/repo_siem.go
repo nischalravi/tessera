@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -11,13 +12,16 @@ import (
 type SiemSink struct {
 	ID              string
 	Name            string
-	Kind            string // syslog | webhook
+	Kind            string // syslog | webhook | s3
 	Format          string // json | ocsf
-	Target          string // host:port, or the webhook URL
+	Target          string // host:port, the webhook URL, or the bucket URL with its key prefix
 	Flavor          string // webhook: hec | json
 	CAPEM           *string
 	SecretSealed    []byte
 	IncludeHTTP     bool
+	EventFilter     []string // audit actions or prefixes (grant.revoke, auth.*); empty: every event
+	Region          string   // s3: the signing region
+	AccessKeyID     string   // s3: the access key id (the secret is SecretSealed)
 	Enabled         bool
 	CursorSeq       int64
 	Attempts        int // consecutive failed attempts of the current batch
@@ -43,7 +47,7 @@ type SiemDeadLetter struct {
 }
 
 const siemSinkCols = `s.id, s.name, s.kind, s.format, s.target, s.flavor, s.ca_pem, s.secret_sealed, s.include_http, s.enabled,
-	s.cursor_seq, s.attempts, s.next_attempt_at, s.last_error, s.last_success_at, s.delivered_count, s.dead_letter_count,
+	s.event_filter, s.region, s.access_key_id, s.cursor_seq, s.attempts, s.next_attempt_at, s.last_error, s.last_success_at, s.delivered_count, s.dead_letter_count,
 	s.created_by, s.created_at, s.updated_at`
 
 var (
@@ -53,13 +57,13 @@ var (
 		SELECT `+siemSinkCols+` FROM siem_sinks s WHERE s.tenant_id = @tenant AND s.id = @id`)
 	siemSinksInsert = tq("siem_sinks.insert", `
 		INSERT INTO siem_sinks (id, tenant_id, name, kind, format, target, flavor, ca_pem, secret_sealed, include_http, enabled,
-			cursor_seq, created_by, created_at, updated_at)
-		VALUES (@id, @tenant, @name, @kind, @format, @target, @flavor, @ca_pem, @secret, @include_http, @enabled, @cursor_seq,
-			@created_by, @created_at, @updated_at)`)
+			event_filter, region, access_key_id, cursor_seq, created_by, created_at, updated_at)
+		VALUES (@id, @tenant, @name, @kind, @format, @target, @flavor, @ca_pem, @secret, @include_http, @enabled,
+			@event_filter, @region, @access_key_id, @cursor_seq, @created_by, @created_at, @updated_at)`)
 	siemSinksUpdate = tq("siem_sinks.update", `
 		UPDATE siem_sinks SET name = @name, format = @format, target = @target, flavor = @flavor, ca_pem = @ca_pem,
 			secret_sealed = @secret, include_http = @include_http, enabled = @enabled, updated_at = @updated_at,
-			attempts = 0, next_attempt_at = NULL
+			event_filter = @event_filter, region = @region, access_key_id = @access_key_id, attempts = 0, next_attempt_at = NULL
 		WHERE tenant_id = @tenant AND id = @id`)
 	siemSinksAck = tq("siem_sinks.ack", `
 		UPDATE siem_sinks SET cursor_seq = @to, attempts = 0, next_attempt_at = NULL, last_error = NULL,
@@ -89,13 +93,18 @@ var (
 func scanSiemSink(s scanner) (*SiemSink, error) {
 	var k SiemSink
 	var ca, lastErr, by sql.NullString
+	var filter string
 	var next, lastOK, created, updated nullTime
 	if err := s.Scan(&k.ID, &k.Name, &k.Kind, &k.Format, &k.Target, &k.Flavor, &ca, &k.SecretSealed, &k.IncludeHTTP, &k.Enabled,
-		&k.CursorSeq, &k.Attempts, &next, &lastErr, &lastOK, &k.DeliveredCount, &k.DeadLetterCount, &by, &created,
+		&filter, &k.Region, &k.AccessKeyID, &k.CursorSeq, &k.Attempts, &next, &lastErr, &lastOK, &k.DeliveredCount, &k.DeadLetterCount, &by, &created,
 		&updated); err != nil {
 		return nil, err
 	}
 	k.CAPEM, k.LastError, k.CreatedBy = strp(ca), strp(lastErr), strp(by)
+	k.EventFilter = []string{}
+	if err := json.Unmarshal([]byte(filter), &k.EventFilter); err != nil {
+		return nil, err
+	}
 	var err error
 	if k.NextAttemptAt, err = next.ptr(); err != nil {
 		return nil, err
@@ -123,6 +132,7 @@ func (tx *TenantTx) InsertSiemSink(k *SiemSink) error {
 	_, err := tx.exec(siemSinksInsert, sql.Named("id", k.ID), sql.Named("name", k.Name), sql.Named("kind", k.Kind),
 		sql.Named("format", k.Format), sql.Named("target", k.Target), sql.Named("flavor", k.Flavor), sql.Named("ca_pem", SP(k.CAPEM)),
 		sql.Named("secret", k.SecretSealed), sql.Named("include_http", B(k.IncludeHTTP)), sql.Named("enabled", B(k.Enabled)),
+		sql.Named("event_filter", filterJSON(k.EventFilter)), sql.Named("region", k.Region), sql.Named("access_key_id", k.AccessKeyID),
 		sql.Named("cursor_seq", k.CursorSeq), sql.Named("created_by", SP(k.CreatedBy)), sql.Named("created_at", T(k.CreatedAt)),
 		sql.Named("updated_at", T(k.UpdatedAt)))
 	return err
@@ -134,7 +144,16 @@ func (tx *TenantTx) UpdateSiemSink(k *SiemSink) error {
 	return tx.execOne(siemSinksUpdate, sql.Named("id", k.ID), sql.Named("name", k.Name), sql.Named("format", k.Format),
 		sql.Named("target", k.Target), sql.Named("flavor", k.Flavor), sql.Named("ca_pem", SP(k.CAPEM)),
 		sql.Named("secret", k.SecretSealed), sql.Named("include_http", B(k.IncludeHTTP)), sql.Named("enabled", B(k.Enabled)),
+		sql.Named("event_filter", filterJSON(k.EventFilter)), sql.Named("region", k.Region), sql.Named("access_key_id", k.AccessKeyID),
 		sql.Named("updated_at", T(k.UpdatedAt)))
+}
+
+func filterJSON(f []string) string {
+	if len(f) == 0 {
+		return "[]"
+	}
+	b, _ := json.Marshal(f) // a []string always marshals
+	return string(b)
 }
 
 // AckSiemBatch moves the cursor from `from` to `to` after the destination

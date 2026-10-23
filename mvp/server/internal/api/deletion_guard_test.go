@@ -15,6 +15,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
+	"github.com/nischalravi/tessera/mvp/server/internal/worker"
 )
 
 // The deletion threshold guard through the API (internal/deleteguard).
@@ -516,5 +517,87 @@ func TestDeletionGuardAPI_QueuedSyncHoldNamesWhoQueuedIt(t *testing.T) {
 	}
 	if got := other.call("POST", "/api/admin/deletion-holds/"+id+"/approve", "", 200); got["status"] != "released" {
 		t.Errorf("another admin: %v", got)
+	}
+}
+
+// A dead scheduled sync that an admin retries makes holds that name the retrier too, so they cannot
+// release them (#495). A sync queued by one admin and retried by another names both.
+func TestDeletionGuardAPI_RetriedSyncHoldNamesTheRetrier(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	feed := &swappableFeed{}
+	srv := newIsolationServerWith(f, func(c *Config) {
+		c.Connectors = func(time.Time) ([]connectors.Connector, error) { return []connectors.Connector{feed}, nil }
+	})
+	e := &privEnv{t: t, f: f, srv: srv}
+	retrier := e.as("retrier", []auth.Role{auth.RoleTenantAdmin, auth.RolePolicyAdmin}, nil)
+	other := e.as("other", []auth.Role{auth.RoleTenantAdmin}, nil)
+
+	feed.res.Store(hrFeed(30))
+	retrier.call("POST", "/api/connectors/sync", "", 200)
+	feed.res.Store(hrFeed(20, 0, 1))
+	dead := deadJob(t, f, f.B.ID, "connector_sync") // a scheduled sync: no requested_by
+	retrier.call("POST", "/api/queue/jobs/"+dead+"/retry", "", 200)
+	var j *store.QueueJob
+	_ = f.DB.ReadTenant(context.Background(), f.B.ID, func(c *store.TenantTx) (err error) { j, err = c.QueueJob(dead); return err })
+	var pl worker.SyncPayload
+	if json.Unmarshal([]byte(j.Payload), &pl) != nil || len(pl.RetriedBy) != 1 || pl.RequestedBy != "" {
+		t.Fatalf("payload after the retry = %q", j.Payload)
+	}
+	drain(t, srv)
+
+	holds := retrier.call("GET", "/api/admin/deletion-holds?status=held", "", 200)["holds"].([]any)
+	if len(holds) != 1 {
+		t.Fatalf("holds = %v", holds)
+	}
+	id := holds[0].(map[string]any)["id"].(string)
+	cs, _ := retrier.call("GET", "/api/admin/deletion-holds/"+id, "", 200)["reason"].(map[string]any)["contributors"].([]any)
+	if len(cs) != 1 || cs[0].(map[string]any)["actor"] != pl.RetriedBy[0] {
+		t.Fatalf("contributors = %v, want the retrier", cs)
+	}
+	if got := retrier.call("POST", "/api/admin/deletion-holds/"+id+"/approve", "", 403); got["error"] != "same_actor" {
+		t.Errorf("the admin who retried the run released its hold: %v", got)
+	}
+	if got := other.call("POST", "/api/admin/deletion-holds/"+id+"/approve", "", 200); got["status"] != "released" {
+		t.Errorf("another admin: %v", got)
+	}
+}
+
+// Whether an override escapes the category's budget is recorded when it is approved (#494): two admins
+// approving a looser override mark it, a single-admin tighter one is not marked, and setting it again
+// or removing it clears the mark.
+func TestDeletionGuardAPI_SourceApprovalRecorded(t *testing.T) {
+	e := newPrivEnv(t)
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	conn := store.NewID()
+	if err := e.f.DB.InTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
+		return c.InsertConnection(&store.Connection{ID: conn, Name: "Workday prod", ConnectorType: "workday", System: "workday",
+			Role: "account_source", CreatedAt: storetest.Now, UpdatedAt: storetest.Now})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	approved := func() bool {
+		var ok bool
+		if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) (err error) {
+			ok, err = c.DeletionSourceApproved("connection", conn, "accounts")
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	set := func(rest string) map[string]any {
+		return e.admin.call("POST", "/api/admin/change-requests", srcChange(fmt.Sprintf(
+			`{"kind":"connection","source_id":%q,"category":"accounts"%s}`, conn, rest)), 201)
+	}
+	ch := set(`,"mode":"hold_excess","max_count":100000,"window_minutes":60`) // looser than the category
+	if ch["two_person"] != true || approved() {
+		t.Fatalf("looser override: %v, approved %v before approval", ch, approved())
+	}
+	admin2.call("POST", "/api/admin/change-requests/"+ch["id"].(string)+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, ch["payload_hash"]), 200)
+	if !approved() {
+		t.Error("an override two admins approved as looser is not marked")
+	}
+	if ch = set(`,"mode":"hold_all","max_count":1,"window_minutes":60`); ch["status"] != "applied" || approved() {
+		t.Errorf("tighter single-admin override: %v, approved %v", ch["status"], approved())
 	}
 }

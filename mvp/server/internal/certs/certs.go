@@ -99,8 +99,10 @@ func keyAlgorithm(pub crypto.PublicKey) string {
 type Parsed struct {
 	Cert    *x509.Certificate
 	CertPEM string
-	KeyPEM  []byte // PKCS#8 PEM: seal it, never return it
-	Info    Info
+	// TrustPEM is the trust-anchor bundle of a mutual-TLS upload (ParseMTLS); empty otherwise.
+	TrustPEM string
+	KeyPEM   []byte // PKCS#8 PEM: seal it, never return it
+	Info     Info
 }
 
 // Parse validates an uploaded certificate and private key (PEM). now is the

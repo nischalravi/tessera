@@ -95,8 +95,14 @@ func TestIsolation_Queue(t *testing.T) {
 		if err := c.RetryDeadQueueJob(jobID, now); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("RetryDeadQueueJob(A's) = %v", err)
 		}
+		if err := c.SetDeadQueueJobPayload(jobID, `{"retried_by":["x"]}`, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetDeadQueueJobPayload(A's) = %v", err)
+		}
 		if err := c.AdvanceQueueSchedule(schedID, now, now, now); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("AdvanceQueueSchedule(A's) = %v", err)
+		}
+		if err := c.SetQueueScheduleEnabled("s", false, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetQueueScheduleEnabled(A's) = %v", err)
 		}
 		if n, err := c.PruneQueueJobs(now.Add(time.Hour)); err != nil || n != 0 {
 			t.Errorf("PruneQueueJobs = %d, %v", n, err)
@@ -124,9 +130,46 @@ func TestIsolation_Queue(t *testing.T) {
 func queueCovered() map[string]bool {
 	out := map[string]bool{}
 	for _, k := range []string{"EnqueueQueueJob", "QueueJob", "QueueJobs", "ClaimQueueJobs", "HasDueQueueJobs", "HeartbeatQueueJob",
-		"CompleteQueueJob", "FailQueueJob", "ReleaseQueueJob", "RetryDeadQueueJob", "PruneQueueJobs", "EnsureQueueSchedule",
-		"QueueSchedule", "QueueSchedules", "DueQueueSchedules", "AdvanceQueueSchedule"} {
+		"CompleteQueueJob", "FailQueueJob", "ReleaseQueueJob", "RetryDeadQueueJob", "SetDeadQueueJobPayload", "PruneQueueJobs", "EnsureQueueSchedule", "SetQueueSchedule",
+		"QueueSchedule", "QueueSchedules", "DueQueueSchedules", "AdvanceQueueSchedule", "SetQueueScheduleEnabled"} {
 		out[k] = true // TestIsolation_Queue
 	}
 	return out
+}
+
+// SetQueueSchedule (a tenant's own sync schedule) replaces the schedule of that name in its own tenant only, takes
+// the enabled flag and due time, and a second call updates the row instead of adding one.
+func TestSetQueueSchedulePerTenant(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	now := storetest.Now
+	inA(t, f, func(c *store.TenantTx) error {
+		return c.SetQueueSchedule(&store.QueueSchedule{Name: "connector_sync.delta", Kind: "connector_sync", Payload: `{"mode":"incremental"}`,
+			Spec: "@every 15m", Enabled: true, NextRunAt: now.Add(15 * time.Minute)}, now)
+	})
+	before := queueDump(t, f, f.A)
+	inB(t, f, func(c *store.TenantTx) error {
+		if err := c.SetQueueSchedule(&store.QueueSchedule{Name: "connector_sync.delta", Kind: "connector_sync", Spec: "@every 1h", Enabled: false,
+			NextRunAt: now.Add(time.Hour)}, now); err != nil {
+			return err
+		}
+		return c.SetQueueSchedule(&store.QueueSchedule{Name: "connector_sync.delta", Kind: "connector_sync", Spec: "@every 2h", Enabled: true,
+			NextRunAt: now.Add(2 * time.Hour)}, now)
+	})
+	if queueDump(t, f, f.A) != before {
+		t.Error("tenant A's schedule changed")
+	}
+	inA(t, f, func(c *store.TenantTx) error {
+		s, err := c.QueueSchedule("connector_sync.delta")
+		if err != nil || s.Spec != "@every 15m" || !s.Enabled || s.Payload != `{"mode":"incremental"}` {
+			t.Errorf("A's schedule = %+v, %v", s, err)
+		}
+		return nil
+	})
+	inB(t, f, func(c *store.TenantTx) error {
+		ss, err := c.QueueSchedules()
+		if err != nil || len(ss) != 1 || ss[0].Spec != "@every 2h" || !ss[0].Enabled || !ss[0].NextRunAt.Equal(now.Add(2*time.Hour)) || ss[0].Payload != "{}" {
+			t.Errorf("B's schedules = %+v, %v", ss, err)
+		}
+		return nil
+	})
 }

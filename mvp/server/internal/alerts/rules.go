@@ -174,6 +174,41 @@ var Rules = []*Rule{
 		},
 	},
 	{
+		ID: "provision_failed", Name: "A change sent to a target failed", Kind: "event", Severity: "high", Threshold: 1, Window: time.Hour,
+		Description: "A provisioning operation (SCIM, Okta, a vault or an ERP target) ran out of attempts and ended failed, so the change was not made in the target (provision.failed, #498).",
+		Match: func(e *store.AuditEvent) (Hit, bool) {
+			if e.Action != "provision.failed" {
+				return Hit{}, false
+			}
+			d := detailOf(e)
+			return Hit{Key: orStr(str(d, "op_id"), "operation"),
+				Title: fmt.Sprintf("Provisioning failed: %s for %s", strings.ReplaceAll(orStr(str(d, "kind"), "a change"), "_", " "), orStr(str(d, "target"), "a target"))}, true
+		},
+	},
+	{
+		ID: "provision_mismatch", Name: "A target did not apply a change", Kind: "event", Severity: "high", Threshold: 1, Window: time.Hour,
+		Description: "A re-read of the target showed it did not apply what Tessera sent, so the operation ended in mismatch and a finding was raised (provision.mismatch, #498).",
+		Match: func(e *store.AuditEvent) (Hit, bool) {
+			if e.Action != "provision.mismatch" {
+				return Hit{}, false
+			}
+			d := detailOf(e)
+			return Hit{Key: orStr(str(d, "op_id"), "operation"),
+				Title: fmt.Sprintf("Target did not apply %s for %s", strings.ReplaceAll(orStr(str(d, "kind"), "a change"), "_", " "), orStr(str(d, "target"), "a target"))}, true
+		},
+	},
+	{
+		ID: "queue_job_dead", Name: "Background job gave up", Kind: "event", Severity: "high", Threshold: 1, Window: time.Hour,
+		Description: "A queued background job (a sweep, sync or retry) used up its attempts and will not run again until an admin retries it (issue #497).",
+		Match: func(e *store.AuditEvent) (Hit, bool) {
+			if e.Action != "queue.job_dead" {
+				return Hit{}, false
+			}
+			kind := orStr(str(detailOf(e), "kind"), "unknown")
+			return Hit{Key: kind, Title: "Background job gave up: " + kind}, true
+		},
+	},
+	{
 		ID: "access_drift", Name: "Access drift needs action", Kind: "event", Severity: "medium", Threshold: 1, Window: time.Hour,
 		Description: "Reconciliation found access that differs from what was approved, and its remediation policy acted on it (#301).",
 		Match: func(e *store.AuditEvent) (Hit, bool) {

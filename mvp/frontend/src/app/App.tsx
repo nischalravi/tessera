@@ -8,6 +8,7 @@ import { PaletteProvider } from "./CommandPalette";
 import { PersonaProvider } from "./persona";
 import { Shell } from "./Shell";
 import { PrefsGate } from "./PrefsGate";
+import { RouteErrorBoundary } from "./RouteErrorBoundary";
 import { ThemeProvider } from "./theme";
 
 /**
@@ -67,6 +68,7 @@ const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege")
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
 const OAuthApps = named(() => import("../features/security/OAuthApps"), "OAuthApps");
+const GitHubTokens = named(() => import("../features/security/GitHubTokens"), "GitHubTokens");
 const Alerts = named(() => import("../features/alerts/Alerts"), "Alerts");
 const MfaPosture = named(() => import("../features/insights/MfaPosture"), "MfaPosture");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
@@ -181,6 +183,7 @@ export default function App() {
             <PaletteProvider>
               <Shell>
                 <AdminBanner />
+                <RouteErrorBoundary>
                 <Suspense fallback={<PageSkeleton />}>
                   <Routes>
                     <Route path="/" element={<Home />} />
@@ -247,6 +250,7 @@ export default function App() {
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
                     <Route path="/alerts" element={<Alerts />} />
                     <Route path="/security/oauth-apps" element={<OAuthApps />} />
+                    <Route path="/security/github-tokens" element={<GitHubTokens />} />
                     <Route path="/governance/policies" element={<Policies />} />
                     <Route path="/governance/mitigations" element={<Mitigations />} />
                     <Route path="/governance/attributes" element={<AttributePolicies />} />
@@ -298,6 +302,7 @@ export default function App() {
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>
                 </Suspense>
+                </RouteErrorBoundary>
               </Shell>
             </PaletteProvider>
           </PersonaProvider>

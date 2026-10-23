@@ -4,6 +4,7 @@ import { Bell, CheckCheck } from "lucide-react";
 import { NotificationChannel, NotificationKindPref, NotificationPrefs, fmtDate, markNotificationsRead, putNotificationPrefs, relTime, useApi } from "../../api";
 import { Badge, Button, Callout, EmptyState, FilterChips, Loading, Page, useToast } from "../../components";
 import { KIND_LABEL, useNotifications } from "./model";
+import { ChatCard, MailRelayCard, PolicyCard, TemplatesCard } from "./NotifyAdmin";
 import { useOpenNotification } from "./open";
 
 const CHANNEL_LABEL: Record<NotificationChannel, string> = {
@@ -132,8 +133,14 @@ export function NotificationsAdminPanel() {
   return (
     <div className="stack">
       <div className="card small">
-        Notifications are live. Each person chooses what they get under <Link to="/notifications">Notifications</Link>; the settings below are yours.
+        Notifications are live. Each person chooses what they get under <Link to="/notifications">Notifications</Link>. Below, your organization sets how email is sent
+        (the delivery log is under <Link to="/admin/email-delivery">Email delivery</Link>), where chat messages go, what the emails say and when reminders and escalations happen.
       </div>
+      <MailRelayCard />
+      <ChatCard />
+      <TemplatesCard />
+      <PolicyCard />
+      <h2 style={{ margin: "8px 0 0" }}>Your own settings</h2>
       <NotificationPreferences />
     </div>
   );

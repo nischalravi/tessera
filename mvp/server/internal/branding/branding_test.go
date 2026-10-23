@@ -2,13 +2,19 @@ package branding
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"maps"
 	"strings"
 	"testing"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/cfgerr"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 )
 
 func img(w, h int) image.Image {
@@ -148,5 +154,82 @@ func TestCheckLogo(t *testing.T) {
 				t.Errorf("logo = %+v", l)
 			}
 		})
+	}
+}
+
+func TestLabels(t *testing.T) {
+	cases := []struct {
+		name string
+		in   map[string]string
+		want map[string]string
+		code string
+	}{
+		{"rename", map[string]string{"entitlement": "permission set"}, map[string]string{"entitlement": "permission set"}, ""},
+		{"spaces are tidied", map[string]string{"group": "  work   team "}, map[string]string{"group": "work team"}, ""},
+		{"the default is dropped", map[string]string{"guest": "Guest"}, map[string]string{}, ""},
+		{"unicode letters", map[string]string{"application": "système"}, map[string]string{"application": "système"}, ""},
+		{"unknown term", map[string]string{"role": "job"}, nil, "invalid_label_term"},
+		{"empty", map[string]string{"group": "  "}, nil, "invalid_label"},
+		{"too long", map[string]string{"group": strings.Repeat("a", MaxLabel+1)}, nil, "invalid_label"},
+		{"markup", map[string]string{"group": "<b>team</b>"}, nil, "invalid_label"},
+		{"control character", map[string]string{"group": "team\u0000"}, nil, "invalid_label"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Labels(tc.in)
+			if tc.code != "" {
+				var be *Error
+				if !errors.As(err, &be) || be.Code != tc.code {
+					t.Fatalf("err = %v, want %s", err, tc.code)
+				}
+				return
+			}
+			if err != nil || !maps.Equal(got, tc.want) {
+				t.Errorf("got %v, %v; want %v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestSaveSettings(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	now := storetest.Now
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		if s, v, err := LoadSettings(c); err != nil || v != 0 || s.DefaultLanguage != "" || s.EmailLogo || len(s.Labels) != 0 {
+			t.Fatalf("defaults = %+v v%d %v", s, v, err)
+		}
+		in := Settings{DefaultLanguage: "de-DE", EmailLogo: true, Labels: map[string]string{"entitlement": "permission set"}}
+		if _, v, err := SaveSettings(c, in, 0, "admin", now); err != nil || v != 1 {
+			t.Fatalf("save = v%d %v", v, err)
+		}
+		if s, v, err := LoadSettings(c); err != nil || v != 1 || s.DefaultLanguage != "de-DE" || !s.EmailLogo || s.Labels["entitlement"] != "permission set" {
+			t.Fatalf("after = %+v v%d %v", s, v, err)
+		}
+		var ce *cfgerr.Error
+		if _, _, err := SaveSettings(c, in, 0, "admin", now); !errors.As(err, &ce) || ce.Code != "version_conflict" {
+			t.Errorf("stale save = %v", err)
+		}
+		in.DefaultLanguage = "xx-XX"
+		if _, _, err := SaveSettings(c, in, 1, "admin", now); !errors.As(err, &ce) || ce.Code != "invalid_language" {
+			t.Errorf("unknown language = %v", err)
+		}
+		in.DefaultLanguage = ""
+		in.Labels = map[string]string{"nope": "x"}
+		var be *Error
+		if _, _, err := SaveSettings(c, in, 1, "admin", now); !errors.As(err, &be) || be.Code != "invalid_label_term" {
+			t.Errorf("unknown term = %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// B is untouched
+	if err := f.DB.ReadTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
+		if s, v, err := LoadSettings(c); err != nil || v != 0 || s.DefaultLanguage != "" {
+			t.Errorf("B = %+v v%d %v", s, v, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

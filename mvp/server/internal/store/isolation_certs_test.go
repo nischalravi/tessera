@@ -46,7 +46,10 @@ func TestIsolation_Certificates(t *testing.T) {
 		if err := c.InsertCertificate(testCert("a-next", store.CertSAMLSP, store.CertNext, &ia)); err != nil {
 			return err
 		}
-		return c.InsertCertificate(testCert("a-mtls", store.CertMTLSClient, store.CertActive, nil))
+		m := testCert("a-mtls", store.CertMTLSClient, store.CertActive, nil)
+		conn := f.A.Refs["connection:ad"]
+		m.ConnectionID, m.TrustPEM = &conn, "-----BEGIN CERTIFICATE-----\nBBBB\n-----END CERTIFICATE-----\n"
+		return c.InsertCertificate(m)
 	})
 	inB(t, f, func(c *store.TenantTx) error {
 		return c.InsertCertificate(testCert("b-sign", store.CertSigning, store.CertActive, nil))
@@ -64,6 +67,9 @@ func TestIsolation_Certificates(t *testing.T) {
 		}
 		if _, err := c.NextSAMLCertificate(connA.ID); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("NextSAMLCertificate(A's connection) = %v", err)
+		}
+		if _, err := c.ActiveMTLSCertificate(f.A.Refs["connection:ad"]); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("ActiveMTLSCertificate(A's connection) = %v", err)
 		}
 		for name, err := range map[string]error{
 			"ActivateCertificate": c.ActivateCertificate("a-next", storetest.Now),
@@ -83,6 +89,13 @@ func TestIsolation_Certificates(t *testing.T) {
 	if storetest.Dump(t, f.DB, f.A.ID) != before {
 		t.Error("tenant A changed")
 	}
+	inA(t, f, func(c *store.TenantTx) error {
+		m, err := c.ActiveMTLSCertificate(f.A.Refs["connection:ad"])
+		if err != nil || m.ID != "a-mtls" || !strings.Contains(m.TrustPEM, "BBBB") {
+			t.Errorf("A's own ActiveMTLSCertificate = %+v, %v", m, err)
+		}
+		return nil
+	})
 	// the same fingerprint may exist in two tenants; one waiting key per connection
 	inB(t, f, func(c *store.TenantTx) error {
 		same := testCert("a-dup", store.CertMTLSClient, store.CertActive, nil)

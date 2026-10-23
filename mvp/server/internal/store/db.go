@@ -153,6 +153,8 @@ var tables = []string{
 	"deletion_holds", "deletion_hold_items",
 	// per-source settings (schema/0690_deletion_guard_sources.sql)
 	"deletion_guard_source_policies", "deletion_guard_source_state", "deletion_guard_source_ledger",
+	// two-admin approval of an override (schema/0730_deletion_guard_source_approvals.sql)
+	"deletion_guard_source_approvals",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)
@@ -199,10 +201,16 @@ var tables = []string{
 	"review_populations", "review_population_rows", "review_auto_decisions", "tenant_settings",
 	// verified help-desk resets (schema/0254_helpdesk.sql)
 	"helpdesk_cases", "helpdesk_verifications", "helpdesk_signals", "helpdesk_findings",
+	// recent authentication method rule settings and IdP risk signals (schema/0720_helpdesk_auth_method_risk.sql)
+	"helpdesk_settings", "helpdesk_idp_risks",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// certificates and rotation state, tenant branding (schema/0410_certificates.sql, 0411_branding.sql)
 	"tenant_certificates", "tenant_branding",
+	// label settings and identity rules (schema/0765_tenant_label_settings.sql, 0766_identity_rules.sql)
+	"tenant_label_settings", "identity_rules",
+	// tenant mail relay, chat webhook, notification wording and timings, suppressions (schema/0760 to 0764)
+	"tenant_mail_relay", "tenant_chat_webhook", "notification_templates", "notification_policy", "email_suppressions",
 	// alerting (schema/0209_alerts.sql)
 	"alert_rule_settings", "alerts", "alert_channels", "alert_deliveries", "alert_cursors",
 	// identity disable / enable (schema/0310_identity_disables.sql)
@@ -245,6 +253,8 @@ var tables = []string{
 	"oauth_revoke_requests",
 	// credential, permission and owner changes of OAuth apps (schema/0680_oauth_app_changes.sql)
 	"oauth_app_facts", "oauth_app_changes",
+	// GitHub and CI token inventory (schema/0710_github_tokens.sql)
+	"github_tokens",
 	// guest lifecycle (schema/0371_guest_lifecycle.sql)
 	"guest_lifecycle_settings", "guest_reminders", "guest_renewal_tokens", "guest_lifecycle_tasks", "sponsorship_stepups",
 	"guest_deprovisioning",
@@ -448,10 +458,16 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	if err := d.upgradeAgentJobs(ctx); err != nil {
 		return err
 	}
+	if err := d.upgradeSiemSinks(ctx); err != nil {
+		return err
+	}
 	if err := d.upgradeUserIDColumns(ctx); err != nil {
 		return err
 	}
 	if err := d.upgradeAdminChangeTypes(ctx); err != nil {
+		return err
+	}
+	if err := d.upgradeCertTrust(ctx); err != nil {
 		return err
 	}
 	if err := d.upgradeGrpInboxKinds(ctx); err != nil {

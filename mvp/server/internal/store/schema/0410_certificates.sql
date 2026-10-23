@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS tenant_certificates (
   connection_id TEXT REFERENCES connections (id),
   status TEXT NOT NULL CHECK (status IN ('next','active','retired')),
   cert_pem TEXT NOT NULL,
+  -- mtls_client: the CA certificates (PEM) the target's server certificate must chain to; '' uses the system roots
+  trust_pem TEXT NOT NULL DEFAULT '',
   key_sealed BLOB,
   subject TEXT NOT NULL,
   issuer TEXT NOT NULL,
