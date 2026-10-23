@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/breach"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauthapps"
@@ -27,7 +28,8 @@ import (
 //	POST /api/breach/plans/{id}/run                queue the rotation of the vendor's secrets, revoke its OAuth
 //	                                               grants, then re-read everything
 //	POST /api/breach/plans/{id}/verify             re-read every open item (completes the plan when none is left)
-//	POST /api/breach/plans/{id}/items/{item}/attest {note}: a person did a manual item
+//	POST /api/breach/plans/{id}/items/{item}/attest {note}: a person did a manual item; answers 409
+//	                                               two_admin_change_required, a second admin approves a breach.item.attest change (#538)
 //	GET  /api/breach/plans/{id}/evidence           the evidence export (JSON, hashed), as a download
 //
 // Reading needs graph.read (the export needs audit.read). Everything that
@@ -133,8 +135,15 @@ func (s *Server) breachAttest(r *http.Request, p *params) (int, any, error) {
 	if err := decodeBody(r, &in, false); err != nil {
 		return 0, nil, err
 	}
-	out, err := s.breach.Attest(store.TxFrom(r.Context()), id, item, in.Note, actor(r), s.clock())
-	return http.StatusOK, out, breachErr(err)
+	// attesting closes a vendor breach item on a person's word, so it takes two admins (issue #538): this checks the
+	// attestation and names the change to file; a different admin approves it and the item closes then.
+	if _, _, err := s.breach.CheckAttest(store.TxFrom(r.Context()), id, item, in.Note); err != nil {
+		return 0, nil, breachErr(err)
+	}
+	return 0, nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
+		Msg: "attesting a breach item needs a second admin: submit a change request of type " + admin.TypeBreachAttest +
+			" (POST /api/admin/change-requests, payload {plan_id, item_id, note}) for a different admin to approve; the item stays in progress until then",
+		Extra: map[string]any{"change_type": admin.TypeBreachAttest}}
 }
 
 func (s *Server) breachEvidence(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {

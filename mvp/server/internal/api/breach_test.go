@@ -1,9 +1,12 @@
 package api
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 )
 
@@ -95,15 +98,58 @@ func TestBreachAPI_EndToEnd(t *testing.T) {
 		}
 	}
 
-	// whatever is left is manual: attest it, and the plan completes
+	// whatever is left is manual: attesting needs a second admin (issue #538)
+	admin2 := grpClient{client{a.t, signIn(a.t, a.f.DB, a.f.B.ID, authtest.User{Email: "admin2@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}},
+		authtest.Phr, storetest.Now).Handler(a.srv.Handler())}}
+	otherTenant := grpClient{client{a.t, signIn(a.t, a.f.DB, a.f.A.ID, authtest.User{Email: "admin@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}},
+		authtest.Phr, storetest.Now).Handler(a.srv.Handler())}}
+	requester := grpClient{client{a.t, a.h}}
+	attested := 0
 	for _, it := range planItems(v) {
-		if it["state"] != "verified" {
-			if it["action"] != "manual" {
-				t.Fatalf("an open item that is not manual: %v", it)
-			}
-			a.call("POST", "/api/breach/plans/"+id+"/items/"+it["id"].(string)+"/attest", `{"note":"short"}`, 422)
-			v, _ = a.call("POST", "/api/breach/plans/"+id+"/items/"+it["id"].(string)+"/attest", `{"note":"disabled in the vendor console"}`, 200)
+		if it["state"] == "verified" {
+			continue
 		}
+		if it["action"] != "manual" {
+			t.Fatalf("an open item that is not manual: %v", it)
+		}
+		item := "/api/breach/plans/" + id + "/items/" + it["id"].(string) + "/attest"
+		a.call("POST", item, `{"note":"short"}`, 422)
+		// the attest route no longer closes the item: it names the change a second admin must approve
+		got, _ := a.call("POST", item, `{"note":"disabled in the vendor console"}`, 409)
+		if errCode(obj(got)) != "two_admin_change_required" || obj(got)["change_type"] != "breach.item.attest" {
+			t.Fatalf("attest answered %v", got)
+		}
+		body := `{"type":"breach.item.attest","payload":{"plan_id":"` + id + `","item_id":"` + it["id"].(string) + `","note":"disabled in the vendor console"}}`
+		ch := requester.call("POST", "/api/admin/change-requests", body, 201)
+		if ch["status"] != "pending_approval" || ch["two_person"] != true {
+			t.Fatalf("attest request = %v", ch)
+		}
+		requester.call("POST", "/api/admin/change-requests", body, 409) // one open request per item
+		// the item is in progress and the plan open until a second admin approves
+		pv, _ := a.call("GET", "/api/breach/plans/"+id, "", 200)
+		for _, x := range planItems(pv) {
+			if x["id"] == it["id"] && (x["state"] != "in_progress" || x["attested_by"] != nil) {
+				t.Errorf("item while the request waits: %v", x)
+			}
+		}
+		// the requester cannot approve; another tenant's admin cannot see the request; a second admin can
+		approve := "/api/admin/change-requests/" + ch["id"].(string) + "/approve"
+		ph := `{"payload_hash":"` + ch["payload_hash"].(string) + `"}`
+		if got := requester.call("POST", approve, ph, 403); errCode(got) != "self_approval_refused" {
+			t.Errorf("self approval = %v", got)
+		}
+		otherTenant.call("POST", approve, ph, 404)
+		admin2.call("POST", approve, ph, 200)
+		attested++
+		v, _ = a.call("GET", "/api/breach/plans/"+id, "", 200)
+		for _, x := range planItems(v) {
+			if x["id"] == it["id"] && (x["state"] != "attested" || !strings.Contains(x["attested_by"].(string), "approved by")) {
+				t.Errorf("item after approval: %v", x)
+			}
+		}
+	}
+	if attested == 0 {
+		t.Fatal("no manual item to attest")
 	}
 	if obj(v)["status"] != "completed" || obj(obj(v)["report"])["complete"] != true || obj(v)["completed_at"] == nil {
 		t.Fatalf("plan after every item was verified or attested: %v", v)
@@ -119,13 +165,30 @@ func TestBreachAPI_EndToEnd(t *testing.T) {
 		!strings.Contains(rec.Body.String(), `"rotation_jobs"`) || !strings.Contains(rec.Body.String(), `"old_credential_re_read"`) {
 		t.Errorf("evidence: %d %v %.600s", rec.Code, rec.Header(), rec.Body)
 	}
+	var ev struct {
+		Evidence struct {
+			Attestations []struct {
+				Status      string `json:"status"`
+				RequestedBy string `json:"requested_by"`
+				ApprovedBy  string `json:"approved_by"`
+			} `json:"attestations"`
+		} `json:"evidence"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &ev); err != nil || len(ev.Evidence.Attestations) != attested {
+		t.Fatalf("evidence attestations = %+v, %v", ev.Evidence.Attestations, err)
+	}
+	for _, at := range ev.Evidence.Attestations {
+		if at.Status != "applied" || at.RequestedBy == "" || at.ApprovedBy == "" || at.RequestedBy == at.ApprovedBy {
+			t.Errorf("attestation evidence must name two different admins: %+v", at)
+		}
+	}
 	if strings.Contains(rec.Body.String(), "secret_enc") {
 		t.Error("the evidence carries sealed material")
 	}
 
 	// every change is in the audit ledger
 	acts := strings.Join(a.actions(), " ")
-	for _, want := range []string{"breach.plan.created", "breach.plan.started", "breach.plan.verified", "breach.plan.completed", "rotation.bulk.executed"} {
+	for _, want := range []string{"breach.plan.created", "breach.plan.started", "breach.plan.verified", "breach.plan.completed", "rotation.bulk.executed", "admin.change.submitted", "admin.change.approved", "breach.item.attested"} {
 		if !strings.Contains(acts, want) {
 			t.Errorf("no %s event in %s", want, acts)
 		}

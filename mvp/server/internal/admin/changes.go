@@ -211,6 +211,9 @@ type changeType struct {
 	// submitSecret seals the client secret that travels with the request
 	// (idp_connection.create only); nil for the other types.
 	submitSecret func(e *env, v any, id uuid.UUID, secret string) ([]byte, error)
+	// afterSubmit runs in the transaction that records the request, once it is inserted (breach.item.attest
+	// marks its item in progress); nil for the other types.
+	afterSubmit func(e *env, ch *store.AdminChange, v any) error
 }
 
 // typed builds a changeType for payload struct T. prep may fill server-chosen
@@ -359,6 +362,11 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput)
 		}
 		if err := tx.InsertAdminChange(ch); err != nil {
 			return err
+		}
+		if typ.afterSubmit != nil {
+			if err := typ.afterSubmit(e, ch, v); err != nil {
+				return err
+			}
 		}
 		return e.transition(ch, TransSubmitted, p.Display)
 	})

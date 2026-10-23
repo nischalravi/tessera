@@ -166,7 +166,7 @@ func TestPlanLifecycleVerifiesByReRead(t *testing.T) {
 	// attest needs a real note, a manual item and a running plan
 	for _, c := range []struct{ note, code string }{{"short", "note_required"}} {
 		err := f.DB.InTenant(ctx, f.A.ID, func(tx *store.TenantTx) error {
-			_, err := s.Attest(tx, planID, tok.ID, c.note, "admin", now)
+			_, err := s.AttestApproved(tx, planID, tok.ID, c.note, "admin", "approver", "chg", now)
 			return err
 		})
 		var be *Error
@@ -175,7 +175,7 @@ func TestPlanLifecycleVerifiesByReRead(t *testing.T) {
 		}
 	}
 	v = step(func(c *store.TenantTx) (*View, error) {
-		return s.Attest(c, planID, tok.ID, "revoked the PAT in the GitHub console", "admin", now)
+		return s.AttestApproved(c, planID, tok.ID, "revoked the PAT in the GitHub console", "admin", "approver", "chg", now)
 	})
 	if got := state(v, "github_token", tokenID); got.State != "attested" || got.AttestedBy == nil || v.Status != "running" {
 		t.Errorf("after attest: %+v status %s", got, v.Status)
@@ -260,7 +260,7 @@ func TestOAuthGrantItems(t *testing.T) {
 		}
 	}
 	err := f.DB.InTenant(ctx, f.A.ID, func(c *store.TenantTx) error {
-		_, err := s.Attest(c, id, failed.ID, "I promise it is fine really", "admin", now)
+		_, err := s.AttestApproved(c, id, failed.ID, "I promise it is fine really", "admin", "approver", "chg", now)
 		return err
 	})
 	var be *Error
