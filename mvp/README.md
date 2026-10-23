@@ -510,6 +510,14 @@ and `tessera worker` runs them with no HTTP API and no listener, over the same d
   `POST /api/connectors/sync?async=true[&mode=full]` queues it and returns `{"queued":true}` (audited as
   `connectors.sync_queued`); without `async` the call is as before. `TESSERA_CONNECTOR_SYNC_SCHEDULE`
   (`@every 15m` or five cron fields) schedules it for every tenant; unset, syncs run on demand only.
+  A tenant also sets its own schedule (issue #498): `PUT /api/connectors/sync-schedule {delta_every_minutes, full_every_hours}`
+  (`connections.manage`; 0 is off, delta 5 to 1440 minutes, full 1 to 720 hours; audited as `connectors.schedule_updated`)
+  stores two rows in the tenant's `queue_schedules` (`connector_sync.delta`, payload `{"mode":"incremental"}`, and
+  `connector_sync.full`, `{"mode":"full"}`), which the queue fires as `connector_sync` jobs like any other schedule, so they run
+  wherever a worker runs that kind and appear under Jobs. `GET /api/connectors/sync-status` (`connections.read`) returns the
+  schedule with its next and last times, the last sync run, and per connector the counts (accounts, groups, resources,
+  permissions) and the last sync and last full read from its checkpoint (a connector that keeps no checkpoint has none).
+  Admin > Connections shows both and has a **Sync schedule** panel.
 - `provision_push` is one tenant's pass of the provisioning engine (`provision.Engine.RunTenant`), scheduled
   every 5 s per tenant. It records a `provision` run only when it found work, like the in-process loop.
 
@@ -656,7 +664,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
-`GET|POST /api/ssf/transmitters` · `GET|PUT|DELETE /api/ssf/transmitters/{id}` · `POST /api/ssf/transmitters/{id}/verify` ·
+`GET /api/connectors/sync-status` · `PUT /api/connectors/sync-schedule` (see "Durable job queue") · `GET|POST /api/ssf/transmitters` · `GET|PUT|DELETE /api/ssf/transmitters/{id}` · `POST /api/ssf/transmitters/{id}/verify` ·
 `GET /api/ssf/events` · `POST /public/t/{slug}/ssf/{transmitter_id}/events` (SSF push, see "Shared Signals receiver") ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it) · `POST /api/siem/sinks/{id}/rewind {seq}` ·
@@ -5175,7 +5183,7 @@ curl -X POST "$TESSERA_PUBLIC_URL/t/acme/oauth/token" -H "DPoP: $PROOF" \
 roles: a machine client may hold `viewer`, `operator` and `auditor` only, and its `roles` are read on every
 request like a user's. `-dpop=false` registers a client that may skip DPoP (it then gets a `Bearer` token and
 the command warns; sending a proof anyway still binds the token). Creating and changing clients moves to
-the change-request workflow in PR12. The token is an `at+jwt` of 10 minutes (5 with `tessera:admin`),
+the change-request workflow in PR12 (until then the UI and API below create them directly, with a fresh passkey sign-in). The token is an `at+jwt` of 10 minutes (5 with `tessera:admin`),
 `sub` = `cli_<client row id>`, with no `sid`, no refresh token, and `cnf.jkt` when DPoP-bound.
 
 What a machine principal may do is the intersection of its roles and its scopes (the scope is the subset of
@@ -5188,7 +5196,10 @@ A disabled client, or one whose roles or scopes are narrowed, is cut off on the 
 |---|---|
 | `POST /t/{slug}/oauth/token` | also `client_credentials`: `client_assertion_type`, `client_assertion`, optional `scope`; DPoP proof and nonce when the client requires DPoP |
 | `POST /t/{slug}/oauth/introspect` | RFC 7662: the same client authentication (`aud` = the introspect URL) for a client registered with the `tessera:introspect` scope; `{"active": false}` for anything that is not an active token of this tenant (expired, revoked session, other tenant, malformed) |
-| `GET /api/admin/api-clients` · `/{client_id}` | `admin.read`: the tenant's clients with their public keys (kid, alg, thumbprint), roles, scopes, owner, last use. Read-only |
+| `GET /api/admin/api-clients` · `/{client_id}` | `admin.read`: the tenant's clients with their public keys (kid, alg, thumbprint), roles, scopes, owner, last use (when it last got a token) |
+| `POST /api/admin/api-clients` | issue #498: create a machine client `{name, owner (id or e-mail of an active user), scopes, roles, dpop_required, jwks}`; scopes are `tessera:read|write|audit|introspect` (never `tessera:admin`), roles `viewer|operator|auditor`, `jwks` public keys only (`invalid_jwks`); needs `admin.change.request` and a step-up of 5 minutes, audited as `oauth.client.created` |
+| `POST /api/admin/api-clients/{client_id}/keys` | rotate the keys `{jwks, mode}`: `add` keeps the current keys during the overlap (a repeated `kid` is refused), `replace` leaves only the new set; audited as `oauth.client.keys_rotated` |
+| `POST /api/admin/api-clients/{client_id}/revoke` | disable the client (409 when already revoked): no new token, and its tokens stop on the next request; audited as `oauth.client.revoked`. The first-party CLI client and another tenant's client are 404 |
 
 The RFC 8414 metadata advertises `client_credentials`, `private_key_jwt` (`ES256`, `EdDSA`) and the
 `introspection_endpoint`.
@@ -5573,7 +5584,8 @@ OpenAPI document). Deliberate differences:
   notification outbox and provisioning operations still run their own loops, so they are not safe on more
   than one instance yet; moving them is the follow-up. There is no queue depth or oldest-job-age metric
   yet (only `tessera_queue_job_runs_total` and the per-sweep loop lag in `obs.DefaultLoops`), and schedules cannot be edited or disabled through the API.
-* There is no scheduled connector sync. Seeding runs discovery once, and `POST /api/connectors/sync`
+* Connector syncs are scheduled per tenant (Admin > Connections > Sync schedule) or with
+  `TESSERA_CONNECTOR_SYNC_SCHEDULE`; seeding runs discovery once, and `POST /api/connectors/sync`
   re-runs discovery on demand (`?mode=full` ignores connector checkpoints).
 * Effective-permission paths are capped at 8 per permission, and "lost if removed" uses those paths.
 * AWS permissions are modelled as discrete actions on resources. IAM policy conditions, deny

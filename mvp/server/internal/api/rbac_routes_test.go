@@ -25,6 +25,8 @@ const designRoutes = `
 GET    /api/health                                   public
 GET    /api/connectors                               graph.read      -
 POST   /api/connectors/sync                          connectors.sync -
+GET    /api/connectors/sync-status                   connections.read -  # issue #498
+PUT    /api/connectors/sync-schedule                 connections.manage -  # issue #498
 GET    /api/summary                                  graph.read      -
 GET    /api/identities                               graph.read      -
 GET    /api/identities/{identity_id}                 graph.read      -
@@ -722,6 +724,9 @@ POST   /api/admin/change-requests/{change_id}/apply  admin.change.approve STEP_U
 GET    /api/admin/notifications                      admin.read      -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #15
 GET    /api/admin/api-clients/{client_id}            admin.read      -  # issue #15
+POST   /api/admin/api-clients                        admin.change.request STEP_UP_ADMIN  # issue #498
+POST   /api/admin/api-clients/{client_id}/keys       admin.change.request STEP_UP_ADMIN  # issue #498
+POST   /api/admin/api-clients/{client_id}/revoke     admin.change.request STEP_UP_ADMIN  # issue #498
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16

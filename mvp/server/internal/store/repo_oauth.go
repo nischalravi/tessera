@@ -26,6 +26,10 @@ var (
 		SELECT `+clientCols+` FROM api_clients c WHERE c.tenant_id = @tenant AND c.client_id = @client_id`)
 	clientsList = tq("api_clients.list", `
 		SELECT `+clientCols+` FROM api_clients c WHERE c.tenant_id = @tenant ORDER BY c.created_at, c.rowid`)
+	clientsSetKeys = tq("api_clients.set_keys", `
+		UPDATE api_clients SET jwks = @jwks WHERE tenant_id = @tenant AND client_id = @client_id AND kind = 'machine'`)
+	clientsSetStatus = tq("api_clients.set_status", `
+		UPDATE api_clients SET status = @status WHERE tenant_id = @tenant AND client_id = @client_id AND kind = 'machine'`)
 	clientsTouch = tq("api_clients.touch", `
 		UPDATE api_clients SET last_used_at = @at WHERE tenant_id = @tenant AND client_id = @client_id`)
 )
@@ -119,6 +123,18 @@ func (tx *TenantTx) APIClientByClientID(clientID string) (*APIClient, error) {
 
 // APIClients lists this tenant's clients in creation order.
 func (tx *TenantTx) APIClients() ([]*APIClient, error) { return collect(tx, scanClient, clientsList) }
+
+// SetAPIClientKeys replaces the registered public key set (canonical JWKS JSON) of this tenant's machine client
+// (ErrNotFound for another tenant's client, a missing one and the first-party CLI client).
+func (tx *TenantTx) SetAPIClientKeys(clientID string, jwks []byte) error {
+	return tx.execOne(clientsSetKeys, sql.Named("jwks", string(jwks)), sql.Named("client_id", clientID))
+}
+
+// SetAPIClientStatus enables or disables this tenant's machine client (ErrNotFound as for SetAPIClientKeys). A
+// disabled client gets no new token, and the tokens it holds stop working at once.
+func (tx *TenantTx) SetAPIClientStatus(clientID, status string) error {
+	return tx.execOne(clientsSetStatus, sql.Named("status", status), sql.Named("client_id", clientID))
+}
 
 // TouchAPIClient records a use of the client.
 func (tx *TenantTx) TouchAPIClient(clientID string, at time.Time) error {

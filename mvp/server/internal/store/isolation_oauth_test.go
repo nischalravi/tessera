@@ -71,6 +71,12 @@ var oauthMutations = map[string]func(c *store.TenantTx, a oauthRows) error{
 	"TouchAPIClient": func(c *store.TenantTx, a oauthRows) error {
 		return c.TouchAPIClient("tsc_onlya", storetest.Now)
 	},
+	"SetAPIClientKeys": func(c *store.TenantTx, a oauthRows) error {
+		return c.SetAPIClientKeys("tsc_onlya", []byte(`{"keys":[]}`))
+	},
+	"SetAPIClientStatus": func(c *store.TenantTx, a oauthRows) error {
+		return c.SetAPIClientStatus("tsc_onlya", store.ClientDisabled)
+	},
 	"PollDeviceGrant": func(c *store.TenantTx, a oauthRows) error {
 		return c.PollDeviceGrant(a.grant.ID, storetest.Now, 10)
 	},

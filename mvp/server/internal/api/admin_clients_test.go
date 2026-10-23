@@ -128,8 +128,8 @@ func TestAdminAPIClients(t *testing.T) {
 			t.Errorf("%s: %d %s", role, rec.Code, rec.Body)
 		}
 	}
-	// read-only: nothing here writes
-	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+	// the list route takes no PUT, PATCH or DELETE (creating is a POST, tested in TestAdminAPIClients_Manage)
+	for _, m := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		l := signIn(t, f.DB, f.B.ID, testAdmin, authtest.Phr, storetest.Now)
 		req := httptest.NewRequest(m, "/api/admin/api-clients", strings.NewReader(`{}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -387,4 +387,168 @@ func TestMachinePrincipalRoutes(t *testing.T) {
 			t.Errorf("bad assertion: %d %s", rec.Code, rec.Body)
 		}
 	})
+}
+
+// pubJWKS is a one-key public key set with the given kid.
+func pubJWKS(t *testing.T, kid string) json.RawMessage {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: kid, Algorithm: "ES256", Use: "sig"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// TestAdminAPIClients_Manage: creating a machine client, adding and replacing its keys, and revoking it need an admin
+// with a fresh passkey sign-in; none of it can grant the admin scope or role, accept a private key, or touch the CLI
+// client or another tenant's client; each change is audited without key material.
+func TestAdminAPIClients_Manage(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	seedClient(t, f.DB, f.A.ID, "tsc_client_a", "ETL A")
+	if err := f.DB.InTenant(context.Background(), f.B.ID, func(tx *store.TenantTx) error { return oauth.EnsureCLIClient(tx, storetest.Now) }); err != nil {
+		t.Fatal(err)
+	}
+	h := newIsolationServer(f).Handler()
+	now := storetest.Now
+	admin := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ta@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, now)
+	stale := signIn(t, f.DB, f.B.ID, authtest.User{Email: "stale@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}},
+		authtest.Ctx{AAL: 2, Phr: true, AuthTime: now.Add(-20 * time.Minute)}, now)
+	owner := signIn(t, f.DB, f.B.ID, authtest.User{Email: "owner@b.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, now)
+	_ = owner
+	do := func(l authtest.Login, method, path string, body any) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(body)
+		return reqDo(h, l, method, path, string(raw))
+	}
+	create := func(m map[string]any) map[string]any {
+		base := map[string]any{"name": "Nightly ETL", "owner": "owner@b.example", "scopes": []string{"tessera:read"}, "roles": []string{"viewer"}, "jwks": pubJWKS(t, "k1")}
+		for k, v := range m {
+			base[k] = v
+		}
+		return base
+	}
+
+	for _, role := range []auth.Role{auth.RoleViewer, auth.RoleOperator, auth.RoleAuditor, auth.RolePolicyAdmin} {
+		l := signIn(t, f.DB, f.B.ID, authtest.User{Email: string(role) + "@b.example", Roles: []auth.Role{role}}, authtest.Phr, now)
+		if rec := do(l, "POST", "/api/admin/api-clients", create(nil)); rec.Code != 403 {
+			t.Errorf("%s creates a client: %d", role, rec.Code)
+		}
+	}
+	if rec := do(stale, "POST", "/api/admin/api-clients", create(nil)); rec.Code != 401 || !strings.Contains(rec.Body.String(), "step_up_required") {
+		t.Errorf("stale sign-in: %d %s", rec.Code, rec.Body)
+	}
+	for name, body := range map[string]map[string]any{
+		"the admin scope":       create(map[string]any{"scopes": []string{"tessera:read", "tessera:admin"}}),
+		"no scope":              create(map[string]any{"scopes": []string{}}),
+		"an unknown scope":      create(map[string]any{"scopes": []string{"root"}}),
+		"the tenant_admin role": create(map[string]any{"roles": []string{"tenant_admin"}}),
+		"no role":               create(map[string]any{"roles": []string{}}),
+		"no name":               create(map[string]any{"name": " "}),
+		"no owner":              create(map[string]any{"owner": ""}),
+		"an unknown owner":      create(map[string]any{"owner": "nobody@b.example"}),
+		"another tenant's user": create(map[string]any{"owner": "owner-tsc_client_a@example.test"}),
+		"no keys":               create(map[string]any{"jwks": json.RawMessage(`{"keys":[]}`)}),
+		"an unknown field":      create(map[string]any{"password": "x"}),
+	} {
+		if rec := do(admin, "POST", "/api/admin/api-clients", body); rec.Code != 422 {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	// a private key is refused, and never echoed
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privSet, _ := json.Marshal(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: priv, KeyID: "p1", Algorithm: "ES256"}}})
+	if rec := do(admin, "POST", "/api/admin/api-clients", create(map[string]any{"jwks": json.RawMessage(privSet)})); rec.Code != 422 || strings.Contains(rec.Body.String(), `"d"`) {
+		t.Errorf("a private key: %d %s", rec.Code, rec.Body)
+	}
+
+	rec := do(admin, "POST", "/api/admin/api-clients", create(map[string]any{"scopes": []string{"tessera:read", "tessera:audit", "tessera:read"}, "roles": []string{"auditor"}}))
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	var c map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &c)
+	id, _ := c["client_id"].(string)
+	if !strings.HasPrefix(id, "tsc_") || c["kind"] != "machine" || c["status"] != "active" || c["dpop_required"] != true || c["last_used_at"] != nil ||
+		fmt.Sprint(c["allowed_scopes"]) != "[tessera:read tessera:audit]" || fmt.Sprint(c["roles"]) != "[auditor]" || c["owner_user_id"] == nil {
+		t.Fatalf("created client = %v", c)
+	}
+	if ks, _ := c["keys"].([]any); len(ks) != 1 || ks[0].(map[string]any)["kid"] != "k1" {
+		t.Errorf("keys = %v", c["keys"])
+	}
+	keys := func() []any {
+		rec := do(admin, "GET", "/api/admin/api-clients/"+id, nil)
+		var v map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &v)
+		ks, _ := v["keys"].([]any)
+		return ks
+	}
+	// add a second key for the overlap, then replace the set
+	if rec := do(admin, "POST", "/api/admin/api-clients/"+id+"/keys", map[string]any{"mode": "add", "jwks": pubJWKS(t, "k1")}); rec.Code != 422 || !strings.Contains(rec.Body.String(), "already registered") {
+		t.Errorf("a kid that is already there: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(admin, "POST", "/api/admin/api-clients/"+id+"/keys", map[string]any{"mode": "swap", "jwks": pubJWKS(t, "k2")}); rec.Code != 422 {
+		t.Errorf("a bad mode: %d", rec.Code)
+	}
+	if rec := do(admin, "POST", "/api/admin/api-clients/"+id+"/keys", map[string]any{"mode": "add", "jwks": pubJWKS(t, "k2")}); rec.Code != 200 {
+		t.Fatalf("add key: %d %s", rec.Code, rec.Body)
+	}
+	if ks := keys(); len(ks) != 2 {
+		t.Errorf("keys after add = %v", ks)
+	}
+	if rec := do(admin, "POST", "/api/admin/api-clients/"+id+"/keys", map[string]any{"mode": "replace", "jwks": pubJWKS(t, "k3")}); rec.Code != 200 {
+		t.Fatalf("replace keys: %d %s", rec.Code, rec.Body)
+	}
+	if ks := keys(); len(ks) != 1 || ks[0].(map[string]any)["kid"] != "k3" {
+		t.Errorf("keys after replace = %v", ks)
+	}
+	// revoke
+	if rec := do(stale, "POST", "/api/admin/api-clients/"+id+"/revoke", map[string]any{}); rec.Code != 401 {
+		t.Errorf("stale revoke: %d", rec.Code)
+	}
+	if rec := do(admin, "POST", "/api/admin/api-clients/"+id+"/revoke", map[string]any{}); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"status":"disabled"`) {
+		t.Fatalf("revoke: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(admin, "POST", "/api/admin/api-clients/"+id+"/revoke", map[string]any{}); rec.Code != 409 {
+		t.Errorf("revoke twice: %d", rec.Code)
+	}
+	// the CLI client and another tenant's client are out of reach, exactly like one that does not exist
+	before := storetest.Dump(t, f.DB, f.A.ID)
+	for _, target := range []string{oauth.CLIClientID, "tsc_client_a", "tsc_nope"} {
+		for _, path := range []string{"/keys", "/revoke"} {
+			body := map[string]any{}
+			if path == "/keys" {
+				body = map[string]any{"mode": "replace", "jwks": pubJWKS(t, "x")}
+			}
+			rec := do(admin, "POST", "/api/admin/api-clients/"+target+path, body)
+			if rec.Code != 404 {
+				t.Errorf("%s%s: %d %s", target, path, rec.Code, rec.Body)
+			}
+		}
+	}
+	if storetest.Dump(t, f.DB, f.A.ID) != before {
+		t.Error("tenant A changed")
+	}
+	// the audit log names each change and carries no key material
+	got := map[string]int{}
+	_ = f.DB.ReadTenant(context.Background(), f.B.ID, func(tx *store.TenantTx) error {
+		evs, err := tx.AuditEvents(store.AuditFilter{})
+		for _, e := range evs {
+			if strings.HasPrefix(e.Action, "oauth.client.") {
+				got[e.Action]++
+				if d := string(e.Detail); strings.Contains(d, `"x"`) || strings.Contains(d, `"y"`) || strings.Contains(d, "jwks") || !strings.Contains(d, id) {
+					t.Errorf("%s detail = %s", e.Action, d)
+				}
+			}
+		}
+		return err
+	})
+	if got["oauth.client.created"] != 1 || got["oauth.client.keys_rotated"] != 2 || got["oauth.client.revoked"] != 1 {
+		t.Errorf("audit = %v", got)
+	}
 }
