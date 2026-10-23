@@ -1,6 +1,13 @@
-import { RefObject, useEffect, useRef } from "react";
+import { type RefObject, useEffect, useRef } from "react";
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Where focus should go inside a modal: the marked autofocus element, else the first focusable, else the modal itself. */
+export function focusTarget<T>(autofocus: T | null, focusables: T[], container: T): T {
+  return autofocus ?? focusables[0] ?? container;
+}
+
+const target = (m: HTMLElement) => focusTarget(m.querySelector<HTMLElement>("[data-autofocus]"), Array.from(m.querySelectorAll<HTMLElement>(FOCUSABLE)), m);
 
 /**
  * Modal behaviour for drawers, dialogs and the command palette:
@@ -18,9 +25,19 @@ export function useModal(ref: RefObject<HTMLElement | null>, onClose: () => void
     const prev = document.activeElement as HTMLElement | null;
     const el = ref.current;
     if (el && opts.initialFocus !== false) {
-      const first = el.querySelector<HTMLElement>("[data-autofocus]") ?? el.querySelector<HTMLElement>(FOCUSABLE);
-      (first ?? el).focus();
+      if (!el.hasAttribute("tabindex")) el.tabIndex = -1;
+      target(el).focus();
     }
+    // When the focused control is swapped out (a dialog moving to its success state), the browser drops focus to
+    // <body>; move it to the new content's target so Enter works and the Tab trap holds until close.
+    const refocus = () => {
+      const m = ref.current;
+      if (!m || stack[stack.length - 1] !== me || m.contains(document.activeElement)) return;
+      if (document.activeElement && document.activeElement !== document.body) return; // focus deliberately went elsewhere
+      target(m).focus();
+    };
+    const mo = el ? new MutationObserver(refocus) : null;
+    if (el) mo?.observe(el, { childList: true, subtree: true });
     const onKey = (e: KeyboardEvent) => {
       if (stack[stack.length - 1] !== me) return;
       // an open dropdown inside the modal handles its own Escape first
@@ -31,6 +48,11 @@ export function useModal(ref: RefObject<HTMLElement | null>, onClose: () => void
         return;
       }
       if (e.key === "Tab" && ref.current) {
+        if (!ref.current.contains(document.activeElement)) {
+          e.preventDefault();
+          target(ref.current).focus();
+          return;
+        }
         const items = Array.from(ref.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((x) => x.offsetParent !== null);
         if (!items.length) return;
         const first = items[0], last = items[items.length - 1];
@@ -45,6 +67,7 @@ export function useModal(ref: RefObject<HTMLElement | null>, onClose: () => void
     };
     document.addEventListener("keydown", onKey, true);
     return () => {
+      mo?.disconnect();
       document.removeEventListener("keydown", onKey, true);
       stack.splice(stack.indexOf(me), 1);
       prev?.focus?.();

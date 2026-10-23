@@ -7,10 +7,14 @@ fullnameOverride: ""
 image:
   api:
     repository: ghcr.io/nischalravi/tessera-api
-    tag: "latest"          # pin a version or digest in production
+    tag: "latest"
+    # TODO(#530): release images are not published yet, so there is no digest to default to. Set the digest
+    # ("sha256:...") of the release you deploy; it is appended as repository:tag@digest and wins over the tag.
+    digest: ""
   ui:
     repository: ghcr.io/nischalravi/tessera-ui
     tag: "latest"
+    digest: ""             # see the TODO above
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 

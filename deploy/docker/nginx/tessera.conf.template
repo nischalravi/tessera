@@ -1,4 +1,4 @@
-# Rendered at container start by the nginx image's envsubst step (only ${API_UPSTREAM} is substituted).
+# Rendered at container start by the nginx image's envsubst step (${API_UPSTREAM} and ${TESSERA_HSTS} are substituted).
 # API_UPSTREAM is host:port of the Tessera API, for example api:8000 (Compose), tessera-api:8000
 # (Kubernetes Service) or 127.0.0.1:8000 (a sidecar in the same task or pod).
 #
@@ -14,6 +14,14 @@ upstream tessera_api {
 map $http_x_forwarded_proto $tessera_proto {
   default $http_x_forwarded_proto;
   ""      $scheme;
+}
+
+# HSTS only when the request reached the load balancer over https, so plain-http development is not broken.
+# TESSERA_HSTS is the header value (default in the image: max-age=31536000; includeSubDomains); set it to an
+# empty string to turn HSTS off, for example when the TLS terminator already adds it.
+map $tessera_proto $tessera_hsts {
+  default "";
+  https   "${TESSERA_HSTS}";
 }
 
 server {
@@ -42,15 +50,13 @@ server {
   location /assets/ {
     try_files $uri =404;
     add_header Cache-Control "public, max-age=31536000, immutable" always;
-    add_header X-Content-Type-Options nosniff always;
+    include /etc/nginx/tessera-headers.inc;
   }
 
   # Single-page app: every other path is a client-side route.
   location / {
     try_files $uri /index.html;
     add_header Cache-Control "no-cache" always;
-    add_header X-Content-Type-Options nosniff always;
-    add_header Referrer-Policy no-referrer always;
-    add_header X-Frame-Options DENY always;
+    include /etc/nginx/tessera-headers.inc;
   }
 }

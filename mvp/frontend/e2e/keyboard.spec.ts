@@ -142,6 +142,40 @@ test("dialogs trap focus and Escape closes them", async ({ page }) => {
   await expect(palette).toBeHidden();
 });
 
+test("a two-admin request dialog keeps focus after it is submitted (issue #533)", async ({ page }) => {
+  await signInByKeyboard(page, "Alice");
+  await page.goto("/alerts?view=rules");
+  await expect(page.locator("main h1").first()).toBeVisible();
+  const inDialog = () => page.evaluate(() => !!document.activeElement?.closest('[role="alertdialog"]'));
+  // a normal drawer takes initial focus and Escape closes it
+  const edit = page.getByRole("button", { name: "Edit" }).first();
+  await edit.click();
+  const drawer = page.locator('[role="dialog"]').first();
+  await expect(drawer).toBeVisible();
+  expect(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]')), "the drawer took no initial focus").toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(drawer).toBeHidden();
+  // switching a security rule off needs a second admin: the request dialog opens
+  await edit.click();
+  await page.getByLabel("Enabled").uncheck();
+  await page.getByRole("button", { name: "Save" }).click();
+  const dialog = page.locator('[role="alertdialog"]');
+  await expect(dialog.getByRole("button", { name: "Request this change" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  // the dialog's content swaps to "Change requested": focus must stay inside it, not fall to <body>
+  await expect(dialog.getByRole("heading", { name: "Change requested" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Close" })).toBeFocused();
+  for (let i = 0; i < 6; i++) {
+    await page.keyboard.press(i % 2 ? "Shift+Tab" : "Tab");
+    expect(await inDialog(), "Tab left the dialog after the request was filed").toBe(true);
+  }
+  // Enter on the focused button closes it and focus returns to the opener (Save)
+  await dialog.getByRole("button", { name: "Close" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("button", { name: "Save" })).toBeFocused();
+});
+
 // The pages added since the first walkthrough (issue #420): Workflows, OAuth apps, the settings
 // pages, preferences and service-account requests. Tab through each: every stop shows a focus
 // indicator, focus stays on the page, and the content is reachable.
