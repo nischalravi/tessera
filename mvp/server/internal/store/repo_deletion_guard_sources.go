@@ -52,6 +52,18 @@ var (
 		DELETE FROM deletion_guard_source_policies
 		WHERE tenant_id = @tenant AND source_kind = @kind AND source_id = @source_id AND category = @category`)
 
+	delApprovalGet = tq("deletion_guard_source_approvals.get", `
+		SELECT COUNT(*) FROM deletion_guard_source_approvals a
+		WHERE a.tenant_id = @tenant AND a.source_kind = @kind AND a.source_id = @source_id AND a.category = @category`)
+	delApprovalPut = tq("deletion_guard_source_approvals.put", `
+		INSERT INTO deletion_guard_source_approvals (tenant_id, source_kind, source_id, category, approved_by, approved_at)
+		VALUES (@tenant, @kind, @source_id, @category, @approved_by, @approved_at)
+		ON CONFLICT (tenant_id, source_kind, source_id, category) DO UPDATE SET approved_by = excluded.approved_by,
+			approved_at = excluded.approved_at`)
+	delApprovalDelete = tq("deletion_guard_source_approvals.delete", `
+		DELETE FROM deletion_guard_source_approvals
+		WHERE tenant_id = @tenant AND source_kind = @kind AND source_id = @source_id AND category = @category`)
+
 	delStateGet = tq("deletion_guard_source_state.get", `
 		SELECT s.last_count FROM deletion_guard_source_state s
 		WHERE s.tenant_id = @tenant AND s.source_kind = @kind AND s.source_id = @source_id AND s.category = @category`)
@@ -152,8 +164,31 @@ func (tx *TenantTx) PutDeletionSourcePolicy(p *DeletionSourcePolicy, now time.Ti
 	return err
 }
 
+// DeletionSourceApproved says the source's override of the category was approved by two admins as
+// looser than the category (SetDeletionSourceApproved); false when it has no such record.
+func (tx *TenantTx) DeletionSourceApproved(kind, sourceID, category string) (bool, error) {
+	var n int
+	err := tx.queryRow(delApprovalGet, sql.Named("kind", kind), sql.Named("source_id", sourceID), sql.Named("category", category)).Scan(&n)
+	return n > 0, err
+}
+
+// SetDeletionSourceApproved records (or, with false, clears) that the source's override of the
+// category was approved by two admins as looser than the category. by is the approving change.
+func (tx *TenantTx) SetDeletionSourceApproved(kind, sourceID, category string, approved bool, by *string, now time.Time) error {
+	if !approved {
+		_, err := tx.exec(delApprovalDelete, sql.Named("kind", kind), sql.Named("source_id", sourceID), sql.Named("category", category))
+		return err
+	}
+	_, err := tx.exec(delApprovalPut, sql.Named("kind", kind), sql.Named("source_id", sourceID), sql.Named("category", category),
+		sql.Named("approved_by", SP(by)), sql.Named("approved_at", RT(now)))
+	return err
+}
+
 // DeleteDeletionSourcePolicy removes a source's override: the category's settings apply again.
 func (tx *TenantTx) DeleteDeletionSourcePolicy(kind, sourceID, category string) error {
+	if _, err := tx.exec(delApprovalDelete, sql.Named("kind", kind), sql.Named("source_id", sourceID), sql.Named("category", category)); err != nil {
+		return err
+	}
 	_, err := tx.exec(delSrcDelete, sql.Named("kind", kind), sql.Named("source_id", sourceID), sql.Named("category", category))
 	return err
 }

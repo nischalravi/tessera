@@ -482,6 +482,42 @@ func CreateSink(tx *store.TenantTx, sealer *seal.Sealer, s SinkSpec, dev bool, b
 	return k, tx.Audit(now, by.Display, "siem.sink.created", sinkAudit(k, s.Token != nil))
 }
 
+// CheckSink validates a sink's settings as CreateSink would (the checks that
+// do not need a token), without storing anything. It returns the settings as
+// they would be kept (trimmed, the syslog target with its port).
+func CheckSink(s SinkSpec, dev bool) (SinkSpec, error) {
+	err := s.check(dev)
+	return s, err
+}
+
+// ImportSink adds a sink that came in a configuration bundle (internal/transport).
+// A bundle never carries a token, so the sink is always added disabled, starts
+// at the current head of the ledger and sends nothing until an admin sets its
+// token and enables it (UpdateSink then refuses a Splunk HEC sink without one).
+// by.UserID may be empty (a machine caller).
+func ImportSink(tx *store.TenantTx, s SinkSpec, dev bool, by Actor, bundleHash string, now time.Time) (*store.SiemSink, error) {
+	if err := s.check(dev); err != nil {
+		return nil, err
+	}
+	head, err := tx.AuditHead()
+	if err != nil {
+		return nil, err
+	}
+	k := &store.SiemSink{ID: uuid.NewString(), Name: s.Name, Kind: s.Kind, Format: s.Format, Target: s.Target, Flavor: s.Flavor,
+		IncludeHTTP: s.IncludeHTTP, Enabled: false, CursorSeq: head.LastSeq, CreatedAt: now, UpdatedAt: now}
+	if by.UserID != "" {
+		k.CreatedBy = &by.UserID
+	}
+	if s.CAPEM != "" {
+		k.CAPEM = &s.CAPEM
+	}
+	if err := tx.InsertSiemSink(k); err != nil {
+		return nil, err
+	}
+	d := append(sinkAudit(k, false), ojson.KV{Key: "imported_from_bundle", Value: bundleHash})
+	return k, tx.Audit(now, by.Display, "siem.sink.created", d)
+}
+
 // UpdateSink replaces a sink's settings; its kind cannot change.
 func UpdateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, dev bool, by Actor, now time.Time) (*store.SiemSink, error) {
 	k, err := tx.SiemSink(id)

@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Mail, RefreshCw } from "lucide-react";
-import { EmailAttempt, EmailList, EmailMessage, EmailStatus, fmtDate, relTime, retryEmail, useApi } from "../../api";
-import { Badge, Button, Callout, Column, DataTable, EmptyState, Loading, SidePanel, useSelected, useToast } from "../../components";
+import { Ban, Mail, RefreshCw } from "lucide-react";
+import { EmailAttempt, EmailList, EmailMessage, EmailStatus, emailSuppressionsApi, fmtDate, relTime, retryEmail, useApi } from "../../api";
+import { Badge, Button, Callout, Column, DataTable, EmptyState, Loading, SidePanel, useConfirm, useSelected, useToast } from "../../components";
+import { MailRelayCard, SuppressionsCard } from "./NotifyAdmin";
 
 const STATUS_LABEL: Record<EmailStatus, string> = {
   queued: "Queued", sending: "Sending", accepted: "Accepted by relay", deferred: "Deferred", rejected: "Rejected", failed: "Failed", bounced: "Bounced",
@@ -16,7 +17,7 @@ const STATUS_HELP: Record<EmailStatus, string> = {
   deferred: "The relay answered with a temporary error (4xx). Tessera retries with a growing delay.",
   rejected: "The relay refused the message (5xx). It is not retried.",
   failed: "The connection or TLS failed. Tessera retries with a growing delay.",
-  bounced: "Reserved: bounce and delivery-status processing is not built yet, so nothing sets this.",
+  bounced: "A delivery status report said the address cannot be reached (a hard bounce). The address is suppressed, so it is not emailed again until you lift that.",
 };
 
 const StatusBadge = ({ s }: { s: EmailStatus }) => <Badge tone={STATUS_TONE[s]} title={STATUS_HELP[s]}>{STATUS_LABEL[s]}</Badge>;
@@ -45,8 +46,8 @@ export function EmailDelivery() {
       {data.email_mode === "dev" && <Callout tone="warn">Email goes to the development mail sink, so “Accepted” only means it was recorded in a file.</Callout>}
       {data.email_mode === "off" && <Callout tone="neutral">Email is turned off on this server, so nothing is sent and nothing is logged here.</Callout>}
       <Callout tone="info">
-        <b>Accepted</b> means the relay took the message (250 at the end of DATA). It does not mean the message reached the inbox: bounce and delivery-status processing is a later step.
-        Message bodies and credentials are never recorded.
+        <b>Accepted</b> means the relay took the message (250 at the end of DATA). It does not mean the message reached the inbox: if it bounces later, the relay's delivery status
+        report marks it <b>Bounced</b> (post the report to <code>POST /api/email/dsn</code>, for example from the bounce mailbox). Message bodies and credentials are never recorded.
       </Callout>
       <DataTable
         id="email-delivery"
@@ -68,6 +69,8 @@ export function EmailDelivery() {
         empty={<EmptyState icon={<Mail size={18} />} title="No email sent yet">Every email Tessera sends is listed here with what the relay answered.</EmptyState>}
       />
       {selected && <MessagePanel id={selected} onClose={() => setSelected(null)} onChanged={reload} />}
+      <SuppressionsCard />
+      <MailRelayCard />
     </div>
   );
 }
@@ -75,7 +78,23 @@ export function EmailDelivery() {
 function MessagePanel({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
   const { data: m, error, reload } = useApi<EmailMessage>(`/email/messages/${encodeURIComponent(id)}`);
   const toast = useToast();
+  const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
+  const suppress = async () => {
+    if (!m) return;
+    const reason = await confirm({ title: `Stop emailing ${m.recipient}?`, body: "No more email goes to this address. It still gets the inbox entries. You can lift this under Suppressed addresses.", confirmLabel: "Suppress", danger: true, reason: { label: "Why (optional)", required: false } });
+    if (reason === null) return;
+    setBusy(true);
+    try {
+      await emailSuppressionsApi.add(m.recipient, reason || "");
+      toast(`${m.recipient} is suppressed`);
+      onChanged();
+    } catch (e) {
+      toast((e as Error).message, { kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
   const retry = async () => {
     setBusy(true);
     try {
@@ -91,7 +110,12 @@ function MessagePanel({ id, onClose, onChanged }: { id: string; onClose: () => v
   };
   return (
     <SidePanel title={m?.subject ?? "Email"} sub={m && <span className="small muted">to {m.recipient}</span>} onClose={onClose}
-      footer={m?.retryable && <Button size="sm" variant="primary" icon={<RefreshCw size={14} />} disabled={busy} onClick={retry}>Send again</Button>}>
+      footer={m && (
+        <div className="row">
+          {m.retryable && <Button size="sm" variant="primary" icon={<RefreshCw size={14} />} disabled={busy} onClick={retry}>Send again</Button>}
+          <Button size="sm" variant="danger" icon={<Ban size={14} />} disabled={busy} onClick={suppress}>Suppress this address</Button>
+        </div>
+      )}>
       {!m ? <Loading error={error} kind="block" /> : (
         <div className="stack">
           <div className="stack-sm">

@@ -33,6 +33,8 @@ type Email struct {
 	To      string
 	Subject string
 	Body    string
+	// HTML, when set, is sent as an alternative part next to the plain-text Body (the tenant's logo in emails).
+	HTML string
 }
 
 // Sender delivers an email. Implementations return ErrPermanent (wrapped) for
@@ -381,6 +383,16 @@ func (c *SMTP) send(ctx context.Context, e Email, a *Attempt) error {
 }
 
 // buildMessage renders a plain-text RFC 5322 message with CRLF line endings.
+// writeBase64 writes text as base64 in lines of 76 characters.
+func writeBase64(b *strings.Builder, text string) {
+	enc := base64.StdEncoding.EncodeToString([]byte(text))
+	for len(enc) > 76 {
+		b.WriteString(enc[:76] + "\r\n")
+		enc = enc[76:]
+	}
+	b.WriteString(enc + "\r\n")
+}
+
 func buildMessage(from *mail.Address, e Email) []byte {
 	host := "tessera.invalid"
 	if i := strings.LastIndex(from.Address, "@"); i >= 0 {
@@ -395,16 +407,25 @@ func buildMessage(from *mail.Address, e Email) []byte {
 	h("Date", time.Now().UTC().Format(time.RFC1123Z))
 	h("Message-ID", "<"+clean(e.ID)+"@"+host+">")
 	h("MIME-Version", "1.0")
-	h("Content-Type", `text/plain; charset="utf-8"`)
-	h("Content-Transfer-Encoding", "base64")
 	h("Auto-Submitted", "auto-generated")
-	b.WriteString("\r\n")
-	enc := base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(e.Body, "\r\n", "\n")))
-	for len(enc) > 76 {
-		b.WriteString(enc[:76] + "\r\n")
-		enc = enc[76:]
+	if e.HTML == "" {
+		h("Content-Type", `text/plain; charset="utf-8"`)
+		h("Content-Transfer-Encoding", "base64")
+		b.WriteString("\r\n")
+		writeBase64(&b, strings.ReplaceAll(e.Body, "\r\n", "\n"))
+		return []byte(b.String())
 	}
-	b.WriteString(enc + "\r\n")
+	// multipart/alternative: the plain-text part first (the one to fall back on), then the HTML part
+	boundary := "tessera-" + clean(e.ID)
+	h("Content-Type", `multipart/alternative; boundary="`+boundary+`"`)
+	b.WriteString("\r\n")
+	for _, part := range []struct{ typ, text string }{{"text/plain", strings.ReplaceAll(e.Body, "\r\n", "\n")}, {"text/html", e.HTML}} {
+		b.WriteString("--" + boundary + "\r\n")
+		b.WriteString("Content-Type: " + part.typ + `; charset="utf-8"` + "\r\n")
+		b.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
+		writeBase64(&b, part.text)
+	}
+	b.WriteString("--" + boundary + "--\r\n")
 	return []byte(b.String())
 }
 

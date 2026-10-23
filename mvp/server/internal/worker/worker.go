@@ -68,8 +68,21 @@ type SyncPayload struct {
 	// Mode is "incremental" (default) or "full" (ignore checkpoints).
 	Mode string `json:"mode,omitempty"`
 	// RequestedBy is the platform user who queued the sync ("" for a schedule). The holds of the run
-	// record them as a contributor, so they cannot release them (#487). A retry keeps the payload.
+	// record them as a contributor, so they cannot release them (#487).
 	RequestedBy string `json:"requested_by,omitempty"`
+	// RetriedBy are the platform users who put the dead job back in the queue (#495): the retrier
+	// causes the run, so the holds record them as contributors too. A schedule's run has no
+	// RequestedBy, so the retrier is its only named actor.
+	RetriedBy []string `json:"retried_by,omitempty"`
+}
+
+// WithRetrier returns the payload with user added as a retrier (once).
+func (p SyncPayload) WithRetrier(user string) SyncPayload {
+	if user == "" || user == p.RequestedBy || slices.Contains(p.RetriedBy, user) {
+		return p
+	}
+	p.RetriedBy = append(slices.Clone(p.RetriedBy), user)
+	return p
 }
 
 // Deps is what the handlers need.
@@ -177,8 +190,13 @@ func (d *Deps) connectorSync(ctx context.Context, j queue.Job) (any, error) {
 		if _, err := uuid.Parse(p.RequestedBy); err != nil {
 			return nil, queue.Permanent(errors.New("connector_sync: bad payload"))
 		}
-		ctx = deleteguard.WithRequester(ctx, p.RequestedBy)
 	}
+	for _, id := range p.RetriedBy {
+		if _, err := uuid.Parse(id); err != nil {
+			return nil, queue.Permanent(errors.New("connector_sync: bad payload"))
+		}
+	}
+	ctx = deleteguard.WithRequester(ctx, append([]string{p.RequestedBy}, p.RetriedBy...)...)
 	now := d.now()
 	conns, err := d.Connectors(now)
 	if err != nil {

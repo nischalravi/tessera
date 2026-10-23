@@ -49,11 +49,16 @@ const MaxDelegationDays = 90
 var StageKinds = []string{store.StageManager, store.StageOwner, store.StageDecider}
 
 // Policy returns an item's stages and escalation hours (the default: one
-// decider stage, 48 hours).
+// decider stage, escalating after the tenant's escalation SLA: 48 hours unless it set another).
 func Policy(tx *store.TenantTx, itemID string) ([]string, float64, error) {
 	p, err := tx.ApprovalPolicy(itemID)
 	if errors.Is(err, store.ErrNotFound) {
-		return []string{store.StageDecider}, DefaultEscalateHours, nil
+		// the tenant's escalation SLA (Admin > Notifications) replaces the 48 hours
+		pol, _, err := notify.LoadPolicy(tx)
+		if err != nil {
+			return nil, 0, err
+		}
+		return []string{store.StageDecider}, float64(pol.EscalateAfterHours), nil
 	} else if err != nil {
 		return nil, 0, err
 	}
