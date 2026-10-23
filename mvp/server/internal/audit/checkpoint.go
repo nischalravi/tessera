@@ -29,6 +29,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/go-jose/go-jose/v4"
+	"github.com/nischalravi/tessera/mvp/server/internal/objstore"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
@@ -170,7 +171,12 @@ type SinkOption func(*sinkOptions)
 type sinkOptions struct {
 	httpClient *http.Client
 	s3         S3API
+	obj        *objstore.Deps
 }
+
+// WithObjectStores supplies the credentials sources of the azure:// and gs://
+// anchor sinks (their client is the safehttp client in deps.HTTP).
+func WithObjectStores(d objstore.Deps) SinkOption { return func(o *sinkOptions) { o.obj = &d } }
 
 // WithHTTPClient sets the HTTP client the s3:// sink's AWS SDK client uses. It
 // must be the safehttp client: every outbound call goes through the SSRF guard.
@@ -211,8 +217,13 @@ func NewSink(anchorURL string, opts ...SinkOption) (Sink, error) {
 			}
 		}
 		return NewS3Sink(anchorURL, client)
+	case strings.HasPrefix(anchorURL, "azure://") || strings.HasPrefix(anchorURL, "gs://"):
+		if o.obj == nil {
+			return nil, errors.New("audit: the azure:// and gs:// anchor sinks need the safehttp client and workload credentials (WithObjectStores)")
+		}
+		return NewObjectSink(anchorURL, *o.obj)
 	}
-	return nil, fmt.Errorf("audit: unsupported anchor URL %q (want file:// or s3://)", anchorURL)
+	return nil, fmt.Errorf("audit: unsupported anchor URL %q (want file://, s3://, azure:// or gs://)", anchorURL)
 }
 
 // FilePath returns the path of a file:// anchor URL.

@@ -198,7 +198,11 @@ func auditCheckpoint(ctx context.Context, st *store.DB, dbFile string, tenants [
 	if err != nil {
 		return err
 	}
-	sink, err := audit.NewSink(cfg.AnchorURL(dbFile), audit.WithHTTPClient(outbound))
+	objDeps, err := newObjDeps(&outCfg)
+	if err != nil {
+		return err
+	}
+	sink, err := audit.NewSink(cfg.AnchorURL(dbFile), audit.WithHTTPClient(outbound), audit.WithObjectStores(objDeps))
 	if err != nil {
 		return err
 	}

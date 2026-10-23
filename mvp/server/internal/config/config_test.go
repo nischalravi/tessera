@@ -870,3 +870,44 @@ func TestWorkerMetricsAddr(t *testing.T) {
 		t.Errorf("loopback flag = %q, %v", a, err)
 	}
 }
+
+func TestObjectStoreURLs(t *testing.T) {
+	ok := func(kv ...string) *config.Config {
+		t.Helper()
+		c, err := config.Load(env(with(safeProd(), kv...)))
+		if err != nil {
+			t.Fatalf("%v: %v", kv, err)
+		}
+		return c
+	}
+	bad := func(want string, kv ...string) {
+		t.Helper()
+		_, err := config.Load(env(with(safeProd(), kv...)))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%v: err %v, want %q", kv, err, want)
+		}
+	}
+	// the anchor may sit in any of the three clouds' immutable storage
+	for _, a := range []string{"azure://acct123/anchors/tessera", "gs://tessera-anchors/tessera", "s3://anchors/tessera"} {
+		ok("TESSERA_AUDIT_ANCHOR", a)
+	}
+	bad("azure://… or gs://", "TESSERA_AUDIT_ANCHOR", "file:///tmp/a.jsonl")
+	bad("TESSERA_AUDIT_ANCHOR", "TESSERA_AUDIT_ANCHOR", "azure://AB/c")
+	bad("endpoint option must be https", "TESSERA_AUDIT_ANCHOR", "gs://bkt/p?endpoint=http://minio.example.com")
+	bad("TESSERA_AUDIT_ANCHOR", "TESSERA_AUDIT_ANCHOR", "ftp://x/y")
+
+	// archive: workload identity needs no token; a token with a cloud scheme is a mistake
+	c := ok("TESSERA_ARCHIVE_URL", "s3://tessera-archive/segments?region=eu-west-1")
+	if c.ArchiveURL == "" {
+		t.Error("archive url dropped")
+	}
+	ok("TESSERA_ARCHIVE_URL", "gs://tessera-archive")
+	ok("TESSERA_ARCHIVE_URL", "azure://acct123/archive")
+	bad("applies to http(s) archive stores only", "TESSERA_ARCHIVE_URL", "gs://tessera-archive", "TESSERA_ARCHIVE_TOKEN_SEALED", "AAAA")
+	bad("TESSERA_ARCHIVE_TOKEN_SEALED", "TESSERA_ARCHIVE_URL", "https://store.example.com/a") // http(s) still needs its token in prod
+
+	// backups copied to an object store need the local backup directory
+	ok("TESSERA_BACKUP_DIR", "/backups", "TESSERA_BACKUP_URL", "s3://tessera-backups/db")
+	bad("needs TESSERA_BACKUP_DIR", "TESSERA_BACKUP_URL", "s3://tessera-backups/db")
+	bad("must be an s3://, azure:// or gs://", "TESSERA_BACKUP_DIR", "/backups", "TESSERA_BACKUP_URL", "https://x.example.com/b")
+}

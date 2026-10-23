@@ -586,3 +586,54 @@ func TestDialSeamOnlyInTests(t *testing.T) {
 		t.Fatalf("walk: %v, %d files", err, n)
 	}
 }
+
+// TestMetadataClientOnlyForCredentialFetches: safehttp.MetadataClient is the
+// one client allowed to reach the cloud metadata addresses (169.254.169.254,
+// 169.254.170.2, fd00:ec2::254), which every other client refuses. It is
+// built in exactly one place, cmd/tessera/cloud.go, and handed to
+// internal/cloudcred, whose URLs are constants. Any other caller could turn
+// it into an SSRF primitive.
+func TestMetadataClientOnlyForCredentialFetches(t *testing.T) {
+	root := moduleRoot(t)
+	allowed := map[string]bool{"internal/safehttp/metadata.go": true, "cmd/tessera/cloud.go": true}
+	n, found := 0, false
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != root && (strings.HasPrefix(name, ".") || name == "testdata" || name == "node_modules") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		n++
+		rel := filepath.ToSlash(mustRel(t, root, path))
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(raw), "safehttp.MetadataClient(") {
+			found = found || rel == "cmd/tessera/cloud.go"
+			if !allowed[rel] {
+				t.Errorf("%s names safehttp.MetadataClient: only cmd/tessera/cloud.go may build it", rel)
+			}
+		}
+		return nil
+	})
+	if err != nil || n < 50 || !found {
+		t.Fatalf("walk: %v, %d files, cloud.go found %v", err, n, found)
+	}
+}
+
+func mustRel(t *testing.T, root, path string) string {
+	t.Helper()
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rel
+}

@@ -4057,6 +4057,25 @@ the 500 rows on screen. Opening an event shows how its actor signed in (the `aut
 level, phishing-resistant or not, `acr`, authentication time) and builds its inclusion proof for an
 evidence pack (`?path=true`, downloaded as JSON).
 
+#### Azure and Google Cloud anchors
+
+Outside AWS the anchor goes to the cloud's own write-once storage, with the workload identity as credentials
+(see "Cloud object stores and workload identity"). Prod accepts any of the three.
+
+- `TESSERA_AUDIT_ANCHOR=azure://account/container/prefix`: one create-only blob per checkpoint
+  (`If-None-Match: *`), `prefix/<tenant id>/<seq>.jws`. Each blob is written with a locked version-level
+  immutability policy of 7 years (`x-ms-immutability-policy-mode: Locked`), so the container needs
+  **version-level immutability support** enabled. With `?worm=container` no per-blob policy is sent and the
+  container's own time-based retention policy (locked) is relied on instead. Tessera cannot read the
+  container's policy through the data plane, so for Azure it is the operator's job to lock it.
+- `TESSERA_AUDIT_ANCHOR=gs://bucket/prefix`: one create-only object per checkpoint (`ifGenerationMatch=0`).
+  The bucket needs a **locked retention policy** (`gcloud storage buckets update gs://bucket --retention-period=7y
+  --lock-retention-period`); before the first anchor Tessera reads the bucket and refuses to anchor into one
+  without it (a service account that may not read the bucket metadata is let through).
+
+`anchor_ref` is `<url>/<key>?versionId=<generation or version>`. Verification of non-file anchors is as for S3
+(`tessera audit verify` reads the anchor source you give it).
+
 #### S3 Object Lock anchor
 
 `TESSERA_AUDIT_ANCHOR=s3://bucket/prefix` writes one object per checkpoint, `prefix/<tenant id>/<seq>.jws`
@@ -4097,7 +4116,7 @@ change request is a 422 below one. A floor raised later lifts a stored lower val
 It needs a step-up from the requester and from a second admin who approves the payload hash, has no cooling-off,
 and is audited with `admin.change.*` and `retention.updated` in the transaction that applies it.
 
-**Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL` (an http(s) object
+**Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL`: `s3://bucket/prefix`, `azure://account/container/prefix` or `gs://bucket/prefix` (workload identity, no token; see "Cloud object stores and workload identity"), or an http(s) object
 store, PUT and GET of `<base>/<tenant>/<class>/<segment>.seg`, always through `internal/safehttp`; https in prod),
 authenticated with a bearer token (`TESSERA_ARCHIVE_TOKEN_SEALED`: the base64 of the token sealed under the KEK;
 make it with `printf '%s\n' "$TOKEN" | tessera archive seal-token`; prod refuses an archive URL without it),
@@ -4388,6 +4407,30 @@ dialect, schema-parity, DSN and `gen-rls` tests need no server and always run). 
 `internal/store/storetest`, `testkit` and the API parity replay run on Postgres (the parity replay
 accepts a different numeric `id`/`edge_id` there, see above). CI should run this with a Postgres 16
 service container and `TESSERA_REQUIRE_PG_TESTS=1`.
+
+### Cloud object stores and workload identity
+
+`TESSERA_ARCHIVE_URL`, `TESSERA_BACKUP_URL` and `TESSERA_AUDIT_ANCHOR` accept object-store URLs (standard library
+only; `internal/objstore`, S3 requests signed with `internal/aws/sigv4`, every call through `internal/safehttp`):
+
+| URL | Options (query) | Credentials, first match wins |
+| --- | --- | --- |
+| `s3://bucket/prefix` | `region=` (else `AWS_REGION` or the instance region), `endpoint=https://…` (S3-compatible stores, path style) | `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`; web identity (`AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`, EKS IRSA, STS call); ECS container credentials; EC2 role through IMDSv2 (never IMDSv1) |
+| `azure://account/container/prefix` | `endpoint=`, `worm=version\|container` (anchors) | `AZURE_STORAGE_SAS_TOKEN` (a secret: mount it from a Secret); AKS workload identity (`AZURE_FEDERATED_TOKEN_FILE`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`); managed identity (`AZURE_CLIENT_ID` picks a user-assigned one) |
+| `gs://bucket/prefix` | `endpoint=` | service-account key file (`GOOGLE_APPLICATION_CREDENTIALS`, `service_account` type only); the metadata server (GKE workload identity, GCE) |
+
+Objects are write-once (`If-None-Match: *` / `ifGenerationMatch=0`); archive segments are read back and compared
+after every write. `TESSERA_ARCHIVE_TOKEN_SEALED` applies to http(s) stores only and is refused with these URLs.
+`TESSERA_BACKUP_URL` (with `TESSERA_BACKUP_DIR`) also copies each scheduled backup, under `backups/<file>`; the
+file is already sealed under the KEK, is read into memory and is limited to 1 GiB (SQLite backups only: **Postgres
+backups stay `pg_dump` or the provider's snapshots and point-in-time recovery**, as above).
+
+**Metadata services.** The link-local metadata addresses are blocked for every safehttp client (SSRF). The
+credential fetches use `safehttp.MetadataClient`, an exception that is as narrow as it can be: plain http to
+exactly `169.254.169.254`, `169.254.170.2` and `[fd00:ec2::254]` on port 80, no DNS, no redirects, 64 KiB
+responses, 3 s. Only `internal/cloudcred` uses it, with URLs fixed in code (an architecture test pins the
+single caller); no setting, tenant, request or stored URL can reach it. On EKS, IMDSv2 normally needs a hop limit of 2 for
+pods; IRSA avoids the question. Credentials are cached in memory until five minutes before they expire and never logged.
 
 ### Backup and restore
 
