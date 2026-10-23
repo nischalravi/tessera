@@ -19,8 +19,8 @@ terraform apply -var subscription_id=... -var registry_server=myacr.azurecr.io -
 # 2. set the secrets in Key Vault (names are fixed, values never enter Terraform state). The vault is private by
 #    default (public access off, firewall default-deny): run this from a network with a private endpoint, or
 #    apply once with -var key_vault_public_network_access=true -var 'key_vault_allowed_ips=["a.b.c.d/32"]'
-#    and turn it off again afterwards. Container Apps must still be able to resolve the Key Vault references
-#    (the firewall keeps the AzureServices bypass): confirm the app starts, or add a private endpoint.
+#    and turn it off again afterwards. The apps read their Key Vault secret references through the vault's
+#    private endpoint (snet-endpoints, privatelink.vaultcore.azure.net), so they work with public access off.
 #    db-owner-dsn db-app-dsn kek aws-access-key-id aws-secret-access-key
 az keyvault secret set --vault-name $(terraform output -raw key_vault_name) --name kek --value "$(openssl rand -base64 32)"
 # 3. terraform apply -var desired_min_replicas=2 ...
