@@ -101,6 +101,9 @@ func TestIsolation_Queue(t *testing.T) {
 		if err := c.AdvanceQueueSchedule(schedID, now, now, now); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("AdvanceQueueSchedule(A's) = %v", err)
 		}
+		if err := c.SetQueueScheduleEnabled("s", false, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetQueueScheduleEnabled(A's) = %v", err)
+		}
 		if n, err := c.PruneQueueJobs(now.Add(time.Hour)); err != nil || n != 0 {
 			t.Errorf("PruneQueueJobs = %d, %v", n, err)
 		}
@@ -128,7 +131,7 @@ func queueCovered() map[string]bool {
 	out := map[string]bool{}
 	for _, k := range []string{"EnqueueQueueJob", "QueueJob", "QueueJobs", "ClaimQueueJobs", "HasDueQueueJobs", "HeartbeatQueueJob",
 		"CompleteQueueJob", "FailQueueJob", "ReleaseQueueJob", "RetryDeadQueueJob", "SetDeadQueueJobPayload", "PruneQueueJobs", "EnsureQueueSchedule",
-		"QueueSchedule", "QueueSchedules", "DueQueueSchedules", "AdvanceQueueSchedule"} {
+		"QueueSchedule", "QueueSchedules", "DueQueueSchedules", "AdvanceQueueSchedule", "SetQueueScheduleEnabled"} {
 		out[k] = true // TestIsolation_Queue
 	}
 	return out

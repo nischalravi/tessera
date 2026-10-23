@@ -130,6 +130,8 @@ var (
 		VALUES (@id, @tenant, @name, @kind, @payload, @spec, 1, @max_attempts, @next_run_at, @now, @now)
 		ON CONFLICT (tenant_id, name) DO UPDATE SET kind = excluded.kind, payload = excluded.payload,
 			spec = excluded.spec, max_attempts = excluded.max_attempts, updated_at = @now`)
+	queueScheduleSetEnabled = tq("queue_schedules.set_enabled", `
+		UPDATE queue_schedules SET enabled = @enabled, updated_at = @now WHERE tenant_id = @tenant AND name = @name`)
 	queueScheduleGet = tq("queue_schedules.get", `
 		SELECT `+queueScheduleCols+` FROM queue_schedules s WHERE s.tenant_id = @tenant AND s.name = @name`)
 	queueScheduleList = tq("queue_schedules.list", `
@@ -358,6 +360,17 @@ func (tx *TenantTx) QueueSchedule(name string) (*QueueSchedule, error) {
 // QueueSchedules lists the tenant's schedules by name.
 func (tx *TenantTx) QueueSchedules() ([]*QueueSchedule, error) {
 	return collect(tx, scanQueueSchedule, queueScheduleList)
+}
+
+// SetQueueScheduleEnabled pauses (false) or resumes (true) the named schedule;
+// ErrNotFound when the tenant has none of that name. A paused schedule keeps
+// its due time, so a resumed one fires once and then keeps its cadence.
+func (tx *TenantTx) SetQueueScheduleEnabled(name string, enabled bool, now time.Time) error {
+	e := 0
+	if enabled {
+		e = 1
+	}
+	return tx.execOne(queueScheduleSetEnabled, sql.Named("name", name), sql.Named("enabled", e), sql.Named("now", RT(now)))
 }
 
 // DueQueueSchedules lists enabled schedules whose next_run_at has passed.

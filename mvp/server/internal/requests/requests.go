@@ -142,6 +142,50 @@ type ItemSpec struct {
 	Populations []string
 }
 
+// CheckItem validates an item's metadata for group g. PutItem and the
+// configuration import (internal/transport) both apply it.
+func CheckItem(tx *store.TenantTx, g *store.Group, s ItemSpec) error {
+	switch {
+	case !slices.Contains(Risks, s.Risk):
+		return refuse(422, "invalid_risk", "risk is low, medium or high")
+	case len(s.Description) > 1000:
+		return refuse(422, "invalid_description", "the description is at most 1000 characters")
+	case !hoursOK(s.DefaultHours) || !hoursOK(s.MaxHours):
+		return refuse(422, "invalid_duration", "durations are between 0 and %d hours", MaxHours)
+	case s.DefaultHours != nil && s.MaxHours != nil && *s.DefaultHours > *s.MaxHours:
+		return refuse(422, "invalid_duration", "the default duration exceeds the maximum")
+	case g.Privileged && s.DefaultHours == nil && s.Requestable:
+		return refuse(422, "privileged_needs_duration", "a privileged item needs a default duration")
+	}
+	for _, t := range s.EligibleTypes {
+		if !slices.Contains(IdentityTypes, t) {
+			return refuse(422, "invalid_type", "eligible types are human, service or ai_agent")
+		}
+	}
+	for _, d := range s.EligibleDepartments {
+		if strings.TrimSpace(d) == "" || len(d) > 200 {
+			return refuse(422, "invalid_department", "department names are 1 to 200 characters")
+		}
+	}
+	for _, pop := range s.Populations {
+		if !slices.Contains(GuestPopulations, pop) {
+			return refuse(422, "invalid_population", "populations are visitor, contractor, volunteer or partner")
+		}
+	}
+	if s.OwnerIdentityID != nil {
+		o, err := tx.Identity(*s.OwnerIdentityID)
+		if errors.Is(err, store.ErrNotFound) {
+			return refuse(404, "owner_not_found", "owner not found")
+		} else if err != nil {
+			return err
+		}
+		if o.Status != "active" || o.Type != "human" {
+			return refuse(409, "owner_not_active", "the owner is an active person")
+		}
+	}
+	return nil
+}
+
 // PutItem creates or updates a group's catalog item.
 func PutItem(tx *store.TenantTx, groupID int64, s ItemSpec, by Actor, now time.Time) (*store.CatalogItem, error) {
 	g, err := tx.Group(groupID)
@@ -150,43 +194,8 @@ func PutItem(tx *store.TenantTx, groupID int64, s ItemSpec, by Actor, now time.T
 	} else if err != nil {
 		return nil, err
 	}
-	switch {
-	case !slices.Contains(Risks, s.Risk):
-		return nil, refuse(422, "invalid_risk", "risk is low, medium or high")
-	case len(s.Description) > 1000:
-		return nil, refuse(422, "invalid_description", "the description is at most 1000 characters")
-	case !hoursOK(s.DefaultHours) || !hoursOK(s.MaxHours):
-		return nil, refuse(422, "invalid_duration", "durations are between 0 and %d hours", MaxHours)
-	case s.DefaultHours != nil && s.MaxHours != nil && *s.DefaultHours > *s.MaxHours:
-		return nil, refuse(422, "invalid_duration", "the default duration exceeds the maximum")
-	case g.Privileged && s.DefaultHours == nil && s.Requestable:
-		return nil, refuse(422, "privileged_needs_duration", "a privileged item needs a default duration")
-	}
-	for _, t := range s.EligibleTypes {
-		if !slices.Contains(IdentityTypes, t) {
-			return nil, refuse(422, "invalid_type", "eligible types are human, service or ai_agent")
-		}
-	}
-	for _, d := range s.EligibleDepartments {
-		if strings.TrimSpace(d) == "" || len(d) > 200 {
-			return nil, refuse(422, "invalid_department", "department names are 1 to 200 characters")
-		}
-	}
-	for _, pop := range s.Populations {
-		if !slices.Contains(GuestPopulations, pop) {
-			return nil, refuse(422, "invalid_population", "populations are visitor, contractor, volunteer or partner")
-		}
-	}
-	if s.OwnerIdentityID != nil {
-		o, err := tx.Identity(*s.OwnerIdentityID)
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, refuse(404, "owner_not_found", "owner not found")
-		} else if err != nil {
-			return nil, err
-		}
-		if o.Status != "active" || o.Type != "human" {
-			return nil, refuse(409, "owner_not_active", "the owner is an active person")
-		}
+	if err := CheckItem(tx, g, s); err != nil {
+		return nil, err
 	}
 	id := uuid.NewString()
 	if old, err := tx.CatalogItemForGroup(g.ID); err == nil {

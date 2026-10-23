@@ -154,10 +154,26 @@ var errAuditEventNotFound = errStatus(http.StatusNotFound, "Audit event not foun
 // neighbours' hashes and the checkpoint that covers it, so an auditor can
 // check one entry offline (with GET /api/audit/export for the events up to
 // the checkpoint and GET /api/audit/keys for the signing key).
+//
+// With path=true the proof is self-contained, the form for an evidence pack:
+// "path" holds the exported records of every event after this one up to the
+// covering checkpoint, in order. Hash the event, then each path record
+// (audit.VerifyInclusion, or the same steps in any language): each prev_hash
+// is the hash before it and the last hash equals checkpoint.head_hash, which
+// the checkpoint's JWS signs. It is refused (422 proof_path_too_long) when
+// more than MaxProofPath events lie between; take the range from
+// /api/audit/export instead.
 func (s *Server) auditProof(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	id, err := uuid.Parse(p.path["event_id"])
 	if err != nil {
 		return nil, errAuditEventNotFound
+	}
+	withPath := false
+	if b := p.queryOptBool("path"); b != nil {
+		withPath = *b
+	}
+	if err := validated(p, nil); err != nil {
+		return nil, err
 	}
 	tx := store.TxFrom(r.Context())
 	e, err := tx.AuditEvent(id)
@@ -200,13 +216,37 @@ func (s *Server) auditProof(_ http.ResponseWriter, r *http.Request, p *params) (
 		ck = checkpointRow(c)
 		between = c.Seq - e.Seq
 	}
-	return ojson.Object{
+	out := ojson.Object{
 		{Key: "event", Value: rec}, {Key: "previous", Value: prev}, {Key: "next", Value: next},
 		{Key: "checkpoint", Value: ck}, {Key: "events_to_checkpoint", Value: between},
 		{Key: "hash_algorithm", Value: `sha256("tessera-audit-v1" || 0x00 || RFC8785(event without "hash"))`},
 		{Key: "genesis", Value: audit.Genesis(tx.Tenant())},
-	}, nil
+	}
+	if !withPath {
+		return out, nil
+	}
+	path := []ojson.Object{}
+	if c != nil && between > 0 {
+		if between > MaxProofPath {
+			return nil, badRequest("proof_path_too_long", fmt.Sprintf("%d events lie between this event and its checkpoint (limit %d): export that range from /api/audit/export", between, MaxProofPath))
+		}
+		evs, err := tx.AuditEventsRange(e.Seq+1, c.Seq, MaxProofPath+1)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range evs {
+			rec, err := audit.ExportRecord(n)
+			if err != nil {
+				return nil, err
+			}
+			path = append(path, rec)
+		}
+	}
+	return append(out, ojson.KV{Key: "path", Value: path}), nil
 }
+
+// MaxProofPath caps the events a self-contained inclusion proof carries.
+const MaxProofPath = 2000
 
 // GET /api/audit/checkpoints?from_seq=
 func (s *Server) auditCheckpoints(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {

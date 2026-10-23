@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Play, RotateCcw } from "lucide-react";
+import { Pause, Play, RotateCcw } from "lucide-react";
 import { JobRun, QueueJob, QueueSchedule, QueueWorker, api, fmtDate, jobs, queue, relTime, useApi } from "../../api";
 import { Badge, Button, Callout, DataTable, SidePanel, useToast } from "../../components";
 
@@ -58,9 +58,10 @@ export function Jobs() {
 /** The durable queue behind the scheduled jobs: its schedules, and its jobs with the dead letters (issue #300). */
 function QueueSection() {
   const { data: jobsData, error, reload } = useApi<QueueJob[]>("/queue/jobs?limit=200");
-  const { data: schedules, error: schedError } = useApi<QueueSchedule[]>("/queue/schedules");
+  const { data: schedules, error: schedError, reload: reloadSchedules } = useApi<QueueSchedule[]>("/queue/schedules");
   const [open, setOpen] = useState<QueueJob | null>(null);
   const dead = (jobsData ?? []).filter((j) => j.status === "dead").length;
+  const paused = (schedules ?? []).filter((s) => !s.enabled);
   return (
     <div className="stack">
       <div className="card stack-sm">
@@ -71,6 +72,7 @@ function QueueSection() {
         </p>
       </div>
       <WorkersTable />
+      {paused.length > 0 && <Callout tone="warn"><b>{paused.length} {paused.length === 1 ? "schedule is" : "schedules are"} paused:</b> {paused.map((s) => KIND[s.kind] ?? s.kind).join(", ")}. Nothing new is queued for {paused.length === 1 ? "it" : "them"} until someone resumes.</Callout>}
       <DataTable
         id="queue-schedules"
         rows={schedules}
@@ -82,8 +84,10 @@ function QueueSection() {
           { id: "spec", header: "Runs", sort: (r) => r.spec, cell: (r) => <code className="xs">{r.spec}</code> },
           { id: "next", header: "Next run", sort: (r) => r.next_run_at, cell: (r) => <span className="small nowrap" title={fmtDate(r.next_run_at)}>{relTime(r.next_run_at.replace("Z", ""))}</span> },
           { id: "last", header: "Last enqueued", hideNarrow: true, sort: (r) => r.last_enqueued_at ?? "", cell: (r) => r.last_enqueued_at ? <span className="small nowrap" title={fmtDate(r.last_enqueued_at)}>{relTime(r.last_enqueued_at.replace("Z", ""))}</span> : <span className="faint xs">never</span> },
-          { id: "enabled", header: "State", cell: (r) => <Badge tone={r.enabled ? "ok" : undefined}>{r.enabled ? "enabled" : "disabled"}</Badge>, hideNarrow: true },
+          { id: "enabled", header: "State", sort: (r) => (r.enabled ? 1 : 0), csv: (r) => (r.enabled ? "running" : "paused"), cell: (r) => <Badge tone={r.enabled ? "ok" : "warning"}>{r.enabled ? "running" : "paused"}</Badge> },
+          { id: "act", header: "", cell: (r) => <ScheduleToggle schedule={r} onDone={reloadSchedules} /> },
         ]}
+        filters={[{ id: "state", label: "State", options: [{ value: "running", label: "Running" }, { value: "paused", label: "Paused" }], get: (r) => (r.enabled ? "running" : "paused") }]}
         searchText={(r) => `${r.name} ${r.kind} ${r.spec}`}
         searchPlaceholder="Search schedules…"
         empty="No schedules yet. They are created for the tenant when the queue worker first runs."
@@ -115,6 +119,31 @@ function QueueSection() {
       />
       {open && <QueueJobPanel job={open} onClose={() => setOpen(null)} onRetried={() => { setOpen(null); reload(); }} />}
     </div>
+  );
+}
+
+/** Pause or resume one recurring job. Pausing stops new runs only; it needs a fresh sign-in check and is audited. */
+function ScheduleToggle({ schedule: r, onDone }: { schedule: QueueSchedule; onDone: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const label = KIND[r.kind] ?? r.kind;
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      if (r.enabled) await queue.pauseSchedule(r.name);
+      else await queue.resumeSchedule(r.name);
+      toast(r.enabled ? `${label} paused. Work already queued will still run.` : `${label} resumed.`);
+      onDone();
+    } catch (e) {
+      toast((e as Error).message, { kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Button size="sm" icon={r.enabled ? <Pause size={13} /> : <Play size={13} />} disabled={busy} onClick={toggle} aria-label={`${r.enabled ? "Pause" : "Resume"} ${label}`}>
+      {r.enabled ? "Pause" : "Resume"}
+    </Button>
   );
 }
 
