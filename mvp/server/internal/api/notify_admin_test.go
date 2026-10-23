@@ -446,6 +446,16 @@ func TestSuppressionsAndDSNAPI(t *testing.T) {
 	if !strings.Contains(res.Body.String(), `"outcome":"not_matched"`) {
 		t.Errorf("DSN result = %s", res.Body)
 	}
+	// issue #513: the real RFC 3464 media types are accepted, and text/plain (CORS-safelisted) is not
+	for ct, want := range map[string]int{"multipart/report; report-type=delivery-status; boundary=b": 200, "message/delivery-status": 200,
+		"message/rfc822": 200, "text/plain": 415, "text/csv": 415} {
+		req := httptest.NewRequest("POST", "/api/email/dsn", strings.NewReader(dsn))
+		req.Header.Set("Content-Type", ct)
+		r.admin.Apply(req)
+		if res := serve(r.h, req); res.Code != want {
+			t.Errorf("DSN as %s: %d %s, want %d", ct, res.Code, res.Body, want)
+		}
+	}
 	if res := r.do(r.admin, "POST", "/api/email/dsn", "this is not a report"); res.Code != 422 {
 		t.Errorf("garbage DSN: %d %s", res.Code, res.Body)
 	}

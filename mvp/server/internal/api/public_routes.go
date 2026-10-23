@@ -20,6 +20,9 @@ type Route struct {
 	// be application/json. The type must not be CORS-safelisted, so a
 	// cross-site form cannot send it (text/plain, for one, is).
 	BodyType string
+	// BodyTypes are further non-JSON media types the route takes (the delivery status report route takes the RFC 3464
+	// types). The same rule applies: none may be CORS-safelisted, so text/plain is never listed.
+	BodyTypes []string
 	// NoConditionalAccess exempts a step-up route from the tenant's
 	// privileged-scope conditional access policies (still permission and
 	// step-up). Only the conditional access management routes set it: a policy

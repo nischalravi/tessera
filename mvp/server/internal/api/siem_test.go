@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -204,4 +205,60 @@ func TestSiemAPI_S3AndEventFilter(t *testing.T) {
 		}
 		return err
 	})
+}
+
+// TestSiemAPI_NarrowingTheFilterNeedsTwoAdmins (issue #511): one admin cannot narrow a sink's event filter through
+// the PUT; the change request that does it needs a second admin, widening needs none, and the change's own audit
+// events always match the sink.
+func TestSiemAPI_NarrowingTheFilterNeedsTwoAdmins(t *testing.T) {
+	e := newPrivEnv(t)
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	sink := e.admin.call("POST", "/api/siem/sinks", `{"name":"splunk","kind":"webhook","format":"json","flavor":"json","target":"https://siem.example.com/hook"}`, 201)
+	id := sink["id"].(string)
+	// narrowing from "every event", or to a subset, is refused at the PUT
+	for _, f := range []string{`["grant.revoke"]`, `["auth.*"]`} {
+		got := e.admin.call("PUT", "/api/siem/sinks/"+id, `{"name":"splunk","event_filter":`+f+`}`, 409)
+		if got["error"] != "two_admin_change_required" && got["code"] != "two_admin_change_required" {
+			t.Errorf("narrowing to %s: %v", f, got)
+		}
+	}
+	// the request needs a second admin
+	body := fmt.Sprintf(`{"type":"siem.sink.filter","payload":{"sink_id":%q,"event_filter":["grant.revoke"]}}`, id)
+	ch := e.admin.call("POST", "/api/admin/change-requests", body, 201)
+	if ch["status"] != "pending_approval" || ch["two_person"] != true {
+		t.Fatalf("narrowing request = %v", ch)
+	}
+	approve := "/api/admin/change-requests/" + ch["id"].(string) + "/approve"
+	if rec := e.admin.do("POST", approve, fmt.Sprintf(`{"payload_hash":%q}`, ch["payload_hash"])); rec.Code == 200 {
+		t.Errorf("the requester approved their own narrowing: %s", rec.Body)
+	}
+	admin2.call("POST", approve, fmt.Sprintf(`{"payload_hash":%q}`, ch["payload_hash"]), 200)
+	var filter []string
+	var narrowedEvents int
+	_ = e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+		k, err := tx.SiemSink(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		filter = k.EventFilter
+		evs, _ := tx.AuditEvents(store.AuditFilter{})
+		for _, ev := range evs {
+			if ev.Action == "siem.sink.filter_changed" {
+				narrowedEvents++
+				if !siem.EventMatches(k.EventFilter, ev.Action) {
+					t.Error("the filter change does not reach the filtered sink")
+				}
+			}
+		}
+		return nil
+	})
+	if len(filter) != 1 || filter[0] != "grant.revoke" || narrowedEvents != 1 {
+		t.Errorf("filter = %v, filter_changed events = %d", filter, narrowedEvents)
+	}
+	// widening is one admin, at the PUT or as a request that applies at once
+	e.admin.call("PUT", "/api/siem/sinks/"+id, `{"name":"splunk","event_filter":["grant.revoke","auth.*"]}`, 200)
+	wide := e.admin.call("POST", "/api/admin/change-requests", fmt.Sprintf(`{"type":"siem.sink.filter","payload":{"sink_id":%q,"event_filter":[]}}`, id), 201)
+	if wide["status"] != "applied" || wide["two_person"] != false {
+		t.Errorf("clearing the filter = %v", wide)
+	}
 }

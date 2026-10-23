@@ -144,7 +144,7 @@ func ScopeSetOf(scopes []string) ScopeSet {
 	out := ScopeSet{}
 	for _, s := range scopes {
 		switch sc := Scope(s); sc {
-		case ScopeRead, ScopeWrite, ScopeAudit, ScopeAdmin:
+		case ScopeRead, ScopeWrite, ScopeAudit, ScopeAdmin, ScopeEmailDSN:
 			out[sc] = true
 		}
 	}

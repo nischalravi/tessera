@@ -17,6 +17,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth/dpop"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -45,9 +46,30 @@ func (s *Server) registerAdminClientRoutes() {
 // machineClientScopes and machineClientRoles are what a UI-created machine client may hold: no admin scope and no
 // admin role (§9.5); approvals and policy changes stay human-only.
 var (
-	machineClientScopes = []string{"tessera:read", "tessera:write", "tessera:audit", oauth.ScopeIntrospect}
+	machineClientScopes = []string{"tessera:read", "tessera:write", "tessera:audit", oauth.ScopeIntrospect, oauth.ScopeEmailDSN}
 	machineClientRoles  = []string{string(auth.RoleViewer), string(auth.RoleOperator), string(auth.RoleAuditor)}
 )
+
+// ensureWithinCreator refuses roles and scopes whose effective permissions (perms(roles) ∩ perms(scopes), the same
+// rule a token principal gets) the signed-in admin does not hold now (issue #509). Without it a tenant admin, who has
+// no data-plane permission by design, could mint an operator client and use it for data-plane work. The check is
+// against the caller's active permissions, so an admin whose roles are inactive (no step-up) holds fewer.
+func ensureWithinCreator(r *http.Request, roles, scopes []string) error {
+	_, active, _ := auth.MachineRoles(roles)
+	want := auth.EffectivePermissions(&auth.Principal{ActiveRoles: active, Scopes: auth.ScopeSetOf(scopes)})
+	have := auth.EffectivePermissions(principal(r))
+	var missing []string
+	for _, p := range want.Sorted() {
+		if !have.Has(p) {
+			missing = append(missing, string(p))
+		}
+	}
+	if len(missing) > 0 {
+		return &readiness.Error{Status: http.StatusForbidden, Code: "exceeds_creator",
+			Msg: "a client cannot hold permissions its creator lacks: " + strings.Join(missing, ", ")}
+	}
+	return nil
+}
 
 // clientView is an OAuth client as the admin API shows it: the registered
 // public keys (kid, algorithm, RFC 7638 thumbprint) and never any secret (a
@@ -200,6 +222,9 @@ func (s *Server) adminCreateAPIClient(_ http.ResponseWriter, r *http.Request, _ 
 	if err != nil {
 		return nil, err
 	}
+	if err := ensureWithinCreator(r, roles, scopes); err != nil {
+		return nil, err
+	}
 	set, jwks, err := oauth.ParseClientJWKS(b.JWKS)
 	if err != nil {
 		return nil, badRequest("invalid_jwks", err.Error())
@@ -278,6 +303,10 @@ func (s *Server) adminRotateAPIClientKeys(_ http.ResponseWriter, r *http.Request
 	}
 	c, err := machineClientOf(r, p)
 	if err != nil {
+		return nil, err
+	}
+	// new keys hand the client to whoever holds them: the rotating admin must hold everything the client can do
+	if err := ensureWithinCreator(r, c.Roles, c.AllowedScopes); err != nil {
 		return nil, err
 	}
 	incoming, _, err := oauth.ParseClientJWKS(b.JWKS)

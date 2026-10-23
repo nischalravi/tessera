@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -19,7 +20,7 @@ import (
 //
 //	GET  /api/siem/sinks                              sinks with their health and lag
 //	POST /api/siem/sinks                              add a sink
-//	PUT  /api/siem/sinks/{sink_id}                    change a sink
+//	PUT  /api/siem/sinks/{sink_id}                    change a sink (narrowing its event filter is a two-admin change request)
 //	POST /api/siem/sinks/{sink_id}/rewind {seq}       replay from seq+1 (0: everything)
 //	POST /api/siem/sinks/{sink_id}/test               send one test event now
 //	GET  /api/siem/sinks/{sink_id}/dead-letters       batches the destination rejected
@@ -229,6 +230,16 @@ func (s *Server) updateSiemSink(_ http.ResponseWriter, r *http.Request, p *param
 		return nil, errSinkNotFound
 	} else if err != nil {
 		return nil, err
+	}
+	// Narrowing the event filter removes detection: it is a two-admin change (issue #511). Widening, clearing or
+	// keeping it stays here. (An unnormalized filter that narrows is refused too: the check normalizes first.)
+	if b.EventFilter != nil {
+		if next, err := siem.NormalizeFilter(*b.EventFilter); err == nil && siem.Narrows(cur.EventFilter, next) {
+			return nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
+				Msg: "narrowing a sink's event filter needs a second admin: submit a change request of type " + admin.TypeSiemSinkFilter +
+					" (POST /api/admin/change-requests, payload {sink_id, event_filter}) for a different admin to approve",
+				Extra: map[string]any{"change_type": admin.TypeSiemSinkFilter}}
+		}
 	}
 	k, err := siem.UpdateSink(tx, s.siemSealer(), cur.ID, b.spec(cur), s.cfg.Env == config.Dev, by, s.clock().UTC())
 	if err != nil {

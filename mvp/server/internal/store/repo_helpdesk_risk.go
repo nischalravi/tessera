@@ -41,11 +41,19 @@ type HelpdeskIdPRisk struct {
 	Detail     string
 	OccurredAt time.Time
 	CreatedAt  time.Time
+	// SubmittedBy and SubmittedByUser are the signed-in admin who posted it (Source is only their unverified label);
+	// empty for a signal recorded before they were kept.
+	SubmittedBy, SubmittedByUser string
+	// DismissedAt is set once a different admin dismissed the signal; it no longer counts.
+	DismissedAt                  *time.Time
+	DismissedBy, DismissedByUser string
+	DismissReason                string
 }
 
 const (
 	helpdeskSettingsCols = `s.recent_method_days, s.recent_method_action, s.updated_by, s.updated_at`
-	helpdeskIdPRiskCols  = `r.id, r.identity_id, r.kind, r.source, r.detail, r.occurred_at, r.created_at`
+	helpdeskIdPRiskCols  = `r.id, r.identity_id, r.kind, r.source, r.detail, r.occurred_at, r.created_at, r.submitted_by, r.submitted_by_user,
+		r.dismissed_at, r.dismissed_by, r.dismissed_by_user, r.dismiss_reason`
 )
 
 var (
@@ -58,8 +66,17 @@ var (
 			recent_method_action = excluded.recent_method_action, updated_by = excluded.updated_by,
 			updated_at = excluded.updated_at`)
 	helpdeskIdPRiskInsert = tq("helpdesk_idp_risks.insert", `
-		INSERT INTO helpdesk_idp_risks (id, tenant_id, identity_id, kind, source, detail, occurred_at, created_at)
-		VALUES (@id, @tenant, @identity_id, @kind, @source, @detail, @occurred_at, @now)`)
+		INSERT INTO helpdesk_idp_risks (id, tenant_id, identity_id, kind, source, detail, occurred_at, created_at, submitted_by, submitted_by_user)
+		VALUES (@id, @tenant, @identity_id, @kind, @source, @detail, @occurred_at, @now, @by, @by_user)`)
+	helpdeskIdPRiskGet = tq("helpdesk_idp_risks.get", `
+		SELECT `+helpdeskIdPRiskCols+` FROM helpdesk_idp_risks r WHERE r.tenant_id = @tenant AND r.id = @id`)
+	helpdeskIdPRiskList = tq("helpdesk_idp_risks.list", `
+		SELECT `+helpdeskIdPRiskCols+` FROM helpdesk_idp_risks r WHERE r.tenant_id = @tenant
+		ORDER BY r.created_at DESC, r.id LIMIT @limit`)
+	// dismissed_at = '' makes a repeat a no-op that touches no row
+	helpdeskIdPRiskDismiss = tq("helpdesk_idp_risks.dismiss", `
+		UPDATE helpdesk_idp_risks SET dismissed_at = @now, dismissed_by = @by, dismissed_by_user = @by_user, dismiss_reason = @reason
+		WHERE tenant_id = @tenant AND id = @id AND dismissed_at = ''`)
 	helpdeskIdPRisksFor = tq("helpdesk_idp_risks.for_identity", `
 		SELECT `+helpdeskIdPRiskCols+` FROM helpdesk_idp_risks r
 		WHERE r.tenant_id = @tenant AND r.identity_id = @identity_id ORDER BY r.occurred_at, r.id`)
@@ -82,11 +99,19 @@ func scanHelpdeskSettings(s scanner) (*HelpdeskSettings, error) {
 
 func scanHelpdeskIdPRisk(s scanner) (*HelpdeskIdPRisk, error) {
 	var r HelpdeskIdPRisk
-	var occ, created string
-	if err := s.Scan(&r.ID, &r.IdentityID, &r.Kind, &r.Source, &r.Detail, &occ, &created); err != nil {
+	var occ, created, dismissed string
+	if err := s.Scan(&r.ID, &r.IdentityID, &r.Kind, &r.Source, &r.Detail, &occ, &created, &r.SubmittedBy, &r.SubmittedByUser,
+		&dismissed, &r.DismissedBy, &r.DismissedByUser, &r.DismissReason); err != nil {
 		return nil, err
 	}
 	var err error
+	if dismissed != "" {
+		t, perr := ParseRT(dismissed)
+		if perr != nil {
+			return nil, perr
+		}
+		r.DismissedAt = &t
+	}
 	if r.OccurredAt, err = ParseRT(occ); err != nil {
 		return nil, err
 	}
@@ -117,8 +142,25 @@ func (tx *TenantTx) InsertHelpdeskIdPRisk(r *HelpdeskIdPRisk, now time.Time) err
 		r.ID = NewID()
 	}
 	_, err := tx.exec(helpdeskIdPRiskInsert, sql.Named("id", r.ID), sql.Named("identity_id", r.IdentityID), sql.Named("kind", r.Kind),
-		sql.Named("source", r.Source), sql.Named("detail", r.Detail), sql.Named("occurred_at", RT(r.OccurredAt)), sql.Named("now", RT(now)))
+		sql.Named("source", r.Source), sql.Named("detail", r.Detail), sql.Named("occurred_at", RT(r.OccurredAt)), sql.Named("now", RT(now)),
+		sql.Named("by", r.SubmittedBy), sql.Named("by_user", r.SubmittedByUser))
 	return err
+}
+
+// HelpdeskIdPRisk returns one risk signal or ErrNotFound.
+func (tx *TenantTx) HelpdeskIdPRisk(id string) (*HelpdeskIdPRisk, error) {
+	return one(tx, scanHelpdeskIdPRisk, helpdeskIdPRiskGet, sql.Named("id", id))
+}
+
+// HelpdeskIdPRiskList lists the tenant's newest risk signals, dismissed ones included.
+func (tx *TenantTx) HelpdeskIdPRiskList(limit int) ([]*HelpdeskIdPRisk, error) {
+	return collect(tx, scanHelpdeskIdPRisk, helpdeskIdPRiskList, sql.Named("limit", limit))
+}
+
+// DismissHelpdeskIdPRisk marks a risk signal dismissed; ErrNotFound when it is missing or already dismissed.
+func (tx *TenantTx) DismissHelpdeskIdPRisk(id string, byUser, by, reason string, now time.Time) error {
+	return tx.execOne(helpdeskIdPRiskDismiss, sql.Named("id", id), sql.Named("by", by), sql.Named("by_user", byUser),
+		sql.Named("reason", reason), sql.Named("now", RT(now)))
 }
 
 // HelpdeskIdPRisks lists an identity's IdP risk signals, oldest first.

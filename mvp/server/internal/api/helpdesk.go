@@ -27,7 +27,9 @@ import (
 //	POST /api/helpdesk/signals                                {identity_id, kind, location, device, occurred_at}
 //	GET  /api/helpdesk/settings                               the recent authentication method rule (#477)
 //	PUT  /api/helpdesk/settings                               {recent_method_days, recent_method_action} (step-up)
-//	POST /api/helpdesk/risk-signals                           {identity_id, source, detail, occurred_at}: an IdP risk signal
+//	POST /api/helpdesk/risk-signals                           {identity_id, source, detail, occurred_at}: an IdP risk signal (helpdesk.risk, step-up)
+//	GET  /api/helpdesk/risk-signals                           the tenant's newest risk signals (helpdesk.risk)
+//	POST /api/helpdesk/risk-signals/{risk_id}/dismiss         {reason}: a different admin than the poster (helpdesk.risk, step-up)
 //
 // Recent authentication method rule (#477): when the identity gained an
 // authentication method in the last recent_method_days (1-90, default 7), or a
@@ -60,7 +62,12 @@ func (s *Server) registerHelpdeskRoutes() {
 	s.handle(http.MethodPost, "/api/helpdesk/signals", write, need(auth.PermHelpdeskApprove), s.ingestHelpdeskSignal)
 	s.handle(http.MethodGet, "/api/helpdesk/settings", read, need(auth.PermGraphRead), s.getHelpdeskSettings)
 	s.handle(http.MethodPut, "/api/helpdesk/settings", write, needStepUp(auth.PermHelpdeskApprove, auth.StepUpPolicy), s.putHelpdeskSettings)
-	s.handle(http.MethodPost, "/api/helpdesk/risk-signals", write, need(auth.PermHelpdeskApprove), s.ingestHelpdeskRisk)
+	// issue #510: a signal can block account recovery for up to the rule's window, so only admins post or dismiss one
+	// (operators hold helpdesk.approve, not helpdesk.risk), each with step-up
+	s.handle(http.MethodPost, "/api/helpdesk/risk-signals", write, needStepUp(auth.PermHelpdeskRisk, auth.StepUpPolicy), s.ingestHelpdeskRisk)
+	s.handle(http.MethodGet, "/api/helpdesk/risk-signals", read, need(auth.PermHelpdeskRisk), s.listHelpdeskRisks)
+	s.handle(http.MethodPost, "/api/helpdesk/risk-signals/{risk_id}/dismiss", write,
+		needStepUp(auth.PermHelpdeskRisk, auth.StepUpPolicy), s.dismissHelpdeskRisk)
 }
 
 // helpdeskErr renders a workflow refusal.
@@ -393,5 +400,59 @@ func (s *Server) ingestHelpdeskRisk(_ http.ResponseWriter, r *http.Request, _ *p
 	if err != nil {
 		return nil, helpdeskErr(err)
 	}
-	return statusBody{http.StatusCreated, ojson.Object{{Key: "recorded", Value: true}, {Key: "id", Value: rk.ID}}}, nil
+	return statusBody{http.StatusCreated, ojson.Object{{Key: "recorded", Value: true}, {Key: "id", Value: rk.ID},
+		{Key: "reported_by", Value: rk.SubmittedBy}}}, nil
+}
+
+type riskView struct {
+	ID            string  `json:"id"`
+	IdentityID    int64   `json:"identity_id"`
+	SourceLabel   string  `json:"source_label"` // typed by the poster: unverified
+	Detail        string  `json:"detail"`
+	OccurredAt    string  `json:"occurred_at"`
+	ReportedBy    string  `json:"reported_by"` // the signed-in admin who posted it
+	Dismissed     bool    `json:"dismissed"`
+	DismissedAt   *string `json:"dismissed_at"`
+	DismissedBy   string  `json:"dismissed_by"`
+	DismissReason string  `json:"dismiss_reason"`
+}
+
+func viewRisk(r *store.HelpdeskIdPRisk) riskView {
+	v := riskView{ID: r.ID, IdentityID: r.IdentityID, SourceLabel: r.Source, Detail: r.Detail, OccurredAt: rt3339(r.OccurredAt),
+		ReportedBy: r.SubmittedBy, Dismissed: r.DismissedAt != nil, DismissedBy: r.DismissedBy, DismissReason: r.DismissReason}
+	if r.DismissedAt != nil {
+		t := rt3339(*r.DismissedAt)
+		v.DismissedAt = &t
+	}
+	return v
+}
+
+func (s *Server) listHelpdeskRisks(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	rs, err := store.TxFrom(r.Context()).HelpdeskIdPRiskList(200)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]riskView, 0, len(rs))
+	for _, x := range rs {
+		out = append(out, viewRisk(x))
+	}
+	return out, nil
+}
+
+func (s *Server) dismissHelpdeskRisk(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	var b struct {
+		Reason string `json:"reason"`
+	}
+	if err := decodeBody(r, &b, false); err != nil {
+		return nil, err
+	}
+	id := p.path["risk_id"]
+	if len(id) > 64 {
+		return nil, errStatus(http.StatusNotFound, "Not Found")
+	}
+	rk, err := s.helpdesk.DismissRisk(store.TxFrom(r.Context()), id, b.Reason, principal(r).User(), s.clock())
+	if err != nil {
+		return nil, helpdeskErr(err)
+	}
+	return viewRisk(rk), nil
 }

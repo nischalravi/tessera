@@ -150,6 +150,27 @@ var Rules = []*Rule{
 		},
 	},
 	{
+		ID: "schedule_paused", Name: "Security schedule paused", Kind: "event", Severity: "high", Threshold: 1, Window: time.Hour,
+		Description: "A background security schedule (containment retries, lifecycle, SoD mitigation, admin change, drift or certificate sweeps, connector syncs) was paused, or every connector sync was turned off (#512).",
+		Match: func(e *store.AuditEvent) (Hit, bool) {
+			d := detailOf(e)
+			switch e.Action {
+			case "queue.schedule_paused":
+				if p, _ := d["protected"].(bool); !p {
+					return Hit{}, false
+				}
+				name := orStr(str(d, "schedule"), "a schedule")
+				return Hit{Key: name, Title: fmt.Sprintf("%s was paused by %s: %s", name, actorOf(e), orStr(str(d, "reason"), "no reason"))}, true
+			case "connectors.schedule_updated":
+				if off, _ := d["all_syncs_off"].(bool); !off {
+					return Hit{}, false
+				}
+				return Hit{Key: "connector_sync", Title: "All scheduled connector syncs were turned off by " + actorOf(e)}, true
+			}
+			return Hit{}, false
+		},
+	},
+	{
 		ID: "provisioning_failed", Name: "Provisioning or sync job failed", Kind: "event", Severity: "high", Threshold: 1,
 		Window:      time.Hour,
 		Description: "A connector sync, connection job, lifecycle (JML) run or admin change failed.",

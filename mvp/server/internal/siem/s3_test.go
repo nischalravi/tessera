@@ -106,10 +106,11 @@ func TestEventFilterDelivery(t *testing.T) {
 			actions = append(actions, r.Action)
 		}
 	}
-	if strings.Join(actions, ",") != "grant.revoke,grant.add" {
+	// siem.* always matches (issue #511): the sink's own creation is delivered whatever the filter says
+	if strings.Join(actions, ",") != "siem.sink.created,grant.revoke,grant.add" {
 		t.Errorf("sent %v", actions)
 	}
-	if got := w.sink(t, k.ID); got.CursorSeq != w.head(t) || got.DeliveredCount != 2 {
+	if got := w.sink(t, k.ID); got.CursorSeq != w.head(t) || got.DeliveredCount != 3 {
 		t.Errorf("cursor %d (head %d), delivered %d", got.CursorSeq, w.head(t), got.DeliveredCount)
 	}
 }

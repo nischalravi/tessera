@@ -473,6 +473,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	if err := d.upgradeGrpInboxKinds(ctx); err != nil {
 		return err
 	}
+	if err := d.upgradeSecurityControls(ctx); err != nil {
+		return err
+	}
 	files, err := fs.Glob(schemaFS, "schema/*.sql")
 	if err != nil {
 		return err

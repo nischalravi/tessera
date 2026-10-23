@@ -511,7 +511,7 @@ and `tessera worker` runs them with no HTTP API and no listener, over the same d
   `connectors.sync_queued`); without `async` the call is as before. `TESSERA_CONNECTOR_SYNC_SCHEDULE`
   (`@every 15m` or five cron fields) schedules it for every tenant; unset, syncs run on demand only.
   A tenant also sets its own schedule (issue #498): `PUT /api/connectors/sync-schedule {delta_every_minutes, full_every_hours}`
-  (`connections.manage`; 0 is off, delta 5 to 1440 minutes, full 1 to 720 hours; audited as `connectors.schedule_updated`)
+  (`connections.manage` with step-up; 0 is off, delta 5 to 1440 minutes, full 1 to 720 hours; audited as `connectors.schedule_updated`; turning both off sets `all_syncs_off` and raises the `schedule_paused` alert, issue #512)
   stores two rows in the tenant's `queue_schedules` (`connector_sync.delta`, payload `{"mode":"incremental"}`, and
   `connector_sync.full`, `{"mode":"full"}`), which the queue fires as `connector_sync` jobs like any other schedule, so they run
   wherever a worker runs that kind and appear under Jobs. `GET /api/connectors/sync-status` (`connections.read`) returns the
@@ -668,7 +668,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET /api/ssf/events` · `POST /public/t/{slug}/ssf/{transmitter_id}/events` (SSF push, see "Shared Signals receiver") ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it) · `POST /api/siem/sinks/{id}/rewind {seq}` ·
-`POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` (a sink's `kind` is `syslog`, `webhook` or `s3`; `event_filter`, `region` and `access_key_id` are in the body and the view) ·
+`POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` (a sink's `kind` is `syslog`, `webhook` or `s3`; `event_filter`, `region` and `access_key_id` are in the body and the view; narrowing `event_filter` is refused with 409 `two_admin_change_required`, see "Event filter") ·
 `GET|POST /api/admin/certificates` · `POST /api/admin/certificates/generate {connection_id}` · `POST /api/admin/certificates/{id}/promote|retire` ·
 `GET|PUT /api/admin/branding` · `GET /api/auth/branding?tenant=` · `GET /api/auth/branding/logo?tenant=` (the last two are public, see "Certificates, branding and identity rules") ·
 `GET|PUT /api/admin/identity-rules` · `GET|PUT /api/admin/labels` ·
@@ -900,7 +900,7 @@ The pull export (`/api/audit/export`) stays available.
     - Each batch is one `PUT` of newline-delimited JSON to `<bucket URL>/<tenant>/YYYY/MM/DD/<first seq>-<last seq>.ndjson` (`.ocsf.ndjson` for OCSF). The key comes from the batch's seq range, so a retry replaces its object instead of adding a copy.
     - The target is the bucket URL with an optional key prefix (path style or virtual hosted), `region` is the signing region, `access_key_id` is stored in the clear and the secret access key is the sink's sealed `token`.
     - Requests are signed with AWS Signature Version 4 (stdlib, checked against the AWS documentation vector) and go through `internal/safehttp`. Give the key `s3:PutObject` on the prefix only.
-- **Event filter (issue #498):** a sink can receive only some audit actions. `event_filter` is a list of actions (`grant.revoke`) or prefixes ending in `.*` (`auth.*`), `*` for all, empty for everything. A sink still needs `include_http` for `http.request`. Filtered-out events advance the cursor, but **Behind** still counts them (it is the distance to the ledger head).
+- **Event filter (issue #498):** a sink can receive only some audit actions. `event_filter` is a list of actions (`grant.revoke`) or prefixes ending in `.*` (`auth.*`), `*` for all, empty for everything. A sink still needs `include_http` for `http.request`. Filtered-out events advance the cursor, but **Behind** still counts them (it is the distance to the ledger head). **Narrowing is a two-admin change (issue #511):** `PUT /api/siem/sinks/{id}` refuses a narrower filter (from empty or `*` to a list, or dropping an entry) with 409 `two_admin_change_required`; submit an admin change request `POST /api/admin/change-requests {"type":"siem.sink.filter","payload":{"sink_id","event_filter"}}` and a different admin approves it. Widening or clearing stays single-admin. Some actions reach every sink whatever its filter says: `siem.*`, `audit.*`, `admin.change.*`, `auth.break_glass*`, `breakglass.*`, `auth.step_up.*`, `auth.role.*`, `stepup.*` and `deletion_guard.*`, so a sink always learns that its own configuration changed (`siem.sink.filter_changed` records the old and new filter).
 - **Formats:**
   - `json` is the export record. It carries `hash` and `prev_hash`, so the SIEM can recompute the chain.
   - `ocsf` is OCSF 1.3: Authentication (3002) for sign-in and sign-out, Account Change (3001) for role grants and revokes and user disables, and API Activity (6003) for everything else.
@@ -1197,7 +1197,12 @@ the way the old sweepers did (active tenant list), then works each one in its ow
   stops or restarts a recurring job for the tenant; work already queued or running finishes, and a resumed
   schedule fires once if it came due while paused. Audited `queue.schedule_paused` / `queue.schedule_resumed`
   in the same transaction; repeating the state it already has changes and audits nothing. Admin → Jobs → Queue
-  shows paused schedules and a Pause / Resume button on each.
+  shows paused schedules and a Pause / Resume button on each. **Security schedules** (`protected: true` in the list:
+  `containment_retries`, `sweep_lifecycle`, `sweep_sod_mitigations`, `sweep_admin_changes`, `certificate_expiry`,
+  `drift_sweep`, `connector_sync.delta`, `connector_sync.full`; issue #512) cannot be paused for good: the pause needs a
+  `reason`, takes `resume_after_hours` (1 to 24, default 24), shows `paused_until`, resumes by itself (audited
+  `queue.schedule_resumed` with `automatic: true`) and raises the `schedule_paused` alert (high). Other schedules stay
+  paused until resumed.
 * **Schedules.** Specs are `@every 30s` or 5-field cron (UTC). A worker that finds a schedule due moves
   `next_run_at` and enqueues the job (key `schedule:name:window`) in one transaction, so a window runs
   once however many workers poll; after downtime it fires once, not per missed window. Schedules are
@@ -2360,8 +2365,10 @@ reports, a fresh phishing-resistant sign-in. Each change is audited in the same 
   access (60 minutes) is announced, and the default approval escalation (48 hours) for a catalog item with no approval
   policy of its own. An item's own policy, an organization's default stages and a workflow keep their own hours.
 * **Delivery status reports (DSN)** (`POST /api/email/dsn`). Post the raw RFC 3464 report (`multipart/report`, or just its
-  `message/delivery-status` part, at most 256 KiB) that the relay mails to the envelope sender; whatever collects that
-  mailbox calls it (for example with an API client holding `email.manage`). Each recipient block is matched to the email
+  `message/delivery-status` part, at most 256 KiB) that the relay mails to the envelope sender, with its real
+  `Content-Type` (`multipart/report`, `message/delivery-status` or `message/rfc822`; `application/json` still works;
+  `text/plain` is refused because a cross-site form can send it); whatever collects that mailbox calls it with a machine
+  client holding the narrow `tessera:email-dsn` scope (the `email.dsn` permission, which needs no role; tenant admins hold it too). Each recipient block is matched to the email
   Tessera sent through the `Message-ID` it set (the notification's id; Postfix's `X-Postfix-Queue-ID` is the fallback) and
   the recipient must be the message's. `Action: failed` with a `5.x.x` status is a **hard bounce**: the message becomes
   `bounced`, the report is added to its attempts, and the address is suppressed. `delayed` and a soft failure are recorded
@@ -3057,9 +3064,14 @@ IdP is never called.
   `PUT /api/helpdesk/settings {recent_method_days, recent_method_action}` (`helpdesk.approve`,
   step-up, audited as `helpdesk.settings.updated` with the old values). IdP risk signals
   (`helpdesk_idp_risks`): `POST /api/helpdesk/risk-signals {identity_id, source, detail,
-  occurred_at}` (`helpdesk.approve`) records that a connected IdP reported a suspicious method
-  (audited `helpdesk.risk_signal.ingested`). It can only make a reset stricter, so it is available in
-  production; the Entra and Okta log connectors do not call it yet. Starting a case that triggers the
+  occurred_at}` records that a connected IdP reported a suspicious method (audited
+  `helpdesk.risk_signal.ingested`). It can block account recovery, so since issue #510 it needs the admin-only
+  `helpdesk.risk` permission (tenant and policy admins, not operators) and step-up; `occurred_at` must be inside the rule's
+  window and not in the future. The signal records who posted it: staff see "reported by <admin> (manual; source label
+  "Entra ID" is unverified)", and `source` is only a label. `GET /api/helpdesk/risk-signals` lists them and
+  `POST /api/helpdesk/risk-signals/{id}/dismiss {reason}` (`helpdesk.risk`, step-up) removes one's effect: it must be a
+  different admin than the poster, needs a reason and is audited `helpdesk.risk_signal.dismissed`. The Entra and Okta log
+  connectors do not call it yet. Starting a case that triggers the
   rule is audited as `helpdesk.case.recent_auth_method`. Help desk → Settings edits the rule.
 - **Simulated outside production.** The `simulated` executor (calls nothing), the push provider
   (always approves) and the IDV provider (accepts any session reference not starting with
@@ -5197,7 +5209,7 @@ A disabled client, or one whose roles or scopes are narrowed, is cut off on the 
 | `POST /t/{slug}/oauth/token` | also `client_credentials`: `client_assertion_type`, `client_assertion`, optional `scope`; DPoP proof and nonce when the client requires DPoP |
 | `POST /t/{slug}/oauth/introspect` | RFC 7662: the same client authentication (`aud` = the introspect URL) for a client registered with the `tessera:introspect` scope; `{"active": false}` for anything that is not an active token of this tenant (expired, revoked session, other tenant, malformed) |
 | `GET /api/admin/api-clients` · `/{client_id}` | `admin.read`: the tenant's clients with their public keys (kid, alg, thumbprint), roles, scopes, owner, last use (when it last got a token) |
-| `POST /api/admin/api-clients` | issue #498: create a machine client `{name, owner (id or e-mail of an active user), scopes, roles, dpop_required, jwks}`; scopes are `tessera:read|write|audit|introspect` (never `tessera:admin`), roles `viewer|operator|auditor`, `jwks` public keys only (`invalid_jwks`); needs `admin.change.request` and a step-up of 5 minutes, audited as `oauth.client.created` |
+| `POST /api/admin/api-clients` | issue #498: create a machine client `{name, owner (id or e-mail of an active user), scopes, roles, dpop_required, jwks}`; scopes are `tessera:read|write|audit|introspect|email-dsn` (never `tessera:admin`; `tessera:email-dsn` grants only `email.dsn`, for the bounce-mailbox collector), roles `viewer|operator|auditor`, `jwks` public keys only (`invalid_jwks`); needs `admin.change.request` and a step-up of 5 minutes, audited as `oauth.client.created`. **A client cannot exceed its creator (issue #509):** the client's effective permissions (role permissions ∩ scope permissions) must all be held by the creating admin now, else 403 `exceeds_creator` naming the missing ones; a tenant admin, who has no data-plane permission, can therefore not create an `operator` + `tessera:write` client, while an admin who also holds `operator` can. Rotating keys applies the same check |
 | `POST /api/admin/api-clients/{client_id}/keys` | rotate the keys `{jwks, mode}`: `add` keeps the current keys during the overlap (a repeated `kid` is refused), `replace` leaves only the new set; audited as `oauth.client.keys_rotated` |
 | `POST /api/admin/api-clients/{client_id}/revoke` | disable the client (409 when already revoked): no new token, and its tokens stop on the next request; audited as `oauth.client.revoked`. The first-party CLI client and another tenant's client are 404 |
 
