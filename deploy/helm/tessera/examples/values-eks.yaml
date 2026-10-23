@@ -1,0 +1,61 @@
+# Amazon EKS: AWS Load Balancer Controller (ALB), IRSA, RDS for PostgreSQL, Secrets Manager via the CSI driver.
+# helm upgrade --install tessera deploy/helm/tessera -n tessera --create-namespace -f deploy/helm/tessera/examples/values-eks.yaml
+image:
+  api: { repository: 123456789012.dkr.ecr.us-east-1.amazonaws.com/tessera-api, tag: "v0.1.0" }
+  ui: { repository: 123456789012.dkr.ecr.us-east-1.amazonaws.com/tessera-ui, tag: "v0.1.0" }
+
+config:
+  publicUrl: https://tessera.example.com
+  awsRegion: us-east-1
+  # Audit anchor bucket (S3 Object Lock). IRSA grants the pod role s3:PutObject, PutObjectRetention, GetObject*.
+  auditAnchor: s3://example-tessera-anchors/prod
+  # The ALB sits in the private subnets of the VPC: list their CIDRs (broader than /8 is refused).
+  trustedProxies: ["127.0.0.1/32", "10.0.0.0/16"]
+
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/tessera-prod   # IRSA
+automountServiceAccountToken: true   # IRSA projects the web identity token
+
+csi:
+  enabled: true
+  provider: aws
+  parameters:
+    objects: |
+      - objectName: tessera/prod/db-owner-dsn
+        objectType: secretsmanager
+        objectAlias: db-owner
+      - objectName: tessera/prod/db-app-dsn
+        objectType: secretsmanager
+        objectAlias: db-app
+      - objectName: tessera/prod/kek
+        objectType: secretsmanager
+        objectAlias: kek
+  objects:
+    - { objectName: db-owner, key: TESSERA_DB }
+    - { objectName: db-app, key: TESSERA_DB_APP }
+    - { objectName: kek, key: TESSERA_KEK }
+migration:
+  enabled: false   # secrets are synced by the CSI driver only once a pod mounts them; replicas migrate on start
+
+database:
+  caConfigMap: rds-ca   # kubectl create configmap rds-ca --from-file=ca.crt=global-bundle.pem ; DSN: sslmode=verify-full&sslrootcert=/etc/tessera/db-ca/ca.crt
+
+ingress:
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:123456789012:certificate/REPLACE
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+  tls: { enabled: true }   # ACM terminates TLS; no secretName
+
+networkPolicy:
+  ingressFrom:
+    - ipBlock: { cidr: 10.0.0.0/16 }   # ALB (target-type ip) sends from the VPC subnets
+  databaseCIDRs: ["10.0.32.0/20"]       # database subnets
+
+metrics:
+  serviceMonitor: { enabled: true, labels: { release: kube-prometheus-stack } }
+  prometheusRule: { enabled: true, labels: { release: kube-prometheus-stack } }

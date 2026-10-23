@@ -1,0 +1,32 @@
+# OpenShift 4.x (restricted-v2 SCC): no fixed uid or fsGroup, a Route instead of an Ingress. Bring your own
+# Postgres (CrunchyData/CNPG operator or a managed service) and a Secret created with `oc create secret`.
+image:
+  api: { repository: image-registry.openshift-image-registry.svc:5000/tessera/tessera-api, tag: "v0.1.0" }
+  ui: { repository: image-registry.openshift-image-registry.svc:5000/tessera/tessera-ui, tag: "v0.1.0" }
+
+openshift: { enabled: true }
+
+config:
+  publicUrl: https://tessera.apps.cluster.example.com
+  auditAnchor: s3://example-tessera-anchors/prod
+  awsRegion: us-east-1
+  # the router pods; list the cluster/pod network CIDR that carries them (check: oc get network.config cluster)
+  trustedProxies: ["127.0.0.1/32", "10.128.0.0/14"]
+
+secrets:
+  existingSecret: tessera-env   # oc create secret generic tessera-env --from-literal=TESSERA_DB=... --from-literal=TESSERA_DB_APP=... --from-literal=TESSERA_KEK=...
+
+route:
+  annotations:
+    haproxy.router.openshift.io/timeout: 60s
+
+networkPolicy:
+  ingressFrom:
+    - namespaceSelector: { matchLabels: { network.openshift.io/policy-group: ingress } }
+  metricsFrom:
+    - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: openshift-monitoring } }
+  dnsNamespaceSelector: { matchLabels: { kubernetes.io/metadata.name: openshift-dns } }
+
+metrics:
+  serviceMonitor: { enabled: true }
+  prometheusRule: { enabled: true }

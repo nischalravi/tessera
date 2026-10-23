@@ -185,7 +185,7 @@ func auditCheckpoint(ctx context.Context, st *store.DB, dbFile string, tenants [
 	if err != nil {
 		return err
 	}
-	sealer, err := cfg.Sealer(config.DevKEKPath(dbFile))
+	sealer, err := loadSealer(ctx, cfg, config.DevKEKPath(dbFile))
 	if err != nil {
 		return err
 	}
@@ -198,7 +198,11 @@ func auditCheckpoint(ctx context.Context, st *store.DB, dbFile string, tenants [
 	if err != nil {
 		return err
 	}
-	sink, err := audit.NewSink(cfg.AnchorURL(dbFile), audit.WithHTTPClient(outbound))
+	objDeps, err := newObjDeps(&outCfg)
+	if err != nil {
+		return err
+	}
+	sink, err := audit.NewSink(cfg.AnchorURL(dbFile), audit.WithHTTPClient(outbound), audit.WithObjectStores(objDeps))
 	if err != nil {
 		return err
 	}
@@ -234,7 +238,7 @@ func archiveSourceFor(dbFile string, st *store.DB) audit.ArchiveSource {
 	if err != nil {
 		return nil
 	}
-	sealer, err := cfg.Sealer(config.DevKEKPath(dbFile))
+	sealer, err := loadSealer(context.Background(), cfg, config.DevKEKPath(dbFile))
 	if err != nil {
 		return nil
 	}

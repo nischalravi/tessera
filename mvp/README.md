@@ -4062,6 +4062,25 @@ the 500 rows on screen. Opening an event shows how its actor signed in (the `aut
 level, phishing-resistant or not, `acr`, authentication time) and builds its inclusion proof for an
 evidence pack (`?path=true`, downloaded as JSON).
 
+#### Azure and Google Cloud anchors
+
+Outside AWS the anchor goes to the cloud's own write-once storage, with the workload identity as credentials
+(see "Cloud object stores and workload identity"). Prod accepts any of the three.
+
+- `TESSERA_AUDIT_ANCHOR=azure://account/container/prefix`: one create-only blob per checkpoint
+  (`If-None-Match: *`), `prefix/<tenant id>/<seq>.jws`. Each blob is written with a locked version-level
+  immutability policy of 7 years (`x-ms-immutability-policy-mode: Locked`), so the container needs
+  **version-level immutability support** enabled. With `?worm=container` no per-blob policy is sent and the
+  container's own time-based retention policy (locked) is relied on instead. Tessera cannot read the
+  container's policy through the data plane, so for Azure it is the operator's job to lock it.
+- `TESSERA_AUDIT_ANCHOR=gs://bucket/prefix`: one create-only object per checkpoint (`ifGenerationMatch=0`).
+  The bucket needs a **locked retention policy** (`gcloud storage buckets update gs://bucket --retention-period=7y
+  --lock-retention-period`); before the first anchor Tessera reads the bucket and refuses to anchor into one
+  without it (a service account that may not read the bucket metadata is let through).
+
+`anchor_ref` is `<url>/<key>?versionId=<generation or version>`. Verification of non-file anchors is as for S3
+(`tessera audit verify` reads the anchor source you give it).
+
 #### S3 Object Lock anchor
 
 `TESSERA_AUDIT_ANCHOR=s3://bucket/prefix` writes one object per checkpoint, `prefix/<tenant id>/<seq>.jws`
@@ -4102,7 +4121,7 @@ change request is a 422 below one. A floor raised later lifts a stored lower val
 It needs a step-up from the requester and from a second admin who approves the payload hash, has no cooling-off,
 and is audited with `admin.change.*` and `retention.updated` in the transaction that applies it.
 
-**Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL` (an http(s) object
+**Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL`: `s3://bucket/prefix`, `azure://account/container/prefix` or `gs://bucket/prefix` (workload identity, no token; see "Cloud object stores and workload identity"), or an http(s) object
 store, PUT and GET of `<base>/<tenant>/<class>/<segment>.seg`, always through `internal/safehttp`; https in prod),
 authenticated with a bearer token (`TESSERA_ARCHIVE_TOKEN_SEALED`: the base64 of the token sealed under the KEK;
 make it with `printf '%s\n' "$TOKEN" | tessera archive seal-token`; prod refuses an archive URL without it),
@@ -4293,12 +4312,23 @@ under them (an approved held loader run is an approved override and is not count
 
 ## Operational monitoring (issue #303)
 
-`GET /livez` and `GET /readyz` (API listener, unauthenticated, constant-shape JSON, not audited) are the orchestrator probes. `GET /metrics` (Prometheus text) is served only on the separate internal listener `TESSERA_METRICS_ADDR` (dev default `127.0.0.1:9464`, `run.sh` uses `API_PORT+1000`; off in prod unless set to a loopback or private IP; `off` disables). `GET /api/admin/platform-health` (admin.read) backs Admin -> Platform health. `TESSERA_READY_MAX_LOOP_LAG_SECONDS` (default 300) is the loop-lag threshold of `/readyz`. Metrics, SLOs and alert rules: `docs/operations/slo.md`, `deploy/prometheus/tessera-rules.yml`.
+`GET /livez` and `GET /readyz` (API listener, unauthenticated, constant-shape JSON, not audited) are the orchestrator probes. `GET /metrics` (Prometheus text) is served only on the separate internal listener `TESSERA_METRICS_ADDR` (dev default `127.0.0.1:9464`, `run.sh` uses `API_PORT+1000`; off in prod unless set to a loopback or private IP; `off` disables). `GET /api/admin/platform-health` (admin.read) backs Admin -> Platform health. `TESSERA_READY_MAX_LOOP_LAG_SECONDS` (default 300) is the loop-lag threshold of `/readyz`. `/readyz` reports six checks (`database`, `schema`, `audit_chain`, `kek`, `loops`, `draining`): `schema` fails while the database is older than this binary (missing tables, or on Postgres a lower goose migration than the binary embeds; a newer schema is fine), and `draining` fails from SIGTERM until exit. `/livez` never depends on the database.
+
+**Shutdown and logs.** On SIGTERM or SIGINT the server fails `/readyz` first, waits `TESSERA_SHUTDOWN_DRAIN_DELAY` (default 0, max 2m; set a few seconds behind a load balancer), stops accepting, drains in-flight requests and stops the background loops, all within `TESSERA_SHUTDOWN_GRACE` (a Go duration or seconds; default 25s, 1s to 10m; keep it under the platform's termination grace period, for example Kubernetes' 30s). Loops that have not returned by then are logged and abandoned. `TESSERA_LOG_FORMAT=json|text`: JSON lines on stdout is the default in prod and test, human-readable text on stderr in dev. All configuration comes from environment variables and files.
+
+**More than one replica (Postgres).** Every background loop (review scheduler, provisioning push, key rotation, audit checkpointer, readiness scheduler, SIEM, alerts, backups, the group engine, history, rules, attestation, deprovisioning, reports, loaders, provisioning, sinks, secret rotation, notifications) runs on one replica at a time. Each takes a Postgres session-level advisory lock (`tessera/leader/<loop>`); the others stand by and retry every 5 s, and a replica that dies loses its locks with its database session. `/readyz` adds `"leaders":{"siem":"leader",...}`, `/metrics` has `tessera_loop_leader{loop}`, Admin -> Platform health lists them. The job queue is leased per job and needs no election. SQLite is single-process: no election, nothing changes. In-memory state per replica (rate limits and small caches) is listed in `docs/design/ha-postgres.md`. Metrics, SLOs and alert rules: `docs/operations/slo.md`, `deploy/prometheus/tessera-rules.yml`.
 
 ```bash
 curl -s http://127.0.0.1:9000/metrics | head      # with API_PORT=8000
 curl -s http://127.0.0.1:8000/readyz
 ```
+
+## Deploying to a cloud
+
+Container images, Docker Compose (one VM), a Helm chart (EKS, AKS, GKE, OpenShift), ECS Fargate / Container Apps /
+Cloud Run manifests and Terraform reference modules for AWS, Azure and GCP are under `deploy/`. Start with
+[docs/deploy/README.md](../docs/deploy/README.md): which option to pick, the production environment variables,
+TLS and proxy settings per cloud, KEK handling, backups and upgrades.
 
 ## Postgres
 
@@ -4386,6 +4416,64 @@ dialect, schema-parity, DSN and `gen-rls` tests need no server and always run). 
 `internal/store/storetest`, `testkit` and the API parity replay run on Postgres (the parity replay
 accepts a different numeric `id`/`edge_id` there, see above). CI should run this with a Postgres 16
 service container and `TESSERA_REQUIRE_PG_TESTS=1`.
+
+### Where the KEK comes from
+
+Exactly one of three sources (setting more than one is refused; prod requires one):
+
+- `TESSERA_KEK`: the base64 of 32 bytes in the environment.
+- `TESSERA_KEK_FILE`: a file holding that base64, for example a Kubernetes Secret volume or a CSI-mounted secret.
+  The file must be a regular file with **no access for others and no group write** (`0600`, `0400`, `0440` or
+  `0640`; a Kubernetes secret volume is `0440` with `fsGroup`) and must be owned by the process's user or root.
+  Anything world-readable, group-writable or owned by another user is refused.
+- `TESSERA_KEK_WRAPPED` + `TESSERA_KEK_KMS`: the KEK wrapped by a cloud key service, so no plaintext KEK is in the
+  deployment at all. The server unwraps it **once at start** with its workload identity (see "Cloud object stores
+  and workload identity" for how credentials are found) and then behaves exactly as with `TESSERA_KEK`. A failed
+  unwrap stops the start (it never falls back to a generated dev KEK). The prod guard rails apply as before.
+
+| `TESSERA_KEK_KMS` | Operation | Key type |
+| --- | --- | --- |
+| `aws:arn:aws:kms:<region>:<account>:key/<id>` (or `alias/<name>`) | KMS `Encrypt`/`Decrypt`, SigV4, encryption context `purpose=tessera-kek` | symmetric |
+| `azure:https://<vault>.vault.azure.net/keys/<name>/<version>` (also managed HSM) | Key Vault `wrapkey`/`unwrapkey`, `RSA-OAEP-256`, token for `https://vault.azure.net` | RSA |
+| `gcp:projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>` | Cloud KMS `encrypt`/`decrypt`, additional authenticated data `tessera-kek` | symmetric |
+
+Create the wrapped value once, from a machine that may use the key:
+
+```sh
+# a new random KEK that never appears in clear (only the key service can open the result)
+tessera admin wrap-kek -kms gcp:projects/p/locations/europe-west1/keyRings/tessera/cryptoKeys/kek -generate
+# or wrap an existing KEK (the base64 of 32 bytes on stdin), for example to move off TESSERA_KEK
+printf '%s' "$TESSERA_KEK" | tessera admin wrap-kek -kms aws:arn:aws:kms:eu-west-1:111122223333:key/<id>
+```
+
+It prints the base64 ciphertext for `TESSERA_KEK_WRAPPED` and checks it by unwrapping it. The server's identity needs
+only decrypt (`kms:Decrypt`, Key Vault `unwrapKey`, `cloudkms.cryptoKeyVersions.useToDecrypt`); the operator running
+`wrap-kek` needs encrypt. Keep the wrapped value in escrow: the KEK is not in backups, and losing both the wrapped
+value and the key service means the sealed data cannot be opened. Tests use fake provider servers; no real cloud calls.
+
+### Cloud object stores and workload identity
+
+`TESSERA_ARCHIVE_URL`, `TESSERA_BACKUP_URL` and `TESSERA_AUDIT_ANCHOR` accept object-store URLs (standard library
+only; `internal/objstore`, S3 requests signed with `internal/aws/sigv4`, every call through `internal/safehttp`):
+
+| URL | Options (query) | Credentials, first match wins |
+| --- | --- | --- |
+| `s3://bucket/prefix` | `region=` (else `AWS_REGION` or the instance region), `endpoint=https://…` (S3-compatible stores, path style) | `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`; web identity (`AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`, EKS IRSA, STS call); ECS container credentials; EC2 role through IMDSv2 (never IMDSv1) |
+| `azure://account/container/prefix` | `endpoint=`, `worm=version\|container` (anchors) | `AZURE_STORAGE_SAS_TOKEN` (a secret: mount it from a Secret); AKS workload identity (`AZURE_FEDERATED_TOKEN_FILE`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`); managed identity (`AZURE_CLIENT_ID` picks a user-assigned one) |
+| `gs://bucket/prefix` | `endpoint=` | service-account key file (`GOOGLE_APPLICATION_CREDENTIALS`, `service_account` type only); the metadata server (GKE workload identity, GCE) |
+
+Objects are write-once (`If-None-Match: *` / `ifGenerationMatch=0`); archive segments are read back and compared
+after every write. `TESSERA_ARCHIVE_TOKEN_SEALED` applies to http(s) stores only and is refused with these URLs.
+`TESSERA_BACKUP_URL` (with `TESSERA_BACKUP_DIR`) also copies each scheduled backup, under `backups/<file>`; the
+file is already sealed under the KEK, is read into memory and is limited to 1 GiB (SQLite backups only: **Postgres
+backups stay `pg_dump` or the provider's snapshots and point-in-time recovery**, as above).
+
+**Metadata services.** The link-local metadata addresses are blocked for every safehttp client (SSRF). The
+credential fetches use `safehttp.MetadataClient`, an exception that is as narrow as it can be: plain http to
+exactly `169.254.169.254`, `169.254.170.2` and `[fd00:ec2::254]` on port 80, no DNS, no redirects, 64 KiB
+responses, 3 s. Only `internal/cloudcred` uses it, with URLs fixed in code (an architecture test pins the
+single caller); no setting, tenant, request or stored URL can reach it. On EKS, IMDSv2 normally needs a hop limit of 2 for
+pods; IRSA avoids the question. Credentials are cached in memory until five minutes before they expire and never logged.
 
 ### Backup and restore
 
@@ -5533,7 +5621,7 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   `-addr`. `serve` and `seed` both need an explicit `TESSERA_ENV` (`run.sh` exports `dev`).
 * Keys: `seed` and `serve` run the ensure-keys step (one active and one next ES256 key per tenant
   and purpose, the platform Ed25519 key, daily rotation). Private keys are stored only sealed
-  under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). Sealed
+  under the KEK (`TESSERA_KEK`, `TESSERA_KEK_FILE` or a cloud-wrapped KEK, base64 of 32 bytes; see "Where the KEK comes from"). Sealed
   values are AES-256-GCM under `HKDF(KEK, "tessera/seal/v1")` (format version 2); version 1
   values (the raw KEK, before #127) still open and are re-sealed lazily on write. In dev a KEK is
   generated at `server/var/dev-kek` (temp file, then linked into place, never overwritten); if it

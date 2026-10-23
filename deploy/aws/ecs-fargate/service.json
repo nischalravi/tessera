@@ -1,0 +1,25 @@
+{
+  "cluster": "tessera",
+  "serviceName": "tessera",
+  "taskDefinition": "tessera",
+  "desiredCount": 2,
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "deploymentConfiguration": {
+    "minimumHealthyPercent": 100,
+    "maximumPercent": 200,
+    "deploymentCircuitBreaker": { "enable": true, "rollback": true }
+  },
+  "healthCheckGracePeriodSeconds": 60,
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": ["subnet-PRIVATE-A", "subnet-PRIVATE-B"],
+      "securityGroups": ["sg-TESSERA-TASKS"],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "loadBalancers": [
+    { "targetGroupArn": "arn:aws:elasticloadbalancing:REGION:ACCOUNT_ID:targetgroup/tessera/ID", "containerName": "ui", "containerPort": 8080 }
+  ],
+  "enableExecuteCommand": false
+}

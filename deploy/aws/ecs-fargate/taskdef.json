@@ -1,0 +1,70 @@
+{
+  "family": "tessera",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "1024",
+  "memory": "2048",
+  "runtimePlatform": { "operatingSystemFamily": "LINUX", "cpuArchitecture": "X86_64" },
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/tessera-ecs-execution",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/tessera-ecs-task",
+  "volumes": [
+    { "name": "tessera-data" },
+    { "name": "api-tmp" },
+    { "name": "ui-tmp" }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "ui",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/tessera-ui:TAG",
+      "essential": true,
+      "user": "101",
+      "readonlyRootFilesystem": true,
+      "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
+      "environment": [{ "name": "API_UPSTREAM", "value": "127.0.0.1:8000" }],
+      "dependsOn": [{ "containerName": "api", "condition": "START" }],
+      "mountPoints": [{ "sourceVolume": "ui-tmp", "containerPath": "/tmp" }],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/health || exit 1"],
+        "interval": 15, "timeout": 5, "retries": 3, "startPeriod": 30
+      },
+      "linuxParameters": { "capabilities": { "drop": ["ALL"] }, "initProcessEnabled": true },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": { "awslogs-group": "/tessera/prod", "awslogs-region": "REGION", "awslogs-stream-prefix": "ui" }
+      }
+    },
+    {
+      "name": "api",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/tessera-api:TAG",
+      "essential": true,
+      "user": "65532",
+      "readonlyRootFilesystem": true,
+      "command": ["serve", "-addr", "0.0.0.0:8000"],
+      "portMappings": [{ "containerPort": 8000, "protocol": "tcp" }],
+      "environment": [
+        { "name": "TESSERA_ENV", "value": "prod" },
+        { "name": "TESSERA_PUBLIC_URL", "value": "https://tessera.example.com" },
+        { "name": "TESSERA_COOKIE_SECURE", "value": "true" },
+        { "name": "TESSERA_TRUSTED_PROXIES", "value": "127.0.0.1/32,10.0.0.0/16" },
+        { "name": "TESSERA_AUDIT_ANCHOR", "value": "s3://example-tessera-anchors/prod" },
+        { "name": "AWS_REGION", "value": "REGION" },
+        { "name": "TESSERA_METRICS_ADDR", "value": "off" }
+      ],
+      "secrets": [
+        { "name": "TESSERA_DB", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:tessera/prod/db-owner-dsn" },
+        { "name": "TESSERA_DB_APP", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:tessera/prod/db-app-dsn" },
+        { "name": "TESSERA_KEK", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:tessera/prod/kek" }
+      ],
+      "mountPoints": [
+        { "sourceVolume": "tessera-data", "containerPath": "/var/lib/tessera" },
+        { "sourceVolume": "api-tmp", "containerPath": "/tmp" }
+      ],
+      "linuxParameters": { "capabilities": { "drop": ["ALL"] } },
+      "stopTimeout": 30,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": { "awslogs-group": "/tessera/prod", "awslogs-region": "REGION", "awslogs-stream-prefix": "api" }
+      }
+    }
+  ]
+}

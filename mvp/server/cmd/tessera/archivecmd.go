@@ -34,7 +34,7 @@ func archiveCmd(_ context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
-	sealer, err := cfg.Sealer(config.DevKEKPath(*db))
+	sealer, err := loadSealer(context.Background(), cfg, config.DevKEKPath(*db))
 	if err != nil {
 		return err
 	}
