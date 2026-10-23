@@ -16,12 +16,13 @@ func openPGPair(t *testing.T) (*DB, *DB) {
 	t.Helper()
 	PostgresForTest(t)
 	ctx := context.Background()
-	a, err := Open(ctx, TestTarget(t))
+	target := TestTarget(t) // one database, two handles: two replicas
+	a, err := Open(ctx, target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Close() })
-	b, err := Open(ctx, TestTarget(t))
+	b, err := Open(ctx, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,5 +140,20 @@ func TestPG_TwoReplicasNeverDoubleRunALoop(t *testing.T) {
 	wg.Wait()
 	if maxInside.Load() != 1 {
 		t.Fatalf("overlap: %d", maxInside.Load())
+	}
+}
+
+func TestPG_SchemaCurrent(t *testing.T) {
+	a, _ := openPGPair(t)
+	if err := a.SchemaCurrent(context.Background()); err != nil {
+		t.Fatalf("migrated database: %v", err)
+	}
+	// a database behind this binary is not current
+	a.schemaOK = false
+	if _, err := a.owner.ExecContext(context.Background(), `UPDATE `+pgGooseTable+` SET is_applied = false WHERE version_id = (SELECT max(version_id) FROM `+pgGooseTable+`)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SchemaCurrent(context.Background()); err == nil {
+		t.Fatal("an unapplied migration passed")
 	}
 }
