@@ -233,6 +233,10 @@ export function Machine() {
       id: "sponsor", header: "Sponsor", sort: (r) => agentOf.get(r.id)?.sponsor_status ?? "", csv: (r) => agentOf.get(r.id)?.sponsor_status ?? "",
       cell: (r) => { const a = agentOf.get(r.id); return a ? <SponsorCell a={a} /> : <span className="faint">-</span>; },
     },
+    {
+      id: "blueprint", header: "Blueprint", hideNarrow: true, sort: (r) => agentOf.get(r.id)?.blueprint?.name ?? "", csv: (r) => agentOf.get(r.id)?.blueprint?.name ?? "",
+      cell: (r) => { const b = agentOf.get(r.id)?.blueprint; return b ? <span className="small">{b.name}</span> : <span className="faint">-</span>; },
+    },
     { id: "systems", header: "Systems", csv: (r) => r.systems.join(" "), cell: (r) => <div className="row tight" style={{ flexWrap: "nowrap" }}>{r.systems.map((s) => <Chip key={s} mono>{s}</Chip>)}</div>, hideNarrow: true },
     { id: "secret", header: "Oldest secret", num: true, sort: (r) => r.oldest_secret_days ?? -1, cell: (r) => (r.oldest_secret_days == null ? <span className="faint">-</span> : r.oldest_secret_days > 90 ? <Badge tone="warning">{r.oldest_secret_days} d</Badge> : `${r.oldest_secret_days} d`) },
     { id: "rotation", header: "Rotation", sort: (r) => rotationOf(r)?.key ?? "", csv: (r) => { const x = rotationOf(r); return x ? SECRET_STATUS_LABEL[x.key] : ""; }, cell: (r) => { const x = rotationOf(r); return x ? <Badge tone={SECRET_STATUS_TONE[x.key]} dot>{SECRET_STATUS_LABEL[x.key]}{x.count > 1 ? ` (${x.count})` : ""}</Badge> : <span className="faint">-</span>; }, hideNarrow: true },

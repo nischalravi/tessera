@@ -759,6 +759,26 @@ export interface AgentRow {
   violations: string[];
   first_seen_at: string | null;
   last_seen_at: string | null;
+  /** Entra Agent ID: the blueprint the agent was created from, matched on the blueprint's app id (issue #478). */
+  blueprint: { id: string; name: string } | null;
+  /** Application ids that manage the agent (Entra managerApplications): applications, not people. Flags carries "no_sponsor" when it has no sponsor at all. */
+  manager_applications: string[] | null;
+}
+
+/** An Entra Agent ID blueprint, with its sponsor and how many agents use it (issue #478). */
+export interface AgentBlueprint {
+  source: string;
+  /** The blueprint's object id; agents link by app_id. */
+  id: string;
+  app_id: string | null;
+  name: string;
+  creator: string | null;
+  sponsor: PersonBrief | null;
+  sponsor_ref: string | null;
+  sponsor_status: "active" | "inactive" | "none";
+  agents: number;
+  first_seen_at: string;
+  last_seen_at: string;
 }
 
 /** An MCP server or an agent credential found in source code. Never a secret value. */
@@ -784,6 +804,7 @@ export interface McpFinding {
 }
 
 export const useAIAgents = () => useApi<AgentRow[]>("/ai-agents");
+export const useAgentBlueprints = () => useApi<AgentBlueprint[]>("/ai-agents/blueprints");
 export const useMcpFindings = () => useApi<McpFinding[]>("/ai-agents/mcp-findings");
 
 export interface Policy { id: string; name: string; type: string; severity: string; description: string; enabled: boolean; source: string; violations: number }
@@ -4304,7 +4325,7 @@ export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
   | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
   | "groups.loader.save" | "retention.update" | "deletion_guard.update" | "siem.sink.filter"
-  | "siem.sink.target" | "alerts.rule.loosen";
+  | "siem.sink.target" | "alerts.rule.loosen" | "breach.item.attest";
 
 export interface AdminPersonRef { id: string; display_name: string }
 
@@ -5066,6 +5087,59 @@ export interface GitHubTokenList {
 export const githubTokens = {
   listPath: "/github-tokens",
   sync: () => api<{ status: "ok" | "failed" | "skipped"; tokens: number; error?: string; notes?: string[] }>("/github-tokens/sync", {}),
+};
+
+// ---- Vendor breach response (issue #475): every credential tied to a vendor, rotated, revoked and verified as one plan
+
+export type BreachKind = "secret" | "oauth_grant" | "github_token" | "service_account";
+export type BreachAction = "rotate" | "revoke" | "manual";
+export type BreachItemState = "pending" | "in_progress" | "verified" | "attested" | "failed";
+export type BreachStatus = "planned" | "running" | "completed";
+
+export interface BreachCandidate { kind: BreachKind; ref: string; label: string; action: BreachAction; detail?: string }
+export interface BreachInventory { vendor: string; credentials: BreachCandidate[]; total: number }
+
+export interface BreachItem {
+  id: string; kind: BreachKind; ref: string; label: string; action: BreachAction; state: BreachItemState; detail: string;
+  /** What the re-read found (a rotation job's verification, a grant status). */
+  verification?: unknown; verified_at: string | null; attested_by: string | null; attested_note: string | null;
+}
+export interface BreachCounts { total: number; verified: number; attested: number; failed: number; in_progress: number; pending: number; open: number }
+export interface BreachPlan {
+  id: string; vendor: string; reason: string; status: BreachStatus; rotation_run_id: string | null;
+  created_by: string; created_at: string; started_by: string | null; started_at: string | null; completed_at: string | null;
+  items: BreachItem[]; report: { vendor: string; counts: BreachCounts; complete: boolean; items: BreachItem[] };
+}
+export interface BreachPlanSummary { id: string; vendor: string; status: BreachStatus; created_at: string; created_by: string; completed_at: string | null; counts: BreachCounts }
+export interface BreachRun {
+  plan: BreachPlan;
+  /** none, nothing_to_revoke, pending_second_admin (a second admin must run the plan too), or executed. */
+  oauth_revoke: "none" | "nothing_to_revoke" | "pending_second_admin" | "executed";
+}
+
+export const breach = {
+  plansPath: "/breach/plans",
+  planPath: (id: string) => `/breach/plans/${encodeURIComponent(id)}`,
+  /** A dry run: lists, changes nothing. */
+  inventory: (vendor: string) => api<BreachInventory>("/breach/inventory", { vendor }),
+  create: (vendor: string, reason: string) => api<BreachPlan>("/breach/plans", { vendor, reason }),
+  run: (id: string) => api<BreachRun>(`/breach/plans/${encodeURIComponent(id)}/run`, {}),
+  verify: (id: string) => api<BreachPlan>(`/breach/plans/${encodeURIComponent(id)}/verify`, {}),
+  attest: (id: string, item: string, note: string) => api<BreachPlan>(`/breach/plans/${encodeURIComponent(id)}/items/${encodeURIComponent(item)}/attest`, { note }),
+  /** The hashed JSON evidence export, for saving. A server error comes back as an ApiError like any other call. */
+  evidence: async (id: string): Promise<Blob> => {
+    const res = await fetch(`/api/breach/plans/${encodeURIComponent(id)}/evidence`, { credentials: "same-origin" });
+    if (!res.ok) {
+      let j: any = null;
+      try {
+        j = await res.json();
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+    }
+    return res.blob();
+  },
 };
 
 // ------------------------------------------------------------ deletion threshold guard (internal/deleteguard)

@@ -15,6 +15,7 @@ export const RotationTabs = () => (
       { to: "/rotation/jobs", label: "Rotation jobs" },
       { to: "/rotation/policies", label: "Policies & adapters" },
       { to: "/rotation/vendor", label: "Vendor compromised" },
+      { to: "/rotation/breach", label: "Breach response" },
     ]}
   />
 );

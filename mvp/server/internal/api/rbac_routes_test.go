@@ -37,6 +37,7 @@ GET    /api/graph                                    graph.read      -
 GET    /api/nhi                                      graph.read      -
 GET    /api/ai-agents                                graph.read      -  # issue #116
 GET    /api/ai-agents/mcp-findings                   graph.read      -  # issue #116
+GET    /api/ai-agents/blueprints                     graph.read      -  # issue #478
 GET    /api/least-privilege/recommendations          graph.read      -
 POST   /api/least-privilege/revoke                   graph.read      -  (dry_run=false: grants.revoke + STEP_UP_POLICY in the handler)
 GET    /api/policies                                 graph.read      -
@@ -126,6 +127,14 @@ POST   /api/oauth-apps/{app_id}/credentials/{credential_id}/remove oauthapps.rev
 POST   /api/oauth-apps/{app_id}/changes/{change_id}/resolve oauthapps.manage -  # issue #474
 GET    /api/github-tokens                            graph.read      -  # issue #476
 POST   /api/github-tokens/sync                       oauthapps.manage -  # issue #476
+POST   /api/breach/inventory                         graph.read      -  # issue #475
+GET    /api/breach/plans                             graph.read      -  # issue #475
+POST   /api/breach/plans                             secrets.rotate  STEP_UP_POLICY  # issue #475
+GET    /api/breach/plans/{id}                        graph.read      -  # issue #475
+POST   /api/breach/plans/{id}/run                    secrets.rotate  STEP_UP_POLICY  # issue #475
+POST   /api/breach/plans/{id}/verify                 secrets.rotate  STEP_UP_POLICY  # issue #475
+POST   /api/breach/plans/{id}/items/{item}/attest    secrets.rotate  STEP_UP_POLICY  # issue #475
+GET    /api/breach/plans/{id}/evidence               audit.read      -  # issue #475
 GET    /api/vms/sources                              connections.read -  # issue #304
 POST   /api/vms/sources                              connections.manage -  # issue #304
 PUT    /api/vms/sources/{source_id}                  connections.manage -  # issue #304
@@ -618,6 +627,12 @@ PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POL
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
 POST   /api/groups/pit/rebuild                       groups.admin    -  # issue #46
+GET    /api/groups/permissions/effective             groups.admin    -  # issue #62
+GET    /api/groups/permissions/check                 groups.admin    -  # issue #62
+GET    /api/groups/permissions/cedar                 groups.admin    -  # issue #62
+GET    /api/groups/permissions/export                groups.admin    -  # issue #62
+POST   /api/groups/permissions/import                groups.admin    -  # issue #62: also needs the tenant_admin role
+GET    /api/groups/{id}/permissions                  groups.read     -  # issue #62: the role's read privilege
 GET    /api/mfa/posture                              graph.read      -  # issue #109
 POST   /api/groups/{id}/members:batch                groups.write    -  # issue #48: update, or optin / optout for oneself, per operation
 POST   /api/groups:simulate                          groups.write    -  # issue #48: the privileges of the changes it simulates

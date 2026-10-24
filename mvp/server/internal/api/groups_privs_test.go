@@ -248,6 +248,7 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"POST", "/api/groups/policy/apply", "/api/groups/policy/apply", polBody, "create"},
 		{"POST", "/api/groups/policy/reindex", "/api/groups/policy/reindex", "", ""},
 		{"GET", "/api/groups/{id}/policy", "/api/groups/" + g + "/policy", "", "read"},
+		{"GET", "/api/groups/{id}/permissions", "/api/groups/" + g + "/permissions", "", "read"}, // GR-19
 		// tenant-wide maintenance and settings: groups.admin
 		{"GET", "/api/groups/pit/digests", "/api/groups/pit/digests", "", ""},
 		{"GET", "/api/groups/pit/verify", "/api/groups/pit/verify", "", ""},
@@ -309,6 +310,10 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		// the description of these routes is for every signed-in user
 		{"GET", "/api/openapi/groups.json", "", "", ""},
 
+		// GR-19: tenant-wide permission reads and the import, for groups.admin (tenant_admin) only
+		{"GET", "/api/groups/permissions/effective", "", "", ""}, {"GET", "/api/groups/permissions/check", "", "", ""},
+		{"GET", "/api/groups/permissions/cedar", "", "", ""}, {"GET", "/api/groups/permissions/export", "", "", ""},
+		{"POST", "/api/groups/permissions/import", "", "", ""},
 		{"GET", "/api/groups/attr-defs", "", "", ""}, {"GET", "/api/groups/attr-names", "", "", ""},
 		{"GET", "/api/groups/attr-assignments", "", "", ""}, {"GET", "/api/groups/services", "", "", ""},
 		{"GET", "/api/groups/object-types", "", "", ""},

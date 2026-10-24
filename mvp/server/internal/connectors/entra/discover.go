@@ -168,6 +168,13 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 	res.AuthMethods, res.AuthSource = c.readAuthMethods(ctx, st)
 	if agentsRead {
 		c.applyAgents(res, agents)
+		// A failed blueprint list is not an empty one: keep what is stored (no snapshot) and say so.
+		if blueprints, err := c.readBlueprints(ctx); err != nil {
+			res.Partial = "entra: agent blueprints not read (" + statusText(err) + "); stored blueprints kept"
+		} else {
+			applyBlueprints(res, blueprints)
+			res.BlueprintSnapshotOf = append(res.BlueprintSnapshotOf, System)
+		}
 	}
 	c.save(ctx, st, next, start, full)
 	return res, nil

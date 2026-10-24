@@ -12,6 +12,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/attrs"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/perms"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -917,13 +918,31 @@ func (s *Server) createAttrAssign(r *http.Request, _ *params) (int, any, error) 
 		var err error
 		out, err = attrs.Assign(e.Attrs(), attrs.AssignInput{Name: name.ID, Action: action, Owner: owner,
 			Disallowed: in.Disallowed, EnabledFrom: from, DisabledAt: to, Values: in.Values})
-		return err
+		if err != nil {
+			return err
+		}
+		return checkLimitAssign(tx, d, name, owner, out.Values)
 	})
 	if err != nil {
 		return 0, nil, err
 	}
 	v, err := newAssignViewer(tx, s.clock()).view(out.Assign, out.Values)
 	return http.StatusCreated, v, err
+}
+
+// checkLimitAssign refuses (422 invalid_limit, rolling the write back) a limit on
+// an assignment that does not compile, the check the permission import makes. The
+// decision point also fails closed on a stored limit that does not compile.
+func checkLimitAssign(tx *store.TenantTx, d *store.GrpAttrDef, n *store.GrpAttrName, o attrs.Owner, vals []*store.GrpAttrValue) error {
+	if d.AttrType != store.AttrTypeLimit || o.Type != store.AttrOwnerAssignment {
+		return nil
+	}
+	texts := make([]string, len(vals))
+	for i, v := range vals {
+		texts[i] = perms.KeyText(v.Key)
+	}
+	_, err := perms.CompileLimit(attrs.NameFullName(d, n), texts)
+	return permsErr(err)
 }
 
 // assignFor loads the path's assignment (404) and its definition.
@@ -1056,7 +1075,14 @@ func (s *Server) setAttrAssignValues(r *http.Request, p *params) (int, any, erro
 	err = s.grpWrite(r, func(e model.Env) error {
 		var err error
 		out, err = attrs.SetValues(e.Attrs(), a.ID, in.Values)
-		return err
+		if err != nil {
+			return err
+		}
+		n, err := attrs.Name(tx, a.NameID)
+		if err != nil {
+			return err
+		}
+		return checkLimitAssign(tx, d, n, attrs.OwnerOf(a), out.Values)
 	})
 	if err != nil {
 		return 0, nil, err

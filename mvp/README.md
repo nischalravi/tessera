@@ -256,6 +256,31 @@ change writes its audit event in the same transaction (`rotation.adapter.*`, `ro
 `rotation.completed`, `rotation.bulk.executed`, `rotation.owner_notified`); the worker acts as the system
 actor `rotation.worker`.
 
+**Vendor breach response** (issue #475, **Secret rotation > Breach response**, `/rotation/breach`). When a
+vendor or integration is breached, Tessera lists every credential tied to it and runs the response as one
+tracked plan. `POST /api/breach/inventory {vendor}` is the dry run: the vendor's secrets (rotate), live OAuth
+grants of apps it publishes (revoke), and for `github` the GitHub tokens and service accounts of the system
+(by hand). `POST /api/breach/plans {vendor, reason}` records the plan, one item per credential.
+`POST /api/breach/plans/{id}/run` queues the rotation of the vendor's secrets (the same bulk run as *Vendor
+compromised*: no grace period, owners told), revokes the OAuth grants through the OAuth app revoke (provider
+call, provider re-read, four-eyes rule kept: the plan stays running until a second admin runs it too), then
+re-reads everything. `POST .../verify` re-reads again: a secret is verified when its rotation job reached
+`verified` (the old credential re-read as disabled), a grant when its record is revoked or removed, a token or
+service account when it is gone or disabled. What no API can do (GitHub PATs, service accounts) stays open until
+a re-read shows it done or a person attests it. Attesting takes two admins (issue #538):
+`POST .../items/{item}/attest {note}` checks the note and answers 409 `two_admin_change_required`
+(`change_type: breach.item.attest`); the UI then opens the two-admin dialog, which files that change request
+(`POST /api/admin/change-requests`, payload `{plan_id, item_id, note}`). The item shows *In progress* until a different
+admin approves it (the requester gets 403 `self_approval_refused`); the approval closes the item, with both admins named
+on it, in the `breach.item.attested` event (same transaction) and in the evidence export (`attestations`). A tenant with
+fewer than two active admins cannot attest (`bootstrap_restricted`). A failed item is never attestable. The plan completes only when nothing is open. `GET /api/breach/plans[/{id}]` return the plans and
+the completion report; `GET /api/breach/plans/{id}/evidence` (`audit.read`) downloads the hashed JSON export
+(plan, report, rotation run and jobs with their verification). Reading needs `graph.read`; changing needs
+`secrets.rotate` (policy admin) and a fresh phishing-resistant sign-in, and running a plan with OAuth grants also
+needs `oauthapps.revoke`. Audit events in the changing transaction: `breach.plan.created|started|verified|completed`
+and `breach.item.attested`, next to the rotation and OAuth events of the work. Tables `breach_plans` and
+`breach_items` (schema 0800; 0820 widens the change-request type list on Postgres) hold references and labels only, never secret material.
+
 **Owner notifications** go through `rotation.Notifier` (`internal/rotation/notify.go`): `Notify(ctx, tx,
 Notification)` runs in the tenant transaction that records the change, must not do network I/O, and an error
 rolls the change back. The default, `AuditNotifier`, writes a `rotation.owner_notified` audit event naming the
@@ -645,7 +670,7 @@ hand in each environment.
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
 `GET /api/graph?identity_id=|resource_id=` · `GET /api/nhi` · `GET /api/ai-agents` ·
-`GET /api/ai-agents/mcp-findings[?kind=mcp_server|agent_credential]` ·
+`GET /api/ai-agents/mcp-findings[?kind=mcp_server|agent_credential]` · `GET /api/ai-agents/blueprints` ·
 `GET /api/least-privilege/recommendations?unused_days=60&kind=remove|right_size|role_trim` ·
 `POST /api/least-privilege/revoke {edge_id, dry_run}` · `GET /api/policies` · `GET /api/violations` ·
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
@@ -722,6 +747,8 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `POST /api/rotation/plan {secret_ids}` · `GET|POST /api/rotation/jobs` · `GET /api/rotation/jobs/{id}` ·
 `POST /api/rotation/jobs/{id}/retry|cancel` · `POST /api/rotation/bulk/plan {system}` ·
 `GET|POST /api/rotation/bulk` · `GET /api/rotation/bulk/{id}` ·
+`POST /api/breach/inventory {vendor}` · `GET|POST /api/breach/plans` · `GET /api/breach/plans/{id}[/evidence]` ·
+`POST /api/breach/plans/{id}/run|verify` · `POST /api/breach/plans/{id}/items/{item}/attest {note}` (409 `two_admin_change_required`: a second admin approves a `breach.item.attest` change) ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` (pin and release need two admins with `identities.correlate`, #376: the first
@@ -3576,6 +3603,63 @@ calls it `0104`; `0280`..`0285` are taken and `0286` belongs to another change):
   `TestEvents_InTheChangeTransaction`), `internal/api` (`TestGroupsRoutesRequirePrivilege` covers every
   attribute route, `TestGroupsAttrsFlow`, `TestGroupsAttrsPrivileges`, `TestGroupsAttrsTenantIsolation`,
   ...), `TestIsolation_GroupAttrTables` and `TestValues_NoFloatColumns` in `internal/store`.
+
+#### Group permissions and limits (GR-19, issue #62)
+
+Design `docs/design/groups-grouper-parity.md` §10.10. Schema `0810_group_pit_assigns.sql` (with its
+Postgres variant): `grp_pit_assigns`, the point-in-time history of attribute assignments. Package
+`internal/groups/perms`. There is no new storage for permissions: they are GR-7 attribute assignments.
+
+- **Model.** A permission *resource* is a name of a definition of type `perm`, an *action* is one of
+  that definition's actions, and an assignment sits on a role (a group) or on a role's membership (the
+  `(role, identity)` pair). Resource and action inheritance are the definition's implication closures
+  (assigning `ledger`, which implies `entry`, also covers `entry`; `write` implying `read` likewise).
+  A *limit* is an assignment of a definition of type `limit` on a permission assignment; make both
+  through `/api/groups/attr-assignments`.
+- **Heuristics** (`perms.Decide`). Of the assignments that reach the identity (through the roles it is
+  effectively in), cover the resource and action, are inside their dates and have all limits holding,
+  the more specific wins: the named resource over one that only implies it, then the named action, then
+  how directly it reaches the subject (`(role, identity)` pair, then a role the identity is a direct
+  member of, then a role reached through nesting). Among equals a disallow beats an allow; with none the
+  answer is `no_permission`. `[to be confirmed against Grouper's PermissionHeuristics on import]`.
+- **Limits** compile to Cedar `when` conditions over `context`, by the extension of the limit's name:
+  `amountLessThan` (integers, `context.amount < N`), `ipOnNetwork` (CIDRs, `ip(context.ip).isInRange(...)`),
+  `timeWindow` (`"9-17"`, UTC hours, end exclusive, `context.hour`) and `expression`
+  (`"attr op literal"`, ops `== != < <= > >=`, an integer or a double-quoted string). A missing context value
+  fails the limit; several limits on one assignment must all hold; several values of one `ipOnNetwork` or
+  `timeWindow` are alternatives. The same condition tree is rendered as Cedar text and evaluated by the
+  decision point (`TestLimits_EvaluatedByPDP`).
+- **Context for conditional denies.** A disallow whose limit reads a `ctx.*` value that the check
+  request does not carry does not apply (a missing value fails the limit, as in Cedar), so callers must
+  supply the context for a conditional deny to take effect. A limit that cannot compile is the
+  opposite case: a disallow with one stays in force unconditionally (and exports as an unconditional
+  `forbid`), an allow with one grants nothing. Limits are validated on write (`422 invalid_limit` from
+  `/api/groups/attr-assignments`), so this only guards rows stored earlier
+  (`TestLimits_UncompilableDisallowFailsClosed`).
+- **PIT view.** `grp_pit_assigns` is filled from the `attribute.*` events (and rebuilt by
+  `POST /api/groups/pit/rebuild`, pruned by retention). `as_of=T` answers from it and from the effective
+  membership history. What the history does not keep is read as it is now: the implication closures, and
+  whether a role was direct (every role the identity held counts as direct).
+- **Grouper shape.** `GET /api/groups/permissions/export` and `POST .../import` use
+  `{permissions: [{role, subject?, resource, action, disallowed?, enabled_at?, disabled_at?, limits: [{name, values}]}]}`
+  (full names; `subject` is an identity's external id and needs a direct membership). Import checks the
+  whole document first (422 `invalid_import` with every problem, nothing applied), leaves held entries
+  alone, replaces changed ones and removes nothing; each change is audited and evented by
+  `attrs.Assign`, plus one `groups.permissions.imported`. The Grouper connector (GR-15, #58) is not on
+  `dev` yet; it is expected to hand its reads to this document.
+
+| Route | Needs |
+|---|---|
+| `GET /api/groups/permissions/effective?identity=&as_of=` | `groups.admin`; every (resource, action) the identity's assignments cover, with the verdict and the assignments behind it; limits are reported (`conditional`), not evaluated |
+| `GET /api/groups/permissions/check?identity=&resource=&action=&as_of=&ctx.<name>=<value>` | `groups.admin`; the decision with limits evaluated (`hour`, UTC, defaults to the clock's) |
+| `GET /api/groups/permissions/cedar` | `groups.admin`; the assignments as Cedar text. Cedar's forbid overrides any permit while the heuristics let a more specific allow win, so the text is exact only when no allow overrides a disallow; `check` is the authority |
+| `GET /api/groups/permissions/export`, `POST .../import` | `groups.admin` (import also needs the tenant_admin role) |
+| `GET /api/groups/{id}/permissions` | `groups.read` and the role's `read` privilege |
+
+- Tests: `go test ./internal/groups/perms` (`TestHeuristics_Table`, `TestCompileLimit_Table`,
+  `TestLimits_EvaluatedByPDP`, `TestPermissions_PITView`, `TestPermissions_PITDisallowOfDeletedMembership`, `TestEffective_Bounded`, `TestGrouperImport_RoundTrip`), `internal/api`
+  (`TestGroupsPermissionsAPI`), `TestIsolation_GroupPermissionTables` in `internal/store`.
+
 #### Group rules and membership constraints (GR-13, issue #56)
 
 Design `docs/design/groups-grouper-parity.md` §10.3, K6. Schema `0288_group_rules.sql` (the design's
@@ -4631,7 +4715,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles (with a *Mining* tab), Organizations (live, read-only, derived from departments) |
+| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised, Breach response), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles (with a *Mining* tab), Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle*, *Questionnaires* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*, *Request settings*, *Step-up per action* and *SoD page*) |
@@ -5409,6 +5493,19 @@ identities) and `mcp_findings`, both tenant-scoped with cross-tenant guard trigg
 (`schema/0375_agent_discovery.sql`). `GET /api/ai-agents` is the `ai_agent` inventory with source,
 creator, sponsor status and violating policy ids; `GET /api/nhi` is unchanged. The demo company
 supplies Okta-sourced agents and five sample findings, so the screens work without any connector.
+
+**Entra Agent ID blueprints (issue #478).** With `TESSERA_ENTRA_DISCOVER_AGENTS=true` the connector also reads
+Graph **beta** `applications/microsoft.graph.agentIdentityBlueprint` and its `sponsors`, and, on each agent identity,
+`agentIdentityBlueprintId` (the blueprint's **appId**, not its object id) and `managerApplications` (application
+ids, requested with `$select`; applications, not people). Required Graph application permissions:
+`AgentIdentity.Read.All` and `AgentIdentityBlueprint.Read.All`. Storage: `agent_blueprints` and `agent_links`
+(`schema/0830_agent_blueprints.sql`, Postgres variant and RLS included). `GET /api/ai-agents/blueprints` lists
+blueprints with sponsor, sponsor status and agent count; each `GET /api/ai-agents` row gains `blueprint`
+(joined on appId) and `manager_applications`, and an agent with no sponsor at all (none resolved, none named by
+Entra) carries the `no_sponsor` flag next to the existing `nhi-ownership` violation. Humans stay sponsors and
+owners. A failed or forbidden blueprint list is never an empty snapshot: stored blueprints are kept and the
+sync result is marked partial with the HTTP status. Tested on recorded fixtures only; the beta shapes follow
+Microsoft's documentation and were not run against a live tenant.
 
 ### Groups from the command line and declarative plans (`tessera-cli groups`)
 

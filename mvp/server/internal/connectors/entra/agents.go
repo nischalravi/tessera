@@ -10,6 +10,7 @@ package entra
 //
 //	GET /beta/servicePrincipals/microsoft.graph.agentIdentity   the agent identities
 //	GET /beta/servicePrincipals/{id}/microsoft.graph.agentIdentity/sponsors   its sponsors
+//	GET /beta/applications/microsoft.graph.agentIdentityBlueprint             the blueprints, with /{id}/microsoft.graph.agentIdentityBlueprint/sponsors
 //
 // The shapes are those of the Graph documentation, exercised here against
 // recorded fixtures only: this code has not been run against a live tenant.
@@ -61,10 +62,29 @@ type eAgent struct {
 	Created             string        `json:"createdDateTime"`
 	PasswordCredentials []eCredential `json:"passwordCredentials"`
 	KeyCredentials      []eCredential `json:"keyCredentials"`
+	// BlueprintID is the blueprint the agent identity was created from (issue #478).
+	// BlueprintAppID is agentIdentityBlueprintId: the blueprint's appId, not its object id. The
+	// managerApplications (returned only with $select) are application ids, not people.
+	BlueprintAppID      string   `json:"agentIdentityBlueprintId"`
+	ManagerApplications []string `json:"managerApplications"`
 	sponsors            []eSponsor
 }
 
-const agentSelect = "$select=id,appId,displayName,accountEnabled,createdByAppId,createdDateTime,passwordCredentials,keyCredentials&$top=999"
+// eBlueprint is an agent identity blueprint: an application of type
+// microsoft.graph.agentIdentityBlueprint (issue #478).
+type eBlueprint struct {
+	ID             string `json:"id"`
+	AppID          string `json:"appId"`
+	DisplayName    string `json:"displayName"`
+	CreatedByAppID string `json:"createdByAppId"`
+	sponsors       []eSponsor
+}
+
+const agentSelect = "$select=id,appId,displayName,accountEnabled,createdByAppId,createdDateTime,agentIdentityBlueprintId,managerApplications,passwordCredentials,keyCredentials&$top=999"
+
+const blueprintSelect = "$select=id,appId,displayName,createdByAppId&$top=999"
+
+const personSelect = "$select=id,displayName,mail,userPrincipalName,accountEnabled"
 
 // graphBeta builds an absolute beta URL.
 func (c *Connector) graphBeta(path, rawQuery string) string {
@@ -91,7 +111,7 @@ func (c *Connector) readAgents(ctx context.Context) (agents []*eAgent, ok bool, 
 	}
 	for _, a := range agents {
 		path := "/servicePrincipals/" + url.PathEscape(a.ID) + "/microsoft.graph.agentIdentity/sponsors"
-		_, err := listAll(ctx, c, c.graphBeta(path, "$select=id,displayName,mail,userPrincipalName,accountEnabled"), func(s eSponsor) error {
+		_, err := listAll(ctx, c, c.graphBeta(path, personSelect), func(s eSponsor) error {
 			a.sponsors = append(a.sponsors, s)
 			return nil
 		})
@@ -107,6 +127,72 @@ func (c *Connector) readAgents(ctx context.Context) (agents []*eAgent, ok bool, 
 	}
 	sort.SliceStable(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
 	return agents, true, nil
+}
+
+// readBlueprints lists the agent identity blueprints and their sponsors. Any error
+// means the list is not complete: the caller must not treat it as an empty snapshot.
+func (c *Connector) readBlueprints(ctx context.Context) ([]*eBlueprint, error) {
+	var out []*eBlueprint
+	_, err := listAll(ctx, c, c.graphBeta("/applications/microsoft.graph.agentIdentityBlueprint", blueprintSelect), func(b eBlueprint) error {
+		if validID(b.ID) {
+			out = append(out, &b)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("entra: agent blueprints: %w", err)
+	}
+	for _, b := range out {
+		path := "/applications/" + url.PathEscape(b.ID) + "/microsoft.graph.agentIdentityBlueprint/sponsors"
+		_, err := listAll(ctx, c, c.graphBeta(path, personSelect), func(s eSponsor) error {
+			b.sponsors = append(b.sponsors, s)
+			return nil
+		})
+		if err != nil {
+			// no sponsors readable for this blueprint: it has none we know of; anything else is incomplete
+			if s := connsync.Status(err); s == 403 || s == 404 {
+				b.sponsors = nil
+				continue
+			}
+			return nil, fmt.Errorf("entra: blueprint sponsors: %w", err)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// statusText names a failure by its HTTP status only, never by a response body.
+func statusText(err error) string {
+	if s := connsync.Status(err); s != 0 {
+		return fmt.Sprintf("HTTP %d", s)
+	}
+	return "request failed"
+}
+
+// applyBlueprints adds the blueprint records; the sponsor is the first enabled
+// sponsor with an e-mail address, as for agents.
+func applyBlueprints(res *connectors.DiscoveryResult, blueprints []*eBlueprint) {
+	for _, b := range blueprints {
+		name := b.DisplayName
+		if name == "" {
+			name = b.ID
+		}
+		rec := connectors.BlueprintRecord{System: System, ExternalID: b.ID, AppID: b.AppID, Name: name}
+		if b.CreatedByAppID != "" {
+			rec.CreatorRef = "app:" + b.CreatedByAppID
+		}
+		if len(b.sponsors) > 0 {
+			rec.SponsorRef = b.sponsors[0].email()
+			if rec.SponsorRef == "" {
+				rec.SponsorRef = b.sponsors[0].DisplayName
+			}
+		}
+		rec.Sponsor = firstActive(b.sponsors)
+		if rec.Sponsor != nil && rec.SponsorRef == "" {
+			rec.SponsorRef = rec.Sponsor.Email
+		}
+		res.Blueprints = append(res.Blueprints, rec)
+	}
 }
 
 // markAgents makes sure every agent is among the service principals, owned by
@@ -195,6 +281,14 @@ func (c *Connector) applyAgents(res *connectors.DiscoveryResult, agents []*eAgen
 		if rec.Sponsor != nil && rec.SponsorRef == "" {
 			rec.SponsorRef = rec.Sponsor.Email
 		}
+		if validID(a.BlueprintAppID) {
+			rec.BlueprintAppID = a.BlueprintAppID
+		}
+		for _, m := range a.ManagerApplications {
+			if validID(m) {
+				rec.ManagerApplications = append(rec.ManagerApplications, m)
+			}
+		}
 		res.Agents = append(res.Agents, rec)
 	}
 	res.AgentSnapshotOf = append(res.AgentSnapshotOf, System)
@@ -202,8 +296,10 @@ func (c *Connector) applyAgents(res *connectors.DiscoveryResult, agents []*eAgen
 
 // activeSponsor is the first sponsor whose Entra account is enabled and that
 // has an e-mail address to correlate by; nil when there is none.
-func activeSponsor(a *eAgent) *connectors.IdentityRef {
-	for _, s := range a.sponsors {
+func activeSponsor(a *eAgent) *connectors.IdentityRef { return firstActive(a.sponsors) }
+
+func firstActive(sponsors []eSponsor) *connectors.IdentityRef {
+	for _, s := range sponsors {
 		if s.AccountEnabled != nil && !*s.AccountEnabled {
 			continue
 		}

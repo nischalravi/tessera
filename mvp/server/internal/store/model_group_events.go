@@ -110,6 +110,20 @@ type PitPrivilege struct {
 	EndSeq      *int64
 }
 
+// PitAssign is an interval of an attribute assignment (a permission or a limit
+// among them), with the assignment's snapshot.
+type PitAssign struct {
+	AssignID  string
+	DefID     string
+	OwnerType string
+	OwnerID   string
+	Snapshot  json.RawMessage
+	StartAt   time.Time
+	EndAt     *time.Time
+	StartSeq  int64
+	EndSeq    *int64
+}
+
 // PitDigest is a day's Merkle root over grp_events (K9).
 type PitDigest struct {
 	Day        string // YYYY-MM-DD, UTC
@@ -123,5 +137,5 @@ type PitDigest struct {
 
 // PitTotals counts the rows of the four PIT interval tables in a scope.
 type PitTotals struct {
-	Objects, Direct, Effective, Privileges int64
+	Objects, Direct, Effective, Privileges, Assigns int64
 }

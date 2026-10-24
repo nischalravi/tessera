@@ -49,13 +49,13 @@ func Prune(tx *store.TenantTx, now time.Time, retentionDays int) (*PruneResult, 
 	}
 	res.PrunedSeq = head.PrunedSeq
 	i := res.Intervals
-	if res.Events+i.Objects+i.Direct+i.Effective+i.Privileges == 0 {
+	if res.Events+i.Objects+i.Direct+i.Effective+i.Privileges+i.Assigns == 0 {
 		return res, nil
 	}
 	_, err = tx.RecordAudit(store.AuditRecord{At: now, Action: ActionRetention, LegacyActor: "groups.pit",
 		TargetType: "group_events", TargetID: Day(res.Cutoff), Detail: ojson.Object{{Key: "cutoff", Value: res.Cutoff},
 			{Key: "retention_days", Value: int64(retentionDays)}, {Key: "events", Value: res.Events}, {Key: "pruned_seq", Value: res.PrunedSeq},
 			{Key: "pit_objects", Value: i.Objects}, {Key: "pit_direct", Value: i.Direct}, {Key: "pit_effective", Value: i.Effective},
-			{Key: "pit_privileges", Value: i.Privileges}}})
+			{Key: "pit_privileges", Value: i.Privileges}, {Key: "pit_assigns", Value: i.Assigns}}})
 	return res, err
 }

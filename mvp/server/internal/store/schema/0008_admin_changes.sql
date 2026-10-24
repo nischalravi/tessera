@@ -63,7 +63,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     'siem.sink.target',
     -- loosening a security alert rule (disable, raise the threshold, lower the severity, shorten the window) takes two admins
     -- (internal/admin/change_alerts.go, issue #521)
-    'alerts.rule.loosen')),
+    'alerts.rule.loosen',
+    -- attesting a manual item of a vendor breach plan takes two admins (internal/admin/change_breach.go, issue #538)
+    'breach.item.attest')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

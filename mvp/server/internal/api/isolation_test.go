@@ -433,6 +433,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/vms/") {
 			continue // TestVmsAPI (UUIDs, not fixture ids: tenant A gets 404 on B's source)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/breach/plans/{id}") {
+			continue // TestBreachAPI_CrossTenant (UUIDs, not fixture ids: tenant A gets 404 on B's plan)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/oauth-apps/") {
 			continue // TestOAuthAppsAPI (UUIDs, not fixture ids: tenant B gets 404 on A's app and grants)
 		}
@@ -595,6 +598,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if path == "/api/oauth-apps/{app_id}" {
 			continue // TestOAuthAppsAPI (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(path, "/api/breach/plans/{id}") {
+			continue // TestBreachAPI_CrossTenant (a UUID, not a fixture id)
+		}
 		if path == "/api/questionnaires/{id}" {
 			continue // TestQuestionnairesAPI_CrossTenant (a UUID, not a fixture id)
 		}
@@ -616,6 +622,12 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if path == "/api/graph" {
 			queries = []string{fmt.Sprintf("?identity_id=%d", b["alice"]), fmt.Sprintf("?resource_id=%d", b["resource:aws:prod"]),
 				fmt.Sprintf("?identity_id=%d&perm_key=perm:%d", b["alice"], b["perm:aws:get-pii"])}
+		}
+		if path == "/api/groups/permissions/check" {
+			continue // needs a resource and an action: TestGroupsPermissionsAPI
+		}
+		if path == "/api/groups/permissions/effective" {
+			queries = []string{fmt.Sprintf("?identity=%d", b["alice"])}
 		}
 		if path == "/api/access/as-of" {
 			queries = []string{fmt.Sprintf("?resource=%d&date=2026-10-08", b["resource:aws:prod"]),
