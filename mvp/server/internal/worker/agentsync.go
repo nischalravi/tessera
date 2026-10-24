@@ -35,9 +35,9 @@ func AgentSyncPayload(c *store.Connection, rev *store.ConnectionRevision) (agent
 	if err != nil {
 		return "", spec, false, err
 	}
-	spec = agent.SyncSpec{System: c.System, Target: agent.Target{Host: cfg.Host, Port: cfg.Port},
+	spec = agent.SyncSpec{System: c.System, Target: agent.Target{Host: cfg.Host, Port: cfg.Port, TLSMode: cfg.TLSMode},
 		Config: agent.ProbeConfig{BindDN: cfg.BindDN, CredName: cred, BaseDNs: cfg.BaseDNs, UserFilter: cfg.UserFilter,
-			CABundle: cfg.CABundle}}
+			CABundle: cfg.CABundle, PageSize: cfg.PageSize, AttrMap: attrMap(cfg.AttrMap)}}
 	if err := spec.Validate(); err != nil {
 		return "", spec, false, fmt.Errorf("connection %s: %w", c.Name, err)
 	}
@@ -106,7 +106,7 @@ func QueueAgentSyncs(tx *store.TenantTx, now time.Time, window string) (int, err
 // any connector sync, inside the transaction that finishes the job. The
 // records are the connection's own system (not whatever the agent says), and
 // the listing was validated by the agent service before it got here.
-func RecordAgentSync(tx *store.TenantTx, now time.Time, job *store.AgentJob, _ agent.SyncSpec, res *agent.SyncResult) (ojson.Object, error) {
+func RecordAgentSync(tx *store.TenantTx, now time.Time, job *store.AgentJob, spec agent.SyncSpec, res *agent.SyncResult) (ojson.Object, error) {
 	conn, err := tx.Connection(job.ConnectionID)
 	if err != nil {
 		return nil, err
@@ -116,6 +116,15 @@ func RecordAgentSync(tx *store.TenantTx, now time.Time, job *store.AgentJob, _ a
 		rec := connectors.AccountRecord{System: conn.System, ExternalID: a.ExternalID, Username: a.Username, Kind: "user", Status: a.Status}
 		if a.Email != "" {
 			rec.Identity = &connectors.IdentityRef{Email: a.Email}
+		}
+		for _, x := range a.Extra {
+			if !mapped(spec.Config.AttrMap, x) {
+				continue // the agent is not trusted to name attributes the connection did not map
+			}
+			if rec.Attributes == nil {
+				rec.Attributes = map[string]string{}
+			}
+			rec.Attributes[x.Scope+"."+x.Target] = x.Value
 		}
 		dr.Accounts = append(dr.Accounts, rec)
 	}
@@ -142,4 +151,24 @@ func RecordAgentSync(tx *store.TenantTx, now time.Time, job *store.AgentJob, _ a
 		return nil, err
 	}
 	return stats.Object(), nil
+}
+
+// attrMap converts the connection's attribute map to the job's form.
+func attrMap(in []readiness.AttrMapping) []agent.AttrMap {
+	out := make([]agent.AttrMap, 0, len(in))
+	for _, m := range in {
+		out = append(out, agent.AttrMap{LDAP: m.LDAP, Target: m.Target, Scope: m.Scope})
+	}
+	return out
+}
+
+// mapped reports whether the (scope, target) of an extra value is one the job's
+// attribute map lists.
+func mapped(m []agent.AttrMap, x agent.SyncExtra) bool {
+	for _, e := range m {
+		if e.Scope == x.Scope && e.Target == x.Target {
+			return true
+		}
+	}
+	return false
 }

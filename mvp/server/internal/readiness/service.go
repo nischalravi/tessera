@@ -64,6 +64,8 @@ type Bundle struct {
 	Evidence   *Evidence
 	Eval       *Evaluation
 	LiveTTL    time.Duration
+	// Env is the server environment (TESSERA_ENV): tls_mode none is valid only in dev.
+	Env string
 
 	// cred is the opened credential of a real revision, loaded by Validate
 	// for one run. It never leaves the bundle and prints as [redacted].
@@ -123,7 +125,7 @@ func (s *Service) Load(c *store.TenantTx, rev *store.ConnectionRevision, now tim
 	if err != nil {
 		return nil, err
 	}
-	b := &Bundle{Conn: conn, Rev: rev, Template: tmpl, Config: cfg, Hash: hashInput(conn, rev, cfg), LiveTTL: s.LiveTTL}
+	b := &Bundle{Conn: conn, Rev: rev, Template: tmpl, Config: cfg, Hash: hashInput(conn, rev, cfg), LiveTTL: s.LiveTTL, Env: s.Env}
 	if err := b.Hash.Normalize(); err != nil {
 		return nil, err
 	}
@@ -447,7 +449,8 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 	// database, user, TLS, mode, statements). Moving it drops the stored credential, so it has to be entered
 	// again: an edit can never point a credential that was given for one place at another.
 	credCleared := rev.SecretRef != nil && ((b.Template.ID == "rest_generic" && restDestination(b.Config.Rest) != restDestination(cfg.Rest)) ||
-		(b.Template.ID == "sql" && sqlConfigChanged(b.Config, cfg)))
+		(b.Template.ID == "sql" && sqlConfigChanged(b.Config, cfg)) ||
+		((b.Template.ID == "ldap" || b.Template.ID == "ad") && ldapDestinationChanged(b.Config, cfg)))
 	if credCleared {
 		rev.SecretRef, rev.SecretVersion = nil, nil
 	}
@@ -461,9 +464,12 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 		if err := c.ClearRevisionSecret(rev.ID, rev.ConfigHash, now); err != nil {
 			return nil, err
 		}
-		if b.Template.ID == "sql" {
+		switch b.Template.ID {
+		case "sql":
 			changed = append(changed, "credential (cleared: the database settings changed)")
-		} else {
+		case "ldap", "ad":
+			changed = append(changed, "credential (cleared: the directory destination changed)")
+		default:
 			changed = append(changed, "credential (cleared: the REST destination changed)")
 		}
 	}
@@ -488,6 +494,13 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 		}
 	}
 	return res, nil
+}
+
+// ldapDestinationChanged reports whether an edit moves where a directory bind
+// goes or whom it trusts: host, port, the effective TLS mode, bind DN or CA.
+// The stored password was entered for the old destination, so it is dropped.
+func ldapDestinationChanged(a, b ConnConfig) bool {
+	return a.Host != b.Host || a.Port != b.Port || TLSModeOf(a) != TLSModeOf(b) || a.BindDN != b.BindDN || a.CABundle != b.CABundle
 }
 
 func sqlConfigChanged(a, b ConnConfig) bool {
@@ -553,7 +566,10 @@ func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialI
 		return nil, unprocessable("invalid_credential", "send either secret or reference, not both")
 	case in.Reference != "":
 		if !refRE.MatchString(in.Reference) {
-			return nil, unprocessable("invalid_credential", "reference must look like vault:<path> or agent:<id>/<name>")
+			if strings.Contains(in.Reference, "=") && strings.Contains(in.Reference, ",") {
+				return nil, unprocessable("invalid_credential", "that looks like a distinguished name: enter the bind DN in Bind DN, and the password in Or the secret; this field is only a reference such as vault:<path> or agent:<id>/<name>")
+			}
+			return nil, unprocessable("invalid_credential", "reference must look like vault:<path> or agent:<id>/<name>; the bind DN goes in Bind DN and the password in Or the secret")
 		}
 		if strings.HasPrefix(in.Reference, "agent:") {
 			id, _, ok := agent.ParseRef(in.Reference)

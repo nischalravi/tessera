@@ -523,8 +523,8 @@ func TestProbe_PrivateTargetRefused(t *testing.T) {
 	if _, err := p.Authenticate(context.Background()); !errors.Is(err, connectors.ErrTargetNotAllowed) {
 		t.Errorf("Authenticate: %v", err)
 	}
-	if _, err := New(Config{Host: "h", Port: 3268, Dialer: d}); err == nil {
-		t.Error("port 3268 accepted")
+	if _, err := New(Config{Host: "h", Port: 3306, Dialer: d}); err == nil {
+		t.Error("port 3306 accepted")
 	}
 	if _, err := New(Config{Host: "h", Port: 636}); err == nil {
 		t.Error("no dialer accepted")

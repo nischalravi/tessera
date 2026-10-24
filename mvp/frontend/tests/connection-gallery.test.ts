@@ -11,7 +11,9 @@ const T = [
   ["demo-workday", "Workday (demo)", "The demo HR source", true], ["ad", "Active Directory", "Through the Directory Agent", false],
   ["ldap", "OpenLDAP / 389-DS", "Generic LDAP", false], ["entra", "Microsoft Entra ID", "Microsoft Graph", false],
   ["okta", "Okta", "OAuth service app", false], ["google", "Google Workspace", "Domain-wide delegation", false],
-  ["workday", "Workday", "Integration system user", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false], ["scim:auth0", "Auth0", "Enterprise connection", false],
+  ["workday", "Workday", "Integration system user", false],
+  ["servicenow", "ServiceNow", "Users, groups and roles through the Table API", false],
+  ["atlassian", "Atlassian Jira and Confluence", "Groups, project roles and product access", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false], ["scim:auth0", "Auth0", "Enterprise connection", false],
   ["awsorg", "AWS Organizations and IAM", "Reader role in each account", false],
   ["azurerbac", "Azure RBAC", "Role assignments of subscriptions", false], ["gcpiam", "Google Cloud IAM", "IAM policies of an organization", false], ["unixssh", "Unix/Linux host (SSH)", "Local accounts, groups and sudoers rules", false], ["githubscan", "GitHub (code scan)", "Reads MCP configuration", false],
   ["sap", "SAP", "Roles and transaction codes", false], ["oracle", "Oracle Fusion Applications", "Roles of Oracle Fusion", false],
@@ -46,7 +48,7 @@ test("search matches name, description and publisher, ignoring case and padding"
 test("chips filter by category and capability, and combine with search", () => {
   assert.deepEqual(ids({ category: "Demo / simulated" }), ["demo-ad", "demo-okta", "demo-workday"]);
   assert.deepEqual(ids({ capability: "HR source" }), ["demo-workday", "workday", "successfactors"]);
-  assert.deepEqual(ids({ capability: "Provisioning target", category: "Cloud & SaaS" }), ["okta", "google", "scim_app", "rest_generic"]);
+  assert.deepEqual(ids({ capability: "Provisioning target", category: "Cloud & SaaS" }), ["okta", "google", "servicenow", "atlassian", "scim_app", "rest_generic"]);
   assert.deepEqual(ids({ capability: "HR source", q: "demo" }), ["demo-workday"]);
 });
 
@@ -105,4 +107,18 @@ test("arrow keys wrap, Home and End jump, other keys stay put, empty list has no
 
 test("Salesforce is an identity source and provisioning target in Cloud & SaaS", () => {
   assert.deepEqual(GALLERY_META.salesforce, { vendor: "salesforce", publisher: "Salesforce", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] });
+});
+
+test("ServiceNow and Atlassian are identity sources and provisioning targets in Cloud & SaaS, each with a logo and a picker entry", () => {
+  assert.deepEqual(GALLERY_META.servicenow, { vendor: "servicenow", publisher: "ServiceNow", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] });
+  assert.deepEqual(GALLERY_META.atlassian, { vendor: "atlassian", publisher: "Atlassian", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] });
+  assert.deepEqual(ids({ q: "table api" }), ["servicenow"]);
+  assert.deepEqual(ids({ q: "project roles" }), ["atlassian"]);
+  const logo = readFileSync(new URL("../src/components/VendorLogo.tsx", import.meta.url), "utf8");
+  assert.match(logo, /siAtlassian\b/, "the Atlassian mark");
+  assert.doesNotMatch(logo, /siServicenow\b/, "simple-icons 16.30.0 has no ServiceNow mark: an original glyph is used");
+  const picker = readFileSync(new URL("../src/features/admin/connections/shared.tsx", import.meta.url), "utf8");
+  for (const id of ["servicenow", "atlassian"]) assert.match(picker, new RegExp(`id: "${id}", label: "[^"]+", template: "${id}"`), id);
+  const gov = readFileSync(new URL("../src/features/admin/connections/governed.ts", import.meta.url), "utf8");
+  for (const id of ["servicenow", "atlassian"]) assert.match(gov, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a connect form`);
 });
