@@ -12,12 +12,12 @@ import { CATEGORY_LABEL, MODE_LABEL, SourceEdit, checkSourceEdit, sourceEditOf, 
  * good run, and whether an empty feed is held). Changes go through the same admin change request as the category
  * thresholds: tightening needs one admin, loosening a second one.
  */
-export function SourceDeletionGuard({ kind, id }: { kind: DeletionSourceKind; id: string }) {
+export function SourceDeletionGuard({ kind, id, heading = "Deletion guard" }: { kind: DeletionSourceKind; id: string; heading?: string }) {
   const { can } = useSession();
-  return can("admin.read") ? <SourceSettings kind={kind} id={id} /> : null;
+  return can("admin.read") ? <SourceSettings kind={kind} id={id} heading={heading} /> : null;
 }
 
-function SourceSettings({ kind, id }: { kind: DeletionSourceKind; id: string }) {
+function SourceSettings({ kind, id, heading }: { kind: DeletionSourceKind; id: string; heading: string }) {
   const { data, error, reload } = useApi<DeletionSourceView>(deletionGuard.sourcePath(kind, id));
   const { can } = useSession();
   const toast = useToast();
@@ -62,7 +62,7 @@ function SourceSettings({ kind, id }: { kind: DeletionSourceKind; id: string }) 
 
   return (
     <form className="card stack-sm" onSubmit={submit} aria-label={`Deletion guard for ${data.name}`}>
-      <h2>Deletion guard</h2>
+      <h2>{heading}</h2>
       <p className="small muted" style={{ margin: 0 }}>
         What this source may remove in a window, and when its feed is not trusted. A source with no setting of its own uses the category's threshold
         (<Link to="/admin/deletion-guard">Admin → Deletion guard</Link>) and the default feed checks: held when the record count falls more than {data.feed_defaults.drop_percent}%
