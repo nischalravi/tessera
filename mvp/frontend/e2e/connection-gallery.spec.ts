@@ -27,7 +27,7 @@ test("tiles are one radio group: arrows move and select, Space selects, one tab 
   await expect(group.getByRole("radio", { name: "Okta (demo)" })).toBeChecked();
   await expect(group.getByRole("radio", { name: "Okta (demo)" })).toBeFocused();
   await page.keyboard.press("End");
-  await expect(group.getByRole("radio", { name: "Workday (demo)" })).toBeChecked();
+  await expect(group.getByRole("radio", { name: "SCIM 2.0 application" })).toBeChecked();
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("Space");
   await expect(group.getByRole("radio", { checked: true })).toHaveCount(1);

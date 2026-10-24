@@ -3,7 +3,7 @@
 export type Capability = "Identity source" | "Provisioning target" | "HR source";
 export type Category = "Directories & HR" | "Cloud & SaaS" | "Demo / simulated";
 
-export const CATEGORIES: Category[] = ["Directories & HR", "Cloud & SaaS", "Demo / simulated"];
+export const CATEGORIES: Category[] = ["Demo / simulated", "Directories & HR", "Cloud & SaaS"]; // the default selection is a demo type, so it comes first
 export const CAPABILITIES: Capability[] = ["Identity source", "Provisioning target", "HR source"];
 
 export interface GalleryMeta { vendor: string; publisher: string; category: Category; capabilities: Capability[] }

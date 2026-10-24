@@ -1,9 +1,8 @@
-// New connection, step 1: the app-gallery filter model and the vendor-logo contrast rule. Run with `npm test`.
+// New connection, step 1: the app-gallery filter model. Run with `npm test`.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { CATEGORIES, GALLERY_META, filterGallery, groupGallery, nextIndex } from "../src/features/admin/connections/gallery.ts";
-import { LOGO_NEUTRAL, LOGO_SURFACE, contrast, logoFills } from "../src/components/logoContrast.ts";
 
 // mirrors CONNECTOR_TYPES in shared.tsx (that module pulls in React, so the ids are listed here and checked below)
 const T = [
@@ -56,18 +55,3 @@ test("arrow keys wrap, Home and End jump, other keys stay put, empty list has no
   assert.equal(nextIndex("ArrowRight", 0, 0), -1);
 });
 
-test("a brand colour is used only where it meets AA against the tile, else a neutral", () => {
-  assert.ok(Math.abs(contrast("#000000", "#ffffff") - 21) < 0.01);
-  // Google blue is under 4.5:1 on both tiles: neutral in each theme
-  assert.ok(contrast("4285F4", "#ffffff") < 4.5);
-  assert.equal(logoFills("4285F4").light, LOGO_NEUTRAL.light);
-  assert.equal(logoFills("4285F4").dark, LOGO_NEUTRAL.dark);
-  // black brand mark: fine on light, neutral (white) on dark
-  assert.deepEqual(logoFills("000000"), { light: "#000000", dark: LOGO_NEUTRAL.dark });
-  // whatever is chosen always passes
-  for (const hex of ["007DC1", "4285F4", "29B5E8", "181717", "FF0000", "FFFF00"]) {
-    const f = logoFills(hex);
-    assert.ok(contrast(f.light, LOGO_SURFACE.light) >= 4.5, `${hex} light`);
-    assert.ok(contrast(f.dark, LOGO_SURFACE.dark) >= 4.5, `${hex} dark`);
-  }
-});

@@ -5,7 +5,7 @@
  */
 import { FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { CircleCheck, FlaskConical, Search, Play, Power, ShieldCheck, Trash2, Wand2 } from "lucide-react";
+import { ArrowRightLeft, Briefcase, CircleCheck, FlaskConical, Search, Users, Play, Power, ShieldCheck, Trash2, Wand2 } from "lucide-react";
 import {
   Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, readiness, useApi,
 } from "../../../api";
@@ -66,6 +66,8 @@ export function NewConnection() {
   );
 }
 
+const CAP_ICON = { "Identity source": Users, "Provisioning target": ArrowRightLeft, "HR source": Briefcase } as const;
+
 /** App-gallery picker for the connector type: search, category and capability chips, grouped tiles. */
 function TypeGallery({ type, onPick, taken }: { type: string; onPick: (id: string) => void; taken: (id: string) => boolean }) {
   const [q, setQ] = useState("");
@@ -117,12 +119,17 @@ function TypeGallery({ type, onPick, taken }: { type: string; onPick: (id: strin
                     tabIndex={tabStop === t.id ? 0 : -1} className={`gallery-tile ${type === t.id ? "on" : ""}`}
                     aria-labelledby={`gal-n-${t.id}`} aria-describedby={`gal-d-${t.id}`}
                     onClick={() => onPick(t.id)} onKeyDown={(e) => onKey(e, t.id)}>
-                    <VendorLogo vendor={m.vendor} size={40} />
+                    <VendorLogo vendor={m.vendor} />
                     <span className="gallery-body">
                       <b id={`gal-n-${t.id}`}>{t.label}</b>
                       <span className="small faint">{m.publisher}</span>
                       <span id={`gal-d-${t.id}`} className="small faint">{t.blurb}</span>
-                      <span className="gallery-caps small">{m.capabilities.join(" · ")}</span>
+                      <span className="gallery-caps">
+                        {m.capabilities.map((c) => {
+                          const Icon = CAP_ICON[c];
+                          return <span key={c} className="gallery-cap" title={c}><Icon size={16} aria-hidden /><span className="sr-only">{c}</span></span>;
+                        })}
+                      </span>
                     </span>
                     <span className="gallery-foot row tight">
                       {t.demo ? <Badge tone="info">Simulated</Badge> : <Badge tone="outline">Needs DR-10+</Badge>}
