@@ -36,8 +36,10 @@ import (
 	"net"
 	"net/netip"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -55,11 +57,15 @@ const (
 	cmdPasswd  = "getent passwd" // #nosec G101 -- a fixed command line, not a credential
 	cmdGroup   = "getent group"
 	cmdLastlog = "lastlog"
-	// cmdSudoers reads the sudoers file and the files of sudoers.d that sudo itself reads (no dot and no
-	// trailing tilde in the name). Most hosts allow it only to root: UseSudo runs it through sudo -n,
-	// which needs a NOPASSWD rule for exactly this command (README).
-	cmdSudoers     = `cat /etc/sudoers && find /etc/sudoers.d -maxdepth 1 -type f ! -name "*.*" ! -name "*~" -exec cat {} +`
-	cmdSudoersSudo = `sudo -n sh -c 'cat /etc/sudoers && find /etc/sudoers.d -maxdepth 1 -type f ! -name "*.*" ! -name "*~" -exec cat {} +'`
+	// The sudoers files. Most hosts allow them to root only: UseSudo runs each through sudo -n, which
+	// needs a NOPASSWD entry for exactly that command line (README). They are separate commands so
+	// that no shell is needed. tail prints a "==> file <==" line between files, which ParseSudoers
+	// reads as a file boundary (a file without a final newline, or ending in a backslash, cannot run
+	// into the next file's first rule). Names with a dot or a trailing tilde are skipped, as sudo does.
+	cmdSudoers      = `cat /etc/sudoers`
+	cmdSudoersD     = `find /etc/sudoers.d -maxdepth 1 -type f ! -name "*.*" ! -name "*~" -exec tail -n +1 {} +`
+	cmdSudoersSudo  = `sudo -n cat /etc/sudoers`
+	cmdSudoersDSudo = `sudo -n find /etc/sudoers.d -maxdepth 1 -type f ! -name "*.*" ! -name "*~" -exec tail -n +1 {} +`
 )
 
 // Timeouts and size limits.
@@ -193,12 +199,19 @@ func parsePin(v string) (pin, error) {
 		return pin{fingerprint: v}, nil
 	}
 	if k, _, _, _, err := ssh.ParseAuthorizedKey([]byte(v)); err == nil {
-		return pin{key: k}, nil
+		return keyPin(k)
 	}
 	if marker, _, k, _, _, err := ssh.ParseKnownHosts([]byte(v)); err == nil && marker == "" {
-		return pin{key: k}, nil
+		return keyPin(k)
 	}
 	return pin{}, errors.New("unixssh: the host key is a SHA256 fingerprint or one public key line")
+}
+
+func keyPin(k ssh.PublicKey) (pin, error) {
+	if hostKeyAlgorithms(k) == nil {
+		return pin{}, errors.New("unixssh: the host key type is not allowed (use Ed25519, ECDSA or RSA with SHA-2)")
+	}
+	return pin{key: k}, nil
 }
 
 func (p pin) matches(k ssh.PublicKey) bool {
@@ -232,6 +245,7 @@ func (c *Connector) open(ctx context.Context) (*session, error) {
 		},
 		Timeout: HandshakeTimeout,
 	}
+	conf.HostKeyAlgorithms = allowedHostKeyAlgorithms
 	if c.pin.key != nil { // offer only the pinned key's algorithms
 		conf.HostKeyAlgorithms = hostKeyAlgorithms(c.pin.key)
 	}
@@ -259,23 +273,40 @@ func (c *Connector) open(ctx context.Context) (*session, error) {
 	return &session{cl: ssh.NewClient(sc, chans, reqs)}, nil
 }
 
+// allowedHostKeyAlgorithms are the host key algorithms offered: SHA-2 RSA, ECDSA and Ed25519. ssh-rsa
+// (SHA-1) and DSA are never offered.
+var allowedHostKeyAlgorithms = []string{ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521,
+	ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}
+
+// hostKeyAlgorithms are the algorithms to offer for a pinned key, or nil when its type is not allowed.
 func hostKeyAlgorithms(k ssh.PublicKey) []string {
 	if k.Type() == ssh.KeyAlgoRSA { // an RSA key signs with SHA-2 only
 		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}
 	}
-	return []string{k.Type()}
+	if slices.Contains(allowedHostKeyAlgorithms, k.Type()) {
+		return []string{k.Type()}
+	}
+	return nil
 }
 
 func (s *session) close() { _ = s.cl.Close() }
 
-// limitBuf collects at most max bytes and refuses more.
+// limitBuf collects at most max bytes and refuses more; over is closed at the first refusal so the
+// caller can stop at once instead of waiting for the command to end.
 type limitBuf struct {
-	b   bytes.Buffer
-	max int
+	b    bytes.Buffer
+	max  int
+	over chan struct{}
+	once sync.Once
 }
 
 func (l *limitBuf) Write(p []byte) (int, error) {
 	if l.b.Len()+len(p) > l.max {
+		l.once.Do(func() {
+			if l.over != nil {
+				close(l.over)
+			}
+		})
 		return 0, ErrTooLarge
 	}
 	return l.b.Write(p)
@@ -289,15 +320,16 @@ func (s *session) run(ctx context.Context, cmd string, max int) ([]byte, error) 
 		return nil, errors.New("unixssh: cannot open a session")
 	}
 	defer sn.Close()
-	var out limitBuf
-	out.max = max
-	sn.Stdout, sn.Stderr = &out, io.Discard
+	out := &limitBuf{max: max, over: make(chan struct{})}
+	sn.Stdout, sn.Stderr = out, io.Discard
 	done := make(chan error, 1)
 	go func() { done <- sn.Run(cmd) }()
 	t := time.NewTimer(CommandTimeout)
 	defer t.Stop()
 	select {
 	case err = <-done:
+	case <-out.over:
+		return nil, ErrTooLarge
 	case <-t.C:
 		return nil, ErrTimeout
 	case <-ctx.Done():
@@ -318,7 +350,7 @@ type Snapshot struct {
 	Bad int
 	// SudoersRead is false when the sudoers files could not be read (not root, no sudo rule).
 	SudoersRead bool
-	// SudoersSkipped counts sudoers lines that could not be read.
+	// SudoersSkipped counts sudoers lines, includes and files that could not be read.
 	SudoersSkipped int
 	LastLogin      map[string]time.Time
 }
@@ -346,23 +378,35 @@ func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 	if len(snap.Accounts) == 0 {
 		return nil, errors.New("unixssh: getent passwd returned no account")
 	}
-	cmd := cmdSudoers
+	sudoersCmd, sudoersDCmd := cmdSudoers, cmdSudoersD
 	if c.cfg.UseSudo {
-		cmd = cmdSudoersSudo
+		sudoersCmd, sudoersDCmd = cmdSudoersSudo, cmdSudoersDSudo
 	}
-	// A host where the sudoers files are not readable (the login is not root and has no sudo rule) is
-	// still read: its accounts and groups are valid, its rules are unknown (SudoersRead false). A
-	// non-zero exit with output is a host with no sudoers.d directory.
-	out, err := s.run(ctx, cmd, maxSudoers)
-	var ee *ssh.ExitError
-	switch {
-	case ctx.Err() != nil:
+	// A host where /etc/sudoers cannot be read (the login is not root and has no sudo entry) is still
+	// read: its accounts and groups are valid, its rules are unknown (SudoersRead false). When the
+	// main file is read but sudoers.d is not (a failed find, often a 0750 directory), the rules of
+	// sudoers.d are missing: that is counted in SudoersSkipped so the read is reported as partial.
+	base, err := s.run(ctx, sudoersCmd, maxSudoers)
+	if ctx.Err() != nil {
 		return nil, ctx.Err()
-	case err == nil || errors.As(err, &ee) && len(out) > 0:
-		snap.SudoersRead = true
-		snap.Rules, snap.SudoersSkipped = ParseSudoers(out)
 	}
-	out, err = s.run(ctx, cmdLastlog, maxLastlog) // optional: not every host has lastlog
+	if err == nil {
+		snap.SudoersRead = true
+		text := base
+		d, derr := s.run(ctx, sudoersDCmd, maxSudoers)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if derr != nil {
+			snap.SudoersSkipped++
+		}
+		if derr == nil || len(d) > 0 && !errors.Is(derr, ErrTooLarge) && !errors.Is(derr, ErrTimeout) {
+			text = append(append(append([]byte{}, base...), "\n"+fileBoundary+"\n"...), d...)
+		}
+		rules, skipped := ParseSudoers(text)
+		snap.Rules, snap.SudoersSkipped = rules, snap.SudoersSkipped+skipped
+	}
+	out, err := s.run(ctx, cmdLastlog, maxLastlog) // optional: not every host has lastlog
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

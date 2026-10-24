@@ -25,12 +25,13 @@ func StartFake(t testing.TB, outputs map[string]string) Fake {
 
 // The fixed commands and the canned data of the tests.
 const (
-	CmdPasswd  = cmdPasswd
-	CmdGroup   = cmdGroup
-	CmdSudoers = cmdSudoers
-	CmdLastlog = cmdLastlog
-	PasswdOut  = passwdOut
-	GroupOut   = groupOut
-	SudoersOut = sudoersOut
-	LastlogOut = lastlogOut
+	CmdPasswd   = cmdPasswd
+	CmdGroup    = cmdGroup
+	CmdSudoers  = cmdSudoers
+	CmdSudoersD = cmdSudoersD
+	CmdLastlog  = cmdLastlog
+	PasswdOut   = passwdOut
+	GroupOut    = groupOut
+	SudoersOut  = sudoersOut
+	LastlogOut  = lastlogOut
 )

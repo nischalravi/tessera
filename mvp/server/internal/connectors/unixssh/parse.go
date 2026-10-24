@@ -181,6 +181,14 @@ func ParseSudoers(b []byte) (rules []Rule, skipped int) {
 	var cur strings.Builder
 	overflow := false // an endless continuation: the whole logical line is dropped, not its tail read as a rule
 	for _, l := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+		if isBoundary(l) { // the end of one file: nothing continues into the next
+			if cur.Len() > 0 && !overflow {
+				logical = append(logical, strings.TrimSpace(cur.String()))
+			}
+			cur.Reset()
+			overflow = false
+			continue
+		}
 		if cur.Len()+len(l) > maxLine {
 			overflow = true
 		}
@@ -207,6 +215,10 @@ func ParseSudoers(b []byte) (rules []Rule, skipped int) {
 		case l == "":
 		case !printable(l, maxLine):
 			skipped++
+		case isInclude(l):
+			if !isSudoersDInclude(l) {
+				skipped++ // another file or directory is not followed: its rules are unknown
+			}
 		case strings.HasPrefix(l, "#") && !isUIDSpec(l), strings.HasPrefix(l, "@"):
 		case isUIDSpec(l):
 			skipped++ // "#1000 ALL=(ALL) ALL" names a user by uid: not resolved
@@ -237,6 +249,33 @@ func ParseSudoers(b []byte) (rules []Rule, skipped int) {
 		rules = append(rules, r)
 	}
 	return rules, skipped
+}
+
+// fileBoundary separates the files of one sudoers text. tail -n +1 prints the same shape between files
+// ("==> /etc/sudoers.d/ops <=="), so its output needs no other marker.
+const fileBoundary = "==> /etc/sudoers.d <=="
+
+func isBoundary(l string) bool {
+	return strings.HasPrefix(l, "==> ") && strings.HasSuffix(l, " <==")
+}
+
+// isInclude is #include, #includedir, @include or @includedir.
+func isInclude(l string) bool {
+	for _, p := range []string{"#include", "@include"} {
+		if rest, ok := strings.CutPrefix(l, p); ok {
+			rest = strings.TrimPrefix(rest, "dir")
+			if rest == "" || rest[0] == ' ' || rest[0] == '\t' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isSudoersDInclude is an includedir of /etc/sudoers.d, the one directory the connector reads itself.
+func isSudoersDInclude(l string) bool {
+	f := strings.Fields(l)
+	return len(f) == 2 && (f[0] == "#includedir" || f[0] == "@includedir") && strings.TrimSuffix(f[1], "/") == "/etc/sudoers.d"
 }
 
 // isUIDSpec is a line starting "#<digit>": a user given by uid, not a comment.

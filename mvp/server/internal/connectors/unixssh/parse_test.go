@@ -189,6 +189,14 @@ func TestParseSudoers(t *testing.T) {
 				t.Errorf("%+v", r[0])
 			}
 		}},
+		{"include of a file", "#include /etc/sudoers.local\n@include /etc/more\n", 0, 2, nil},
+		{"includedir elsewhere", "#includedir /opt/sudoers.d\n@includedir /etc\n", 0, 2, nil},
+		{"includedir sudoers.d is read by the connector", "#includedir /etc/sudoers.d\n@includedir /etc/sudoers.d/\n", 0, 0, nil},
+		{"file boundary ends a continuation", "alice ALL=(root) /bin/ls, \\\n==> /etc/sudoers.d/a <==\nbob ALL=(root) /bin/id\n", 2, 0, func(t *testing.T, r []Rule) {
+			if strings.Contains(r[1].Text, "/bin/ls") || !slices.Equal(r[1].Principals, []string{"u:bob"}) {
+				t.Errorf("%+v", r)
+			}
+		}},
 		{"undefined alias", "NOBODYS ALL=(ALL) ALL\n", 0, 1, nil},
 		{"uid spec", "#1000 ALL=(ALL) ALL\n", 0, 1, nil},
 		{"no equals", "alice ALL\n", 0, 1, nil},

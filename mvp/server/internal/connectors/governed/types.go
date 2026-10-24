@@ -133,7 +133,7 @@ func SettingSpecs(typ string) []Setting {
 			{"port", "SSH port", "1 to 65535, default 22.", false},
 			{"username", "SSH user", "A dedicated account. Its private key is the credential. It runs only getent, lastlog and the sudoers read.", true},
 			{"host_key", "Host key", "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A host whose key differs is refused.", true},
-			{"use_sudo", "Read sudoers through sudo", "true or false (default false). Needs a NOPASSWD sudo rule for the one read command (see the README).", false}}
+			{"use_sudo", "Read sudoers through sudo", "true or false (default false). Needs NOPASSWD sudo entries for exactly the two read commands (see the README).", false}}
 	case AWSOrg:
 		return []Setting{
 			{"role_name", "Reader role name", "The role assumed in each account. Default TesseraReader.", false},

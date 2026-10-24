@@ -31,6 +31,8 @@ type fakeReply struct {
 	out    string
 	status uint32
 	hang   bool
+	// hangAfter writes the output and then neither exits nor closes: a command that never ends.
+	hangAfter bool
 }
 
 func newKey(t testing.TB) (ssh.Signer, string) {
@@ -154,6 +156,11 @@ func (h *fakeHost) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			return
 		}
 		status := reply.status
+		if reply.hangAfter {
+			_, _ = ch.Write([]byte(reply.out))
+			time.Sleep(10 * time.Second)
+			return
+		}
 		if !ok {
 			status = 127
 		}

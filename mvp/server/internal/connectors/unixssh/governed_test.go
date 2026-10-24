@@ -28,7 +28,7 @@ func params(f unixssh.Fake, mut func(*governed.Params)) governed.Params {
 
 func fake(t *testing.T) unixssh.Fake {
 	return unixssh.StartFake(t, map[string]string{unixssh.CmdPasswd: unixssh.PasswdOut, unixssh.CmdGroup: unixssh.GroupOut,
-		unixssh.CmdSudoers: unixssh.SudoersOut, unixssh.CmdLastlog: unixssh.LastlogOut})
+		unixssh.CmdSudoers: unixssh.SudoersOut, unixssh.CmdSudoersD: "", unixssh.CmdLastlog: unixssh.LastlogOut})
 }
 
 func check(t *testing.T, p connectors.Prober, id string) checks.Result {

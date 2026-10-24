@@ -112,7 +112,7 @@ export const GOVERNED: Record<string, GovType> = {
       { key: "port", label: "SSH port", hint: "1 to 65535, default 22." },
       { key: "username", label: "SSH user", required: true, hint: "A dedicated, unprivileged account. It runs only getent, lastlog and the sudoers read." },
       { key: "host_key", label: "Host key", required: true, hint: "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A host whose key differs is refused." },
-      { key: "use_sudo", label: "Read sudoers through sudo", hint: "true or false (default false). Needs a NOPASSWD sudo rule for the one read command." },
+      { key: "use_sudo", label: "Read sudoers through sudo", hint: "true or false (default false). Needs NOPASSWD sudo entries for exactly the two read commands (see the README)." },
     ],
     credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
   },

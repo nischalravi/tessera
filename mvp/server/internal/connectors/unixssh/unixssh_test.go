@@ -71,8 +71,8 @@ var devRT = connsync.Runtime{Env: config.Dev, AllowLoopback: true}
 
 func fullOutputs() map[string]fakeReply {
 	return map[string]fakeReply{
-		cmdPasswd: {out: passwdOut}, cmdGroup: {out: groupOut}, cmdSudoers: {out: sudoersOut},
-		cmdSudoersSudo: {out: sudoersOut}, cmdLastlog: {out: lastlogOut},
+		cmdPasswd: {out: passwdOut}, cmdGroup: {out: groupOut}, cmdSudoers: {out: sudoersOut}, cmdSudoersD: {},
+		cmdSudoersSudo: {out: sudoersOut}, cmdSudoersDSudo: {}, cmdLastlog: {out: lastlogOut},
 	}
 }
 
@@ -178,15 +178,15 @@ func TestOnlyFixedCommandsAreSent(t *testing.T) {
 		f := newFixture(t, fullOutputs())
 		f.conf.UseSudo = useSudo
 		discover(t, f)
-		want := []string{cmdPasswd, cmdGroup, cmdSudoers, cmdLastlog}
+		want := []string{cmdPasswd, cmdGroup, cmdSudoers, cmdSudoersD, cmdLastlog}
 		if useSudo {
-			want = []string{cmdPasswd, cmdGroup, cmdSudoersSudo, cmdLastlog}
+			want = []string{cmdPasswd, cmdGroup, cmdSudoersSudo, cmdSudoersDSudo, cmdLastlog}
 		}
 		if got := f.h.seen(); !slices.Equal(got, want) {
 			t.Errorf("sudo=%v: commands %q, want %q", useSudo, got, want)
 		}
 	}
-	for _, c := range []string{cmdPasswd, cmdGroup, cmdSudoers, cmdSudoersSudo, cmdLastlog} {
+	for _, c := range []string{cmdPasswd, cmdGroup, cmdSudoers, cmdSudoersD, cmdSudoersSudo, cmdSudoersDSudo, cmdLastlog} {
 		if strings.Contains(c, "%") || strings.Contains(c, "$") || strings.Contains(c, "`") {
 			t.Errorf("command %q looks parameterised", c)
 		}
@@ -209,6 +209,72 @@ func TestSudoersUnreadableIsNotAFailure(t *testing.T) {
 		if strings.HasPrefix(p.Action, "sudo ") {
 			t.Errorf("a sudo rule from nowhere: %+v", p)
 		}
+	}
+	// the rules are unknown, so the conventional sudo groups are privileged (and so are their members)
+	h := "127.0.0.1"
+	for _, g := range res.Groups {
+		want := g.Name == "sudo" || g.Name == "wheel" || g.Name == "root"
+		if g.Privileged != want {
+			t.Errorf("group %s privileged = %v, want %v", g.Name, g.Privileged, want)
+		}
+	}
+	var perm string
+	for _, p := range res.Permissions {
+		if p.ExternalID == h+"|sudo-group" && p.Privileged {
+			perm = p.ExternalID
+		}
+	}
+	grants, member := 0, false
+	for _, e := range res.Edges {
+		if e.Dst.ExternalID == perm && e.Relation == "grants" {
+			grants++
+		}
+		if e.Src.ExternalID == "alice@"+h && e.Dst.ExternalID == "sudo@"+h && e.Relation == "member_of" {
+			member = true
+		}
+	}
+	if perm == "" || grants != 2 || !member {
+		t.Errorf("assumed sudo permission %q, %d grants, alice a member %v", perm, grants, member)
+	}
+	if res.Partial != "" {
+		t.Errorf("partial = %q: unreadable sudoers is a setting, not a failed read", res.Partial)
+	}
+}
+
+func TestSudoersDFailureIsPartial(t *testing.T) {
+	out := fullOutputs()
+	out[cmdSudoersD] = fakeReply{status: 1} // find: permission denied on a 0750 directory
+	res := discover(t, newFixture(t, out))
+	if !strings.Contains(res.Partial, "sudoers") {
+		t.Errorf("partial = %q", res.Partial)
+	}
+	if !slices.Contains(res.Resources[0].Tags, "sudoers-skipped:1") {
+		t.Errorf("tags %v", res.Resources[0].Tags)
+	}
+	n := 0
+	for _, p := range res.Permissions {
+		if strings.HasPrefix(p.Action, "sudo ") {
+			n++
+		}
+	}
+	if n != 4 { // the main file's rules are still read
+		t.Errorf("%d sudo rules", n)
+	}
+}
+
+func TestSudoersDFilesAreSeparated(t *testing.T) {
+	// the first file ends in a backslash; the second starts with a rule that must stay its own rule
+	out := fullOutputs()
+	out[cmdSudoersD] = fakeReply{out: "==> /etc/sudoers.d/a <==\nalice ALL=(root) /bin/ls, \\\n==> /etc/sudoers.d/b <==\nbob ALL=(root) /usr/bin/id\n"}
+	res := discover(t, newFixture(t, out))
+	var got []string
+	for _, p := range res.Permissions {
+		if strings.HasPrefix(p.Action, "sudo ") {
+			got = append(got, p.Action)
+		}
+	}
+	if len(got) != 6 || !slices.ContainsFunc(got, func(a string) bool { return strings.Contains(a, "/usr/bin/id") && !strings.Contains(a, "/bin/ls") }) {
+		t.Errorf("rules %q", got)
 	}
 }
 
@@ -255,6 +321,22 @@ func TestOversizedOutputIsRefused(t *testing.T) {
 	res := discover(t, newFixture(t, out))
 	if !slices.Contains(res.Resources[0].Tags, "sudoers:unreadable") {
 		t.Errorf("tags %v", res.Resources[0].Tags)
+	}
+}
+
+func TestOversizedOutputReturnsAtOnce(t *testing.T) {
+	out := fullOutputs()
+	// the command writes too much and then never ends
+	out[cmdPasswd] = fakeReply{out: strings.Repeat("x", maxPasswd+1024), hangAfter: true}
+	f := newFixture(t, out)
+	c, err := New(f.conf, devRT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, err = c.Read(context.Background())
+	if !errors.Is(err, ErrTooLarge) || time.Since(start) > 8*time.Second {
+		t.Fatalf("err %v after %v", err, time.Since(start))
 	}
 }
 
@@ -328,6 +410,7 @@ func TestWrongClientKeyIsRefused(t *testing.T) {
 func TestNewRejectsBadConfig(t *testing.T) {
 	f := newFixture(t, nil)
 	_, encrypted := encryptedKey(t)
+	dsa := "ssh-dss AAAAB3NzaC1kc3MAAACBAP1/U4EddRIpUt9KnC7s5Of2EbdSPO9EAMMeP4C2USZpRV1AIlH7WT2NWPq/xfW6MPbLm1Vs14E7gB00b/JmYLdrmVClpJ+f6AR7ECLCT7up1/63xhv4O1fnxqimFQ8E+4P208UewwI1VBNaFpEy9nXzrith1yrv8iIDGZ3RSAHHAAAAFQCXYFCPFSMLzLKSuYKi64QL8Fgc9QAAAIEA9+GghdabPd7LvKtcNrhXuXmUr7v6OuqC+VdMCz0HgmdRWVeOutRZT+ZxBxCBgLRJFnEj6EwoFhO3zwkyjMim4TwWeotUfI0o4KOuHiuzpnWRbqN/C/ohNWLx+2J6ASQ7zKTxvqhRkImog9/hWuWfBpKLZl6Ae1UlZAFMO/7PSSoAAACAJtnhW4ZpRZyBF0yblgXYKtlOPbMDvX6LvlcDGXtt8dFlFIwXsjSDUBRFaIsBGVNIhj3K7ksNbXmJ7fnWmFZHjHb2cdlr4t1NtDJI0vtjj0G0BdLTnNMw/Bd6b5sGSxbhXPRNB5RDGSz4pHKPD8XDCX0eA3bfpqKnqG21Fd0xrOo= x"
 	for _, c := range []struct {
 		name string
 		mut  func(*Config)
@@ -338,6 +421,7 @@ func TestNewRejectsBadConfig(t *testing.T) {
 		{"md5 fingerprint", func(c *Config) { c.HostKey = "MD5:aa:bb" }, "host key"},
 		{"cert authority", func(c *Config) { c.HostKey = "@cert-authority * " + f.h.pubLine() }, "host key"},
 		{"two lines", func(c *Config) { c.HostKey = f.h.pubLine() + f.h.pubLine() }, "host key"},
+		{"dsa host key", func(c *Config) { c.HostKey = dsa }, "host key"},
 		{"url host", func(c *Config) { c.Host = "ssh://h.example.com" }, "host"},
 		{"port in host", func(c *Config) { c.Host = "h.example.com:22" }, "host"},
 		{"zone", func(c *Config) { c.Host = "fe80::1%eth0" }, "zone"},
@@ -485,7 +569,7 @@ func TestNoInsecureHostKeyOutsideTests(t *testing.T) {
 	for _, line := range strings.Split(string(b), "\n") {
 		if strings.Contains(line, "s.run(ctx, ") && !strings.Contains(line, "func (s *session)") {
 			ok := false
-			for _, c := range []string{"cmdPasswd", "cmdGroup", "cmd,", "cmdLastlog"} {
+			for _, c := range []string{"cmdPasswd", "cmdGroup", "sudoersCmd,", "sudoersDCmd,", "cmdLastlog"} {
 				ok = ok || strings.Contains(line, "s.run(ctx, "+c)
 			}
 			if !ok {

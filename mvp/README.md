@@ -2734,20 +2734,35 @@ keyboard-interactive method.
 *Host key.* Pinning is mandatory: `host_key` is a `SHA256:` fingerprint (`ssh-keygen -lf
 /etc/ssh/ssh_host_ed25519_key.pub`) or the public key line. A host that presents another key is refused
 before any authentication is offered (`unix.auth` fails). The code has no `InsecureIgnoreHostKey`; a test
-reads the package for it.
+reads the package for it. Only Ed25519, ECDSA and SHA-2 RSA host keys are offered or accepted as a pin
+(`ssh-rsa` with SHA-1 and DSA are not).
 
-*Commands.* Only these constant strings are ever sent: `getent passwd`, `getent group`, `lastlog`, and
-`cat /etc/sudoers && find /etc/sudoers.d ... -exec cat {} +` (through `sudo -n sh -c '...'` when `use_sudo`
-is true). Nothing from a setting or from the host is placed in a command. Most hosts allow the sudoers
-read to root only; with `use_sudo` the login needs a `NOPASSWD` rule in sudoers.d for `/bin/sh` with exactly
-the arguments `-c` and the read script (sudo matches arguments literally; check with `sudo -l` as the login). When the sudoers files cannot be read the host is still read, with its
-resource tagged `sudoers:unreadable`; a missing `lastlog` is skipped.
+*Commands.* Only these constant strings are ever sent: `getent passwd`, `getent group`, `lastlog`,
+`cat /etc/sudoers` and `find /etc/sudoers.d -maxdepth 1 -type f ! -name "*.*" ! -name "*~" -exec tail -n +1 {} +`
+(each prefixed with `sudo -n` when `use_sudo` is true; no shell is involved). Nothing from a setting or from
+the host is placed in a command. Most hosts allow the sudoers read to root only. With `use_sudo` the login
+needs exactly these two entries (adjust the paths to `command -v cat find`, check with `visudo -c` and
+`sudo -l` as the login; sudo matches the arguments literally, and the `\*` escapes keep the globs literal):
+
+```
+tessera ALL=(root) NOPASSWD: /usr/bin/cat /etc/sudoers, \
+    /usr/bin/find /etc/sudoers.d -maxdepth 1 -type f ! -name \*.\* ! -name \*~ -exec tail -n +1 {} +
+```
+
+Never grant the login a shell (`/bin/sh`, `/bin/bash`), `ALL`, or `find` without its exact arguments: `find
+-exec` runs any command as root. When /etc/sudoers cannot be read the host is still read, with its resource
+tagged `sudoers:unreadable`; the groups `sudo`, `wheel` and `admin` are then assumed to carry sudo rights
+(privileged, permission "assumed sudo through group membership") so their members are not shown as
+unprivileged. When /etc/sudoers is read but `find` fails (often a 0750 sudoers.d), the result is partial. A
+missing `lastlog` is skipped.
 
 *Parsing.* Output is parsed strictly with size limits (16 MiB for passwd and group, 2 MiB for sudoers).
 A passwd or group line that does not match its grammar is dropped and the result is marked partial, so the
 deletion guard holds removals. Sudoers: user specifications, `User_Alias` and `Cmnd_Alias` are understood;
-negations, `Defaults`, includes and the other aliases are not rules; a line it cannot read is counted in a
-`sudoers-skipped:N` tag. Files in `sudoers.d` with a dot or a trailing `~` are skipped, as sudo does.
+negations, `Defaults` and the other aliases are not rules. An `#include` or `@include` of another file, an
+`includedir` other than /etc/sudoers.d and any line it cannot read are not followed or read: they are counted in
+a `sudoers-skipped:N` tag and the result is partial (the deletion guard holds removals). `tail` prints a
+`==> file <==` line between the files of sudoers.d, which the parser treats as a file boundary. Files in `sudoers.d` with a dot or a trailing `~` are skipped, as sudo does.
 
 *Mapping.* Host: resource `unix_host`. Passwd entry: account `user@host` (`service` for uids under 1000
 other than root; `disabled` for a uid of 1000 or more whose shell is `nologin` or `false`). Group:

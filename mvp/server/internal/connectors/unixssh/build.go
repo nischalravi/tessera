@@ -11,12 +11,20 @@ import (
 // noLogin are the shells that refuse an interactive login.
 var noLogin = map[string]bool{"/usr/sbin/nologin": true, "/sbin/nologin": true, "/bin/false": true, "/usr/bin/false": true, "/bin/nologin": true}
 
+// sudoGroups are the groups that carry sudo rights by convention (Debian sudo, Red Hat wheel, older admin).
+var sudoGroups = map[string]bool{"sudo": true, "wheel": true, "admin": true}
+
 func (c *Connector) build(s *Snapshot) *connectors.DiscoveryResult {
 	h := c.host
 	res := &connectors.DiscoveryResult{System: System}
+	var partial []string
 	if s.Bad > 0 { // a dropped line may be an account: the deletion guard holds removals
-		res.Partial = strconv.Itoa(s.Bad) + " passwd or group lines could not be read"
+		partial = append(partial, strconv.Itoa(s.Bad)+" passwd or group lines could not be read")
 	}
+	if s.SudoersRead && s.SudoersSkipped > 0 { // a missing rule is a missing privilege
+		partial = append(partial, strconv.Itoa(s.SudoersSkipped)+" sudoers lines, includes or files could not be read")
+	}
+	res.Partial = strings.Join(partial, "; ")
 	tags := []string{"unix", "ssh"}
 	switch {
 	case !s.SudoersRead:
@@ -61,6 +69,26 @@ func (c *Connector) build(s *Snapshot) *connectors.DiscoveryResult {
 				privGroup[p[2:]] = true
 				edges = append(edges, connectors.EdgeRecord{Src: grp(p[2:]), Dst: perm, Relation: "grants"})
 			}
+		}
+	}
+
+	// With the sudoers files unreadable the rules are unknown. The groups that conventionally carry sudo
+	// rights are then treated as privileged, with a permission that says why, so that their members
+	// (by membership and by primary gid) are not shown as unprivileged.
+	if !s.SudoersRead {
+		assumed := connectors.PermissionRecord{System: System, ExternalID: h + "|sudo-group", Action: "assumed sudo through group membership (sudoers unreadable)",
+			ResourceExternalID: h, Privileged: true}
+		assumedRef := connectors.Ref{Kind: "perm", System: System, ExternalID: assumed.ExternalID}
+		used := false
+		for _, g := range s.Groups {
+			if sudoGroups[g.Name] {
+				used = true
+				privGroup[g.Name] = true
+				edges = append(edges, connectors.EdgeRecord{Src: grp(g.Name), Dst: assumedRef, Relation: "grants"})
+			}
+		}
+		if used {
+			res.Permissions = append(res.Permissions, assumed)
 		}
 	}
 
