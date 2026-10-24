@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
@@ -381,20 +382,41 @@ func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, p *param
 	if err != nil {
 		return nil, err
 	}
-	gov, failed, err := s.readiness.GovernedConnectorsTx(c, now)
+	out, err := worker.RunSync(r.Context(), c, now, conns, mode != nil && *mode == "full", "system")
 	if err != nil {
 		return nil, err
 	}
-	out, err := worker.RunSync(r.Context(), c, now, worker.MergeGoverned(conns, gov), mode != nil && *mode == "full", "system")
-	if err != nil || len(failed) == 0 {
-		return out, err
+	// The live governed connections read remote systems, so a worker reads them (a remote
+	// read must not hold this request's write transaction): queue a sync for them.
+	live, err := s.readiness.ActiveConnections(c)
+	if err != nil {
+		return nil, err
 	}
-	names := make([]string, 0, len(failed))
-	for n := range failed {
-		names = append(names, n)
+	for _, ac := range live {
+		if gt, ok := governed.Lookup(ac.ConnectorType()); ok && !gt.Feature {
+			payload := worker.SyncPayload{}
+			if mode != nil {
+				payload.Mode = *mode
+			}
+			if pr := principal(r); pr.UserID != nil {
+				payload.RequestedBy = pr.UserID.String()
+			}
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			id := store.NewID()
+			if _, err := s.queue.EnqueueTx(c, jobs.ConnectorSync, string(raw), id, now, maxSweepAttempts); err != nil {
+				return nil, err
+			}
+			if err := c.Audit(now, actor(r), "connectors.sync_queued", ojson.Object{{Key: "key", Value: id},
+				{Key: "mode", Value: payload.Mode}, {Key: "governed", Value: true}}); err != nil {
+				return nil, err
+			}
+			return append(out, ojson.KV{Key: "governed_queued", Value: id}), nil
+		}
 	}
-	sort.Strings(names)
-	return append(out, ojson.KV{Key: "governed_not_opened", Value: names}), nil
+	return out, nil
 }
 
 // ---------------------------------------------------------------- summary

@@ -8,6 +8,7 @@ display_name: GitHub (code scan)
 connector_types: [githubscan]
 role: account_source
 inventory: true
+attest_when_unsupported: [base.writeback.scope]
 default_correlation_key: id
 required_attributes:
   user: [id]

@@ -133,7 +133,6 @@ items:
     verify:
       - kind: live
         check: write_scope
-        on_unsupported: attestation
     remediation:
       hint: "Delegate rights only on the provisioned OU or groups."
     applies_when: { write_mode: [dry_run, scoped] }

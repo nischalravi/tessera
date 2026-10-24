@@ -8,6 +8,7 @@ extends: base@1
 display_name: AWS Bedrock AgentCore
 connector_types: [agentcore]
 role: account_source
+attest_when_unsupported: [base.writeback.scope]
 default_correlation_key: id
 required_attributes:
   user: [id, username, status]

@@ -9,6 +9,7 @@ display_name: AWS Organizations and IAM
 connector_types: [awsorg]
 role: account_source
 inventory: true
+attest_when_unsupported: [base.writeback.scope]
 default_correlation_key: arn
 required_attributes:
   user: [arn]

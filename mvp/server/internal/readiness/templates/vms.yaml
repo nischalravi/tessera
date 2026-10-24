@@ -9,6 +9,7 @@ display_name: Contractor feed (VMS)
 connector_types: [fieldglass, beeline, csvfeed]
 role: account_source
 inventory: true
+attest_when_unsupported: [base.writeback.scope]
 default_correlation_key: worker_id
 required_attributes:
   user: [worker_id, email]

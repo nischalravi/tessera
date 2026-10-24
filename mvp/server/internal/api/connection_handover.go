@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
+	"reflect"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/awsorg"
@@ -70,7 +72,7 @@ func handoverVMS(c *store.TenantTx, sealer *seal.Sealer, name, connectionID stri
 	}
 	if err := c.InsertVmsSource(v, now); err != nil {
 		if errors.Is(err, store.ErrVmsNameTaken) {
-			return "", errHandoverExists
+			return "", sameVMSSource(c, v)
 		}
 		return "", err
 	}
@@ -90,10 +92,58 @@ func handoverAWS(c *store.TenantTx, sealer *seal.Sealer, name string, p governed
 		ExternalID: p.Settings["external_id"]}, "system", now)
 	var ie *awsorg.InputError
 	if errors.As(err, &ie) && ie.Code == "name_taken" {
-		return "", errHandoverExists
+		return "", sameAWSConnector(c, name, p)
 	}
 	if err != nil {
 		return "", err
 	}
 	return k.ID, nil
+}
+
+// handoverConflict: a source of the same name exists but is not this connection's. Activation
+// fails rather than reporting success while the other source is the one that is read.
+func handoverConflict(what string) error {
+	return &readiness.Error{Status: http.StatusConflict, Code: "handover_conflict",
+		Msg: "a " + what + " with this name already exists with different settings; rename one of them or remove the existing one"}
+}
+
+// sameVMSSource is errHandoverExists when the existing feed of the name is this connection's
+// (same vendor and URL), else a conflict.
+func sameVMSSource(c *store.TenantTx, v *store.VmsSource) error {
+	all, err := c.VmsSources()
+	if err != nil {
+		return err
+	}
+	for _, x := range all {
+		if x.Name == v.Name {
+			if x.Vendor == v.Vendor && x.BaseURL == v.BaseURL && x.Settings == v.Settings {
+				return errHandoverExists
+			}
+			return handoverConflict("contractor feed")
+		}
+	}
+	return handoverConflict("contractor feed")
+}
+
+// sameAWSConnector is errHandoverExists when the existing connector of the name has this
+// connection's external id and configuration, else a conflict.
+func sameAWSConnector(c *store.TenantTx, name string, p governed.Params) error {
+	all, err := c.AWSConnectors()
+	if err != nil {
+		return err
+	}
+	want := awsorg.ConfigOf(p)
+	if want.Validate() != nil {
+		return handoverConflict("AWS connector")
+	}
+	for _, k := range all {
+		if k.Name == name {
+			have, err := awsorg.ParseConfig(k.Config)
+			if err == nil && k.ExternalID == p.Settings["external_id"] && reflect.DeepEqual(*have, want) {
+				return errHandoverExists
+			}
+			return handoverConflict("AWS connector")
+		}
+	}
+	return handoverConflict("AWS connector")
 }

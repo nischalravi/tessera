@@ -120,7 +120,11 @@ type Template struct {
 	// Inventory marks a source that reports findings, snapshots or contractor
 	// records rather than an account population: the staged account data checks
 	// (key, fill and correlation rates) do not apply to it.
-	Inventory             bool                `yaml:"inventory,omitempty"`
+	Inventory bool `yaml:"inventory,omitempty"`
+	// AttestWhenUnsupported names base items whose live check this system cannot
+	// answer (it reports "unsupported"): for this template only, a named person's
+	// attestation may stand in. A failing result is never replaced.
+	AttestWhenUnsupported []string            `yaml:"attest_when_unsupported,omitempty"`
 	DefaultCorrelationKey string              `yaml:"default_correlation_key,omitempty"`
 	DefaultHRIDAttribute  string              `yaml:"default_hr_id_attribute,omitempty"`
 	HostAllowlist         []string            `yaml:"host_allowlist,omitempty"`

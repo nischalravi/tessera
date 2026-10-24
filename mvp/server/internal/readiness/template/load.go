@@ -250,6 +250,13 @@ func resolve(base, t *Template) *Resolved {
 			c := cloneItem(it)
 			c.TemplateLevel = c.Level
 			c.Source = src.ID
+			if src == base && slices.Contains(t.AttestWhenUnsupported, c.ID) {
+				for i := range c.Verify {
+					if c.Verify[i].Kind == Live {
+						c.Verify[i].OnUnsupported = Attestation
+					}
+				}
+			}
 			r.Items = append(r.Items, c)
 		}
 	}

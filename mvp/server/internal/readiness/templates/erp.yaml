@@ -8,6 +8,7 @@ extends: base@1
 display_name: ERP (SAP, Oracle)
 connector_types: [sap, oracle]
 role: account_source
+attest_when_unsupported: [base.writeback.scope]
 default_correlation_key: id
 default_hr_id_attribute: employeeNumber
 required_attributes:
