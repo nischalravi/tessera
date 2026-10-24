@@ -14,11 +14,13 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/certs"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -49,6 +51,12 @@ const (
 	KindOracle = "oracle"
 	// KindSalesforce: user lifecycle and permission-set assignment in a Salesforce org (issue #555).
 	KindSalesforce = "salesforce"
+	// KindServiceNow: user lifecycle, group membership and role assignment in a ServiceNow instance, or
+	// (credential mode "ticket") an incident per change for a person to act on (issue #559).
+	KindServiceNow = "servicenow"
+	// KindAtlassian: group membership and project role actors of an Atlassian Cloud site (issue #559). Accounts
+	// are provisioned through the Atlassian Cloud SCIM preset.
+	KindAtlassian = "atlassian"
 	// KindSQL is a database (PostgreSQL, MySQL, SQL Server, Oracle): native accounts and roles,
 	// or an application's own tables (issue #553, internal/connectors/sqldb). The target's
 	// Settings.SQL holds the connection; the credential is the database password.
@@ -320,6 +328,18 @@ func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) 
 			return nil, err
 		}
 		return salesforce.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
+	case KindServiceNow:
+		cred, err := servicenow.ParseCredential(token)
+		if err != nil {
+			return nil, err
+		}
+		return servicenow.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
+	case KindAtlassian:
+		cred, err := atlassian.ParseTargetCredential(token)
+		if err != nil {
+			return nil, err
+		}
+		return atlassian.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
 	case KindSQL:
 		return e.buildSQL(token, s)
 	}

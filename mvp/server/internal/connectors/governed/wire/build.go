@@ -13,12 +13,14 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 )
 
 // Connector builds the connector of a connection by the connector's own
@@ -44,6 +46,13 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 		cn, err = githubscan.FromEnv(getenv, now(), rt, hc)
 	case governed.AgentCore:
 		cn, err = agentcore.FromEnv(getenv, now())
+	case governed.ServiceNow:
+		cn, err = servicenow.FromEnv(getenv, rt, hc, now)
+	case governed.Atlassian:
+		if getenv, err = n.Overrides(getenv); err != nil {
+			return nil, err
+		}
+		cn, err = atlassian.FromEnv(getenv, rt, hc, now)
 	case governed.AzureRBAC, governed.GCPIAM:
 		if getenv, err = n.Overrides(getenv); err != nil {
 			return nil, err

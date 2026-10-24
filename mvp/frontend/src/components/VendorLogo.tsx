@@ -40,6 +40,8 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   aws: { color: "#b45309", glyph: <g {...stroke} stroke="#b45309"><path d="M7 18a4 4 0 01-.6-7.95A5.5 5.5 0 0117 9.5a4.2 4.2 0 01.5 8.5z" /><path d="M9 21h6" /></g> },
   // cloud with a person (SaaS CRM)
   salesforce: { color: "#0b6fa8", glyph: <g {...stroke} stroke="#0b6fa8"><path d="M7 19a4 4 0 01-.6-7.95A5.5 5.5 0 0117 10.5a4.2 4.2 0 01.5 8.5z" /></g> },
+  // service ticket with a notch and a dotted tear line (no simple-icons mark for ServiceNow in 16.30.0: an original glyph, not vendor artwork)
+  servicenow: { color: "#1b6b3a", glyph: <g {...stroke} stroke="#1b6b3a"><path d="M4 6.5h16v3.2a2.3 2.3 0 000 4.6v3.2H4v-3.2a2.3 2.3 0 000-4.6z" /><path d="M14.5 6.5v1.6M14.5 11v2M14.5 15.9v1.6" /><path d="M7.5 10.5h4M7.5 13.5h3" /></g> },
   // cloud over a grid of role tiles (no simple-icons mark for Azure in 16.30.0: an original glyph, not vendor artwork)
   azure: { color: "#0f6cbd", glyph: <g {...stroke} stroke="#0f6cbd"><path d="M7 14a4 4 0 01-.6-7.95A5.5 5.5 0 0117 5.5a4.2 4.2 0 01.5 8.5" /><rect x="6" y="16" width="4" height="4" rx=".8" /><rect x="14" y="16" width="4" height="4" rx=".8" /><path d="M10 18h4M12 14v2" /></g> },
   // database cylinder (no single vendor: PostgreSQL, MySQL, SQL Server and Oracle share this tile)
