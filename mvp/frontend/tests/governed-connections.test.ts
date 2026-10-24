@@ -14,6 +14,9 @@ test("which types take a base URL and a credential", () => {
   assert.equal(GOVERNED.githubscan.baseUrl?.required, false); // GitHub.com when empty
   assert.equal(GOVERNED.awsorg.baseUrl, undefined);
   assert.equal(GOVERNED.agentcore.baseUrl, undefined);
+  assert.equal(GOVERNED.azurerbac.baseUrl, undefined); // fixed Microsoft endpoints
+  assert.equal(GOVERNED.gcpiam.baseUrl, undefined); // fixed Google endpoints
+  assert.equal(GOVERNED.gcpiam.credential?.area, true); // the key JSON
   assert.equal(GOVERNED.agentcore.credential, null); // a recorded snapshot holds no secret
   assert.equal(GOVERNED.awsorg.credential?.area, true); // JSON keys
   for (const [type, t] of Object.entries(GOVERNED)) if (type !== "agentcore") assert.ok(t.credential, type);
@@ -43,5 +46,7 @@ test("required fields are named until they are filled", () => {
   assert.deepEqual(missingRequired("githubscan", "", {}), ["Organization"]); // the API URL is optional
   assert.deepEqual(missingRequired("awsorg", "", { "settings.regions": "us-east-1" }), ["External id"]);
   assert.deepEqual(missingRequired("agentcore", "", {}), ["Snapshot file"]);
+  assert.deepEqual(missingRequired("azurerbac", "", {}), ["Directory (tenant) id", "Application (client) id"]); // no base URL: the public cloud
+  assert.deepEqual(missingRequired("gcpiam", "", {}), []); // one of organization, folders or projects: the server checks
   assert.deepEqual(missingRequired("ldap", "", {}), []);
 });

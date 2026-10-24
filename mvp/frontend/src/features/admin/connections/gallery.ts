@@ -37,6 +37,8 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   "scim:auth0": { vendor: "auth0", publisher: "Auth0", category: "Identity providers", capabilities: ["Provisioning target"] },
   // connectors the server already had, now creatable as governed connections
   awsorg: { vendor: "aws", publisher: "Amazon Web Services", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
+  azurerbac: { vendor: "azure", publisher: "Microsoft", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
+  gcpiam: { vendor: "gcp", publisher: "Google Cloud", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
   githubscan: { vendor: "github", publisher: "GitHub", category: "Source code", capabilities: ["Agent discovery"] },
   sap: { vendor: "sap", publisher: "SAP", category: "ERP", capabilities: ["Access inventory", "Provisioning target"] },
   oracle: { vendor: "oracle", publisher: "Oracle", category: "ERP", capabilities: ["Access inventory", "Provisioning target"] },

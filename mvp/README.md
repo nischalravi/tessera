@@ -365,6 +365,8 @@ builder can resolve (never the process environment).
 | Gallery category | Connector types | Template | Credential (sealed) | Read by |
 |---|---|---|---|---|
 | Cloud & IaaS | `awsorg` | `awsorg` | access keys as JSON; the keys may only assume the reader role | hand-over to the AWS connectors |
+| Cloud & IaaS | `azurerbac` | `azurerbac` | client secret, or a PEM with a certificate and its RSA key | the connector sync |
+| Cloud & IaaS | `gcpiam` | `gcpiam` | service account key (JSON) | the connector sync |
 | Source code | `githubscan` | `githubscan` | read-only token | the connector sync |
 | ERP | `sap`, `oracle` | `erp` | OAuth client secret | the connector sync |
 | Privileged access | `cyberark`, `beyondtrust`, `delinea` | `pam` | password (BeyondTrust: API key) | the connector sync |
@@ -374,7 +376,8 @@ builder can resolve (never the process environment).
 Connection config gains one field, `settings` (string to string), whose keys are closed per type
 and validated at the API boundary (`internal/connectors/governed`: `username`, `client_id`, `org`,
 `snapshot`, `regions`, `external_id`, `api_root`, `token_path`, `workers_path`, `csv_path`,
-`page_size`, `role_name`, `account_ids`, `management_account_id`, `identity_center_region`).
+`page_size`, `role_name`, `account_ids`, `management_account_id`, `identity_center_region`, `tenant_id`,
+`subscription_ids`, `management_group_ids`, `include_eligible`, `organization_id`, `folder_ids`, `project_ids`).
 `base_url` is an https host without a path (GitHub Enterprise Server's API URL ends in
 `/api/v3`; AWS and AgentCore take none). The system name is the one the connector writes
 (`cyberark`, `sap`, `github-scan`, `aws-agentcore`, ...), so counts and call limits line up with the
@@ -2662,6 +2665,57 @@ assignment back through provisioning.
 - **Readiness.** Template `salesforce` (connection type `salesforce` in New connection).
 - **Tests.** `internal/connectors/salesforce` against `sffake`, an in-process org that verifies the JWT signature,
   audience and expiry, serves SOQL with paging and injects faults.
+
+### Azure RBAC and Google Cloud IAM (issue #557)
+
+Two read connectors bring cloud entitlements into the access graph for the effective-permission
+analysis. Both are creatable from Settings, Connections, New connection (category Cloud & IaaS) with a
+readiness template (`azurerbac`, `gcpiam`; inventory templates, like `awsorg`), and are read by the
+connector sync. Neither writes anything: only GET requests (plus the token POST and Google's
+`getIamPolicy` POST, which is a read) are sent, and write-back is not offered.
+
+*Azure RBAC* (`internal/connectors/azurerbac`, system `azure`, env `TESSERA_AZURE_*`). Authenticates
+with the OAuth client credentials flow at `login.microsoftonline.com` for the scope
+`https://management.azure.com/.default`, with a client secret or a certificate (the credential is then
+a PEM holding the certificate and its RSA private key; the connector sends a PS256 client assertion with
+`x5t#S256`). It lists subscriptions (`GET /subscriptions`, 2022-12-01) and management groups (2020-05-01)
+unless the settings name them (a configured management group brings the subscriptions below it, through its descendants), then per scope reads `roleDefinitions` and `roleAssignments`
+(Microsoft.Authorization, api-version 2022-04-01) and, when `include_eligible` is true, the PIM
+`roleEligibilityScheduleInstances` (2020-10-01). Settings: `tenant_id`, `client_id`, `subscription_ids`,
+`management_group_ids`, `include_eligible`. The application needs Reader at the scopes.
+
+*Google Cloud IAM* (`internal/connectors/gcpiam`, system `gcp`, env `TESSERA_GCP_*`). Signs a JWT (RS256)
+with the service account key and exchanges it at `oauth2.googleapis.com/token`; no Google SDK. It walks
+the organization (`GET /v3/folders`, `/v3/projects` with `parent=`), reads each policy with Cloud
+Resource Manager v3 `POST {resource}:getIamPolicy` (policy version 3, so conditions are returned), the
+bound roles with IAM v1 `GET /v1/{role}` (their permissions decide privilege) and each project's service
+accounts (`GET /v1/projects/{id}/serviceAccounts`). Settings: `organization_id`, `folder_ids`,
+`project_ids` (at least one). The service account needs viewer roles (Security Reviewer).
+
+*Mapping.* A scope or Google resource is a resource; a role bound at a scope is a permission
+(`<scope>|<role>`, the action is the role name, privileged for Owner/Contributor-class roles, and for
+Google the roles that can set IAM policy or act as a service account). Users and service principals are
+accounts with a `direct_grant` edge; groups, domains, `allUsers` and federated principals are groups with
+a `grants` edge. A PIM eligible assignment is its own permission (`... (eligible)`), so eligibility is
+never read as access held now; a conditional binding is its own permission (`... (conditional)`).
+Inheritance is not flattened: Google resources carry `parent:<resource>` tags. Azure principals are
+object ids and Google groups are not expanded: names and members come from the Entra and Google Workspace
+connections of the same tenant. A scope or resource that cannot be read (403, 404) is skipped and the result
+is marked partial (`DiscoveryResult.Partial`; today the ingest deletion guard holds back removal of identities and
+account status only, not permissions or edges, which a follow-up will make respect it); nothing readable at all is an error.
+
+*Network.* Every call goes through `internal/safehttp`. The endpoints are fixed to the public cloud:
+`management.azure.com` and `login.microsoftonline.com`; `cloudresourcemanager.googleapis.com`,
+`iam.googleapis.com` and `oauth2.googleapis.com` (sovereign clouds are not supported). A connection has no
+URL setting. The `TESSERA_AZURE_MANAGEMENT_URL`, `TESSERA_AZURE_AUTHORITY_URL`, `TESSERA_GCP_CRM_URL`,
+`TESSERA_GCP_IAM_URL` and `TESSERA_GCP_TOKEN_URL` overrides exist only for a fake server in dev, and
+`New` refuses them in any other environment; a governed connection never reads them from the process
+environment. A next-page link is followed only on the same host. The credential is sealed like every
+connection secret and never printed (`connsync.Secret`); errors carry the status and provider code, never a
+body. Both connectors can also be run without a connection: `TESSERA_CONNECTORS=azure,gcp`.
+
+*Tests* run against fake servers only (no live tenant): `go test ./internal/connectors/azurerbac
+./internal/connectors/gcpiam ./internal/connectors/governed/...`.
 
 ### Database connector (PostgreSQL, MySQL, SQL Server, Oracle; issue #553)
 

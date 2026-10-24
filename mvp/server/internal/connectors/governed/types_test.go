@@ -7,7 +7,7 @@ import (
 
 func TestLookup(t *testing.T) {
 	want := map[string]string{"awsorg": "awsorg", "githubscan": "githubscan", "sap": "erp", "oracle": "erp", "cyberark": "pam",
-		"beyondtrust": "pam", "delinea": "pam", "fieldglass": "vms", "beeline": "vms", "csvfeed": "vms", "agentcore": "agentcore"}
+		"beyondtrust": "pam", "delinea": "pam", "fieldglass": "vms", "beeline": "vms", "csvfeed": "vms", "agentcore": "agentcore", "azurerbac": "azurerbac", "gcpiam": "gcpiam"}
 	if len(Types) != len(want) {
 		t.Errorf("%d types, want %d", len(Types), len(want))
 	}
@@ -24,7 +24,7 @@ func TestLookup(t *testing.T) {
 		t.Error("ldap is not a governed type")
 	}
 	// the connectors that read straight into the graph, and the ones that hand over to a feature
-	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false,
+	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false, "azurerbac": false, "gcpiam": false,
 		"awsorg": true, "fieldglass": true, "beeline": true, "csvfeed": true} {
 		if got, _ := Lookup(id); got.Feature != feature {
 			t.Errorf("%s feature = %v", id, got.Feature)
@@ -44,6 +44,9 @@ func TestValidateSettings(t *testing.T) {
 		Beeline:     {},
 		CSVFeed:     {"csv_path": "/feeds/contractors.csv"},
 		AWSOrg:      {"regions": "us-east-1, eu-west-1", "management_account_id": "111111111111", "external_id": "tessera-abc123", "role_name": "TesseraReader"},
+		AzureRBAC: {"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			"subscription_ids": "aaaa1111-0000-0000-0000-000000000001, bbbb2222-0000-0000-0000-000000000002", "management_group_ids": "corp,Platform_1", "include_eligible": "true"},
+		GCPIAM: {"organization_id": "123456789012", "folder_ids": "1000,2000", "project_ids": "alpha-proj-1, beta-proj-22"},
 	}
 	for typ, set := range good {
 		if errs := ValidateSettings(typ, set); len(errs) != 0 {
@@ -79,6 +82,19 @@ func TestValidateSettings(t *testing.T) {
 		{AWSOrg, map[string]string{"regions": "us-east-1", "external_id": "e1", "management_account_id": "12345678901x"}, "management_account_id"},
 		{AWSOrg, map[string]string{"regions": "us-east-1", "external_id": "bad id with spaces"}, "external_id"},
 		{AWSOrg, map[string]string{"regions": "us-east-1", "external_id": "e1", "role_name": "a b"}, "role_name"},
+		{AzureRBAC, map[string]string{"client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}, "tenant_id"},
+		{AzureRBAC, map[string]string{"tenant_id": "contoso.onmicrosoft.com", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}, "tenant_id"},
+		{AzureRBAC, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555"}, "client_id"},
+		{AzureRBAC, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "not-a-guid"}, "client_id"},
+		{AzureRBAC, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "subscription_ids": "../x"}, "subscription_ids"},
+		{AzureRBAC, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "management_group_ids": "a/b"}, "management_group_ids"},
+		{AzureRBAC, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "include_eligible": "yes"}, "include_eligible"},
+		{AzureRBAC, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "management_url": "https://x.example"}, "management_url"},
+		{GCPIAM, map[string]string{}, "organization_id"},
+		{GCPIAM, map[string]string{"organization_id": "organizations/1"}, "organization_id"},
+		{GCPIAM, map[string]string{"folder_ids": "a"}, "folder_ids"},
+		{GCPIAM, map[string]string{"project_ids": "A_B"}, "project_ids"},
+		{GCPIAM, map[string]string{"organization_id": "1", "token_url": "https://x.example"}, "token_url"},
 	} {
 		errs := ValidateSettings(c.typ, c.set)
 		found := false
