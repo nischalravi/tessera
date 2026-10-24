@@ -344,5 +344,29 @@ func GenerateRLS() ([]byte, error) {
 			fmt.Fprintf(&b, "CREATE POLICY lookup_by_hash ON %s FOR SELECT\n  USING (current_setting('app.lookup', true) = '%s');\n", t.Name, setting)
 		}
 	}
+	// Grants are re-applied after every migration run, so a table created by a
+	// migration after 0900_roles.sql is usable by the application role too (#605).
+	g, err := pgAppGrants()
+	if err != nil {
+		return nil, err
+	}
+	b.WriteString(g)
 	return []byte(b.String()), nil
+}
+
+// pgAppGrants returns the grant block of schema/postgres/0900_roles.sql (its
+// StatementBegin..StatementEnd body). It is idempotent and does nothing when
+// the tessera_app role does not exist (fail closed).
+func pgAppGrants() (string, error) {
+	src, err := pgSchemaFS.ReadFile("schema/postgres/0900_roles.sql")
+	if err != nil {
+		return "", err
+	}
+	const begin, end = "-- +goose StatementBegin\n", "-- +goose StatementEnd"
+	_, body, ok := strings.Cut(string(src), begin)
+	i := strings.Index(body, end)
+	if !ok || i < 0 {
+		return "", fmt.Errorf("store: 0900_roles.sql: no statement block")
+	}
+	return "\n-- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).\n" + body[:i], nil
 }
