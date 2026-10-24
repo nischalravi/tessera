@@ -12,7 +12,7 @@ func TestWorkdayAPIVersionValidation(t *testing.T) {
 		version string
 		bad     bool
 	}{
-		{"", false}, {"v44.0", false}, {"v44", false}, {"44.0", true}, {"v44.0/../x", true}, {"v4444.0", true},
+		{"", false}, {"v44.0", false}, {"v44", false}, {"v44.10", false}, {"v44.100", true}, {"44.0", true}, {"v44.0/../x", true}, {"v4444.0", true},
 	} {
 		cfg := ConnConfig{CorrelationKey: "employee_id", TenantHost: "wd5.myworkday.com", Interface: "get_workers", APIVersion: tc.version}
 		got := false

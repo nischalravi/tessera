@@ -137,7 +137,7 @@ var (
 	guidRE       = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	dnRE         = regexp.MustCompile(`(?i)^([a-z][a-z0-9-]*=[^,]+)(,\s*[a-z][a-z0-9-]*=[^,]+)*$`)
 	attrRE       = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,63}$`)
-	apiVersionRE = regexp.MustCompile(`^v[0-9]{1,3}(\.[0-9])?$`)
+	apiVersionRE = regexp.MustCompile(`^v[0-9]{1,3}(\.[0-9]{1,2})?$`)
 	printable    = regexp.MustCompile(`^[^\x00-\x1f\x7f]*$`)
 	cloudNames   = []string{"global", "usgov", "china"}
 	interfaces   = []string{"get_workers", "raas"}

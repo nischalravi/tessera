@@ -339,7 +339,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             {tid === "okta" && input("org_url", "Org URL", "An Okta domain (*.okta.com) or a verified custom domain.")}
             {tid === "entra" && <>{input("tenant_id", "Tenant id", "The directory GUID from the Overview page, not a domain.")}{input("cloud", "Cloud", "global, usgov or china")}{flag("hybrid", "Hybrid tenant", "Yes when users are synced from an on-premises AD (enables the cross-link check to AD).")}</>}
             {tid === "google" && <>{input("customer", "Customer", "my_customer or the customer id")}{input("domain", "Primary domain")}</>}
-            {tid === "workday" && <>{input("tenant_host", "Tenant host", "*.workday.com or *.myworkday.com")}{input("api_version", "Web Services version", "For example v44.0. Empty uses the connector default.")}{input("interface", "Interface", "get_workers or raas")}{input("time_zone", "Tenant time zone")}</>}
+            {tid === "workday" && <>{input("tenant_host", "Tenant host", "*.workday.com or *.myworkday.com")}{input("api_version", "Web Services version", "Recorded for the tenant check, for example v44.0. The connector does not yet pin calls to it (#597).")}{input("interface", "Interface", "get_workers or raas")}{input("time_zone", "Tenant time zone")}</>}
             {tid === "scim_app" && input("base_url", BASE_URL_FIELDS.scim_app.label, scimUrlHint(cfg.preset, presets))}
             {!gov && tid !== "scim_app" && BASE_URL_FIELDS[tid] && input("base_url", BASE_URL_FIELDS[tid].label, BASE_URL_FIELDS[tid].hint, { "aria-required": true })}
             {gov?.baseUrl && input("base_url", gov.baseUrl.label, gov.baseUrl.hint, { "aria-required": gov.baseUrl.required })}
