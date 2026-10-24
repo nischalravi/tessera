@@ -351,13 +351,16 @@ func has(s []string, v string) bool {
 	return false
 }
 
-func (f *Fake) knownUser(id string) bool {
+// activeUser returns the stored account id of an active user the request names. Writes record the stored id,
+// never the request's text, so nothing a request carried is kept or echoed.
+func (f *Fake) activeUser(v any) (string, bool) {
+	id, _ := v.(string)
 	for _, u := range f.Users {
 		if u.AccountID == id && u.Active {
-			return true
+			return u.AccountID, true
 		}
 	}
-	return false
+	return "", false
 }
 
 func (f *Fake) write(w http.ResponseWriter, r *http.Request) {
@@ -376,8 +379,8 @@ func (f *Fake) write(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Method == http.MethodPost {
-			acct, _ := body["accountId"].(string)
-			if !f.knownUser(acct) {
+			acct, ok := f.activeUser(body["accountId"])
+			if !ok {
 				fail(w, http.StatusNotFound)
 				return
 			}
@@ -388,12 +391,13 @@ func (f *Fake) write(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Method == http.MethodDelete {
-			if !f.knownUser(q.Get("accountId")) {
+			acct, ok := f.activeUser(q.Get("accountId"))
+			if !ok {
 				fail(w, http.StatusNotFound)
 				return
 			}
 			if !f.faults.DropWrites {
-				f.Members[gid] = remove(f.Members[gid], q.Get("accountId"))
+				f.Members[gid] = remove(f.Members[gid], acct)
 			}
 			w.WriteHeader(http.StatusOK)
 			return
@@ -407,8 +411,8 @@ func (f *Fake) write(w http.ResponseWriter, r *http.Request) {
 			case http.MethodPost:
 				users, _ := body["user"].([]any)
 				for _, u := range users {
-					acct, _ := u.(string)
-					if !f.knownUser(acct) {
+					acct, ok := f.activeUser(u)
+					if !ok {
 						fail(w, http.StatusNotFound)
 						return
 					}
@@ -420,7 +424,9 @@ func (f *Fake) write(w http.ResponseWriter, r *http.Request) {
 				return
 			case http.MethodDelete:
 				if !f.faults.DropWrites {
-					ro.Users = remove(ro.Users, q.Get("user"))
+					if acct, ok := f.activeUser(q.Get("user")); ok {
+						ro.Users = remove(ro.Users, acct)
+					}
 				}
 				w.WriteHeader(http.StatusNoContent)
 				return

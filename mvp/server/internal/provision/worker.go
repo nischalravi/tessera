@@ -196,6 +196,10 @@ const (
 )
 
 func (e *Engine) maxAttempts() int { return orInt(e.MaxAttempts, 5) }
+
+// waitStep is the backoff step of an operation waiting for a person (about ten minutes by default).
+const waitStep = 8
+
 func (e *Engine) maxVerifies() int { return orInt(e.MaxVerifies, 3) }
 
 func orInt(v, d int) int {
@@ -638,13 +642,19 @@ func (e *Engine) verify(ctx context.Context, t tenancy.ID, op *store.ProvOp, con
 	case err != nil:
 		// The read itself failed: try again later, and give up after the same
 		// number of tries a disagreeing read gets.
-		if op.VerifyAttempts >= e.maxVerifies() {
+		if !target.Retryable(err) || op.VerifyAttempts >= e.maxVerifies() {
 			return e.fail(ctx, t, op, fmt.Errorf("could not re-read the target to verify: %w", err), st)
 		}
 		st.Retrying++
 		return e.set(ctx, t, op, PendingVerification, store.ProvOpState{Status: PendingVerification, Attempts: op.Attempts,
 			VerifyAttempts: op.VerifyAttempts, NextAttemptAt: now.Add(e.backoff(op.VerifyAttempts)),
 			LastError: sp("re-read failed: " + errText(err))}, "", nil)
+	case !v.OK && v.Waiting:
+		// a person has to act: stay pending, re-read later, and do not spend a verification attempt
+		st.Retrying++
+		return e.set(ctx, t, op, PendingVerification, store.ProvOpState{Status: PendingVerification, Attempts: op.Attempts,
+			VerifyAttempts: max(0, op.VerifyAttempts-1), NextAttemptAt: now.Add(e.backoff(waitStep)),
+			LastError: sp("waiting: " + v.Observed), Observed: sp(v.Observed)}, "", nil)
 	case !v.OK && op.VerifyAttempts < e.maxVerifies():
 		st.Retrying++
 		return e.set(ctx, t, op, PendingVerification, store.ProvOpState{Status: PendingVerification, Attempts: op.Attempts,

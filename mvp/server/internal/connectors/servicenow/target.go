@@ -2,6 +2,7 @@ package servicenow
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -14,7 +15,10 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 )
 
-const tIncident = "incident"
+const (
+	tIncident  = "incident"
+	tGroupRole = "sys_group_has_role"
+)
 
 // Target is the provisioning target of an instance (target.Connector). In direct mode each operation changes
 // the instance, reading first, so a repeated request converges:
@@ -348,6 +352,12 @@ func (t *Target) Verify(ctx context.Context, r target.Request) (target.Verdict, 
 	if t.Ticket {
 		return t.ticketState(ctx, r)
 	}
+	return t.verifyDirect(ctx, r)
+}
+
+// verifyDirect reads the instance's own tables to see whether the change is there. Ticket mode uses it too: a
+// resolved ticket is a person's statement, and this is the proof.
+func (t *Target) verifyDirect(ctx context.Context, r target.Request) (target.Verdict, error) {
 	verdict := func(ok bool, expected, observed string) (target.Verdict, error) {
 		return target.Verdict{OK: ok, Expected: expected, Observed: observed}, nil
 	}
@@ -389,11 +399,22 @@ func (t *Target) Verify(ctx context.Context, r target.Request) (target.Verdict, 
 	}
 	have := false
 	if id != "" {
-		rows, err := t.held(ctx, id, e, r.Kind == target.RemoveEntitlement)
+		rows, err := t.held(ctx, id, e, false) // a role still held through a group is still held
 		if err != nil {
 			return target.Verdict{}, err
 		}
 		have = len(rows) > 0
+		if have && r.Kind == target.RemoveEntitlement && e.table == tHasRole {
+			direct := false
+			for _, row := range rows {
+				direct = direct || !row.flag("inherited")
+			}
+			obs := "still holds the role directly"
+			if !direct {
+				obs = "still holds the role " + t.via(ctx, id, e.id)
+			}
+			return verdict(false, "does not hold the role", obs)
+		}
 	}
 	obs := yes(have, "holds the "+e.field, "does not hold the "+e.field)
 	if r.Kind == target.AddEntitlement {
@@ -402,19 +423,48 @@ func (t *Target) Verify(ctx context.Context, r target.Request) (target.Verdict, 
 	return verdict(!have, "does not hold the "+e.field, obs)
 }
 
-// correlation is the incident's correlation id for an operation: derived from its key, so the query value is
-// always [a-z0-9-] whatever the key holds, and the key itself is not copied into the instance.
-func correlation(key string) (string, error) {
+// via names the group through which a user holds a role, best effort: the user's groups that carry the role.
+func (t *Target) via(ctx context.Context, user, role string) string {
+	groups, err := t.C.rows(ctx, tMember, "user="+user, []string{"group"})
+	if err != nil {
+		return "through a group"
+	}
+	carried, err := t.C.rows(ctx, tGroupRole, "role="+role, []string{"group"})
+	if err != nil {
+		return "through a group"
+	}
+	has := map[string]bool{}
+	for _, g := range carried {
+		has[g.str("group")] = true
+	}
+	for _, g := range groups {
+		id := g.str("group")
+		if !has[id] || !sysIDRE.MatchString(id) {
+			continue
+		}
+		if r, err := t.C.one(ctx, tGroup, "sys_id="+id, []string{"name"}); err == nil && r != nil && r.str("name") != "" {
+			return "through the group " + clip(r.str("name"))
+		}
+		return "through a group"
+	}
+	return "through a group"
+}
+
+// correlation is the incident's correlation id for an operation: an HMAC of its key under the integration's own
+// secret, so it is [a-z0-9-] whatever the key holds, the key is not copied into the instance, and nobody else
+// can compute it: an incident someone else made cannot stand in for the one Tessera raised.
+func (t *Target) correlation(key string) (string, error) {
 	if key == "" {
 		return "", target.Permanent("a ticket needs the operation's key")
 	}
-	sum := sha256.Sum256([]byte(key))
-	return "tessera-" + hex.EncodeToString(sum[:])[:32], nil
+	m := hmac.New(sha256.New, []byte("tessera-ticket|"+t.C.cfg.Secret.Reveal()))
+	m.Write([]byte(key))
+	return "tessera-" + hex.EncodeToString(m.Sum(nil))[:40], nil
 }
 
 // raise creates the incident of an operation unless one with its correlation id exists.
 func (t *Target) raise(ctx context.Context, r target.Request) error {
-	corr, err := correlation(r.Key)
+	corr, err := t.correlation(r.Key)
 	if err != nil {
 		return err
 	}
@@ -447,9 +497,11 @@ func (t *Target) raise(ctx context.Context, r target.Request) error {
 	return wrap("raise ticket", err)
 }
 
-// ticketState reports an operation done once its incident is resolved (state 6) or closed (state 7).
+// ticketState settles an operation from its incident. An open one keeps the operation waiting (the engine does
+// not count it against its verification limit); a canceled one fails it; a resolved (6) or closed (7) one counts
+// only when the instance's own tables show the change, since a person may resolve a ticket without doing it.
 func (t *Target) ticketState(ctx context.Context, r target.Request) (target.Verdict, error) {
-	corr, err := correlation(r.Key)
+	corr, err := t.correlation(r.Key)
 	if err != nil {
 		return target.Verdict{}, err
 	}
@@ -457,7 +509,7 @@ func (t *Target) ticketState(ctx context.Context, r target.Request) (target.Verd
 	if err != nil {
 		return target.Verdict{}, wrap("read ticket", err)
 	}
-	const want = "the ticket is resolved or closed"
+	const want = "the ticket is resolved or closed and the change is in place"
 	if row == nil {
 		return target.Verdict{OK: false, Expected: want, Observed: "there is no ticket"}, nil
 	}
@@ -466,10 +518,17 @@ func (t *Target) ticketState(ctx context.Context, r target.Request) (target.Verd
 		label = "ticket " + n
 	}
 	switch row.str("state") {
-	case "6":
-		return target.Verdict{OK: true, Expected: want, Observed: label + " is resolved"}, nil
-	case "7":
-		return target.Verdict{OK: true, Expected: want, Observed: label + " is closed"}, nil
+	case "8":
+		return target.Verdict{}, target.Permanent("%s was canceled", label)
+	case "6", "7":
+		v, err := t.verifyDirect(ctx, r)
+		if err != nil {
+			return target.Verdict{}, err
+		}
+		if !v.OK {
+			return target.Verdict{OK: false, Expected: want, Observed: label + " resolved but change not observed (" + v.Observed + ")"}, nil
+		}
+		return target.Verdict{OK: true, Expected: want, Observed: label + " resolved and the change is observed"}, nil
 	}
-	return target.Verdict{OK: false, Expected: want, Observed: label + " is open"}, nil
+	return target.Verdict{OK: false, Waiting: true, Expected: want, Observed: label + " is open"}, nil
 }

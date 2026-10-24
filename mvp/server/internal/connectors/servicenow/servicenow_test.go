@@ -2,6 +2,8 @@ package servicenow_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -536,11 +538,16 @@ func TestTarget_Entitlements(t *testing.T) {
 		t.Errorf("an add of a role already held through a group wrote")
 	}
 	rmR := target.Request{Kind: target.RemoveEntitlement, Key: "r2", Account: acct("bo"), Group: target.Group{ExternalID: rAdmin}}
-	if v := apply(t, tg, rmR); !v.OK {
-		t.Fatalf("remove role: %+v", v)
+	if err := tg.Apply(ctx, rmR); err != nil {
+		t.Fatal(err)
 	}
 	if left := r.fake.Rows("sys_user_has_role", "user", uBo, "role", rAdmin); len(left) != 1 || left[0]["inherited"] != "true" {
 		t.Errorf("the inherited row stays: %v", left)
+	}
+	r.fake.Set("sys_group_has_role", snfake.Row{"group": gApps, "role": rAdmin})
+	v, err := tg.Verify(context.Background(), rmR)
+	if err != nil || v.OK || !strings.Contains(v.Observed, "still holds the role through the group Apps") {
+		t.Errorf("a role still held through a group: %+v %v", v, err)
 	}
 	if err := tg.Apply(ctx, target.Request{Kind: target.RemoveEntitlement, Account: acct("ada@acme.example"), Group: target.Group{ExternalID: rSec}}); err != nil ||
 		len(r.fake.Rows("sys_user_has_role", "user", uAda, "role", rSec)) != 0 {
@@ -651,15 +658,48 @@ func TestTarget_TicketMode(t *testing.T) {
 		t.Errorf("ticket mode wrote something else: %v", r.fake.Created)
 	}
 	v, err := tg.Verify(ctx, req)
-	if err != nil || v.OK || !strings.Contains(v.Observed, "open") || !strings.Contains(v.Observed, "INC") {
+	if err != nil || v.OK || !v.Waiting || !strings.Contains(v.Observed, "open") || !strings.Contains(v.Observed, "INC") {
 		t.Errorf("open ticket: %+v %v", v, err)
 	}
+	// resolved or closed is a person's statement: the change must also be in the instance's tables
 	for state, word := range map[string]string{"6": "resolved", "7": "closed"} {
 		inc[0]["state"] = state
 		r.fake.Set("incident", inc[0])
-		if v, err := tg.Verify(ctx, req); err != nil || !v.OK || !strings.Contains(v.Observed, word) {
-			t.Errorf("state %s: %+v %v", state, v, err)
+		r.fake.Set("sys_user_grmember")
+		v, err := tg.Verify(ctx, req)
+		if err != nil || v.OK || v.Waiting || !strings.Contains(v.Observed, "change not observed") {
+			t.Errorf("state %s without the change: %+v %v", state, v, err)
 		}
+		r.fake.Set("sys_user_grmember", snfake.Row{"sys_id": "m9", "user": uBo, "group": gNet})
+		if v, err := tg.Verify(ctx, req); err != nil || !v.OK || !strings.Contains(v.Observed, "change is observed") {
+			t.Errorf("state %s with the change (%s): %+v %v", state, word, v, err)
+		}
+	}
+	// canceled: a permanent failure
+	inc[0]["state"] = "8"
+	r.fake.Set("incident", inc[0])
+	if _, err := tg.Verify(ctx, req); err == nil || target.Retryable(err) {
+		t.Errorf("a canceled ticket: %v", err)
+	}
+	// an incident someone else made with a guessable id (a hash of the key, no secret) is not Tessera's
+	sum := sha256.Sum256([]byte("guess-key"))
+	r.fake.Set("incident", snfake.Row{"sys_id": "x1", "number": "INC0000001", "state": "7", "correlation_id": "tessera-" + hex.EncodeToString(sum[:])[:32]},
+		snfake.Row{"sys_id": "x2", "number": "INC0000002", "state": "7", "correlation_id": "tessera-" + hex.EncodeToString(sum[:])[:40]})
+	if v, err := tg.Verify(ctx, target.Request{Kind: target.AddEntitlement, Key: "guess-key", Account: acct("bo"), Group: target.Group{ExternalID: gNet}}); err != nil || v.OK || !strings.Contains(v.Observed, "no ticket") {
+		t.Errorf("a pre-made incident stood in for the ticket: %+v %v", v, err)
+	}
+	// a revocation whose ticket was resolved while access remains is not done
+	r.fake.Set("sys_user_has_role", snfake.Row{"sys_id": "h9", "user": uBo, "role": rAdmin, "inherited": "true", "state": "active"})
+	r.fake.Set("sys_group_has_role", snfake.Row{"group": gApps, "role": rAdmin})
+	r.fake.Set("sys_user_grmember", snfake.Row{"sys_id": "m10", "user": uBo, "group": gApps})
+	rev := target.Request{Kind: target.RemoveEntitlement, Key: "rev1", Account: acct("bo"), Group: target.Group{ExternalID: rAdmin}}
+	if err := tg.Apply(ctx, rev); err != nil {
+		t.Fatal(err)
+	}
+	corr, _ := tg.CorrelationForTest("rev1")
+	r.fake.Set("incident", snfake.Row{"sys_id": "x3", "number": "INC0000003", "state": "6", "correlation_id": corr})
+	if v, err := tg.Verify(ctx, rev); err != nil || v.OK || !strings.Contains(v.Observed, "change not observed") || !strings.Contains(v.Observed, "the group Apps") {
+		t.Errorf("a revocation resolved while access remains: %+v %v", v, err)
 	}
 	if v, err := tg.Verify(ctx, target.Request{Kind: target.AddEntitlement, Key: "other", Account: acct("bo"), Group: target.Group{ExternalID: gNet}}); err != nil || v.OK || !strings.Contains(v.Observed, "no ticket") {
 		t.Errorf("no ticket: %+v %v", v, err)

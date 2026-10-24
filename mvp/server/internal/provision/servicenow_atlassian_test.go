@@ -89,25 +89,57 @@ func TestEngine_ServiceNowTarget(t *testing.T) {
 	// ticket mode: one incident per change; the change is done when a person resolves the incident
 	fk.SetFaults(snfake.Faults{})
 	set(true, `{"auth":"basic","username":"tessera.integration","password":"pw-1","mode":"ticket"}`)
-	op, _ = submit(target.AddEntitlement, target.Group{ExternalID: "0000000000000000000000000000a002", Name: "Apps"}, "sn:ticket")
-	e.run()
+	const apps, ops3 = "0000000000000000000000000000a002", "0000000000000000000000000000a003"
+	fk.Set("sys_user_group", snfake.Row{"sys_id": snGroup, "name": "Network"}, snfake.Row{"sys_id": apps, "name": "Apps"}, snfake.Row{"sys_id": ops3, "name": "Ops"})
+	op, _ = submit(target.AddEntitlement, target.Group{ExternalID: apps, Name: "Apps"}, "sn:ticket")
+	for i := 0; i < 6; i++ { // an open ticket keeps the operation waiting; it does not run out of verifications
+		e.run()
+	}
 	inc := fk.Rows("incident")
 	if len(inc) != 1 {
 		t.Fatalf("incidents = %d", len(inc))
 	}
-	if got := e.op(op.ID); got.Status == provision.Verified {
-		t.Fatalf("an open ticket was counted as done: %+v", got)
+	if got := e.op(op.ID); got.Status != provision.PendingVerification {
+		t.Fatalf("an open ticket must leave the operation pending: %+v", got)
 	}
+	// the person does the work and resolves the ticket
 	inc[0]["state"] = "6"
 	fk.Set("incident", inc[0])
+	fk.Set("sys_user_grmember", snfake.Row{"sys_id": "m1", "user": snUserID, "group": apps})
 	for i := 0; i < 4; i++ {
 		e.run()
 	}
 	if got := e.op(op.ID); got.Status != provision.Verified {
-		t.Errorf("a resolved ticket was not counted as done: %+v", got)
+		t.Errorf("a resolved ticket with the change in place was not counted as done: %+v", got)
 	}
 	if len(fk.Rows("incident")) != 1 {
 		t.Errorf("a retry raised another ticket: %d", len(fk.Rows("incident")))
+	}
+
+	// a ticket resolved without the change is a mismatch, never done
+	op, _ = submit(target.AddEntitlement, target.Group{ExternalID: ops3, Name: "Ops"}, "sn:ticket2")
+	e.run()
+	for _, row := range fk.Rows("incident") {
+		if row["state"] != "6" {
+			row["state"] = "6" // Rows shares the stored maps
+		}
+	}
+	for i := 0; i < 5; i++ {
+		e.run()
+	}
+	if got := e.op(op.ID); got.Status != provision.Mismatch {
+		t.Errorf("a ticket resolved without the change: %+v", got)
+	}
+
+	// a canceled ticket fails the operation at once
+	op, _ = submit(target.AddEntitlement, target.Group{ExternalID: snGroup, Name: "Network"}, "sn:ticket3")
+	e.run()
+	rows := fk.Rows("incident")
+	last := rows[len(rows)-1]
+	last["state"] = "8"
+	e.run()
+	if got := e.op(op.ID); got.Status != provision.Failed {
+		t.Errorf("a canceled ticket: %+v", got)
 	}
 }
 

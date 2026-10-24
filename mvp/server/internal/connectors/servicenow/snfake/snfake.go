@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -249,12 +250,21 @@ func (f *Fake) read(w http.ResponseWriter, r *http.Request, table string) {
 		o := Row{}
 		for k, v := range row { // keys come from the stored row, never from the request
 			if len(want) == 0 || want[k] {
-				o[k] = v
+				o[k] = esc(v)
 			}
 		}
 		out = append(out, o)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"result": out})
+}
+
+// esc HTML-escapes a stored string on the way out: a row can hold what a POST body carried, and the fake never
+// writes request-derived text back unescaped.
+func esc(v any) any {
+	if s, ok := v.(string); ok {
+		return html.EscapeString(s)
+	}
+	return v
 }
 
 func (f *Fake) newID() string {
@@ -343,7 +353,7 @@ func (f *Fake) write(w http.ResponseWriter, r *http.Request, parts []string) {
 				}
 			}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"result": Row{"sys_id": f.tables[table][i]["sys_id"]}})
+		writeJSON(w, http.StatusOK, map[string]any{"result": Row{"sys_id": parts[1]}})
 	case r.Method == http.MethodDelete && len(parts) == 2:
 		i := f.find(table, parts[1])
 		if i < 0 {

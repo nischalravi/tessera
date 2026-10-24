@@ -164,7 +164,7 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 	if err != nil {
 		return nil, err
 	}
-	held, err := read("role assignments", tHasRole, "user", "role", "state", "inherited", "expires")
+	held, err := read("role assignments", tHasRole, "user", "role", "state", "inherited")
 	if err != nil {
 		return nil, err
 	}
@@ -225,16 +225,12 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 			edge(u, g)
 		}
 	}
-	now := c.now()
 	for _, h := range held {
 		u, r := h.str("user"), h.str("role")
 		if !userIDs[u] || !roleIDs[r] {
 			continue
 		}
 		if st := strings.ToLower(h.str("state")); st == "inactive" || st == "suspended" {
-			continue
-		}
-		if exp := h.time("expires"); exp != nil && !exp.After(now) {
 			continue
 		}
 		edge(u, r)

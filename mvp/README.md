@@ -2693,14 +2693,20 @@ with stored rows and generated ids only.
   derived from the operation key, so the key never reaches a query.
 - **Graph.** Groups (`servicenow_group`) and roles (`servicenow_role`) are requestable groups; `admin`,
   `security_admin` and any role flagged `elevated_privilege` are privileged. A user is an account (disabled when
-  inactive or locked out), `member_of` its groups and every active, unexpired role row, inherited ones included.
+  inactive or locked out), `member_of` its groups and every active role row (`state` not inactive or suspended), inherited ones included.
 - **Write.** Target kind `servicenow` (Admin > Provisioning). The credential is JSON, sealed and write-only:
   `{"auth":"basic","username":"...","password":"..."}` or `{"auth":"oauth","client_id":"...","client_secret":"..."}`.
   Direct mode: create a user, update an allow-listed set of fields, deactivate (a delete does the same; users are not
-  deleted), add or remove a group membership or a directly granted role (the sys_id says which). Ticket mode
-  (`"mode":"ticket"`, optional `"assignment_group":"<sys_id>"`): one incident per change, found again by correlation id
-  so a retry raises no second one; the change counts as done when a person resolves or closes it, and the next read of
-  the instance is the proof. Write-back is off by default and, once on, follows the existing approval gates.
+  deleted), add or remove a group membership or a directly granted role (the sys_id says which). Removing a role
+  is verified against inherited rows too: if the user still holds it through a group, the change is not done and the
+  verdict names the group (`sys_group_has_role` and `sys_user_grmember`). Ticket mode (`"mode":"ticket"`, optional
+  `"assignment_group":"<sys_id>"`): one incident per change, found again by an HMAC correlation id under the
+  integration's own secret (not guessable, so an incident someone else makes cannot stand in for it). The operation
+  waits while the incident is open (it does not use up its verification attempts), fails at once if it is canceled
+  (state 8), and when it is resolved or closed (6, 7) counts as done only if the same read-back as direct mode finds
+  the change in the instance; otherwise it is a mismatch ("resolved but change not observed"). An incident left
+  open keeps the operation pending until it is cancelled in Tessera. Write-back is off by default and, once on,
+  follows the existing approval gates.
 
 **Atlassian Cloud** (`internal/connectors/atlassian`)
 
@@ -2710,7 +2716,7 @@ with stored rows and generated ids only.
   `/group/bulk` (also with `accessType=site-admin` and `admin`, which marks groups privileged), `/group/member`, and,
   for the project keys in Settings (at most 50), `/project/{key}/role` and `/project/{key}/role/{id}`. With an
   organization id and an organization API key (credential JSON `{"api_token":"...","admin_api_key":"..."}`), the admin
-  API `GET /admin/v1/orgs/{orgId}/users` adds each account's `product_access` and the e-mail a profile hides. Settings:
+  API `GET /admin/v1/orgs/{orgId}/users` adds each account's `product_access` and the e-mail a profile hides. Atlassian's `product_access` there is often empty in practice (JRACLOUD-97537), so an empty product list is not proof of no access; treat product groups as best effort. Settings:
   `email`, `org_id`, `project_keys`. Env: `TESSERA_ATLASSIAN_BASE_URL`, `_EMAIL`, `_CREDENTIAL`, `_ORG_ID`, `_PROJECTS`.
 - **Hosts.** `*.atlassian.net` for the site and `api.atlassian.com` for the admin API, nothing else. The admin API
   origin can be overridden only by a dev runtime (`TESSERA_ATLASSIAN_ADMIN_URL` through the governed endpoint
@@ -2728,9 +2734,9 @@ with stored rows and generated ids only.
 - **Not covered.** OAuth 2.0 (3LO) and Confluence space permissions are not read; the site token is basic only.
 - **Verification.** The Atlassian paths, parameters and field names were checked against Atlassian's published OpenAPI
   documents (Jira Cloud platform v3 and the Atlassian Access organization API). The ServiceNow Table API and
-  client-credentials token endpoint were checked against ServiceNow's documentation; the column names of the stock
-  tables (for example `elevated_privilege`, `inherited`, `expires`) are not in the public docs and a requested column
-  that does not exist is ignored by the instance, so confirm them against a developer instance.
+  client-credentials token endpoint were checked against ServiceNow's documentation. `inherited`, `state` and
+  `elevated_privilege` exist on the stock tables but are not in the public docs; a requested column that does not exist
+  is ignored by the instance, so confirm them against a developer instance.
 
 ### Azure RBAC and Google Cloud IAM (issue #557)
 
