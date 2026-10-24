@@ -23,6 +23,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/entra"
@@ -34,6 +35,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
@@ -54,6 +56,11 @@ import (
 // Salesforce (issue #555): "salesforce" reads users, profiles, roles, permission sets and permission set groups
 // (TESSERA_SALESFORCE_*, OAuth JWT bearer flow).
 //
+// ServiceNow and Atlassian Cloud (issue #559): "servicenow" reads users, groups and roles through the Table API
+// (TESSERA_SERVICENOW_*, basic or OAuth client credentials); "atlassian" reads users, groups, project roles and,
+// with an organization API key, product access (TESSERA_ATLASSIAN_*). Hosts are *.service-now.com,
+// *.servicenowservices.com, *.atlassian.net and api.atlassian.com only.
+//
 // Generic REST (issue #552): "rest" reads users, groups and entitlements from any HTTP/JSON system as
 // a declarative spec describes (TESSERA_REST_SPEC, TESSERA_REST_CREDENTIAL; see internal/connectors/restgen).
 //
@@ -61,7 +68,7 @@ import (
 // eligible assignments (TESSERA_AZURE_*); "gcp" reads Google Cloud IAM policies, roles and service
 // accounts (TESSERA_GCP_*). Both reach the public cloud only: an endpoint override is refused in prod.
 //
-// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, azure, gcp, github-scan and aws-agentcore factories. hc is the
+// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, azure, gcp, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -96,6 +103,12 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	}
 	connectors.Factories["salesforce"] = func(now time.Time) (connectors.Connector, error) {
 		return salesforce.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["servicenow"] = func(now time.Time) (connectors.Connector, error) {
+		return servicenow.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["atlassian"] = func(now time.Time) (connectors.Connector, error) {
+		return atlassian.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
 	}
 	connectors.Factories["rest"] = func(time.Time) (connectors.Connector, error) {
 		return restgen.FromEnv(os.Getenv, rt, hc)

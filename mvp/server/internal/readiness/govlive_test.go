@@ -33,6 +33,8 @@ var govConfig = map[string]string{
 	"azurerbac":      `{"correlation_key":"id","settings":{"tenant_id":"11111111-2222-3333-4444-555555555555","client_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}}`,
 	"gcpiam":         `{"correlation_key":"id","settings":{"organization_id":"123456789012"}}`,
 	"successfactors": `{"base_url":"https://api4.successfactors.com","correlation_key":"person_id","settings":{"company_id":"acme","username":"tessera-api"}}`,
+	"servicenow":     `{"base_url":"https://acme.service-now.com","settings":{"username":"tessera.integration"}}`,
+	"atlassian":      `{"base_url":"https://acme.atlassian.net","settings":{"email":"tessera@acme.example","project_keys":"PROJ"}}`,
 }
 
 func createGov(t *testing.T, s *Service, st Scope, typ, name, cfg string) string {
@@ -88,6 +90,9 @@ func TestGoverned_CreateEveryType(t *testing.T) {
 			}
 			if gt.ID == governed.GCPIAM {
 				required++ // none of its settings is required alone, but one scope must be named
+			}
+			if gt.ID == governed.ServiceNow {
+				required++ // the sign-in decides which identity is needed: basic needs the user, oauth the client id
 			}
 			if len(errs) != required {
 				t.Errorf("empty config: %d errors %v, want %d", len(errs), errs, required)

@@ -26,6 +26,7 @@ interface OpList { items: ProvOp[]; counts: Partial<Record<ProvStatus, number>> 
 
 /** Admin → Provisioning: the changes sent to target systems and whether a re-read confirmed them (issue #103). */
 const VAULT: Record<string, string> = { cyberark: "CyberArk safes", delinea: "Delinea folders", beyondtrust: "BeyondTrust smart rules", sap: "SAP roles", oracle: "Oracle Fusion roles" };
+const JSON_KINDS: Record<string, string> = { servicenow: "ServiceNow", atlassian: "Atlassian Cloud" }; // targets whose credential is JSON
 
 export function Provisioning() {
   const { data, error, reload } = useApi<OpList>("/provisioning/ops?limit=500");
@@ -128,7 +129,7 @@ function Targets() {
               {data.map((t) => (
                 <tr key={t.connection_id}>
                   <td className="small"><b>{t.connection_name}</b> <span className="faint">· {t.system}</span></td>
-                  <td className="small">{t.kind === "scim" ? `SCIM 2.0${t.dialect === "entra" ? " (Entra)" : ""}` : t.kind === "okta" ? "Okta API" : VAULT[t.kind] ?? "Dev fake"}{t.fault ? <span className="faint"> · {t.fault.replace("_", " ")}</span> : null}</td>
+                  <td className="small">{t.kind === "scim" ? `SCIM 2.0${t.dialect === "entra" ? " (Entra)" : ""}` : t.kind === "okta" ? "Okta API" : VAULT[t.kind] ?? JSON_KINDS[t.kind] ?? "Dev fake"}{t.fault ? <span className="faint"> · {t.fault.replace("_", " ")}</span> : null}</td>
                   <td className="small"><code className="xs">{t.base_url}</code></td>
                   <td><Badge tone={t.write_back ? "ok" : "neutral"}>{t.write_back ? "On" : "Off"}</Badge></td>
                   <td className="small">{t.kind === "scim" && !t.agent_id ? <DiscoveryCell target={t} onDone={reload} /> : <span className="faint">n/a</span>}</td>
@@ -288,12 +289,14 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
             <option value="beyondtrust">BeyondTrust Password Safe smart-rule roles</option>
             <option value="sap">SAP role assignment</option>
             <option value="oracle">Oracle Fusion role assignment</option>
+            <option value="servicenow">ServiceNow users, groups and roles, or a ticket per change</option>
+            <option value="atlassian">Atlassian Cloud groups and project roles</option>
             <option value="fake">Dev fake target (no real system)</option>
           </select>
         </label>
         {kind !== "fake" && (
           <label className="field">Base URL
-            <input className="input" required value={url} onChange={(e) => setUrl(e.target.value)} placeholder={kind === "okta" ? "https://example.okta.com" : kind in VAULT ? "https://vault.example.com" : "https://example.com/scim/v2"} />
+            <input className="input" required value={url} onChange={(e) => setUrl(e.target.value)} placeholder={kind === "okta" ? "https://example.okta.com" : kind === "servicenow" ? "https://name.service-now.com" : kind === "atlassian" ? "https://name.atlassian.net" : kind in VAULT ? "https://vault.example.com" : "https://example.com/scim/v2"} />
             <span className="hint">https only. Requests go through Tessera's outbound guard, which refuses private and internal addresses.</span>
           </label>
         )}
@@ -307,6 +310,8 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
         )}
         {(kind === "sap" || kind === "oracle") && <p className="small muted">Assigns and removes roles, then re-reads the user. Users are not created or disabled here.</p>}
         {kind in VAULT && kind !== "sap" && kind !== "oracle" && <p className="small muted">Adds and removes members of a safe at a profile (list, use, read, manage), then re-reads the safe. {kind === "delinea" ? "Secret Server has no role that means use." : kind === "beyondtrust" ? "Password Safe can express list and use only." : ""} Accounts are not created or disabled here.</p>}
+        {kind === "servicenow" && <p className="small muted">Credential: {`{"auth":"basic","username":"…","password":"…"}`} or {`{"auth":"oauth","client_id":"…","client_secret":"…"}`}. Add {`"mode":"ticket"`} (and optionally {`"assignment_group":"<sys_id>"`}) to raise an incident per change for a person to act on: the change counts as done once the incident is resolved or closed. Otherwise users are changed directly (deactivated, never deleted), and groups and roles are added or removed.</p>}
+        {kind === "atlassian" && <p className="small muted">Credential: {`{"email":"…","api_token":"…"}`}. Adds and removes group members and project role actors, then re-reads the site; product access is granted by the group that carries it. Accounts are not created or suspended here: use the Atlassian Cloud SCIM target.</p>}
         {kind === "fake" && (
           <label className="field">Simulated fault
             <select className="input" value={fault} onChange={(e) => setFault(e.target.value)}>
@@ -317,7 +322,7 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
           </label>
         )}
         {kind !== "fake" && (
-          <label className="field">{kind === "okta" ? "API token" : kind in VAULT ? kind === "sap" || kind === "oracle" ? "OAuth client (client_id:client_secret)" : "Service user and secret (user:secret)" : "Bearer token"}
+          <label className="field">{kind === "okta" ? "API token" : kind in JSON_KINDS ? "Credential (JSON)" : kind in VAULT ? kind === "sap" || kind === "oracle" ? "OAuth client (client_id:client_secret)" : "Service user and secret (user:secret)" : "Bearer token"}
             <input className="input" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder={target?.has_credential ? "Stored; leave empty to keep it (same kind and host only)" : ""} />
             <span className="hint">Write-only. Sealed under the platform key and never shown again.</span>
           </label>

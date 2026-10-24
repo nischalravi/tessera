@@ -24,7 +24,7 @@ type Net struct {
 	AWS func(p Params) (connectors.Prober, error)
 	Now func() time.Time
 	// Endpoints are dev and test endpoint overrides of the cloud entitlement connectors (a fake
-	// Azure or Google), keyed by the connector's own TESSERA_AZURE_* and TESSERA_GCP_* variable.
+	// Azure, Google or Atlassian admin API), keyed by the connector's own variable (TESSERA_AZURE_*, TESSERA_GCP_*, TESSERA_ATLASSIAN_ADMIN_URL).
 	// The server never sets them; a dev runtime applies them and any other runtime refuses a
 	// connection that is given one (Overrides).
 	Endpoints map[string]string
@@ -32,7 +32,7 @@ type Net struct {
 
 // endpointKeys are the overrides Net.Endpoints may hold.
 var endpointKeys = map[string]bool{"TESSERA_AZURE_MANAGEMENT_URL": true, "TESSERA_AZURE_AUTHORITY_URL": true,
-	"TESSERA_GCP_CRM_URL": true, "TESSERA_GCP_IAM_URL": true, "TESSERA_GCP_TOKEN_URL": true}
+	"TESSERA_GCP_CRM_URL": true, "TESSERA_GCP_IAM_URL": true, "TESSERA_GCP_TOKEN_URL": true, "TESSERA_ATLASSIAN_ADMIN_URL": true}
 
 // Overrides layers n.Endpoints over getenv. It refuses them outside the dev runtime, and refuses an
 // unknown key, so a production connection can only reach the public cloud endpoints.
@@ -113,6 +113,12 @@ func (p Params) Env() (func(string) string, error) {
 		m["TESSERA_AZURE_SUBSCRIPTIONS"], m["TESSERA_AZURE_MANAGEMENT_GROUPS"] = set("subscription_ids"), set("management_group_ids")
 		m["TESSERA_AZURE_ELIGIBLE"] = set("include_eligible")
 		m["TESSERA_AZURE_CREDENTIAL"] = "env:" + secretVar // no endpoint override is ever set: a connection reaches the public cloud only
+	case ServiceNow:
+		m[pre+"BASE_URL"], m[pre+"AUTH"], m[pre+"USERNAME"], m[pre+"CLIENT_ID"] = p.BaseURL, set("auth_mode"), set("username"), set("client_id")
+		m[pre+"SECRET"] = "env:" + secretVar
+	case Atlassian:
+		m[pre+"BASE_URL"], m[pre+"EMAIL"], m[pre+"ORG_ID"], m[pre+"PROJECTS"] = p.BaseURL, set("email"), set("org_id"), set("project_keys")
+		m[pre+"CREDENTIAL"] = "env:" + secretVar // no admin API override is ever set: a connection reaches api.atlassian.com only
 	case GCPIAM:
 		m["TESSERA_GCP_ORG_ID"], m["TESSERA_GCP_FOLDER_IDS"], m["TESSERA_GCP_PROJECT_IDS"] = set("organization_id"), set("folder_ids"), set("project_ids")
 		m["TESSERA_GCP_KEY"] = "env:" + secretVar // likewise no endpoint override

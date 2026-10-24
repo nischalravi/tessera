@@ -15,6 +15,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
@@ -22,6 +23,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vms"
 )
@@ -152,6 +154,47 @@ func Prober(p governed.Params, n governed.Net) (connectors.Prober, error) {
 			r, err := c.Probe(ctx)
 			return cloudProbe{mode: "json_key", counts: map[string]int{"resource": r.Resources, "binding": r.Bindings}}, err
 		}, refused: gcpiam.ErrCredential}, nil
+	case governed.ServiceNow:
+		getenv, err := p.Env()
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := servicenow.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := servicenow.Open(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		return &saasProber{base: p.BaseURL, hc: n.HC, id: c.Identity(), mode: c.Mode(), probe: func(ctx context.Context) (map[string]int, error) {
+			r, err := c.Probe(ctx)
+			return map[string]int{"user": r.Users, "group": r.Groups, "role": r.Roles, "role_assignment": r.Assignments}, err
+		}}, nil
+	case governed.Atlassian:
+		getenv, err := p.Env()
+		if err == nil {
+			getenv, err = n.Overrides(getenv)
+		}
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := atlassian.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := atlassian.Open(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		return &saasProber{base: p.BaseURL, hc: n.HC, id: c.Identity(), mode: c.Mode(), probe: func(ctx context.Context) (map[string]int, error) {
+			r, err := c.Probe(ctx)
+			counts := map[string]int{"user": r.Users, "group": r.Groups}
+			if c.HasAdmin() {
+				counts["organization_user"] = r.AdminUsers
+			}
+			return counts, err
+		}}, nil
 	case governed.AWSOrg:
 		if n.AWS == nil {
 			return nil, errors.New("awsorg: no AWS client")
@@ -446,6 +489,57 @@ func (p *erpProber) Sample(ctx context.Context, _ connectors.SampleQuery) (conne
 	}
 	return connectors.SampleStats{Objects: min(len(p.roles)+len(users), connectors.MaxSample), Available: true,
 		PerClass: map[string]int{"role": len(p.roles), "user": len(users)}}, nil
+}
+
+// ---------------------------------------------------------------- ServiceNow and Atlassian Cloud
+
+// saasProber probes a SaaS connector with one bounded read (a page of each object class): it proves the
+// credential, the access to what is read and the shape of the answers, and keeps counts only.
+type saasProber struct {
+	noop
+	base  string
+	hc    *http.Client
+	id    string
+	mode  string
+	probe func(context.Context) (map[string]int, error)
+	got   map[string]int
+}
+
+func (p *saasProber) Connect(ctx context.Context) (connectors.ConnInfo, error) {
+	return httpConnect(ctx, p.hc, p.base)
+}
+
+func (p *saasProber) read(ctx context.Context) error {
+	if p.got != nil {
+		return nil
+	}
+	c, err := p.probe(ctx)
+	if err != nil {
+		return err
+	}
+	p.got = c
+	return nil
+}
+
+func (p *saasProber) Authenticate(ctx context.Context) (connectors.AuthInfo, error) {
+	if err := p.read(ctx); err != nil {
+		if denied(err) {
+			return connectors.AuthInfo{OK: false, Mode: p.mode}, nil
+		}
+		return connectors.AuthInfo{}, err
+	}
+	return connectors.AuthInfo{OK: true, Identity: p.id, Mode: p.mode}, nil
+}
+
+func (p *saasProber) Sample(ctx context.Context, _ connectors.SampleQuery) (connectors.SampleStats, error) {
+	if err := p.read(ctx); err != nil {
+		return connectors.SampleStats{}, err
+	}
+	total := 0
+	for _, n := range p.got {
+		total += n
+	}
+	return connectors.SampleStats{Objects: min(total, connectors.MaxSample), Available: true, PerClass: p.got}, nil
 }
 
 // ---------------------------------------------------------------- Azure RBAC and Google Cloud IAM
