@@ -32,6 +32,7 @@ var govConfig = map[string]string{
 	"agentcore":   `{"settings":{"snapshot":"agentcore.json"}}`,
 	"azurerbac":   `{"correlation_key":"id","settings":{"tenant_id":"11111111-2222-3333-4444-555555555555","client_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}}`,
 	"gcpiam":      `{"correlation_key":"id","settings":{"organization_id":"123456789012"}}`,
+	"unixssh":     `{"correlation_key":"id","settings":{"host":"host1.example.com","username":"tessera","host_key":"SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8"}}`,
 }
 
 func createGov(t *testing.T, s *Service, st Scope, typ, name, cfg string) string {
@@ -479,7 +480,7 @@ func TestGoverned_ERPWriteScopeAttestedWhenUnsupported(t *testing.T) {
 
 func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 	reg := template.MustDefault()
-	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam"} {
+	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "unixssh"} {
 		r, ok := reg.Get(id)
 		if !ok {
 			t.Fatalf("no template %s", id)
@@ -487,7 +488,7 @@ func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 		if got := slices.Sorted(slices.Values(r.ConnectorTypes)); !slices.Equal(got, governedTypesOf(id)) {
 			t.Errorf("%s covers %v", id, r.ConnectorTypes)
 		}
-		wantInv := id == "awsorg" || id == "githubscan" || id == "vms" || id == "azurerbac" || id == "gcpiam"
+		wantInv := id == "awsorg" || id == "githubscan" || id == "vms" || id == "azurerbac" || id == "gcpiam" || id == "unixssh"
 		if r.Inventory != wantInv {
 			t.Errorf("%s inventory = %v", id, r.Inventory)
 		}

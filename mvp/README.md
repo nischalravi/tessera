@@ -367,6 +367,7 @@ builder can resolve (never the process environment).
 | Cloud & IaaS | `awsorg` | `awsorg` | access keys as JSON; the keys may only assume the reader role | hand-over to the AWS connectors |
 | Cloud & IaaS | `azurerbac` | `azurerbac` | client secret, or a PEM with a certificate and its RSA key | the connector sync |
 | Cloud & IaaS | `gcpiam` | `gcpiam` | service account key (JSON) | the connector sync |
+| Servers & hosts | `unixssh` | `unixssh` | SSH private key (no passphrase) | the connector sync |
 | Source code | `githubscan` | `githubscan` | read-only token | the connector sync |
 | ERP | `sap`, `oracle` | `erp` | OAuth client secret | the connector sync |
 | Privileged access | `cyberark`, `beyondtrust`, `delinea` | `pam` | password (BeyondTrust: API key) | the connector sync |
@@ -2716,6 +2717,55 @@ body. Both connectors can also be run without a connection: `TESSERA_CONNECTORS=
 
 *Tests* run against fake servers only (no live tenant): `go test ./internal/connectors/azurerbac
 ./internal/connectors/gcpiam ./internal/connectors/governed/...`.
+
+### Unix and Linux over SSH (issue #558)
+
+`internal/connectors/unixssh` (system `unix`, env `TESSERA_UNIXSSH_*`) reads the local accounts, groups,
+group members, sudoers rules and last logins of one host over SSH. The New connection gallery has a
+**Unix/Linux host (SSH)** tile (category Servers & hosts, logo: the simple-icons Linux mark; template
+`unixssh`, an inventory template). One connection per host. It is read-only: create, lock and delete
+(write-back) are not part of this connector.
+
+*Settings.* `host` (name or IP, no scheme or port), `port` (default 22), `username`, `host_key` and
+`use_sudo`. The credential is the private key (PEM or OpenSSH format, not passphrase protected), sealed
+like every connection secret and never printed. Key authentication only: there is no password or
+keyboard-interactive method.
+
+*Host key.* Pinning is mandatory: `host_key` is a `SHA256:` fingerprint (`ssh-keygen -lf
+/etc/ssh/ssh_host_ed25519_key.pub`) or the public key line. A host that presents another key is refused
+before any authentication is offered (`unix.auth` fails). The code has no `InsecureIgnoreHostKey`; a test
+reads the package for it.
+
+*Commands.* Only these constant strings are ever sent: `getent passwd`, `getent group`, `lastlog`, and
+`cat /etc/sudoers && find /etc/sudoers.d ... -exec cat {} +` (through `sudo -n sh -c '...'` when `use_sudo`
+is true). Nothing from a setting or from the host is placed in a command. Most hosts allow the sudoers
+read to root only; with `use_sudo` the login needs a `NOPASSWD` rule in sudoers.d for `/bin/sh` with exactly
+the arguments `-c` and the read script (sudo matches arguments literally; check with `sudo -l` as the login). When the sudoers files cannot be read the host is still read, with its
+resource tagged `sudoers:unreadable`; a missing `lastlog` is skipped.
+
+*Parsing.* Output is parsed strictly with size limits (16 MiB for passwd and group, 2 MiB for sudoers).
+A passwd or group line that does not match its grammar is dropped and the result is marked partial, so the
+deletion guard holds removals. Sudoers: user specifications, `User_Alias` and `Cmnd_Alias` are understood;
+negations, `Defaults`, includes and the other aliases are not rules; a line it cannot read is counted in a
+`sudoers-skipped:N` tag. Files in `sudoers.d` with a dot or a trailing `~` are skipped, as sudo does.
+
+*Mapping.* Host: resource `unix_host`. Passwd entry: account `user@host` (`service` for uids under 1000
+other than root; `disabled` for a uid of 1000 or more whose shell is `nologin` or `false`). Group:
+`group@host`, kind `unix_group`, with `member_of` edges from its members and from accounts whose primary
+gid it is. Privileged: every uid 0 account (permission `uid 0 (root)`), every sudoers rule (a permission
+on the host granted to the user or group it names, aliases expanded), and a group that a rule names or
+whose gid is 0. A rule for a user that `getent` does not list (for example a directory user) has no edge.
+
+*Network.* SSH is not HTTP, so the socket is opened with `safehttp.NewDialer`: the host is resolved once
+and refused when any address is loopback, private, link-local, cloud metadata or another blocked range;
+only the configured port is dialled. The dev runtime may allow loopback (`TESSERA_OUTBOUND_ALLOW_LOOPBACK`),
+production never. There is no setting that allows private addresses from the server: hosts on a private
+network are read through the Directory Agent, which is not wired for this connector yet. Dial (10 s),
+handshake (15 s) and each command (30 s) have timeouts.
+
+*Tests* run against an in-process SSH server (`fake_test.go`, in `_test.go` files only; it never echoes
+a command back): `go test -race ./internal/connectors/unixssh ./internal/connectors/governed/...`. The
+connector can also run without a connection: `TESSERA_CONNECTORS=unix`.
 
 ### Database connector (PostgreSQL, MySQL, SQL Server, Oracle; issue #553)
 

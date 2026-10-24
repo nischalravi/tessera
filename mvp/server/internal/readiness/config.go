@@ -141,7 +141,7 @@ var (
 	cloudNames = []string{"global", "usgov", "china"}
 	interfaces = []string{"get_workers", "raas"}
 	// governedTemplates are the templates of the connector types in internal/connectors/governed.
-	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam"}
+	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "unixssh"}
 )
 
 // Validate checks a config for a template. It returns every problem rather
@@ -248,7 +248,7 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 		} else if cfg.Preset != "" {
 			bad("preset", "unknown SCIM preset %q", cfg.Preset)
 		}
-	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam":
+	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "unixssh":
 		typ := connectorType
 		if typ == "" && len(t.ConnectorTypes) > 0 {
 			typ = t.ConnectorTypes[0]
