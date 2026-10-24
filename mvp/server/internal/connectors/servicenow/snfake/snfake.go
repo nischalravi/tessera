@@ -15,6 +15,7 @@ import (
 	"html"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -99,6 +100,8 @@ func matches(r Row, kv []string) bool {
 }
 
 const token = "tok-sn-fake" // #nosec G101 -- a fixed test token of a fake
+
+var hostRE = regexp.MustCompile(`^[A-Za-z0-9.:\[\]-]{1,255}$`)
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -227,7 +230,10 @@ func (f *Fake) read(w http.ResponseWriter, r *http.Request, table string) {
 	}
 	next := offset + len(page)
 	if next < len(rows) && !f.faults.NoLink {
-		host := "https://" + r.Host
+		host := "https://invalid.example" // a request header is never echoed unchecked
+		if hostRE.MatchString(r.Host) {
+			host = "https://" + r.Host
+		}
 		if f.faults.BadLink {
 			host = "https://evil.example.com"
 		}
@@ -353,7 +359,7 @@ func (f *Fake) write(w http.ResponseWriter, r *http.Request, parts []string) {
 				}
 			}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"result": Row{"sys_id": parts[1]}})
+		writeJSON(w, http.StatusOK, map[string]any{"result": Row{}}) // a fixed body: the path id is never echoed
 	case r.Method == http.MethodDelete && len(parts) == 2:
 		i := f.find(table, parts[1])
 		if i < 0 {
