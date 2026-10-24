@@ -23,14 +23,19 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/entra"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
@@ -46,10 +51,17 @@ import (
 // ERPs (issue #304): "sap" and "oracle" read roles, t-codes and authorization objects as
 // fine-grained entitlements (TESSERA_SAP_*, TESSERA_ORACLE_*).
 //
+// Salesforce (issue #555): "salesforce" reads users, profiles, roles, permission sets and permission set groups
+// (TESSERA_SALESFORCE_*, OAuth JWT bearer flow).
+//
 // Generic REST (issue #552): "rest" reads users, groups and entitlements from any HTTP/JSON system as
 // a declarative spec describes (TESSERA_REST_SPEC, TESSERA_REST_CREDENTIAL; see internal/connectors/restgen).
 //
-// Register adds the okta, entra, google, workday, rest, github-scan and aws-agentcore factories. hc is the
+// Cloud entitlements (issue #557): "azure" reads Azure RBAC role assignments, role definitions and PIM
+// eligible assignments (TESSERA_AZURE_*); "gcp" reads Google Cloud IAM policies, roles and service
+// accounts (TESSERA_GCP_*). Both reach the public cloud only: an endpoint override is refused in prod.
+//
+// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, azure, gcp, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -64,6 +76,11 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["workday"] = func(now time.Time) (connectors.Connector, error) {
 		return workday.FromEnv(os.Getenv, now, rt, hc)
 	}
+	// SAP SuccessFactors (issue #556): "successfactors" reads people, jobs and lifecycle events as an
+	// HR source (TESSERA_SUCCESSFACTORS_*; see internal/connectors/successfactors).
+	connectors.Factories["successfactors"] = func(now time.Time) (connectors.Connector, error) {
+		return successfactors.FromEnv(os.Getenv, now, rt, hc)
+	}
 	connectors.Factories["github-scan"] = func(now time.Time) (connectors.Connector, error) {
 		return githubscan.FromEnv(os.Getenv, now, rt, hc)
 	}
@@ -77,8 +94,23 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 			return erp.FromEnv(system, os.Getenv, rt, hc, func() time.Time { return now })
 		}
 	}
+	connectors.Factories["salesforce"] = func(now time.Time) (connectors.Connector, error) {
+		return salesforce.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
 	connectors.Factories["rest"] = func(time.Time) (connectors.Connector, error) {
 		return restgen.FromEnv(os.Getenv, rt, hc)
+	}
+	// Databases (issue #553): "sql" reads accounts, roles and grants of one PostgreSQL, MySQL,
+	// SQL Server or Oracle database (TESSERA_SQL_*). It dials through the safehttp address
+	// policy and ignores hc.
+	connectors.Factories["sql"] = func(time.Time) (connectors.Connector, error) {
+		return sqldb.FromEnv(os.Getenv, os.ReadFile, rt)
+	}
+	connectors.Factories["azure"] = func(now time.Time) (connectors.Connector, error) {
+		return azurerbac.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["gcp"] = func(now time.Time) (connectors.Connector, error) {
+		return gcpiam.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
 	}
 	connectors.Factories["aws-agentcore"] = func(now time.Time) (connectors.Connector, error) {
 		return agentcore.FromEnv(os.Getenv, now)

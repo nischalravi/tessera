@@ -19,17 +19,20 @@ import (
 
 // govConfig is a valid minimal config of every governed connector type.
 var govConfig = map[string]string{
-	"awsorg":      `{"correlation_key":"arn","settings":{"regions":"us-east-1","management_account_id":"111111111111","external_id":"tessera-abc123"}}`,
-	"githubscan":  `{"settings":{"org":"acme"}}`,
-	"sap":         `{"base_url":"https://s4.example.com","settings":{"client_id":"tessera"}}`,
-	"oracle":      `{"base_url":"https://fa.example.com","settings":{"client_id":"tessera"}}`,
-	"cyberark":    `{"base_url":"https://pvwa.example.com","settings":{"username":"svc-tessera"}}`,
-	"beyondtrust": `{"base_url":"https://bt.example.com","settings":{"username":"tessera"}}`,
-	"delinea":     `{"base_url":"https://ss.example.com","settings":{"username":"tessera"}}`,
-	"fieldglass":  `{"base_url":"https://fg.example.com","correlation_key":"worker_id"}`,
-	"beeline":     `{"base_url":"https://bl.example.com","correlation_key":"worker_id"}`,
-	"csvfeed":     `{"base_url":"https://feeds.example.com","correlation_key":"worker_id","settings":{"csv_path":"/c.csv"}}`,
-	"agentcore":   `{"settings":{"snapshot":"agentcore.json"}}`,
+	"awsorg":         `{"correlation_key":"arn","settings":{"regions":"us-east-1","management_account_id":"111111111111","external_id":"tessera-abc123"}}`,
+	"githubscan":     `{"settings":{"org":"acme"}}`,
+	"sap":            `{"base_url":"https://s4.example.com","settings":{"client_id":"tessera"}}`,
+	"oracle":         `{"base_url":"https://fa.example.com","settings":{"client_id":"tessera"}}`,
+	"cyberark":       `{"base_url":"https://pvwa.example.com","settings":{"username":"svc-tessera"}}`,
+	"beyondtrust":    `{"base_url":"https://bt.example.com","settings":{"username":"tessera"}}`,
+	"delinea":        `{"base_url":"https://ss.example.com","settings":{"username":"tessera"}}`,
+	"fieldglass":     `{"base_url":"https://fg.example.com","correlation_key":"worker_id"}`,
+	"beeline":        `{"base_url":"https://bl.example.com","correlation_key":"worker_id"}`,
+	"csvfeed":        `{"base_url":"https://feeds.example.com","correlation_key":"worker_id","settings":{"csv_path":"/c.csv"}}`,
+	"agentcore":      `{"settings":{"snapshot":"agentcore.json"}}`,
+	"azurerbac":      `{"correlation_key":"id","settings":{"tenant_id":"11111111-2222-3333-4444-555555555555","client_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}}`,
+	"gcpiam":         `{"correlation_key":"id","settings":{"organization_id":"123456789012"}}`,
+	"successfactors": `{"base_url":"https://api4.successfactors.com","correlation_key":"person_id","settings":{"company_id":"acme","username":"tessera-api"}}`,
 }
 
 func createGov(t *testing.T, s *Service, st Scope, typ, name, cfg string) string {
@@ -63,7 +66,7 @@ func TestGoverned_CreateEveryType(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if b.Conn.System != gt.System || b.Conn.ConnectorType != gt.ID || b.Conn.Role != "account_source" || b.Simulated() {
+			if b.Conn.System != gt.System || b.Conn.ConnectorType != gt.ID || b.Conn.Role != tmpl.Role || b.Simulated() {
 				t.Errorf("connection = %+v", b.Conn)
 			}
 			if b.Rev.TemplateID != gt.Template || b.Rev.State != store.StateDraft {
@@ -82,6 +85,9 @@ func TestGoverned_CreateEveryType(t *testing.T) {
 			}
 			if req, _ := governed.BaseURLUse(gt.ID); req {
 				required++
+			}
+			if gt.ID == governed.GCPIAM {
+				required++ // none of its settings is required alone, but one scope must be named
 			}
 			if len(errs) != required {
 				t.Errorf("empty config: %d errors %v, want %d", len(errs), errs, required)
@@ -474,7 +480,7 @@ func TestGoverned_ERPWriteScopeAttestedWhenUnsupported(t *testing.T) {
 
 func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 	reg := template.MustDefault()
-	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore"} {
+	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam"} {
 		r, ok := reg.Get(id)
 		if !ok {
 			t.Fatalf("no template %s", id)
@@ -482,7 +488,7 @@ func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 		if got := slices.Sorted(slices.Values(r.ConnectorTypes)); !slices.Equal(got, governedTypesOf(id)) {
 			t.Errorf("%s covers %v", id, r.ConnectorTypes)
 		}
-		wantInv := id == "awsorg" || id == "githubscan" || id == "vms"
+		wantInv := id == "awsorg" || id == "githubscan" || id == "vms" || id == "azurerbac" || id == "gcpiam"
 		if r.Inventory != wantInv {
 			t.Errorf("%s inventory = %v", id, r.Inventory)
 		}

@@ -92,7 +92,8 @@ server/
                         production read connectors (see Production connectors)
       githubscan/       GitHub org scan for MCP configs and agent credentials (see AI agent discovery)
       agentcore/        AWS Bedrock AgentCore agents, fixture-only (see AI agent discovery)
-      all/              registers okta, entra, google, workday, github-scan and aws-agentcore (imported by cmd/tessera)
+      successfactors/   SAP SuccessFactors HR source over OData v2 (see SAP SuccessFactors HR source)
+      all/              registers okta, entra, google, workday, successfactors, github-scan and aws-agentcore (imported by cmd/tessera)
     ingest/             phased, idempotent upsert of connector output (cross-system refs resolve)
     store/              schema, row types and parameterized queries (database/sql, no ORM)
     audit/              hash-chained audit ledger: Record, the http.request middleware (fail-closed
@@ -365,6 +366,8 @@ builder can resolve (never the process environment).
 | Gallery category | Connector types | Template | Credential (sealed) | Read by |
 |---|---|---|---|---|
 | Cloud & IaaS | `awsorg` | `awsorg` | access keys as JSON; the keys may only assume the reader role | hand-over to the AWS connectors |
+| Cloud & IaaS | `azurerbac` | `azurerbac` | client secret, or a PEM with a certificate and its RSA key | the connector sync |
+| Cloud & IaaS | `gcpiam` | `gcpiam` | service account key (JSON) | the connector sync |
 | Source code | `githubscan` | `githubscan` | read-only token | the connector sync |
 | ERP | `sap`, `oracle` | `erp` | OAuth client secret | the connector sync |
 | Privileged access | `cyberark`, `beyondtrust`, `delinea` | `pam` | password (BeyondTrust: API key) | the connector sync |
@@ -374,7 +377,8 @@ builder can resolve (never the process environment).
 Connection config gains one field, `settings` (string to string), whose keys are closed per type
 and validated at the API boundary (`internal/connectors/governed`: `username`, `client_id`, `org`,
 `snapshot`, `regions`, `external_id`, `api_root`, `token_path`, `workers_path`, `csv_path`,
-`page_size`, `role_name`, `account_ids`, `management_account_id`, `identity_center_region`).
+`page_size`, `role_name`, `account_ids`, `management_account_id`, `identity_center_region`, `tenant_id`,
+`subscription_ids`, `management_group_ids`, `include_eligible`, `organization_id`, `folder_ids`, `project_ids`).
 `base_url` is an https host without a path (GitHub Enterprise Server's API URL ends in
 `/api/v3`; AWS and AgentCore take none). The system name is the one the connector writes
 (`cyberark`, `sap`, `github-scan`, `aws-agentcore`, ...), so counts and call limits line up with the
@@ -2638,6 +2642,133 @@ assignment back through provisioning.
   service (`oracle.go`). Both are exercised by `erpfake` (paging over 230 roles and users, a refused token, 429, 5xx,
   malformed, failing and dropped writes). Paths are settings; the first real tenant should confirm field names.
 
+### Salesforce (users, profiles, permission sets and groups; issue #555)
+
+- **Read.** `TESSERA_CONNECTORS=salesforce` with `TESSERA_SALESFORCE_BASE_URL` (the My Domain URL), `_CLIENT_ID` (the
+  connected app's consumer key), `_USERNAME` (the integration user), `_PRIVATE_KEY` (`file:/abs/path` or `env:NAME`,
+  PEM RSA), and optionally `_LOGIN_URL` (`https://test.salesforce.com` for a sandbox) and `_API_VERSION` (`v61.0`).
+  Auth is the OAuth JWT bearer flow: Tessera signs a 3-minute RS256 assertion and exchanges it for a token; no password
+  or refresh token is kept, and the `instance_url` in a token response is never followed.
+- **Hosts.** The base URL and `login_url` must be under `salesforce.com` or `force.com` (a 422 at target validation,
+  an error at connector start); only the dev loopback exception, which prod refuses, admits a local fake.
+- **Graph.** Profiles, roles, permission sets and permission set groups are groups (`salesforce_profile`, `_role`,
+  `_permission_set`, `_permission_set_group`); a group is `member_of` its component sets. System permissions
+  (Modify All Data, View All Data, Manage Users, Author Apex and others) are permissions on the resource `org`, and a
+  group holding one is privileged. A user is an account (disabled when inactive or when its login is frozen), correlated
+  by e-mail, `member_of` its profile, role and each unexpired set or group assigned. A profile's own hidden permission
+  set and a group's generated set fold into the profile and group.
+- **Write.** Target kind `salesforce` (Admin > Provisioning). The credential is JSON, sealed and write-only:
+  `{"client_id":"...","username":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...","login_url":"","default_profile_id":""}`.
+  Operations: create user (a profile is required), update an allow-listed set of fields, freeze and deactivate (a delete
+  does the same: Salesforce cannot delete users), assign and remove a permission set (`0PS...`) or group (`0PG...`).
+  Profiles and roles are set through `update_account` (`ProfileId`, `UserRoleId`), not as entitlements. Every operation
+  reads first and is re-read to verify. Write-back is off by default and, once on, follows the existing approval gates.
+- **Readiness.** Template `salesforce` (connection type `salesforce` in New connection).
+- **Tests.** `internal/connectors/salesforce` against `sffake`, an in-process org that verifies the JWT signature,
+  audience and expiry, serves SOQL with paging and injects faults.
+
+### Azure RBAC and Google Cloud IAM (issue #557)
+
+Two read connectors bring cloud entitlements into the access graph for the effective-permission
+analysis. Both are creatable from Settings, Connections, New connection (category Cloud & IaaS) with a
+readiness template (`azurerbac`, `gcpiam`; inventory templates, like `awsorg`), and are read by the
+connector sync. Neither writes anything: only GET requests (plus the token POST and Google's
+`getIamPolicy` POST, which is a read) are sent, and write-back is not offered.
+
+*Azure RBAC* (`internal/connectors/azurerbac`, system `azure`, env `TESSERA_AZURE_*`). Authenticates
+with the OAuth client credentials flow at `login.microsoftonline.com` for the scope
+`https://management.azure.com/.default`, with a client secret or a certificate (the credential is then
+a PEM holding the certificate and its RSA private key; the connector sends a PS256 client assertion with
+`x5t#S256`). It lists subscriptions (`GET /subscriptions`, 2022-12-01) and management groups (2020-05-01)
+unless the settings name them (a configured management group brings the subscriptions below it, through its descendants), then per scope reads `roleDefinitions` and `roleAssignments`
+(Microsoft.Authorization, api-version 2022-04-01) and, when `include_eligible` is true, the PIM
+`roleEligibilityScheduleInstances` (2020-10-01). Settings: `tenant_id`, `client_id`, `subscription_ids`,
+`management_group_ids`, `include_eligible`. The application needs Reader at the scopes.
+
+*Google Cloud IAM* (`internal/connectors/gcpiam`, system `gcp`, env `TESSERA_GCP_*`). Signs a JWT (RS256)
+with the service account key and exchanges it at `oauth2.googleapis.com/token`; no Google SDK. It walks
+the organization (`GET /v3/folders`, `/v3/projects` with `parent=`), reads each policy with Cloud
+Resource Manager v3 `POST {resource}:getIamPolicy` (policy version 3, so conditions are returned), the
+bound roles with IAM v1 `GET /v1/{role}` (their permissions decide privilege) and each project's service
+accounts (`GET /v1/projects/{id}/serviceAccounts`). Settings: `organization_id`, `folder_ids`,
+`project_ids` (at least one). The service account needs viewer roles (Security Reviewer).
+
+*Mapping.* A scope or Google resource is a resource; a role bound at a scope is a permission
+(`<scope>|<role>`, the action is the role name, privileged for Owner/Contributor-class roles, and for
+Google the roles that can set IAM policy or act as a service account). Users and service principals are
+accounts with a `direct_grant` edge; groups, domains, `allUsers` and federated principals are groups with
+a `grants` edge. A PIM eligible assignment is its own permission (`... (eligible)`), so eligibility is
+never read as access held now; a conditional binding is its own permission (`... (conditional)`).
+Inheritance is not flattened: Google resources carry `parent:<resource>` tags. Azure principals are
+object ids and Google groups are not expanded: names and members come from the Entra and Google Workspace
+connections of the same tenant. A scope or resource that cannot be read (403, 404) is skipped and the result
+is marked partial (`DiscoveryResult.Partial`; today the ingest deletion guard holds back removal of identities and
+account status only, not permissions or edges, which a follow-up will make respect it); nothing readable at all is an error.
+
+*Network.* Every call goes through `internal/safehttp`. The endpoints are fixed to the public cloud:
+`management.azure.com` and `login.microsoftonline.com`; `cloudresourcemanager.googleapis.com`,
+`iam.googleapis.com` and `oauth2.googleapis.com` (sovereign clouds are not supported). A connection has no
+URL setting. The `TESSERA_AZURE_MANAGEMENT_URL`, `TESSERA_AZURE_AUTHORITY_URL`, `TESSERA_GCP_CRM_URL`,
+`TESSERA_GCP_IAM_URL` and `TESSERA_GCP_TOKEN_URL` overrides exist only for a fake server in dev, and
+`New` refuses them in any other environment; a governed connection never reads them from the process
+environment. A next-page link is followed only on the same host. The credential is sealed like every
+connection secret and never printed (`connsync.Secret`); errors carry the status and provider code, never a
+body. Both connectors can also be run without a connection: `TESSERA_CONNECTORS=azure,gcp`.
+
+*Tests* run against fake servers only (no live tenant): `go test ./internal/connectors/azurerbac
+./internal/connectors/gcpiam ./internal/connectors/governed/...`.
+
+### Database connector (PostgreSQL, MySQL, SQL Server, Oracle; issue #553)
+
+`internal/connectors/sqldb` reads accounts, roles and grants from a database and provisions them back. Pure-Go
+drivers (pgx, `go-sql-driver/mysql` v1.10.1, `microsoft/go-mssqldb` v1.11.2, `sijms/go-ora/v2` v2.9.0). The New
+connection gallery has a **Database (SQL)** tile (category Databases; template `sql`).
+
+- **Architecture exception.** Tessera's own data goes only through `internal/store`; `internal/archtest` bans
+  `database/sql`, drivers and `Query`/`Exec` calls elsewhere. This package talks to a customer database, so archtest
+  exempts exactly `internal/connectors/sqldb` (not its subpackages) for those three rules and nothing else (`unsafe`,
+  `reflect` tricks, `go:linkname` and the SQLite driver stay banned there). `TestSQLDBExemptionIsNarrow` fails if the
+  package ever imports `internal/store`, and the MySQL, SQL Server and Oracle drivers are banned everywhere else.
+- **Read, native mode** (`mode: native`). Fixed catalogue statements per engine: `pg_roles` and `pg_auth_members`;
+  `mysql.user` and `mysql.role_edges` (MySQL 8.0+); `sys.server_principals`, `sys.server_role_members`,
+  `sys.database_principals`, `sys.database_role_members`, `sys.server_permissions`; `DBA_USERS`, `DBA_ROLES`,
+  `DBA_ROLE_PRIVS`, `DBA_SYS_PRIVS` (Oracle 12c+). A login is an account (`locked` reads as `disabled`), a role is a
+  requestable group, nested roles are `member_of`, system privileges are permissions (`SUPERUSER`, `CONTROL SERVER`,
+  `SELECT ANY TABLE`, ...) and a role is privileged when it holds one of the dangerous ones or is a privileged role
+  by name (`sysadmin`, `DBA`, `db_owner`) directly or through nesting. SQL Server entitlement ids are `server:<role>`
+  and `db:<role>` (database roles come from the database in the connection; a database user is assumed to carry its
+  login's name). The reading user needs `SELECT` on those catalogues (SQL Server: `VIEW ANY DEFINITION`).
+- **Read, app mode** (`mode: app`). Two administrator-written SELECTs: accounts (columns `id`, and optionally
+  `username`, `email`, `display_name`, `status`) and entitlements (`account`, `entitlement`, optional `description`).
+  A statement must be a single SELECT/WITH with no comments, no `;`, no writing keyword and no placeholder.
+- **Write.** Target kind `sql` (the connection is `sql`, the credential is the database password, sealed as every
+  target token; the base URL is derived, `sql://host:port/engine`). Native: `create_account`, `disable_account`,
+  `update_account` with `attrs.status` `active` or `locked`, `delete_account`, `add_entitlement` and
+  `remove_entitlement`, each a fixed per-engine statement (see `engine.go`, golden-tested) with identifiers quoted by
+  the engine's quoting function (`quote.go`: pgx `Identifier.Sanitize`, backticks, `[]`, `""`) and nothing spliced.
+  A created login gets a random credential nobody learns: it signs in through the database's external
+  authentication or an administrator sets a password. App mode: INSERT, UPDATE and DELETE templates for the six
+  operations with named placeholders only (`:username`, `:external_id`, `:email`, `:display_name`, `:entitlement`,
+  `:entitlement_name`, `:attr_<name>`), rendered to the engine's bind markers (`$1`, `?`, `@p1`, `:1`), so a value is
+  always an argument. Both modes read first and change nothing already as asked, then the engine re-reads to verify.
+- **Safety.** Reads run in a read-only transaction (PostgreSQL, MySQL; Oracle `SET TRANSACTION READ ONLY`; SQL
+  Server's driver has no such option, so its reads are fixed statements or validated SELECTs on an
+  `ApplicationIntent=ReadOnly` connection: give the user read-only rights) with a query timeout (default 30 s, max
+  5 min) and a row cap (default 100000, max 1000000); a capped read is `Partial`, so the deletion guard holds
+  removals. The connection is dialled through `safehttp`'s address policy (loopback, private, link-local, metadata
+  and the other blocked ranges refused in prod; only the configured port). TLS is verify-full (chain and host name,
+  TLS 1.2+, the connection's CA bundle or the system roots); `tls: disable` is accepted in dev only. The password is a
+  `connsync.Secret` and is scrubbed from every error.
+- **Run it.** Source: `TESSERA_CONNECTORS=sql` with `TESSERA_SQL_ENGINE`, `_HOST`, `_PORT`, `_DATABASE`, `_USERNAME`,
+  `_PASSWORD` (`file:`/`env:` reference), `_MODE`, `_TLS`, `_CA_FILE`, `_APP` (JSON file of statements), `_SYSTEM`.
+  Target: `PUT /api/provisioning/targets/{connection}` with `{"kind":"sql","token":"<password>","sql":{...}}`.
+  Migration 0860 (Postgres) and the SQLite rebuild widen the `provisioning_targets.kind` check; no new table.
+- **Tests.** Statement generation, quoting, templates and the readers run against a recording fake
+  `database/sql` driver (no server, no sqlmock). Live tests (`live_test.go`) skip engines without a server:
+  PostgreSQL with `TESSERA_TEST_PG_URL` (as the rest of the suite), the others with
+  `TESSERA_TEST_SQL_MYSQL`, `_SQLSERVER` or `_ORACLE` set to `user:password@host:port/database` (a user that can create
+  logins and roles; the tests drop what they make). The MySQL, SQL Server and Oracle statements are verified by
+  golden text only; run the live tests against a real server before relying on them.
 ### Generic REST connector (issue #552)
 
 `internal/connectors/restgen` makes any HTTP/JSON system an identity source and a provisioning target from a
@@ -2739,6 +2870,55 @@ writes:                                        # request templates; see below
   and auth mode, throttling, failures, oversize and looping responses, a hostile next link). Staged dry-run
   reconciliation for `rest_generic` connections arrives with the live-connector work for the other non-demo types
   (`readiness.connectorFor`).
+
+### SAP SuccessFactors HR source (issue #556)
+
+`internal/connectors/successfactors` reads SuccessFactors Employee Central as an authoritative HR source over the
+OData v2 API, like the Workday source. The New connection gallery has an **SAP SuccessFactors** tile (category
+Directories & HR, capability HR source, the SAP mark; template `successfactors`, role `authoritative`).
+
+- **Read-only.** Every request is a GET (the only POST is the OAuth token request). There is no write-back: a
+  connection with `write_mode` other than `off` is refused, and the template's write-back items stay not applicable.
+- **Entities.** `User` (login, name, e-mail, title, status), `EmpEmployment` (person id `personIdExternal`, start and
+  end dates), `EmpJob` (department with its `departmentNav` name, job title, `managerId`, location, cost center,
+  legal entity; only the job in force today), `PerPerson` (the name of a person with no `User` row, for example a
+  leaver; a 403 here is tolerated and names fall back to ids). Only named fields are requested (`$select`): no
+  date of birth, national id, compensation or bank details. Collections are followed through server-side paging
+  (`__next`, absolute or relative); a link that leaves the configured host is refused. Every read is a full read.
+- **Mapping.** A person is an identity keyed by the person id (user id when there is none) with the work e-mail for
+  correlation, plus a `successfactors` account keyed by the user id, `member_of` a `department` group. Manager comes
+  from the job's `managerId` (`NO_MANAGER` is none). Account attributes: `user_id`, `person_id`, `work_email`,
+  `status`, `hire_date`, `termination_date`, `department`, `title`, `manager`, `location`, `cost_center`,
+  `legal_entity`. The open end `9999-12-31` is read as no end; OData dates (`/Date(ms)/`, ISO) are read in UTC.
+- **Effective dating** follows Workday: a person whose start date is ahead is not an identity yet (only a pending
+  joiner event exists); an end date ahead leaves the person active with a pending leaver event; a rehire takes the
+  latest employment. Events (`StreamEvents`): employment start is a `joiner` (historical once it has taken effect),
+  employment end a `leaver`, a new job row that changes department or manager a `mover`; ids are
+  `sf-evt-<kind>-<user id>-<date>`, so a repeat read yields the same events. The window is 30 days (`EVENT_WINDOW`).
+- **Authentication.** `basic`: the credential is the API user's password, sent as `user@companyId:password`.
+  `saml_bearer` (OAuth 2.0 SAML bearer): the credential is a PEM bundle with the RSA private key and the certificate
+  registered on the OAuth client; Tessera signs a short-lived SAML 2.0 assertion (RSA-SHA256, enveloped, exclusive
+  c14n; issuer and `api_key` are the client id, subject is the API user, audience `www.successfactors.com`,
+  recipient `<api server>/oauth/token`) and exchanges it at `/oauth/token`; the token is cached until shortly before
+  it expires and renewed after a 401. The credential is sealed (`internal/seal`) and never returned or logged.
+- **Host.** `base_url` must be an `https` host on a documented data-center domain: `*.successfactors.com`,
+  `*.successfactors.eu`, `*.sapsf.com`, `*.sapsf.cn`, `*.sapsf.eu` (no apex, port, path or user info; the template's
+  `host_allowlist` and the connector's list are tested to be the same). The only exception is a loopback address in a
+  dev runtime with `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, which is how tests reach a fake; `internal/config` refuses
+  that variable with `TESSERA_ENV=prod`, and a runtime that did not come from a loaded configuration has the
+  production rules. All HTTP goes through `internal/safehttp`. `$filter` values (the legal entity) are escaped as
+  OData string literals (single quotes doubled, control characters refused).
+- **Settings** of a connection: `company_id` and `username` (the API user) are required; `auth` (`basic` default or
+  `saml_bearer`), `user_id` (the SAML NameID when it differs from the login name; default the username), `client_id` (required with `saml_bearer`) and `legal_entity` (read one legal entity) are optional. `EmpJob` is effective-dated, so its reads send `fromDate` and `toDate` (a window around today for events); without them SuccessFactors answers as of today only.
+- **Readiness.** Checks: endpoint reachable, authentication accepted, users readable, field inventory (no forbidden
+  field is requested), person id unique, manager and e-mail fill rates, plus attestations (dedicated API user,
+  read-only permission role, target population includes leavers and pre-hires, sync schedule).
+- **As an env connector.** `TESSERA_CONNECTORS=successfactors` with `TESSERA_SUCCESSFACTORS_BASE_URL`, `_COMPANY_ID`,
+  `_USER`, `_AUTH`, `_PASSWORD` (basic) or `_CLIENT_ID` and `_PRIVATE_KEY` (saml_bearer), the two secrets as
+  `env:NAME` or `file:/path` references, and optional `_LEGAL_ENTITY`, `_EMIT_IDENTITIES`, `_EVENT_WINDOW`.
+- **Tests** run against a fake OData server (`successfactors/fake_test.go`; no real network): paging, dates, effective
+  dating, events, both auth modes (the assertion's signature is verified against the certificate), the host
+  allowlist and the dev-only loopback exception, filter escaping, secrets never in errors, read-only methods.
 
 ### Identity containment (kill switch)
 

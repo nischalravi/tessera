@@ -7,7 +7,7 @@ import { Fragment, FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useR
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowRightLeft, Bot, Briefcase, CircleCheck, Database, FlaskConical, HardHat, Search, Users, Play, Power, ShieldCheck, Trash2, Wand2 } from "lucide-react";
 import {
-  Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, ScimPreset, readiness, useApi,
+  Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, SQLConfig, ScimPreset, readiness, useApi,
 } from "../../../api";
 import { SourceDeletionGuard } from "../SourceDeletionGuard";
 import { VendorLogo, vendorForType } from "../../../components/VendorLogo"; // not in the barrel: keeps the brand marks out of the main chunk
@@ -231,6 +231,10 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       exp_groups: cfg.expected_counts ? String(cfg.expected_counts.groups) : "", privileged: privToText(cfg.privileged_expected),
       correlation_key: cfg.correlation_key ?? "", hr_id_attribute: cfg.hr_id_attribute ?? "", stale_days: String(cfg.stale_days ?? ""),
       sync_schedule: cfg.sync_schedule ?? "", write_mode: cfg.write_mode ?? "off", write_scope: (cfg.write_scope ?? []).join("\n"),
+      sql_engine: cfg.sql?.engine ?? "", sql_host: cfg.sql?.host ?? "", sql_port: String(cfg.sql?.port ?? ""), sql_database: cfg.sql?.database ?? "",
+      sql_username: cfg.sql?.username ?? "", sql_ca_bundle: cfg.sql?.ca_bundle ?? "", sql_mode: cfg.sql?.mode ?? "native",
+      sql_max_rows: String(cfg.sql?.max_rows ?? ""), sql_accounts_query: cfg.sql?.app?.accounts_query ?? "",
+      sql_entitlements_query: cfg.sql?.app?.entitlements_query ?? "",
       rest: restText(cfg.rest),
       ...settingValues(conn.connector_type, cfg.settings),
     });
@@ -254,6 +258,19 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       const now = v[k as string] ?? "";
       if (now !== String(cfg[k] ?? "")) (next as Record<string, unknown>)[k] = now === "" ? null : now;
     };
+    if (tid === "sql" && (step === "connect" || step === "scope")) {
+      // the sql object is replaced as a whole by the server, so start from what is saved
+      const prev = cfg.sql;
+      const app = { ...(prev?.app ?? {}) };
+      const q = (k: "accounts_query" | "entitlements_query", val: string) => { if (val.trim()) app[k] = val; else delete app[k]; };
+      q("accounts_query", v.sql_accounts_query ?? "");
+      q("entitlements_query", v.sql_entitlements_query ?? "");
+      const sql: SQLConfig = { ...prev, engine: v.sql_engine, host: v.sql_host, username: v.sql_username, mode: v.sql_mode || "native" };
+      for (const [k, val] of [["database", v.sql_database], ["ca_bundle", v.sql_ca_bundle]] as const) { if (val) sql[k] = val; else delete sql[k]; }
+      for (const [k, val] of [["port", v.sql_port], ["max_rows", v.sql_max_rows]] as const) { if (val) sql[k] = Number(val); else delete sql[k]; }
+      if (sql.mode === "app") sql.app = app; else delete sql.app;
+      if (JSON.stringify(sql) !== JSON.stringify(prev)) next.sql = sql;
+    }
     if (step === "connect") {
       (["host", "bind_dn", "ca_bundle", "org_url", "tenant_id", "cloud", "customer", "domain", "base_url", "tenant_host", "interface", "time_zone", "technical_owner", "business_owner"] as const).forEach(str);
       if (v.port && Number(v.port) !== cfg.port) next.port = Number(v.port);
@@ -322,6 +339,15 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
                 <textarea className="input mono" value={v.rest ?? ""} onChange={set("rest")} rows={14} spellCheck={false} placeholder={REST_EXAMPLE} />
               </Field>
             )}
+            {tid === "sql" && <>
+              {input("sql_engine", "Engine", "postgres, mysql, sqlserver or oracle")}
+              {input("sql_host", "Host", "Host name or IP only. Production refuses loopback, private and metadata addresses.")}
+              {input("sql_port", "Port", "Empty uses the engine's default (5432, 3306, 1433, 1521).", { inputMode: "numeric" })}
+              {input("sql_database", "Database", "Oracle: the service name.")}
+              {input("sql_username", "Database user", "A dedicated read-only user, never postgres, root, sa or SYS. Its password is the credential below.")}
+              {area("sql_ca_bundle", "CA certificate (PEM)", "Public certificates only. TLS is always verified (host name and chain); empty uses the system roots.")}
+              {input("sql_mode", "Mode", "native (the database's own users and roles) or app (your SELECT statements, set under Scope)")}
+            </>}
             {input("technical_owner", "Technical owner", "Accountable for the connection and its findings (base.owner).")}
             {input("business_owner", "Business owner")}
           </div>
@@ -365,6 +391,13 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
               {input("group_filter", "Group filter")}
             </>
           )}
+          {tid === "sql" && <>
+            {input("sql_max_rows", "Row cap", "Empty uses 100000. A read that reaches the cap is partial and the deletion guard holds every removal.", { inputMode: "numeric" })}
+            {v.sql_mode === "app" && <>
+              {area("sql_accounts_query", "Accounts SELECT", "One SELECT with no placeholders. Columns: id (required), username, email, display_name, status.")}
+              {area("sql_entitlements_query", "Entitlements SELECT", "Optional. Columns: account (an id or username above), entitlement, description. Writes (create, disable, grant) are set on the provisioning target.")}
+            </>}
+          </>}
           {input("exp_users", "Expected users", "From the directory's own console (base.scope.count).", { inputMode: "numeric" })}
           {input("exp_groups", "Expected groups", undefined, { inputMode: "numeric" })}
           {tid !== "workday" && !gov && area("privileged", "Privileged groups and expected members", "One group per line: Group name: member, member. Members not listed become RF-08 findings.")}

@@ -1,9 +1,9 @@
 // Filter model for the connection type gallery (New connection, step 1). Pure, so `npm test` covers it.
 
 export type Capability = "Identity source" | "Provisioning target" | "HR source" | "Access inventory" | "Contractor source" | "Agent discovery";
-export type Category = "Directories & HR" | "Cloud & SaaS" | "Identity providers" | "Cloud & IaaS" | "Source code" | "ERP" | "Privileged access" | "Contractor & VMS" | "AI agents" | "Demo / simulated";
+export type Category = "Directories & HR" | "Cloud & SaaS" | "Identity providers" | "Databases" | "Cloud & IaaS" | "Source code" | "ERP" | "Privileged access" | "Contractor & VMS" | "AI agents" | "Demo / simulated";
 
-export const CATEGORIES: Category[] = ["Demo / simulated", "Directories & HR", "Cloud & SaaS", "Identity providers", "Cloud & IaaS", "Source code", "ERP",
+export const CATEGORIES: Category[] = ["Demo / simulated", "Directories & HR", "Cloud & SaaS", "Identity providers", "Databases", "Cloud & IaaS", "Source code", "ERP",
   "Privileged access", "Contractor & VMS", "AI agents"]; // the default selection is a demo type, so it comes first
 export const CAPABILITIES: Capability[] = ["Identity source", "Provisioning target", "HR source", "Access inventory", "Contractor source", "Agent discovery"];
 
@@ -20,7 +20,9 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   okta: { vendor: "okta", publisher: "Okta", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
   google: { vendor: "google", publisher: "Google", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
   workday: { vendor: "workday", publisher: "Workday", category: "Directories & HR", capabilities: ["HR source"] },
+  salesforce: { vendor: "salesforce", publisher: "Salesforce", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
   scim_app: { vendor: "scim_app", publisher: "IETF RFC 7643 / 7644", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+  sql: { vendor: "sql", publisher: "PostgreSQL, MySQL, SQL Server, Oracle", category: "Databases", capabilities: ["Identity source", "Provisioning target"] },
   "scim:slack": { vendor: "slack", publisher: "Slack", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
   "scim:zoom": { vendor: "zoom", publisher: "Zoom", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
   "scim:box": { vendor: "box", publisher: "Box", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
@@ -35,6 +37,8 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   "scim:auth0": { vendor: "auth0", publisher: "Auth0", category: "Identity providers", capabilities: ["Provisioning target"] },
   // connectors the server already had, now creatable as governed connections
   awsorg: { vendor: "aws", publisher: "Amazon Web Services", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
+  azurerbac: { vendor: "azure", publisher: "Microsoft", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
+  gcpiam: { vendor: "gcp", publisher: "Google Cloud", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
   githubscan: { vendor: "github", publisher: "GitHub", category: "Source code", capabilities: ["Agent discovery"] },
   sap: { vendor: "sap", publisher: "SAP", category: "ERP", capabilities: ["Access inventory", "Provisioning target"] },
   oracle: { vendor: "oracle", publisher: "Oracle", category: "ERP", capabilities: ["Access inventory", "Provisioning target"] },
@@ -45,6 +49,7 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   beeline: { vendor: "beeline", publisher: "Beeline", category: "Contractor & VMS", capabilities: ["Contractor source"] },
   csvfeed: { vendor: "csvfeed", publisher: "CSV over HTTPS", category: "Contractor & VMS", capabilities: ["Contractor source"] },
   agentcore: { vendor: "agentcore", publisher: "Amazon Web Services", category: "AI agents", capabilities: ["Agent discovery"] },
+  successfactors: { vendor: "sap", publisher: "SAP", category: "Directories & HR", capabilities: ["HR source"] },
   rest_generic: { vendor: "rest_generic", publisher: "Declarative JSON or YAML spec", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
 };
 

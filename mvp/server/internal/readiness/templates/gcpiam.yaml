@@ -1,0 +1,84 @@
+# Google Cloud IAM (issue #557): read-only IAM policies of an organization, its folders and projects
+# (Cloud Resource Manager v3 getIamPolicy), the roles they bind and the service accounts of each
+# project (IAM v1), signed in with a service account key. The snapshot feeds the effective-permission
+# analysis, not the account directory, so the staged account data checks do not apply (inventory).
+# There is no write-back.
+template: gcpiam
+version: 1.0.0
+extends: base@1
+display_name: Google Cloud IAM
+connector_types: [gcpiam]
+role: account_source
+inventory: true
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id]
+items:
+  - id: gcp.auth
+    title: Service account key accepted by Google (the key JSON stored sealed)
+    category: access
+    level: required
+    why: "Proves the key before any read: a deleted, disabled or malformed key is found here, not in an empty sync."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Create a new key for the service account and store the whole JSON file again."
+    config_fields: [settings, credential]
+
+  - id: gcp.sa.viewer
+    title: The service account holds viewer roles only (Security Reviewer, or IAM Viewer plus Service Account Viewer and Role Viewer)
+    category: access
+    level: required
+    why: "Policies, roles and service accounts are read with get and list permissions; an editor or admin role turns a leaked key into a change path."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Grant roles/iam.securityReviewer at the organization (or at each folder or project) and remove any editor or admin role."
+    config_fields: [settings, credential]
+
+  - id: gcp.read
+    title: The organization, folders and projects are listed and their IAM policies are readable
+    category: scope
+    level: required
+    why: "A connector that signs in but reads no policy leaves Google Cloud access unanalysed without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Grant the service account the getIamPolicy and list rights where the probe reports nothing, and enable the Cloud Resource Manager API in the key's project."
+    depends_on: [gcp.auth]
+    config_fields: [settings, credential]
+
+  - id: gcp.scope.coverage
+    title: Scope covers every project that runs workloads (the organization, or each folder and project listed)
+    category: scope
+    level: recommended
+    why: "A project left out is a project whose access is not evaluated."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Compare the resource count in the read probe with the projects in the Google Cloud console."
+    config_fields: [settings]
+
+  - id: gcp.key.rotation
+    title: The service account key is rotated on a schedule (90 days or less)
+    category: access
+    level: recommended
+    why: "A downloaded key does not expire by itself; rotation bounds how long a leaked key reads the organization's access."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a new key, store it here, then delete the old key; consider an organization policy that limits key lifetime."
+    config_fields: [credential]
+
+  - id: gcp.inheritance
+    title: Inheritance follows the hierarchy (each resource names its parent) and group members come from Google Workspace
+    category: identity_keys
+    level: optional
+    why: "A binding holds on the resource that carries the policy and below; group members live in Cloud Identity, not in IAM."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add a Google Workspace connection for the domain so group members resolve to people."

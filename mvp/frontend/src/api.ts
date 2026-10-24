@@ -3380,10 +3380,18 @@ export interface ConnConfig {
   expected_counts?: { users: number; groups: number }; stale_days?: number; sync_schedule?: string;
   write_mode?: "off" | "dry_run" | "scoped"; write_scope?: string[]; hybrid?: boolean; use_dirsync?: boolean;
   privileged_expected?: Record<string, string[]>; demo_fixed_checks?: string[];
+  sql?: SQLConfig;
   /** Non-secret options of the governed connector types (awsorg, githubscan, sap, oracle, vaults, contractor feeds, agentcore). */
   settings?: Record<string, string>;
   /** Generic REST connection: the declarative spec (base URL, auth type, mapping, write operations). Holds no secret. */
   rest?: Record<string, unknown>;
+}
+
+/** The database connector's settings (template sql). The password is the sealed credential, never part of this. */
+export interface SQLConfig {
+  system?: string; engine: string; host: string; port?: number; database?: string; username: string;
+  tls?: string; ca_bundle?: string; mode: string; query_timeout_seconds?: number; max_rows?: number;
+  app?: Partial<Record<"accounts_query" | "entitlements_query" | "create_account" | "update_account" | "disable_account" | "delete_account" | "add_entitlement" | "remove_entitlement", string>>;
 }
 
 /** One vendor tile of the SCIM preset library (GET /api/scim/presets). "unknown" means the vendor's public docs did not confirm the fact. */
@@ -4200,7 +4208,7 @@ export interface ProvOpDetail extends ProvOp { payload: { account?: Record<strin
 export interface ProvDiscovery { checked_at: string; agent_advertised: boolean; service_provider_config: boolean; resource_types: string[]; error?: string }
 
 export interface ProvTarget {
-  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle"; base_url: string; api_root?: string;
+  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle" | "salesforce"; base_url: string; api_root?: string;
   dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; agent_id?: string; discovery?: ProvDiscovery; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 

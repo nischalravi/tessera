@@ -11,8 +11,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 )
@@ -59,6 +62,9 @@ type ConnConfig struct {
 	Hybrid             bool                `json:"hybrid,omitempty"`
 	UseDirSync         bool                `json:"use_dirsync,omitempty"`
 	PrivilegedExpected map[string][]string `json:"privileged_expected,omitempty"`
+	// SQL is the database connector's settings (template sql, issue #553). It holds no
+	// secret: the password is the sealed credential.
+	SQL *sqldb.Config `json:"sql,omitempty"`
 	// DemoFixedChecks is the demo scenario toggle: simulated checks listed
 	// here pass (for example after "fixing" ranged retrieval). Demo types only.
 	DemoFixedChecks []string `json:"demo_fixed_checks,omitempty"`
@@ -135,7 +141,7 @@ var (
 	cloudNames = []string{"global", "usgov", "china"}
 	interfaces = []string{"get_workers", "raas"}
 	// governedTemplates are the templates of the connector types in internal/connectors/governed.
-	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore"}
+	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam"}
 )
 
 // Validate checks a config for a template. It returns every problem rather
@@ -232,7 +238,7 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 			bad("interface", "must be one of %s", strings.Join(interfaces, ", "))
 		}
 		text("time_zone", cfg.TimeZone, 64)
-	case "scim_app":
+	case "scim_app", "salesforce":
 		httpsURL("base_url", cfg.BaseURL, nil)
 		if p, ok := scimpreset.PresetByID(cfg.Preset); ok {
 			// Vendor-specific shape on top of the generic https check.
@@ -242,7 +248,7 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 		} else if cfg.Preset != "" {
 			bad("preset", "unknown SCIM preset %q", cfg.Preset)
 		}
-	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore":
+	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam":
 		typ := connectorType
 		if typ == "" && len(t.ConnectorTypes) > 0 {
 			typ = t.ConnectorTypes[0]
@@ -250,7 +256,11 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 		required, takes := governed.BaseURLUse(typ)
 		switch {
 		case takes && (required || cfg.BaseURL != ""):
-			httpsURL("base_url", cfg.BaseURL, nil)
+			var allow []string
+			if typ == governed.SuccessFactors {
+				allow = t.HostAllowlist // the documented data-center domains; a look-alike host is refused
+			}
+			httpsURL("base_url", cfg.BaseURL, allow)
 			// The vault, ERP and feed readers take a host (paths are settings); GitHub
 			// Enterprise Server's API URL ends in /api/v3.
 			if u, err := url.Parse(cfg.BaseURL); err == nil && typ != governed.GitHubScan && u.Path != "" && u.Path != "/" {
@@ -262,6 +272,9 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 		for _, se := range governed.ValidateSettings(typ, cfg.Settings) {
 			bad("settings."+se.Key, "%s", se.Msg)
 		}
+		if typ == governed.SuccessFactors && cfg.WriteMode != "" && cfg.WriteMode != "off" {
+			bad("write_mode", "SuccessFactors is a read-only HR source: write-back is not available")
+		}
 	case "rest_generic":
 		if cfg.Rest == nil {
 			bad("rest", "required: the connector spec (base URL, auth, resources and mapping)")
@@ -269,6 +282,13 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 		}
 		for _, e := range cfg.Rest.ValidateShape() {
 			bad("rest."+e.Field, "%s", e.Msg)
+		}
+	case "sql":
+		if cfg.SQL == nil {
+			bad("sql", "required: the database settings")
+		} else if err := cfg.SQL.Validate(connsync.Runtime{Env: config.Prod}); err != nil {
+			// a stored connection follows the production rules (no tls disable)
+			bad("sql", "%v", err)
 		}
 	}
 	if t.ID != "scim_app" && cfg.Preset != "" {
