@@ -531,12 +531,13 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	}
 	if in.Token != "" && in.Kind == provision.KindServiceNow {
 		if _, err := servicenow.ParseCredential(in.Token); err != nil {
-			return 0, nil, badRequest("invalid_credential", err.Error()) // a fixed message, never the credential
+			// fixed text: the parser's error is never echoed back
+			return 0, nil, badRequest("invalid_credential", "the ServiceNow credential is JSON: auth basic with username and password, or oauth with client_id and client_secret; optional mode (direct or ticket) and assignment_group (a sys_id)")
 		}
 	}
 	if in.Token != "" && in.Kind == provision.KindAtlassian {
 		if _, err := atlassian.ParseTargetCredential(in.Token); err != nil {
-			return 0, nil, badRequest("invalid_credential", err.Error())
+			return 0, nil, badRequest("invalid_credential", "the Atlassian credential is JSON with email and api_token")
 		}
 	}
 	switch {
