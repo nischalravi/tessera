@@ -42,6 +42,14 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
   Every `/api/...` route is also served under `/api/v1/...` (same auth, audit and limits); `Deprecation`/`Sunset` headers and the compatibility policy are in `docs/api/compatibility.md` (issue #587).
   On `/api/v1` errors are one envelope `{"error":{"code","message","field?"}}` and lists are `{"items","next_cursor"}` with `limit` and `cursor` (`internal/api/v1_contract.go`); the unversioned paths and their parity fixtures are unchanged.
   The complete OpenAPI 3.1 document of every registered route (permission, token scopes, step-up, errors) is `GET /api/openapi.json`, built from the route table (issue #587); `/openapi.json` stays the original core-route document.
+* Machine-client rate limits (issue #587): every OAuth client has a token bucket per tenant and client. The default is
+  `TESSERA_API_CLIENT_RATE_BURST` (120) requests at once, refilled at `TESSERA_API_CLIENT_RATE_PER_MINUTE` (600; `0` turns the
+  limit off, which production refuses unless `TESSERA_API_CLIENT_RATE_ALLOW_OFF=true`). A client's own limit is `PUT /api/admin/api-clients/{client_id}/rate-limit` `{burst, per_minute}` (admin
+  change request, step-up; `GET` reads the limit in force, `DELETE` returns to the default; table `api_client_limits`;
+  a change applies within 30 seconds). Answers carry `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` and
+  `RateLimit-Policy`; a refused request is `429 rate_limited` with `Retry-After`, is audited (`http.request`, status 429,
+  the client as actor) and counted in `tessera_api_client_rate_limited_total`. Buckets are per process. Users with a
+  session are not limited by it.
 * Dev IdP: http://127.0.0.1:8001 (see [Signing in](#signing-in))
 
 Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`
