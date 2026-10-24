@@ -287,9 +287,13 @@ type Server struct {
 	// built from the routes on first use (stepup_policy.go).
 	stepUps     stepup.Catalog
 	stepUpsOnce sync.Once
-	authn       *auth.Authenticator
-	limits      *limiters
-	guests      *sponsorship.Service
+	// spec is the complete OpenAPI document (openapi_full.go), built on first use.
+	spec     []byte
+	specErr  error
+	specOnce sync.Once
+	authn    *auth.Authenticator
+	limits   *limiters
+	guests   *sponsorship.Service
 	// guestLife runs the guest lifecycle: reminders, transfer tasks, conversion, deprovisioning (issue #74)
 	guestLife *guestlife.Service
 
