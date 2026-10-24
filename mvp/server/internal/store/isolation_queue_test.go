@@ -104,6 +104,9 @@ func TestIsolation_Queue(t *testing.T) {
 		if err := c.SetQueueScheduleEnabled("s", false, now); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("SetQueueScheduleEnabled(A's) = %v", err)
 		}
+		if err := c.DeleteQueueSchedule("s"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("DeleteQueueSchedule(A's) = %v", err)
+		}
 		if n, err := c.PruneQueueJobs(now.Add(time.Hour)); err != nil || n != 0 {
 			t.Errorf("PruneQueueJobs = %d, %v", n, err)
 		}
@@ -131,7 +134,7 @@ func queueCovered() map[string]bool {
 	out := map[string]bool{}
 	for _, k := range []string{"EnqueueQueueJob", "QueueJob", "QueueJobs", "ClaimQueueJobs", "HasDueQueueJobs", "HeartbeatQueueJob",
 		"CompleteQueueJob", "FailQueueJob", "ReleaseQueueJob", "RetryDeadQueueJob", "SetDeadQueueJobPayload", "PruneQueueJobs", "EnsureQueueSchedule", "SetQueueSchedule",
-		"QueueSchedule", "QueueSchedules", "DueQueueSchedules", "AdvanceQueueSchedule", "SetQueueScheduleEnabled"} {
+		"QueueSchedule", "QueueSchedules", "DueQueueSchedules", "AdvanceQueueSchedule", "SetQueueScheduleEnabled", "DeleteQueueSchedule"} {
 		out[k] = true // TestIsolation_Queue
 	}
 	return out

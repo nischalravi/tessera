@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Pause, Play, RotateCcw } from "lucide-react";
+import { Pause, Play, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { JobRun, QueueJob, QueueSchedule, QueueWorker, api, fmtDate, jobs, queue, relTime, useApi } from "../../api";
 import { PauseScheduleDialog } from "./PauseScheduleDialog";
 import { Badge, Button, Callout, DataTable, SidePanel, useToast } from "../../components";
@@ -9,7 +9,7 @@ const KIND: Record<string, string> = {
   health_rerun: "Deployment health re-run", jit_sweep: "JIT expiry sweep", audit_anchor: "Audit anchoring", guest_lifecycle: "Guest lifecycle",
   sweep_requests: "Access request sweep", sweep_lifecycle: "Lifecycle and sponsorship sweep", sweep_admin_changes: "Admin change sweep",
   containment_retries: "Containment retries", job_maintenance: "Job history upkeep", archive_sweep: "Archive sweep (records past retention)",
-  connector_sync: "Connector sync (worker)", provision_push: "Provisioning push (worker)",
+  connector_sync: "Connector sync (worker)", provision_push: "Provisioning push (worker)", review_tick: "Review scheduler",
 };
 const QUEUE_TONE: Record<string, "ok" | "critical" | "warning" | "info"> = { succeeded: "ok", dead: "critical", failed: "warning", running: "info", queued: "info" };
 const STATUS_TONE: Record<string, "ok" | "critical" | "warning"> = { succeeded: "ok", failed: "critical", running: "warning" };
@@ -74,6 +74,7 @@ function QueueSection() {
       </div>
       <WorkersTable />
       {paused.length > 0 && <Callout tone="warn"><b>{paused.length} {paused.length === 1 ? "schedule is" : "schedules are"} paused:</b> {paused.map((s) => KIND[s.kind] ?? s.kind).join(", ")}. Nothing new is queued for {paused.length === 1 ? "it" : "them"} until someone resumes.</Callout>}
+      <NewSchedule onDone={reloadSchedules} />
       <DataTable
         id="queue-schedules"
         rows={schedules}
@@ -81,7 +82,7 @@ function QueueSection() {
         rowKey={(r) => r.name}
         rowLabel={(r) => `${KIND[r.kind] ?? r.kind} schedule`}
         columns={[
-          { id: "name", header: "Schedule", sort: (r) => r.name, cell: (r) => <span className="small"><b>{KIND[r.kind] ?? r.kind}</b></span> },
+          { id: "name", header: "Schedule", sort: (r) => r.name, cell: (r) => <span className="small"><b>{KIND[r.kind] ?? r.kind}</b>{r.name.startsWith("custom.") && <span className="faint"> · {r.name}</span>}</span> },
           { id: "spec", header: "Runs", sort: (r) => r.spec, cell: (r) => <code className="xs">{r.spec}</code> },
           { id: "next", header: "Next run", sort: (r) => r.next_run_at, cell: (r) => <span className="small nowrap" title={fmtDate(r.next_run_at)}>{relTime(r.next_run_at.replace("Z", ""))}</span> },
           { id: "last", header: "Last enqueued", hideNarrow: true, sort: (r) => r.last_enqueued_at ?? "", cell: (r) => r.last_enqueued_at ? <span className="small nowrap" title={fmtDate(r.last_enqueued_at)}>{relTime(r.last_enqueued_at.replace("Z", ""))}</span> : <span className="faint xs">never</span> },
@@ -144,13 +145,98 @@ function ScheduleToggle({ schedule: r, onDone }: { schedule: QueueSchedule; onDo
   };
   // a security schedule needs a reason and resumes by itself within 24 hours (issue #512)
   const toggle = () => (r.enabled && r.protected ? setAsking(true) : run());
+  const runNow = async () => {
+    setBusy(true);
+    try {
+      await queue.runSchedule(r.name);
+      toast(`${label} queued to run now.`);
+      onDone();
+    } catch (e) {
+      toast((e as Error).message, { kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    setBusy(true);
+    try {
+      await queue.deleteSchedule(r.name);
+      toast(`${r.name} deleted.`);
+      onDone();
+    } catch (e) {
+      toast((e as Error).message, { kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <>
+    <Button size="sm" icon={<Play size={13} />} disabled={busy} onClick={runNow} aria-label={`Run ${label} now`}>Run now</Button>{" "}
+    {r.name.startsWith("custom.") && <><Button size="sm" variant="danger" icon={<Trash2 size={13} />} disabled={busy} onClick={remove} aria-label={`Delete ${r.name}`}>Delete</Button>{" "}</>}
     <Button size="sm" icon={r.enabled ? <Pause size={13} /> : <Play size={13} />} disabled={busy} onClick={toggle} aria-label={`${r.enabled ? "Pause" : "Resume"} ${label}`}>
       {r.enabled ? "Pause" : "Resume"}
     </Button>
     {asking && <PauseScheduleDialog label={label} onClose={() => setAsking(false)} onConfirm={(reason, hours) => { setAsking(false); void run(reason, hours); }} />}
     </>
+  );
+}
+
+/** Create a custom schedule: a kind an admin may schedule, a cron or "@every" spec, and a name (issue #588). */
+function NewSchedule({ onDone }: { onDone: () => void }) {
+  const toast = useToast();
+  const kinds = useApi<Awaited<ReturnType<typeof queue.scheduleKinds>>>("/queue/schedule-kinds");
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState("connector_sync");
+  const [spec, setSpec] = useState("@every 6h");
+  const [mode, setMode] = useState("incremental");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const create = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await queue.createSchedule(`custom.${name.trim()}`, kind, spec.trim(), kind === "connector_sync" ? { mode } : undefined);
+      toast("Schedule created.");
+      setOpen(false);
+      setName("");
+      onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!open) return <div><Button size="sm" icon={<Plus size={14} />} onClick={() => setOpen(true)}>New schedule</Button></div>;
+  return (
+    <div className="card stack-sm">
+      <h3 className="h-sm">New schedule</h3>
+      {err && <Callout tone="bad">{err}</Callout>}
+      <label className="field">Name (custom.…)
+        <input className="input" value={name} maxLength={61} onChange={(e) => setName(e.target.value)} placeholder="nightly-sync" />
+      </label>
+      <label className="field">Job
+        <select className="input" value={kind} onChange={(e) => setKind(e.target.value)}>
+          {(kinds.data?.kinds ?? []).map((k) => <option key={k.kind} value={k.kind}>{k.label}: {k.description}</option>)}
+        </select>
+      </label>
+      {kind === "connector_sync" && (
+        <label className="field">Sync mode
+          <select className="input" value={mode} onChange={(e) => setMode(e.target.value)}>
+            <option value="incremental">Incremental</option>
+            <option value="full">Full</option>
+          </select>
+        </label>
+      )}
+      <label className="field">Runs
+        <input className="input" value={spec} onChange={(e) => setSpec(e.target.value)} />
+        <span className="hint">@every 6h, or five cron fields such as 0 2 * * *. At most once a minute.</span>
+      </label>
+      <div className="row tight">
+        <Button variant="primary" size="sm" disabled={busy || !name.trim() || !spec.trim()} onClick={create}>Create</Button>
+        <Button size="sm" onClick={() => setOpen(false)}>Cancel</Button>
+      </div>
+    </div>
   );
 }
 
