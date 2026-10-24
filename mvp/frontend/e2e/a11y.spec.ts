@@ -55,7 +55,7 @@ test("detail pages have no serious or critical WCAG 2.2 AA violations", async ({
   expect(all, report(all)).toEqual([]);
 });
 
-test("the deletion guard is step 8 of a connection, laid out beside the stepper", async ({ page }) => {
+test("the deletion guard is step 7 of a connection, before review and activate, laid out beside the stepper", async ({ page }) => {
   await page.goto("/");
   const conns: any[] = await page.evaluate(async () => (await fetch("/api/connections")).json());
   const conn = conns.find((c) => !c.legacy && c.id && !c.retired_at);
@@ -63,10 +63,11 @@ test("the deletion guard is step 8 of a connection, laid out beside the stepper"
   await page.goto(`/admin/connections/${conn.id}?step=guard`);
   await settle(page);
   const form = page.getByRole("form", { name: /Deletion guard for/ });
-  await expect(form.getByRole("heading", { name: "8. Deletion guard" })).toBeVisible();
+  await expect(form.getByRole("heading", { name: "7. Deletion guard" })).toBeVisible();
   // the guard takes the step column, not the stepper's 220px one
   const box = await form.boundingBox();
   expect(box!.width).toBeGreaterThan(400);
+  await expect(page.getByRole("list", { name: "Steps" }).getByText("Review and activate")).toBeVisible();
   await page.screenshot({ path: "test-results/deletion-guard-step.png", fullPage: true });
 });
 

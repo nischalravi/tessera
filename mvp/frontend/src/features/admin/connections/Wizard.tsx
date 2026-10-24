@@ -179,8 +179,8 @@ const WIZARD_STEPS: { id: StepId; label: string; sub: string }[] = [
   { id: "mapping", label: "Mapping", sub: "Correlation key, HR id, status" },
   { id: "validate", label: "Validate", sub: "Read-only live checks" },
   { id: "dryrun", label: "Dry run", sub: "Staging snapshot and reconciliation" },
-  { id: "activate", label: "Review and activate", sub: "Every gate re-evaluated" },
   { id: "guard", label: "Deletion guard", sub: "Limits on what a sync may remove" },
+  { id: "activate", label: "Review and activate", sub: "Every gate re-evaluated" },
 ];
 const ORDER: string[] = ["draft", "ready_to_validate", "validated", "dry_run_reconciled", "active"];
 const atLeast = (state: string, s: string) => state === "degraded" || ORDER.indexOf(state) >= ORDER.indexOf(s);
