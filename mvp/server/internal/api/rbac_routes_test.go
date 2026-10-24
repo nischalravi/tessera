@@ -53,6 +53,14 @@ GET    /api/reviews/campaigns                        graph.read      -
 POST   /api/reviews/campaigns                        reviews.manage  -
 GET    /api/reviews/campaigns/{campaign_id}          graph.read      -
 POST   /api/reviews/items/{item_id}/decision         reviews.decide  STEP_UP_POLICY
+POST   /api/reviews/items/{item_id}/consult          reviews.decide  -  # issue #588
+POST   /api/reviews/items/{item_id}/reassign         reviews.decide  STEP_UP_POLICY  # issue #588
+GET    /api/reviews/items/{item_id}/events           graph.read      -  # issue #588
+GET    /api/reviews/consultations                    graph.read      -  # issue #588
+POST   /api/reviews/consultations/{consultation_id}/answer graph.read -  # issue #588
+POST   /api/reviews/campaigns/{campaign_id}/lock     reviews.manage  STEP_UP_POLICY  # issue #588
+POST   /api/reviews/campaigns/{campaign_id}/unlock   reviews.manage  STEP_UP_POLICY  # issue #588
+POST   /api/reviews/campaigns/{campaign_id}/close    reviews.manage  STEP_UP_POLICY  # issue #588
 GET    /api/reviews/campaigns/{campaign_id}/population  graph.read   -  # issue #110
 GET    /api/reviews/campaigns/{campaign_id}/export   reviews.export  -  # issue #110
 POST   /api/reviews/qa/{qa_id}/decision              reviews.decide  STEP_UP_POLICY  # issue #110
@@ -98,6 +106,7 @@ POST   /api/alerts/{alert_id}/assign                 alerts.manage   -  # issue 
 GET    /api/ownership                                graph.read      -  # issue #167
 PUT    /api/ownership/{kind}/{object_key}            ownership.manage -  # issue #167
 POST   /api/ownership/bulk                           ownership.manage -  # issue #167
+GET    /api/openapi.json                             graph.read      -  # issue #587
 GET    /openapi.json                                 auth.self       -  #
 GET    /docs                                         auth.self       -  #
 GET    /docs/oauth2-redirect                         auth.self       -  #
@@ -238,6 +247,14 @@ GET    /api/questionnaires/{id}                      catalog.manage  -  # issue 
 PUT    /api/questionnaires/{id}                      catalog.manage  -  # issue #298
 POST   /api/questionnaires/{id}/retire               catalog.manage  -  # issue #298
 PUT    /api/questionnaires/{id}/attachments          catalog.manage  -  # issue #298
+GET    /api/datasets                                 workflows.manage      -  # issue #588
+POST   /api/datasets                                 workflows.manage  STEP_UP_POLICY  # issue #588
+GET    /api/datasets/{id}                            workflows.manage      -  # issue #588
+PUT    /api/datasets/{id}                            workflows.manage  STEP_UP_POLICY  # issue #588
+DELETE /api/datasets/{id}                            workflows.manage  STEP_UP_POLICY  # issue #588
+POST   /api/datasets/{id}/values                     workflows.manage  STEP_UP_POLICY  # issue #588
+POST   /api/datasets/{id}/upload                     workflows.manage  STEP_UP_POLICY  # issue #588
+GET    /api/datasets/{id}/contains                   workflows.manage      -  # issue #588
 GET    /api/workflows                                graph.read      -  # issue #298
 POST   /api/workflows                                workflows.manage STEP_UP_POLICY  # issue #298
 POST   /api/workflows/validate                       workflows.manage -  # issue #298
@@ -259,6 +276,11 @@ POST   /api/requests/{request_id}/approve            requests.create STEP_UP_POL
 POST   /api/requests/{request_id}/deny               requests.create -  # issue #164 (#165: the line's routing decides who)
 POST   /api/requests/{request_id}/cancel             requests.create -  # issue #164 (the requester)
 POST   /api/requests/{request_id}/remove             requests.create -  # issue #164 (requests.decide, or the beneficiary)
+GET    /api/requests/{request_id}/comments           requests.create  -  # issue #588
+POST   /api/requests/{request_id}/comments           requests.create  -  # issue #588
+GET    /api/requests/{request_id}/attachments        requests.create  -  # issue #588
+POST   /api/requests/{request_id}/attachments        requests.create  -  # issue #588
+POST   /api/requests/{request_id}/approvers          requests.create  -  # issue #588
 GET    /api/role-mining/runs                         graph.read      -  # issue #298
 POST   /api/role-mining/runs                         roles.manage    -  # issue #298 (analysis only; changes nothing)
 GET    /api/role-mining/runs/{run_id}                graph.read      -  # issue #298
@@ -489,6 +511,10 @@ GET    /api/queue/jobs                               jobs.read       -  # issue 
 GET    /api/queue/schedules                          jobs.read       -  #
 GET    /api/queue/workers                            jobs.read       -  # issue #302
 POST   /api/queue/jobs/{job_id}/retry                jobs.manage     STEP_UP_POLICY  #
+GET    /api/queue/schedule-kinds                     jobs.read       -  # issue #588
+POST   /api/queue/schedules                          jobs.manage     STEP_UP_POLICY  # issue #588
+DELETE /api/queue/schedules/{name}                   jobs.manage     STEP_UP_POLICY  # issue #588
+POST   /api/queue/schedules/{name}/run               jobs.manage     STEP_UP_POLICY  # issue #588
 POST   /api/queue/schedules/{name}/pause             jobs.manage     STEP_UP_POLICY  # issue #497
 POST   /api/queue/schedules/{name}/resume            jobs.manage     STEP_UP_POLICY  # issue #497
 GET    /api/queue/limits                             connections.read    -  # issue #302
@@ -746,6 +772,9 @@ GET    /api/admin/api-clients/{client_id}            admin.read      -  # issue 
 POST   /api/admin/api-clients                        admin.change.request STEP_UP_ADMIN  # issue #498
 POST   /api/admin/api-clients/{client_id}/keys       admin.change.request STEP_UP_ADMIN  # issue #498
 POST   /api/admin/api-clients/{client_id}/revoke     admin.change.request STEP_UP_ADMIN  # issue #498
+GET    /api/admin/api-clients/{client_id}/rate-limit admin.read      -  # issue #587
+PUT    /api/admin/api-clients/{client_id}/rate-limit admin.change.request STEP_UP_ADMIN  # issue #587
+DELETE /api/admin/api-clients/{client_id}/rate-limit admin.change.request STEP_UP_ADMIN  # issue #587
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16

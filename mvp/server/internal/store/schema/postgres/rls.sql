@@ -2319,3 +2319,67 @@ DROP POLICY IF EXISTS tenant_isolation ON agent_links;
 CREATE POLICY tenant_isolation ON agent_links
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE datasets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE datasets FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON datasets;
+CREATE POLICY tenant_isolation ON datasets
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE dataset_values ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dataset_values FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON dataset_values;
+CREATE POLICY tenant_isolation ON dataset_values
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE access_request_comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE access_request_comments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON access_request_comments;
+CREATE POLICY tenant_isolation ON access_request_comments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE access_request_attachments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE access_request_attachments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON access_request_attachments;
+CREATE POLICY tenant_isolation ON access_request_attachments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE review_item_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_item_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON review_item_events;
+CREATE POLICY tenant_isolation ON review_item_events
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE review_campaign_locks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_campaign_locks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON review_campaign_locks;
+CREATE POLICY tenant_isolation ON review_campaign_locks
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE api_client_limits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_client_limits FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON api_client_limits;
+CREATE POLICY tenant_isolation ON api_client_limits
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+-- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
+DO $roles$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'tessera_app') THEN
+		EXECUTE format('GRANT USAGE ON SCHEMA %I TO tessera_app', current_schema());
+		EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO tessera_app', current_schema());
+		EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO tessera_app', current_schema());
+		REVOKE UPDATE, DELETE, TRUNCATE ON audit_events, audit_checkpoints FROM tessera_app;
+		GRANT UPDATE (anchor_status, anchor_ref, anchored_at, anchor_attempts) ON audit_checkpoints TO tessera_app;
+		-- the migration bookkeeping is the owner's alone
+		EXECUTE format('REVOKE ALL ON %I.schema_migrations FROM tessera_app', current_schema());
+	END IF;
+END
+$roles$;

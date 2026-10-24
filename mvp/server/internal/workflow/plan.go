@@ -49,6 +49,8 @@ type Plan struct {
 	Actions        []Action    `json:"actions"`
 	Questionnaires []string    `json:"questionnaires"`
 	Provision      bool        `json:"provision"`
+	// Datasets are the versions of the datasets the path's conditions read (issue #588).
+	Datasets map[string]int `json:"datasets,omitempty"`
 }
 
 // StageAt returns the plan of stage idx, or nil.
@@ -75,6 +77,10 @@ var approverLabels = map[string]string{ApproverManager: "Manager approval", Appr
 // Compile follows a valid definition from its first step, taking each condition's branch by
 // the attributes, and returns the resolved path.
 func (d Definition) Compile(workflowID string, version int, attrs map[string]string) (*Plan, error) {
+	return d.compile(workflowID, version, attrs, nil)
+}
+
+func (d Definition) compile(workflowID string, version int, attrs map[string]string, sets Sets) (*Plan, error) {
 	p := &Plan{Workflow: workflowID, Version: version, Path: []string{}, Stages: []StagePlan{}, Actions: []Action{},
 		Questionnaires: []string{}}
 	idx := map[string]int{}
@@ -120,7 +126,7 @@ func (d Definition) Compile(workflowID string, version int, attrs map[string]str
 			p.Provision = true
 		case TypeCondition:
 			take := s.Else
-			if s.When != nil && s.When.Eval(attrs) {
+			if s.When != nil && s.When.eval(attrs, sets) {
 				take = s.Then
 			}
 			next = len(d.Steps)

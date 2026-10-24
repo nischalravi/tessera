@@ -129,7 +129,7 @@ func (o LiveOptions) liveProber(b *Bundle, now time.Time) (p connectors.Prober, 
 		if o.Agents == nil || b.agentID == "" || cfg.BindDN == "" {
 			return nil, true, errors.New("readiness: no Directory Agent, or no bind DN, for the LDAP connection")
 		}
-		rp, err := agent.NewRemoteProber(o.Agents, b.Conn.TenantID, b.agentID, agent.Target{Host: cfg.Host, Port: cfg.Port},
+		rp, err := agent.NewRemoteProber(o.Agents, b.Conn.TenantID, b.agentID, agent.Target{Host: cfg.Host, Port: cfg.Port, TLSMode: cfg.TLSMode},
 			agent.ProbeConfig{BindDN: cfg.BindDN, CredName: b.agentCred, BaseDNs: cfg.BaseDNs, UserFilter: cfg.UserFilter,
 				CABundle: cfg.CABundle})
 		return rp, true, err
@@ -145,7 +145,7 @@ func (o LiveOptions) liveProber(b *Bundle, now time.Time) (p connectors.Prober, 
 	if err != nil {
 		return nil, true, err
 	}
-	lp, err := ldap.New(ldap.Config{Host: cfg.Host, Port: cfg.Port, BindDN: cfg.BindDN, Password: b.cred, BaseDNs: cfg.BaseDNs,
+	lp, err := ldap.New(ldap.Config{Host: cfg.Host, Port: cfg.Port, TLSMode: cfg.TLSMode, BindDN: cfg.BindDN, Password: b.cred, BaseDNs: cfg.BaseDNs,
 		UserFilter: cfg.UserFilter, RootCAs: roots, Dialer: d, Now: func() time.Time { return now }})
 	if err != nil {
 		return nil, true, err

@@ -29,6 +29,9 @@ export const SETTING_KEYS: Record<string, string[]> = {
   successfactors: ["auth", "company_id", "username", "user_id", "client_id", "legal_entity"],
   azurerbac: ["tenant_id", "client_id", "subscription_ids", "management_group_ids", "include_eligible"],
   gcpiam: ["organization_id", "folder_ids", "project_ids"],
+  servicenow: ["auth_mode", "username", "client_id"],
+  atlassian: ["email", "org_id", "project_keys"],
+  unixssh: ["host", "port", "username", "host_key", "use_sudo"],
 };
 
 const VAULT_URL = { label: "Vault URL", hint: "The vault's HTTPS host name, no path.", required: true };
@@ -117,6 +120,34 @@ export const GOVERNED: Record<string, GovType> = {
       { key: "project_ids", label: "Project ids", hint: "Comma separated. Set at least one of organization, folders or projects." },
     ],
     credential: { label: "Service account key (JSON)", hint: "The whole key file of a service account with viewer roles (Security Reviewer).", area: true },
+  },
+  servicenow: {
+    baseUrl: { label: "Instance URL", hint: "https://name.service-now.com (or name.servicenowservices.com); HTTPS host name, no path.", required: true },
+    settings: [
+      { key: "auth_mode", label: "Sign-in", hint: "basic (default: an integration user and its password) or oauth (an OAuth client with the client credentials grant)." },
+      { key: "username", label: "Integration user", hint: "Required for basic: a dedicated user with read access to the user, group, group member and role tables." },
+      { key: "client_id", label: "OAuth client id", hint: "Required for oauth: the client id of the instance's OAuth inbound integration." },
+    ],
+    credential: { label: "Password or client secret", hint: "The integration user's password (basic) or the OAuth client secret (oauth)." },
+  },
+  atlassian: {
+    baseUrl: { label: "Site URL", hint: "https://name.atlassian.net; HTTPS host name, no path.", required: true },
+    settings: [
+      { key: "email", label: "Account e-mail", required: true, hint: "The dedicated account whose API token is the credential. Accounts are provisioned on the Atlassian Cloud SCIM tile." },
+      { key: "org_id", label: "Organization id", hint: "Optional: adds product access from the organization admin API; the credential is then JSON." },
+      { key: "project_keys", label: "Project keys", hint: "Comma separated, at most 50. Optional: the projects whose project roles are read." },
+    ],
+    credential: { label: "API token", hint: "The account's API token. With an organization id: {\"api_token\": \"...\", \"admin_api_key\": \"...\"}.", area: true },
+  },
+  unixssh: {
+    settings: [
+      { key: "host", label: "Host", required: true, hint: "The host name or IP address. Private, loopback and link-local addresses are refused from the server." },
+      { key: "port", label: "SSH port", hint: "1 to 65535, default 22." },
+      { key: "username", label: "SSH user", required: true, hint: "A dedicated, unprivileged account. It runs only getent, lastlog and the sudoers read." },
+      { key: "host_key", label: "Host key", required: true, hint: "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A host whose key differs is refused." },
+      { key: "use_sudo", label: "Read sudoers through sudo", hint: "true or false (default false). Needs NOPASSWD sudo entries for exactly the two read commands (see the README)." },
+    ],
+    credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
   },
   agentcore: {
     settings: [{ key: "snapshot", label: "Snapshot file", required: true, hint: "A recorded AgentCore snapshot (JSON) in this tenant's directory. There is no live AgentCore client; refused in prod." }],

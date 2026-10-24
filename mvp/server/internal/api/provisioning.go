@@ -15,9 +15,12 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldapwrite"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
@@ -93,6 +96,8 @@ type targetView struct {
 	AgentID        string `json:"agent_id,omitempty"`       // the Directory Agent that reaches this target (issue #302)
 	// SQL is a database target's connection (no secret in it; issue #553).
 	SQL *sqldb.Config `json:"sql,omitempty"`
+	// LDAP is an ldap or ad target's directory settings (no secret in it; issue #586).
+	LDAP *ldapwrite.Config `json:"ldap,omitempty"`
 	// Rest is a REST target's spec as saved (no base URL, no secret; issue #552).
 	Rest json.RawMessage `json:"rest,omitempty"`
 	// Discovery is the last read of a SCIM target's ServiceProviderConfig and ResourceTypes (issue #542).
@@ -107,7 +112,7 @@ func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, SQL: st.SQL, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, SQL: st.SQL, LDAP: st.LDAP, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -287,12 +292,14 @@ type targetInput struct {
 	AgentID string `json:"agent_id"`
 	// SQL is the database connection of a sql target (issue #553). The password is token.
 	SQL *sqldb.Config `json:"sql"`
+	// LDAP is the directory of an ldap or ad target (issue #586). The bind password is token.
+	LDAP *ldapwrite.Config `json:"ldap"`
 }
 
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	var st provision.Settings
 	switch in.Kind {
-	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle, provision.KindREST, provision.KindSalesforce:
+	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle, provision.KindREST, provision.KindSalesforce, provision.KindServiceNow, provision.KindAtlassian:
 		if s.cfg.Env == "prod" && !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://") {
 			return st, badRequest("invalid_base_url", "base_url must be https")
 		}
@@ -323,6 +330,30 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		}
 		in.BaseURL = "sql://" + net.JoinHostPort(strings.ToLower(in.SQL.Host), strconv.Itoa(in.SQL.EffectivePort())) + "/" + in.SQL.Engine
 		st.SQL = in.SQL
+	case provision.KindLDAP, provision.KindAD:
+		// a directory: LDAPS or StartTLS only (there is no setting for clear text), the bind DN and
+		// password are the credential, and the write scope names the OUs the target may change
+		if in.LDAP == nil {
+			return st, badRequest("invalid_ldap", "ldap (the directory settings) is required for an ldap or ad target")
+		}
+		if in.Fault != "" || in.AgentID != "" || in.Dialect != "" || in.APIRoot != "" || len(in.Rest) > 0 || in.SQL != nil {
+			return st, badRequest("invalid_ldap", "fault, agent_id, dialect, api_root, rest and sql do not apply to an ldap or ad target")
+		}
+		cfg := *in.LDAP
+		cfg.Flavor = in.Kind
+		if cfg.AllowTier0 && s.cfg.Env != config.Dev {
+			return st, badRequest("invalid_ldap", "allow_tier0 is a dev-only setting; production targets never change privileged accounts or groups")
+		}
+		if err := cfg.Validate(); err != nil {
+			return st, badRequest("invalid_ldap", err.Error()) // fixed text, never the submitted value
+		}
+		if cfg.CACertPEM != "" {
+			if _, err := ldapwrite.CAPool(cfg.CACertPEM); err != nil {
+				return st, badRequest("invalid_ldap", "ca_cert_pem holds no PEM certificate")
+			}
+		}
+		in.BaseURL = "ldaps://" + net.JoinHostPort(strings.ToLower(cfg.Host), strconv.Itoa(cfg.Port))
+		st.LDAP = &cfg
 	case provision.KindFake:
 		if s.cfg.FakeTargetURL == "" {
 			return st, badRequest("fake_unavailable", "the fake target is available only in dev (TESSERA_DEV_FAKE_TARGET)")
@@ -336,12 +367,23 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle, sql, salesforce or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle, sql, salesforce, servicenow, atlassian, ldap, ad or fake")
 	}
 	if in.Kind == provision.KindSalesforce {
 		if _, err := salesforce.CheckURL(in.BaseURL, s.sfRuntime()); err != nil {
 			// a fixed message: the error text can carry the submitted URL, which is not echoed back
 			return st, badRequest("invalid_base_url", sfURLRule("base_url"))
+		}
+	}
+	switch in.Kind {
+	case provision.KindServiceNow:
+		if u, err := servicenow.CheckURL(in.BaseURL, s.sfRuntime()); err != nil || u.Path != "" {
+			// a fixed message: the error text can carry the submitted URL, which is not echoed back
+			return st, badRequest("invalid_base_url", "base_url must be an https URL on a ServiceNow domain (*.service-now.com or *.servicenowservices.com), with no path")
+		}
+	case provision.KindAtlassian:
+		if u, err := atlassian.CheckSiteURL(in.BaseURL, s.sfRuntime()); err != nil || u.Path != "" {
+			return st, badRequest("invalid_base_url", "base_url must be an https URL on an Atlassian Cloud site (*.atlassian.net), with no path")
 		}
 	}
 	if in.Kind == provision.KindREST {
@@ -352,7 +394,7 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		return st, badRequest("invalid_rest", "rest applies to REST targets only")
 	}
 	vault := slices.Contains(provision.PAMKinds, in.Kind) || slices.Contains(provision.ERPKinds, in.Kind) // a target with a path root and a user:secret credential
-	noDialect := vault || in.Kind == provision.KindSalesforce
+	noDialect := vault || in.Kind == provision.KindSalesforce || in.Kind == provision.KindServiceNow || in.Kind == provision.KindAtlassian || in.Kind == provision.KindLDAP || in.Kind == provision.KindAD
 	switch {
 	case (in.Kind == provision.KindOkta || noDialect || in.Kind == provision.KindREST) && in.Dialect != "":
 		return st, badRequest("invalid_dialect", "dialect applies to SCIM targets only")
@@ -482,7 +524,7 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	// edit that moves it has to bring a new token (#315).
 	// A change to a database target's settings (engine, host, port, database, user, TLS, CA, mode
 	// or any statement) moves it too: the password was entered for those settings, not for new ones.
-	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL) || sqlSettingsChanged(old.Settings, st.SQL))
+	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL) || sqlSettingsChanged(old.Settings, st.SQL) || ldapSettingsChanged(old.Settings, st.LDAP))
 	if existing && !moved && in.Kind == provision.KindREST {
 		// where a REST target sends its secret is also in the spec: the token URL's origin, the auth type and
 		// the header or query parameter. Moving any of them moves the credential.
@@ -516,6 +558,17 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 			}
 		}
 	}
+	if in.Token != "" && in.Kind == provision.KindServiceNow {
+		if _, err := servicenow.ParseCredential(in.Token); err != nil {
+			// fixed text: the parser's error is never echoed back
+			return 0, nil, badRequest("invalid_credential", "the ServiceNow credential is JSON: auth basic with username and password, or oauth with client_id and client_secret; optional mode (direct or ticket) and assignment_group (a sys_id)")
+		}
+	}
+	if in.Token != "" && in.Kind == provision.KindAtlassian {
+		if _, err := atlassian.ParseTargetCredential(in.Token); err != nil {
+			return 0, nil, badRequest("invalid_credential", "the Atlassian credential is JSON with email and api_token")
+		}
+	}
 	switch {
 	case in.Token != "" && isUserSecretKind(in.Kind) && !strings.Contains(strings.Trim(in.Token, ":"), ":"):
 		return 0, nil, badRequest("invalid_credential", "the credential is user:secret")
@@ -539,10 +592,16 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 			Msg: "changing the target's kind or origin (scheme, host, port) needs a new token; the stored credential does not move with it"}
 	case in.Kind == provision.KindSQL && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "a sql target needs the database password as token")
+	case (in.Kind == provision.KindLDAP || in.Kind == provision.KindAD) && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "an ldap or ad target needs the bind password as token")
 	case in.Kind == provision.KindOkta && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
 	case in.Kind == provision.KindSalesforce && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "a Salesforce target needs its credential (JSON with client_id, username and private_key)")
+	case in.Kind == provision.KindServiceNow && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "a ServiceNow target needs its credential (JSON: auth basic with username and password, or oauth with client_id and client_secret)")
+	case in.Kind == provision.KindAtlassian && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "an Atlassian target needs its credential (JSON with email and api_token)")
 	case in.Kind == provision.KindREST && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "a REST target needs its credential (the secret its auth type uses)")
 	case isUserSecretKind(in.Kind) && len(t.CredentialEnc) == 0:
@@ -576,7 +635,7 @@ func sfURLRule(field string) string {
 	return field + " must be an https URL on a Salesforce domain (*.my.salesforce.com, *.salesforce.com or *.force.com), with no path"
 }
 
-// sfRuntime is the outbound runtime of Salesforce targets: the dev loopback exception exists in dev only.
+// sfRuntime is the outbound runtime of Salesforce, ServiceNow and Atlassian targets: the dev loopback exception exists in dev only.
 func (s *Server) sfRuntime() connsync.Runtime {
 	return connsync.Runtime{Env: s.cfg.Env, AllowLoopback: s.cfg.Env == config.Dev}
 }
@@ -590,6 +649,23 @@ func sqlSettingsChanged(oldSettings string, now *sqldb.Config) bool {
 	a, _ := json.Marshal(os.SQL)
 	b, _ := json.Marshal(now)
 	return string(a) != string(b)
+}
+
+// ldapSettingsChanged reports whether the destination of an ldap or ad target's bind password
+// (host, port, bind DN, CA) differs between its saved settings and the new ones.
+func ldapSettingsChanged(oldSettings string, now *ldapwrite.Config) bool {
+	var os provision.Settings
+	if json.Unmarshal([]byte(oldSettings), &os) != nil {
+		return true
+	}
+	dest := func(c *ldapwrite.Config) string {
+		if c == nil {
+			return ""
+		}
+		b, _ := json.Marshal([]any{c.Host, c.Port, c.BindDN, c.CACertPEM})
+		return string(b)
+	}
+	return dest(os.LDAP) != dest(now)
 }
 
 // restDestination is the secret destination of a stored REST spec, whose own base URL is the target's.

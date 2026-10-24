@@ -237,6 +237,18 @@ func TestRunner_ConfigHashStale(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		if res.Bundle.Rev.SecretRef != nil {
+			t.Error("the stored credential survived a host change")
+		}
+		if _, err := s.SetCredential(c, id, CredentialInput{Reference: "vault:kv/ad"}, "admin", t0); err != nil {
+			return err
+		}
+		if _, err := s.Transition(c, id, store.StateReadyToValidate, "admin", t0); err != nil {
+			return err
+		}
+		if res.Bundle, err = s.reload(c, res.Bundle.Rev.ID, t0); err != nil {
+			return err
+		}
 		if res.Bundle.Rev.State != store.StateReadyToValidate {
 			t.Errorf("state %s", res.Bundle.Rev.State)
 		}

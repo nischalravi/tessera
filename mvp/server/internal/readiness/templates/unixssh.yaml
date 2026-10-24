@@ -1,0 +1,84 @@
+# Unix and Linux hosts over SSH (issue #558): read-only local accounts (getent passwd), groups and
+# their members (getent group), sudoers rules and last logins (lastlog), signed in with a key and a
+# pinned host key. One connection per host. The snapshot feeds the effective-permission analysis, not
+# an account directory with an HR link, so the staged account data checks do not apply (inventory).
+# Only fixed, constant commands are run. There is no write-back.
+template: unixssh
+version: 1.0.0
+extends: base@1
+display_name: Unix/Linux host (SSH)
+connector_types: [unixssh]
+role: account_source
+inventory: true
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id]
+items:
+  - id: unix.auth
+    title: The SSH key is accepted by the host, and the host key is the pinned one (the key stored sealed)
+    category: access
+    level: required
+    why: "Proves the key and the pinned host key before any read: a rotated key, a locked login or a host key that changed (a different machine, or someone in the path) is found here, not in an empty sync."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Check the host key with ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub on the host and store that fingerprint; add the connection's public key to the login's authorized_keys."
+    config_fields: [settings, credential]
+
+  - id: unix.login.unprivileged
+    title: The SSH login is a dedicated, unprivileged account (not root), and its key is restricted to this server
+    category: access
+    level: required
+    why: "The login only runs getent, lastlog and the sudoers read. A root login turns a leaked key into control of the host."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a service login without a password. In authorized_keys limit the key with from=, restrict and, where the host allows it, a forced command."
+    config_fields: [settings, credential]
+
+  - id: unix.read
+    title: Accounts and groups are listed (getent passwd and getent group answer)
+    category: scope
+    level: required
+    why: "A connector that signs in but reads no account leaves the host's access unanalysed without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Run getent passwd and getent group as the login on the host; fix PATH or the shell if they are not found."
+    depends_on: [unix.auth]
+    config_fields: [settings, credential]
+
+  - id: unix.sudoers
+    title: Sudoers rules are readable (the read probe counts sudo rules; zero on a host that has them means the file is not readable)
+    category: scope
+    level: recommended
+    why: "Sudo rules are how most Linux access is privileged. Without them the analysis shows only uid 0 and group membership."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set Read sudoers through sudo and add one sudoers.d rule that lets the login run exactly the sudoers read command with NOPASSWD (see the README)."
+    config_fields: [settings]
+
+  - id: unix.directory
+    title: Directory-backed accounts (SSSD, LDAP, Active Directory) are covered by a connection to that directory
+    category: identity_keys
+    level: optional
+    why: "getent lists the accounts the host's name service returns, but a directory with many users is better read from the directory itself; sudo rules naming a directory user or group resolve only for accounts the host lists."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add a connection for the directory so its users map to people, and keep this one for the host's local accounts."
+
+  - id: unix.key.rotation
+    title: The SSH key is rotated on a schedule (90 days or less)
+    category: access
+    level: recommended
+    why: "An SSH key does not expire by itself; rotation bounds how long a leaked key reads the host's access."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a new key pair, add the new public key to authorized_keys, store the private key here, then remove the old public key."
+    config_fields: [credential]

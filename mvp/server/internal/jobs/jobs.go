@@ -67,6 +67,10 @@ const (
 	// agents), ProvisionPush sends a tenant's due provisioning operations.
 	ConnectorSync = "connector_sync"
 	ProvisionPush = "provision_push"
+
+	// ReviewTick launches the due review schedules of one tenant and progresses its open scheduled
+	// campaigns (issue #588: a schedule an admin sets the cadence of).
+	ReviewTick = "review_tick"
 )
 
 // Kinds lists every kind, for filters.

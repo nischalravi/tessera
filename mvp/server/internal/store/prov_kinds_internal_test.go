@@ -21,7 +21,7 @@ func TestUpgradeProvTargetKinds_KeepsRowsAndWidensTheCheck(t *testing.T) {
 	if err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE name = 'provisioning_targets'`).Scan(&ddl); err != nil {
 		t.Fatal(err)
 	}
-	narrow := strings.Replace(ddl, "'fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql','salesforce'", "'fake'", 1)
+	narrow := strings.Replace(ddl, "'fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql','salesforce','servicenow','atlassian','ldap','ad'", "'fake'", 1)
 	if narrow == ddl {
 		t.Fatal("the schema does not list the new kinds")
 	}
@@ -48,7 +48,7 @@ func TestUpgradeProvTargetKinds_KeepsRowsAndWidensTheCheck(t *testing.T) {
 	if err := d.sql.QueryRowContext(ctx, `SELECT kind, credential_enc FROM provisioning_targets WHERE id = 'pt1'`).Scan(&kind, &enc); err != nil || kind != "scim" || len(enc) != 2 {
 		t.Fatalf("row after the upgrade: %q %v %v", kind, enc, err)
 	}
-	for _, k := range []string{"cyberark", "delinea", "beyondtrust", "sap", "oracle", "rest", "sql", "salesforce"} {
+	for _, k := range []string{"cyberark", "delinea", "beyondtrust", "sap", "oracle", "rest", "sql", "salesforce", "servicenow", "atlassian", "ldap", "ad"} {
 		if _, err := d.sql.ExecContext(ctx, `INSERT INTO provisioning_targets (id, tenant_id, connection_id, kind, base_url, created_by, created_at, updated_at)
 			VALUES ('k-`+k+`', 't1', 'c-`+k+`', '`+k+`', 'https://b.example', 'a', 'x', 'x')`); err != nil {
 			t.Errorf("kind %s refused: %v", k, err)
@@ -78,7 +78,7 @@ func TestUpgradeProvTargetKinds_AddsSalesforce(t *testing.T) {
 	if err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE name = 'provisioning_targets'`).Scan(&ddl); err != nil {
 		t.Fatal(err)
 	}
-	prev := strings.Replace(ddl, ",'salesforce'", "", 1)
+	prev := strings.Replace(ddl, ",'salesforce','servicenow','atlassian','ldap','ad'", "", 1)
 	if prev == ddl {
 		t.Fatal("the schema does not list salesforce")
 	}
@@ -108,5 +108,101 @@ func TestUpgradeProvTargetKinds_AddsSalesforce(t *testing.T) {
 	if _, err := d.sql.ExecContext(ctx, `INSERT INTO provisioning_targets (id, tenant_id, connection_id, kind, base_url, created_by, created_at, updated_at)
 		VALUES ('pt2', 't1', 'c2', 'salesforce', 'https://b.example', 'a', 'x', 'x')`); err != nil {
 		t.Errorf("salesforce refused after the upgrade: %v", err)
+	}
+}
+
+// A SQLite database that already has Salesforce (issue #555) takes the ServiceNow and Atlassian kinds
+// (issue #559) the same way, keeping its rows and their sealed credentials.
+func TestUpgradeProvTargetKinds_AddsServiceNowAndAtlassian(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sf.db")
+	d, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ddl string
+	if err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE name = 'provisioning_targets'`).Scan(&ddl); err != nil {
+		t.Fatal(err)
+	}
+	prev := strings.Replace(ddl, ",'servicenow','atlassian','ldap','ad'", "", 1)
+	if prev == ddl {
+		t.Fatal("the schema does not list servicenow and atlassian")
+	}
+	for _, q := range []string{"DROP TABLE provisioning_targets", prev,
+		`INSERT INTO provisioning_targets (id, tenant_id, connection_id, kind, base_url, settings, credential_enc, write_back, created_by, created_at, updated_at)
+		 VALUES ('pt1', 't1', 'c1', 'salesforce', 'https://a.example', '{}', x'0102', 1, 'alice', 'x', 'x')`} {
+		if _, err := d.sql.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	insert := func(kind string) error {
+		_, err := d.sql.ExecContext(ctx, `INSERT INTO provisioning_targets (id, tenant_id, connection_id, kind, base_url, created_by, created_at, updated_at)
+			VALUES ('k-`+kind+`', 't1', 'c-`+kind+`', '`+kind+`', 'https://b.example', 'a', 'x', 'x')`)
+		return err
+	}
+	if insert("servicenow") == nil || insert("atlassian") == nil {
+		t.Fatal("the previous table accepted the new kinds")
+	}
+	_ = d.Close()
+
+	d, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	var kind string
+	var enc []byte
+	if err := d.sql.QueryRowContext(ctx, `SELECT kind, credential_enc FROM provisioning_targets WHERE id = 'pt1'`).Scan(&kind, &enc); err != nil || kind != "salesforce" || len(enc) != 2 {
+		t.Fatalf("row after the upgrade: %q %v %v", kind, enc, err)
+	}
+	for _, k := range []string{"servicenow", "atlassian"} {
+		if err := insert(k); err != nil {
+			t.Errorf("%s refused after the upgrade: %v", k, err)
+		}
+	}
+	if err := insert("bogus"); err == nil {
+		t.Error("an unknown kind was accepted")
+	}
+}
+
+// A SQLite database that has the kinds up to Atlassian (with ServiceNow and Atlassian, issue #559) takes the ldap and ad kinds (issue #586)
+// the same way, keeping its rows.
+func TestUpgradeProvTargetKinds_AddsLDAPAndAD(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sf.db")
+	d, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ddl string
+	if err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE name = 'provisioning_targets'`).Scan(&ddl); err != nil {
+		t.Fatal(err)
+	}
+	prev := strings.Replace(ddl, ",'ldap','ad'", "", 1)
+	if prev == ddl {
+		t.Fatal("the schema does not list ldap and ad")
+	}
+	for _, q := range []string{"DROP TABLE provisioning_targets", prev,
+		`INSERT INTO provisioning_targets (id, tenant_id, connection_id, kind, base_url, settings, credential_enc, write_back, created_by, created_at, updated_at)
+		 VALUES ('pt1', 't1', 'c1', 'salesforce', 'https://a.example', '{}', x'0102', 1, 'alice', 'x', 'x')`} {
+		if _, err := d.sql.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	_ = d.Close()
+	d, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	var kind string
+	if err := d.sql.QueryRowContext(ctx, `SELECT kind FROM provisioning_targets WHERE id = 'pt1'`).Scan(&kind); err != nil || kind != "salesforce" {
+		t.Fatalf("row after the upgrade: %q %v", kind, err)
+	}
+	for _, k := range []string{"ldap", "ad"} {
+		if _, err := d.sql.ExecContext(ctx, `INSERT INTO provisioning_targets (id, tenant_id, connection_id, kind, base_url, created_by, created_at, updated_at)
+			VALUES ('k-`+k+`', 't1', 'c-`+k+`', '`+k+`', 'ldaps://d.example', 'a', 'x', 'x')`); err != nil {
+			t.Errorf("%s refused after the upgrade: %v", k, err)
+		}
 	}
 }

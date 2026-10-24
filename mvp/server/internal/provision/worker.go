@@ -3,6 +3,7 @@ package provision
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,17 +15,21 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/certs"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldapwrite"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
+	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -49,10 +54,21 @@ const (
 	KindOracle = "oracle"
 	// KindSalesforce: user lifecycle and permission-set assignment in a Salesforce org (issue #555).
 	KindSalesforce = "salesforce"
+	// KindServiceNow: user lifecycle, group membership and role assignment in a ServiceNow instance, or
+	// (credential mode "ticket") an incident per change for a person to act on (issue #559).
+	KindServiceNow = "servicenow"
+	// KindAtlassian: group membership and project role actors of an Atlassian Cloud site (issue #559). Accounts
+	// are provisioned through the Atlassian Cloud SCIM preset.
+	KindAtlassian = "atlassian"
 	// KindSQL is a database (PostgreSQL, MySQL, SQL Server, Oracle): native accounts and roles,
 	// or an application's own tables (issue #553, internal/connectors/sqldb). The target's
 	// Settings.SQL holds the connection; the credential is the database password.
 	KindSQL = "sql"
+	// KindLDAP and KindAD: accounts and group membership in an LDAP directory or Active Directory
+	// (issue #586, internal/connectors/ldapwrite). Settings.LDAP holds the directory; the credential
+	// is the bind password.
+	KindLDAP = "ldap"
+	KindAD   = "ad"
 )
 
 // ERPKinds are the ERP target kinds; the kind is the system's name in internal/connectors/erp.
@@ -86,6 +102,8 @@ type Settings struct {
 	AgentID string `json:"agent_id,omitempty"`
 	// SQL is the database connection of a KindSQL target (no secret in it).
 	SQL *sqldb.Config `json:"sql,omitempty"`
+	// LDAP is the directory of a KindLDAP or KindAD target (no secret in it).
+	LDAP *ldapwrite.Config `json:"ldap,omitempty"`
 	// REST is the spec of a generic REST target (restgen.Spec as JSON). It holds no secret; the
 	// credential is the sealed token. REST targets only.
 	REST json.RawMessage `json:"rest,omitempty"`
@@ -130,6 +148,10 @@ type Engine struct {
 	// Runtime says whether the dev loopback exception applies to vault and ERP
 	// targets (connsync.RuntimeFromConfig). The zero value is the production rules.
 	Runtime connsync.Runtime
+	// DialAllow is the dev-only private-directory allowlist (TESSERA_SAFEDIAL_ALLOW) of ldap and ad targets.
+	DialAllow []safedial.AllowEntry
+	// LDAPDialer replaces the safedial dialer of ldap and ad targets (tests).
+	LDAPDialer func() (*safedial.Dialer, error)
 	// Build creates the connector of a target (tests inject fakes).
 	Build func(t *store.ProvTarget, token string) (target.Connector, error)
 	// Guard, when set, runs every call to a target under that target's
@@ -188,6 +210,10 @@ const (
 )
 
 func (e *Engine) maxAttempts() int { return orInt(e.MaxAttempts, 5) }
+
+// waitStep is the backoff step of an operation waiting for a person (about ten minutes by default).
+const waitStep = 8
+
 func (e *Engine) maxVerifies() int { return orInt(e.MaxVerifies, 3) }
 
 func orInt(v, d int) int {
@@ -320,8 +346,22 @@ func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) 
 			return nil, err
 		}
 		return salesforce.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
+	case KindServiceNow:
+		cred, err := servicenow.ParseCredential(token)
+		if err != nil {
+			return nil, err
+		}
+		return servicenow.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
+	case KindAtlassian:
+		cred, err := atlassian.ParseTargetCredential(token)
+		if err != nil {
+			return nil, err
+		}
+		return atlassian.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
 	case KindSQL:
 		return e.buildSQL(token, s)
+	case KindLDAP, KindAD:
+		return e.buildLDAP(pt, token, s)
 	}
 	return nil, fmt.Errorf("unknown target kind %q", pt.Kind)
 }
@@ -383,6 +423,42 @@ func (e *Engine) buildSQL(token string, s Settings) (target.Connector, error) {
 		rt = e.Runtime
 	}
 	return sqldb.NewTarget(*s.SQL, connsync.NewSecret(token), rt)
+}
+
+// buildLDAP builds the target of a directory. The credential is the bind password; the connection
+// is made by internal/safedial (the address policy, LDAPS or StartTLS), not by the HTTP client.
+func (e *Engine) buildLDAP(pt *store.ProvTarget, token string, s Settings) (target.Connector, error) {
+	if s.LDAP == nil {
+		return nil, errors.New("the directory settings are missing")
+	}
+	cfg := *s.LDAP
+	cfg.Flavor = pt.Kind
+	if cfg.AllowTier0 && e.Runtime.Env != config.Dev {
+		return nil, errors.New("allow_tier0 is refused outside a dev environment")
+	}
+	var roots *x509.CertPool
+	if cfg.CACertPEM != "" {
+		var err error
+		if roots, err = ldapwrite.CAPool(cfg.CACertPEM); err != nil {
+			return nil, errors.New("the directory's CA bundle is not usable")
+		}
+	}
+	// only a dev runtime is dev: any other environment name gets the production rules
+	env, allow := config.Prod, []safedial.AllowEntry(nil)
+	if e.Runtime.Env == config.Dev {
+		env, allow = config.Dev, e.DialAllow
+	}
+	dial := func() (*safedial.Dialer, error) {
+		return safedial.New(safedial.Options{Env: env, Allow: allow, RootCAs: roots})
+	}
+	if e.LDAPDialer != nil {
+		dial = e.LDAPDialer
+	}
+	d, err := dial()
+	if err != nil {
+		return nil, err
+	}
+	return ldapwrite.NewTarget(cfg, connsync.NewSecret(token), d)
 }
 
 func (e *Engine) workerCtx(ctx context.Context) context.Context {
@@ -618,13 +694,19 @@ func (e *Engine) verify(ctx context.Context, t tenancy.ID, op *store.ProvOp, con
 	case err != nil:
 		// The read itself failed: try again later, and give up after the same
 		// number of tries a disagreeing read gets.
-		if op.VerifyAttempts >= e.maxVerifies() {
+		if !target.Retryable(err) || op.VerifyAttempts >= e.maxVerifies() {
 			return e.fail(ctx, t, op, fmt.Errorf("could not re-read the target to verify: %w", err), st)
 		}
 		st.Retrying++
 		return e.set(ctx, t, op, PendingVerification, store.ProvOpState{Status: PendingVerification, Attempts: op.Attempts,
 			VerifyAttempts: op.VerifyAttempts, NextAttemptAt: now.Add(e.backoff(op.VerifyAttempts)),
 			LastError: sp("re-read failed: " + errText(err))}, "", nil)
+	case !v.OK && v.Waiting:
+		// a person has to act: stay pending, re-read later, and do not spend a verification attempt
+		st.Retrying++
+		return e.set(ctx, t, op, PendingVerification, store.ProvOpState{Status: PendingVerification, Attempts: op.Attempts,
+			VerifyAttempts: max(0, op.VerifyAttempts-1), NextAttemptAt: now.Add(e.backoff(waitStep)),
+			LastError: sp("waiting: " + v.Observed), Observed: sp(v.Observed)}, "", nil)
 	case !v.OK && op.VerifyAttempts < e.maxVerifies():
 		st.Retrying++
 		return e.set(ctx, t, op, PendingVerification, store.ProvOpState{Status: PendingVerification, Attempts: op.Attempts,

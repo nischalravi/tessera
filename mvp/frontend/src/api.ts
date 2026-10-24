@@ -1570,7 +1570,8 @@ export const questionnaires = {
 export type WorkflowScope = "access" | "service_account";
 export type WorkflowStepType = "approval" | "questionnaire" | "notify" | "wait" | "condition" | "provisioning";
 export type WorkflowOp = "eq" | "ne" | "in" | "not_in";
-export interface WorkflowCondition { attribute: string; op: WorkflowOp; values: string[] }
+/** dataset (issue #588): test membership in the named dataset instead of values (op in or not_in). */
+export interface WorkflowCondition { attribute: string; op: WorkflowOp; values: string[]; dataset?: string }
 /** One step. Fields that do not belong to the step's type stay absent; "next" and a condition's "then" and "else" name a step id or "end". */
 export interface WorkflowStep {
   id: string;
@@ -1624,6 +1625,23 @@ export const workflows = {
   edit: (id: string, version: number, spec: WorkflowSpec) => api<WorkflowDetail>(workflowPath(id), { version, ...spec }, "PUT"),
   retire: (id: string) => api<Workflow>(workflowPath(id, "/retire"), {}),
   assign: (id: string, targets: WorkflowTarget[]) => api<Workflow>(workflowPath(id, "/assignments"), { targets }, "PUT"),
+};
+
+/** Datasets (Governance → Datasets, issue #588): named lookup tables read by workflow conditions and rules. */
+export interface Dataset { id: string; name: string; description: string; version: number; count: number; updated_by: string; updated_at: string }
+export interface DatasetList { datasets: Dataset[]; can_manage: boolean; limits: Record<string, number> }
+export interface DatasetDetail extends Dataset { values: string[] }
+export interface DatasetChange { dataset: Dataset; added: number; removed: number }
+export const datasetsPath = "/datasets";
+const datasetPath = (id: string, rest = "") => datasetsPath + "/" + encodeURIComponent(id) + rest;
+export const datasets = {
+  create: (name: string, description: string) => api<Dataset>(datasetsPath, { name, description }),
+  update: (id: string, version: number, name: string, description: string) => api<Dataset>(datasetPath(id), { version, name, description }, "PUT"),
+  remove: (id: string) => api<{ deleted: boolean }>(datasetPath(id), undefined, "DELETE"),
+  edit: (id: string, add: string[], remove: string[]) => api<DatasetChange>(datasetPath(id, "/values"), { add, remove }),
+  upload: (id: string, file: File, opts: { header: boolean; replace: boolean }) =>
+    api<DatasetChange>(datasetPath(id, "/upload") + `?${new URLSearchParams({ header: String(opts.header), mode: opts.replace ? "replace" : "append" })}`,
+      undefined, "POST", { data: file, contentType: "text/csv" }),
 };
 
 /** Service-account requests (Access → Request access, issue #298): create, change or transfer a service account, with mandatory owners. */
@@ -3373,7 +3391,8 @@ export interface Progress { pass: number; total: number; skipped: number }
 export interface TemplateRef { id: string; version: string; pin: string; display_name: string; overlay_version: number }
 
 export interface ConnConfig {
-  host?: string; port?: number; bind_dn?: string; ca_bundle?: string; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
+  host?: string; port?: number; tls_mode?: "ldaps" | "starttls" | "none"; page_size?: number;
+  attr_map?: { ldap: string; target: string; scope: "account" | "identity" }[]; bind_dn?: string; ca_bundle?: string; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
   org_url?: string; tenant_id?: string; cloud?: string; customer?: string; domain?: string; base_url?: string; preset?: string;
   tenant_host?: string; api_version?: string; interface?: string; time_zone?: string;
   correlation_key?: string; hr_id_attribute?: string; technical_owner?: string; business_owner?: string;
@@ -4208,7 +4227,7 @@ export interface ProvOpDetail extends ProvOp { payload: { account?: Record<strin
 export interface ProvDiscovery { checked_at: string; agent_advertised: boolean; service_provider_config: boolean; resource_types: string[]; error?: string }
 
 export interface ProvTarget {
-  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle" | "salesforce"; base_url: string; api_root?: string;
+  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle" | "salesforce" | "servicenow" | "atlassian" | "ldap" | "ad"; base_url: string; api_root?: string;
   dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; agent_id?: string; discovery?: ProvDiscovery; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
@@ -4314,6 +4333,15 @@ export const queue = {
     api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/pause`, { ...(reason ? { reason } : {}), ...(resumeAfterHours ? { resume_after_hours: resumeAfterHours } : {}) }),
   /** Lets a paused schedule fire again: once if it came due while paused, then on its cadence. */
   resumeSchedule: (name: string) => api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/resume`, {}),
+  /** The job kinds an admin may schedule (issue #588). */
+  scheduleKinds: () => api<{ kinds: { kind: string; label: string; description: string; payload: string }[]; name_prefix: string; min_interval_seconds: number }>("/queue/schedule-kinds"),
+  /** Creates a custom schedule, named custom.<name> (step-up, audited). */
+  createSchedule: (name: string, kind: string, spec: string, payload?: Record<string, unknown>) =>
+    api<QueueSchedule>("/queue/schedules", { name, kind, spec, ...(payload ? { payload } : {}) }),
+  /** Deletes a custom schedule; a built-in one can only be paused. */
+  deleteSchedule: (name: string) => api<{ deleted: boolean }>(`/queue/schedules/${encodeURIComponent(name)}`, undefined, "DELETE"),
+  /** Queues a schedule's job now (once a minute at most). */
+  runSchedule: (name: string) => api<{ queued: boolean; kind: string }>(`/queue/schedules/${encodeURIComponent(name)}/run`, {}),
 };
 
 // ------------------------------------------------- config transport (#170)
@@ -4425,6 +4453,28 @@ export const apiClients = {
   keys: (clientId: string, mode: "add" | "replace", jwks: unknown) => api<ApiClient>(`/admin/api-clients/${encodeURIComponent(clientId)}/keys`, { mode, jwks }),
   revoke: (clientId: string) => api<ApiClient>(`/admin/api-clients/${encodeURIComponent(clientId)}/revoke`, {}),
 };
+
+/** The complete OpenAPI 3.1 document of the API (GET /api/openapi.json), saved as a file. */
+export async function downloadApiSpec(): Promise<void> {
+  const res = await fetch("/api/openapi.json", { credentials: "same-origin" });
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "tessera-openapi.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 // ------------------------------------------------------------ log retention and the archive (issue #298)
 

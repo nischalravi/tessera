@@ -307,7 +307,7 @@ func (s *Server) patchConfig(r *http.Request, p *params) (int, any, error) {
 			inv = []string{}
 		}
 		out = map[string]any{"connection": v, "new_revision": res.NewRevision, "invalidated": inv,
-			"fields": readiness.ValidateConn(res.Bundle.Config, res.Bundle.Template, res.Bundle.Conn.ConnectorType)}
+			"fields": readiness.ValidateConnEnv(res.Bundle.Config, res.Bundle.Template, res.Bundle.Conn.ConnectorType, res.Bundle.Env)}
 		return err
 	})
 	return http.StatusOK, out, err

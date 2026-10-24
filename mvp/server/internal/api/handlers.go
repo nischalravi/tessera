@@ -79,6 +79,7 @@ func (s *Server) registerRoutes() {
 	s.handle(G, "/api/reviews/campaigns", read, need(auth.PermGraphRead), s.listCampaigns)
 	s.handle(P, "/api/reviews/campaigns", write, need(auth.PermReviewsManage), s.createCampaign)
 	s.handle(G, "/api/reviews/campaigns/{campaign_id}", read, need(auth.PermGraphRead), s.campaign)
+	s.registerReviewActionRoutes()
 	s.handle(P, "/api/reviews/items/{item_id}/decision", write, needStepUp(auth.PermReviewsDecide, auth.StepUpPolicy), s.reviewDecide)
 	s.handle(G, "/api/hris/events", read, need(auth.PermGraphRead), s.hrisEvents)
 	s.handle(P, "/api/hris/events", write, need(auth.PermHRISSimulateEvent), s.hrisCreate)
@@ -86,6 +87,7 @@ func (s *Server) registerRoutes() {
 	s.handle(P, "/api/hris/events/{event_id}/execute", phased, needStepUp(auth.PermHRISExecute, auth.StepUpPolicy), s.hrisExecute).asJob(jobs.Provision, "")
 	s.handle(G, "/api/jml/leaver-plan/{identity_id}", read, need(auth.PermGraphRead), s.leaverPlan)
 	s.handle(G, "/openapi.json", noTenant, need(auth.PermAuthenticated), s.openAPI)
+	s.handle(G, "/api/openapi.json", noTenant, need(auth.PermGraphRead), s.fullOpenAPIHandler)
 	s.handle(G, "/docs", noTenant, need(auth.PermAuthenticated), s.swaggerUI)
 	s.handle(G, "/docs/oauth2-redirect", noTenant, need(auth.PermAuthenticated), s.swaggerRedirect)
 	s.handle(G, "/redoc", noTenant, need(auth.PermAuthenticated), s.redoc)
@@ -1611,6 +1613,10 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 	it, resolution, err := reviews.DecideItem(store.TxFrom(r.Context()), s.clock(), id, body["decision"].(string), principal(r).User(), comment, choice)
 	if errors.Is(err, reviews.ErrUnknownItem) {
 		return nil, errStatus(http.StatusNotFound, "unknown review item")
+	}
+	var ae *reviews.ActionError
+	if errors.As(err, &ae) {
+		return nil, actionErr(err)
 	}
 	if body, ok, aerr := s.refusedDecision(r, err, "item_id", id); ok {
 		return body, aerr

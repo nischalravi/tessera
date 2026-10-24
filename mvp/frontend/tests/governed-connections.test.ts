@@ -17,6 +17,8 @@ test("which types take a base URL and a credential", () => {
   assert.equal(GOVERNED.azurerbac.baseUrl, undefined); // fixed Microsoft endpoints
   assert.equal(GOVERNED.gcpiam.baseUrl, undefined); // fixed Google endpoints
   assert.equal(GOVERNED.gcpiam.credential?.area, true); // the key JSON
+  assert.equal(GOVERNED.unixssh.baseUrl, undefined); // the host is a setting, not a URL
+  assert.equal(GOVERNED.unixssh.credential?.area, true); // the private key
   assert.equal(GOVERNED.agentcore.credential, null); // a recorded snapshot holds no secret
   assert.equal(GOVERNED.awsorg.credential?.area, true); // JSON keys
   for (const [type, t] of Object.entries(GOVERNED)) if (type !== "agentcore") assert.ok(t.credential, type);
@@ -48,6 +50,7 @@ test("required fields are named until they are filled", () => {
   assert.deepEqual(missingRequired("agentcore", "", {}), ["Snapshot file"]);
   assert.deepEqual(missingRequired("azurerbac", "", {}), ["Directory (tenant) id", "Application (client) id"]); // no base URL: the public cloud
   assert.deepEqual(missingRequired("gcpiam", "", {}), []); // one of organization, folders or projects: the server checks
+  assert.deepEqual(missingRequired("unixssh", "", {}), ["Host", "SSH user", "Host key"]);
   assert.deepEqual(missingRequired("ldap", "", {}), []);
 });
 

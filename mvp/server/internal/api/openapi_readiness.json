@@ -1303,7 +1303,7 @@
       "additionalProperties": {
        "type": "string"
       },
-      "description": "Non-secret options of the governed connector types (awsorg, githubscan, sap, oracle, cyberark, beyondtrust, delinea, fieldglass, beeline, csvfeed, agentcore, successfactors, azurerbac, gcpiam); the keys each type takes are closed (username, client_id, org, snapshot, regions, external_id, api_root, token_path, workers_path, csv_path, page_size, role_name, account_ids, management_account_id, identity_center_region, tenant_id, subscription_ids, management_group_ids, include_eligible, organization_id, folder_ids, project_ids). The secret is the sealed credential."
+      "description": "Non-secret options of the governed connector types (awsorg, githubscan, sap, oracle, cyberark, beyondtrust, delinea, fieldglass, beeline, csvfeed, agentcore, successfactors, azurerbac, gcpiam, unixssh); the keys each type takes are closed (username, client_id, org, snapshot, regions, external_id, api_root, token_path, workers_path, csv_path, page_size, role_name, account_ids, management_account_id, identity_center_region, tenant_id, subscription_ids, management_group_ids, include_eligible, organization_id, folder_ids, project_ids, host, port, host_key, use_sudo). The secret is the sealed credential."
      }
     },
     "description": "Typed, secret-free connection configuration. Unknown fields are rejected."
@@ -1388,7 +1388,8 @@
        "agentcore",
        "successfactors",
        "azurerbac",
-       "gcpiam"
+       "gcpiam",
+       "unixssh"
       ]
      },
      "system": {
