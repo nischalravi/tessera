@@ -718,7 +718,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET|POST /api/auth/dev-login` (dev and test only) ·
 `GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
 `POST /api/jobs/{job_id}/retry` ·
-`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` · `POST /api/provisioning/targets/{connection_id}/dry-run` ·
+`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` · `POST /api/provisioning/targets/{connection_id}/dry-run` · `POST /api/provisioning/targets/{connection_id}/discover` ·
 `GET /api/provisioning/ops[?status=&kind=&connection_id=&limit=]` · `GET /api/provisioning/ops/{op_id}` ·
 `POST /api/provisioning/ops/{op_id}/retry|cancel` · `POST /api/provisioning/run` ·
 `GET /api/provisioning/findings[?status=open|resolved]` ·
@@ -1285,6 +1285,15 @@ change in the target system and checks that it happened.
   `0224`, one per connection) has a `write_back` switch. Off: the change edits the graph at once, as
   before, and nothing reaches the target (so the parity fixtures are unchanged). On: the change goes
   through the engine. Routing is by the connection's `system` (`provision.Submit`).
+* **SCIM Agent discovery (issue #542).** `POST /api/provisioning/targets/{connection_id}/discover`
+  (`provisioning.manage`, audited as `provision.discover`) reads a SCIM target's `/ServiceProviderConfig` and
+  `/ResourceTypes` (GET only, through the safehttp client, 512 KiB cap, unknown JSON fields ignored) and records in the
+  target's settings whether resource type `Agent` / schema `urn:ietf:params:scim:schemas:core:2.0:Agent`
+  (draft-wzdk-scim-agent-resource) is advertised, plus the check time and any error. A failed read is recorded and
+  returned in the body, never raised, and does not affect Users/Groups provisioning. The result is the `discovery`
+  object of `GET /api/provisioning/targets` and the "Agent resource" column of Admin > Provisioning; an edit that keeps
+  the target's origin keeps it. Tessera does not provision `/Agents` yet. Agent identities (`ai_agent`) with no owner
+  are already findings of the `nhi-ownership` policy.
 * **Dry run (issue #498).** `POST /api/provisioning/targets/{connection_id}/dry-run {kind, username, group_name?}`
   (`provisioning.manage`) shows what a change would send to the target before write-back is turned on, or at any time:
   the connector runs against the real target with a transport that lets reads (GET, HEAD) through and records every other

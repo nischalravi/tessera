@@ -69,6 +69,9 @@ type Settings struct {
 	// instead of calling the target itself, and the agent's report finishes
 	// the operation (issue #302). SCIM and Okta targets only.
 	AgentID string `json:"agent_id,omitempty"`
+	// Discovery is the last read of the target's ServiceProviderConfig and
+	// ResourceTypes (issue #542). It is informational and never gates provisioning.
+	Discovery *DiscoveryRecord `json:"discovery,omitempty"`
 }
 
 // Engine sends queued operations to their targets and verifies them.
