@@ -20,7 +20,7 @@ func TestUpgradeProvTargetKinds_AddsTheSQLKind(t *testing.T) {
 	if err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE name = 'provisioning_targets'`).Scan(&ddl); err != nil {
 		t.Fatal(err)
 	}
-	mid := strings.Replace(ddl, ",'sql'", "", 1)
+	mid := strings.Replace(ddl, ",'sql','salesforce'", "", 1)
 	if mid == ddl {
 		t.Fatal("the schema does not list the sql kind")
 	}

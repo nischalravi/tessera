@@ -563,12 +563,13 @@ func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
 // run recreates) is dropped, and the new one takes its name. Postgres does this in migrations
 // 0601, 0850 and 0860.
 func (d *DB) upgradeProvTargetKinds(ctx context.Context) error {
-	const wider = "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql'))"
+	const wider = "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql','salesforce'))"
 	// every earlier list a database may still hold
 	olds := []string{"CHECK (kind IN ('scim','okta','fake'))",
 		"CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle'))",
 		"CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest'))",
-		"CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','sql'))"}
+		"CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','sql'))",
+		"CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql'))"}
 	var ddl string
 	err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'provisioning_targets'`).Scan(&ddl)
 	if errors.Is(err, sql.ErrNoRows) {

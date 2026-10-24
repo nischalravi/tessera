@@ -2642,6 +2642,31 @@ assignment back through provisioning.
   service (`oracle.go`). Both are exercised by `erpfake` (paging over 230 roles and users, a refused token, 429, 5xx,
   malformed, failing and dropped writes). Paths are settings; the first real tenant should confirm field names.
 
+### Salesforce (users, profiles, permission sets and groups; issue #555)
+
+- **Read.** `TESSERA_CONNECTORS=salesforce` with `TESSERA_SALESFORCE_BASE_URL` (the My Domain URL), `_CLIENT_ID` (the
+  connected app's consumer key), `_USERNAME` (the integration user), `_PRIVATE_KEY` (`file:/abs/path` or `env:NAME`,
+  PEM RSA), and optionally `_LOGIN_URL` (`https://test.salesforce.com` for a sandbox) and `_API_VERSION` (`v61.0`).
+  Auth is the OAuth JWT bearer flow: Tessera signs a 3-minute RS256 assertion and exchanges it for a token; no password
+  or refresh token is kept, and the `instance_url` in a token response is never followed.
+- **Hosts.** The base URL and `login_url` must be under `salesforce.com` or `force.com` (a 422 at target validation,
+  an error at connector start); only the dev loopback exception, which prod refuses, admits a local fake.
+- **Graph.** Profiles, roles, permission sets and permission set groups are groups (`salesforce_profile`, `_role`,
+  `_permission_set`, `_permission_set_group`); a group is `member_of` its component sets. System permissions
+  (Modify All Data, View All Data, Manage Users, Author Apex and others) are permissions on the resource `org`, and a
+  group holding one is privileged. A user is an account (disabled when inactive or when its login is frozen), correlated
+  by e-mail, `member_of` its profile, role and each unexpired set or group assigned. A profile's own hidden permission
+  set and a group's generated set fold into the profile and group.
+- **Write.** Target kind `salesforce` (Admin > Provisioning). The credential is JSON, sealed and write-only:
+  `{"client_id":"...","username":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...","login_url":"","default_profile_id":""}`.
+  Operations: create user (a profile is required), update an allow-listed set of fields, freeze and deactivate (a delete
+  does the same: Salesforce cannot delete users), assign and remove a permission set (`0PS...`) or group (`0PG...`).
+  Profiles and roles are set through `update_account` (`ProfileId`, `UserRoleId`), not as entitlements. Every operation
+  reads first and is re-read to verify. Write-back is off by default and, once on, follows the existing approval gates.
+- **Readiness.** Template `salesforce` (connection type `salesforce` in New connection).
+- **Tests.** `internal/connectors/salesforce` against `sffake`, an in-process org that verifies the JWT signature,
+  audience and expiry, serves SOQL with paging and injects faults.
+
 ### Azure RBAC and Google Cloud IAM (issue #557)
 
 Two read connectors bring cloud entitlements into the access graph for the effective-permission
