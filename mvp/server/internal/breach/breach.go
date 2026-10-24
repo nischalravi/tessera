@@ -345,7 +345,29 @@ func (s *Service) AwaitAttest(tx *store.TenantTx, planID, itemID, note, changeID
 	if it.State == store.BreachAttested {
 		return nil
 	}
-	return tx.SetBreachItemState(it.ID, store.BreachInProgress, "attestation requested; a second admin must approve it", nil, nil, now)
+	return tx.SetBreachItemState(it.ID, store.BreachInProgress, DetailAwaiting, nil, nil, now)
+}
+
+// Item details for the states of an attestation request.
+const (
+	DetailAwaiting = "attestation requested; a second admin must approve it"
+	DetailDeclined = "attestation request was not approved; do the step at the vendor, then request attestation again"
+)
+
+// DropAttest puts an item back in progress when its attestation request ended without approval (rejected,
+// cancelled or expired). An item that is already attested or verified is left alone.
+func (s *Service) DropAttest(tx *store.TenantTx, planID, itemID string, now time.Time) error {
+	it, err := tx.BreachItem(planID, itemID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if it.State == store.BreachAttested || it.State == store.BreachVerified {
+		return nil
+	}
+	return tx.SetBreachItemState(it.ID, store.BreachInProgress, DetailDeclined, nil, nil, now)
 }
 
 // AttestApproved records that a person did a manual item, once a second admin approved the attestation. The note
@@ -356,7 +378,8 @@ func (s *Service) AttestApproved(tx *store.TenantTx, planID, itemID, note, reque
 		return nil, err
 	}
 	note = strings.TrimSpace(note)
-	if err := tx.AttestBreachItem(it.ID, requester+", approved by "+approver, note, now); err != nil {
+	if err := tx.AttestBreachItem(it.ID, requester+", approved by "+approver, note,
+		"attested by "+requester+", approved by "+approver+": "+note, now); err != nil {
 		return nil, err
 	}
 	if err := tx.Audit(now, approver, "breach.item.attested", ojson.Object{{Key: "plan_id", Value: p.ID}, {Key: "item_id", Value: it.ID},

@@ -65,7 +65,7 @@ func TestIsolation_BreachPlansAndItems(t *testing.T) {
 		if err := c.SetBreachItemState(aItem, store.BreachVerified, "x", nil, nil, storetest.Now); err != nil {
 			return err
 		}
-		return c.AttestBreachItem(aItem, "b-admin", "not mine to attest", storetest.Now)
+		return c.AttestBreachItem(aItem, "b-admin", "not mine to attest", "attested", storetest.Now)
 	})
 	inA(t, f, func(c *store.TenantTx) error {
 		p, err := c.BreachPlan(aPlan)
@@ -107,7 +107,7 @@ func TestBreachItemAndPlanStatesAreFinal(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	planID, itemID := seedBreachPlan(t, f, f.A)
 	inA(t, f, func(c *store.TenantTx) error {
-		if err := c.AttestBreachItem(itemID, "alice", "rotated by hand in the console", storetest.Now); err != nil {
+		if err := c.AttestBreachItem(itemID, "alice", "rotated by hand in the console", "attested", storetest.Now); err != nil {
 			return err
 		}
 		if err := c.SetBreachItemState(itemID, store.BreachPending, "re-read", nil, nil, storetest.Now); err != nil {

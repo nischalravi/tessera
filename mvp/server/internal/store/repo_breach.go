@@ -102,7 +102,7 @@ var (
 		WHERE tenant_id = @tenant AND id = @id AND state <> 'attested'`)
 	breachItemsAttest = tq("breach_items.attest", `
 		UPDATE breach_items SET state = 'attested', attested_by = @attested_by, attested_note = @attested_note,
-			updated_at = @updated_at
+			detail = @detail, updated_at = @updated_at
 		WHERE tenant_id = @tenant AND id = @id AND state <> 'verified'`)
 )
 
@@ -204,8 +204,8 @@ func (tx *TenantTx) SetBreachItemState(id, state, detail string, verification *s
 }
 
 // AttestBreachItem records that a person did the manual step. A verified item is final.
-func (tx *TenantTx) AttestBreachItem(id, by, note string, now time.Time) error {
-	_, err := tx.exec(breachItemsAttest, sql.Named("id", id), sql.Named("attested_by", by), sql.Named("attested_note", note),
+func (tx *TenantTx) AttestBreachItem(id, by, note, detail string, now time.Time) error {
+	_, err := tx.exec(breachItemsAttest, sql.Named("id", id), sql.Named("attested_by", by), sql.Named("attested_note", note), sql.Named("detail", detail),
 		sql.Named("updated_at", RT(now)))
 	return err
 }
