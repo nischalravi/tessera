@@ -346,6 +346,9 @@ func DecideItem(c *store.TenantTx, now time.Time, itemID int64, decision string,
 	if err := refuseSelf(c, item, by); err != nil {
 		return nil, "", err
 	}
+	if err := refuseHeldUndecided(c, item); err != nil {
+		return nil, "", err
+	}
 	// A decided item is final, as in Decide: the same decision again is a
 	// no-op, a different one is a *DecidedError.
 	if done, rerr := resolved(item, decision); done {

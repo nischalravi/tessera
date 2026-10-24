@@ -276,6 +276,18 @@ func progress(tx *store.TenantTx, l *store.ReviewLaunch, now time.Time, res *Tic
 	if err != nil {
 		return err
 	}
+	// a locked campaign waits; one closed by hand ends its launch, revoking nothing
+	if cmp, err := tx.Campaign(l.CampaignID); err == nil {
+		switch cmp.Status {
+		case store.CampaignLocked:
+			return nil
+		case store.CampaignClosed:
+			l.ClosedAt = &now
+			return tx.SaveReviewLaunch(l)
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
 	open, err := undecided(tx, l.CampaignID)
 	if err != nil {
 		return err

@@ -123,6 +123,12 @@ var crossTenantCases = map[string]crossTenantCase{
 	"GET campaign":            {method: "GET", path: pathf("/api/reviews/campaigns/%d"), key: "campaign"},
 	"GET hris plan":           {method: "GET", path: pathf("/api/hris/events/%d/plan"), key: "hris:leaver"},
 	"POST hris execute":       {method: "POST", path: pathf("/api/hris/events/%d/execute"), key: "hris:leaver"},
+	"POST review consult":     {method: "POST", path: pathf("/api/reviews/items/%d/consult"), key: "item", body: func(int64) string { return `{"identity_id":1,"question":"x"}` }},
+	"POST review reassign":    {method: "POST", path: pathf("/api/reviews/items/%d/reassign"), key: "item", body: func(int64) string { return `{"identity_id":1,"reason":"x"}` }},
+	"GET review item events":  {method: "GET", path: pathf("/api/reviews/items/%d/events"), key: "item"},
+	"POST campaign lock":      {method: "POST", path: pathf("/api/reviews/campaigns/%d/lock"), key: "campaign", body: func(int64) string { return `{"reason":"x"}` }},
+	"POST campaign unlock":    {method: "POST", path: pathf("/api/reviews/campaigns/%d/unlock"), key: "campaign", body: func(int64) string { return `{}` }},
+	"POST campaign close":     {method: "POST", path: pathf("/api/reviews/campaigns/%d/close"), key: "campaign", body: func(int64) string { return `{"reason":"x"}` }},
 	"POST review decision":    {method: "POST", path: pathf("/api/reviews/items/%d/decision"), key: "item", body: func(int64) string { return `{"decision":"revoke"}` }},
 	"GET campaign population": {method: "GET", path: pathf("/api/reviews/campaigns/%d/population"), key: "campaign"},
 	"GET campaign export":     {method: "GET", path: pathf("/api/reviews/campaigns/%d/export"), key: "campaign"},
@@ -207,6 +213,12 @@ var routeParamCases = map[string][]string{
 	"GET /api/hris/events/{event_id}/plan":                {"GET hris plan"},
 	"POST /api/hris/events/{event_id}/execute":            {"POST hris execute"},
 	"POST /api/reviews/items/{item_id}/decision":          {"POST review decision"},
+	"POST /api/reviews/items/{item_id}/consult":           {"POST review consult"},
+	"POST /api/reviews/items/{item_id}/reassign":          {"POST review reassign"},
+	"GET /api/reviews/items/{item_id}/events":             {"GET review item events"},
+	"POST /api/reviews/campaigns/{campaign_id}/lock":      {"POST campaign lock"},
+	"POST /api/reviews/campaigns/{campaign_id}/unlock":    {"POST campaign unlock"},
+	"POST /api/reviews/campaigns/{campaign_id}/close":     {"POST campaign close"},
 	"POST /api/jit/requests/{request_id}/approve":         {"POST jit approve"},
 	"POST /api/jit/requests/{request_id}/deny":            {"POST jit deny"},
 	"POST /api/jit/requests/{request_id}/revoke":          {"POST jit revoke"},
@@ -261,6 +273,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
 			continue // TestIsolation_AuditRoutes
+		}
+		if rt.Pattern == "/api/reviews/consultations/{consultation_id}/answer" {
+			continue // TestReviewActionsAPI (the consultation is private to the person asked)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/reviews/schedules/{schedule_id}") {
 			continue // TestReviewSchedulesAPI_CrossTenant (a UUID, not a fixture id)
@@ -549,6 +564,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/evidence/packs/{pack_id}/download":          seedEvidencePack(t, f, f.B.ID),
 		"/api/orgs/{org_id}":                              orgs.RootID,
 		"/api/reviews/campaigns/{campaign_id}/population": fmt.Sprint(b["campaign"]),
+		"/api/reviews/items/{item_id}/events":             fmt.Sprint(b["item"]),
 		"/api/reviews/campaigns/{campaign_id}/export":     fmt.Sprint(b["campaign"]),
 		"/api/helpdesk/cases/{case_id}":                   caseIDs[f.B.Slug],
 		"/api/admin/api-clients/{client_id}":              "tsc_client_b",
