@@ -129,7 +129,9 @@ const apiDescription = "Every route of the Tessera API, generated from the serve
 	"(x-tessera-permission) is held by the client's roles AND granted by one of its token scopes (x-tessera-scopes). " +
 	"Routes marked x-tessera-step-up also demand a recent, strong sign-in and answer 401 step_up_required otherwise. " +
 	"Every request is audited, and a request whose audit event cannot be written fails closed with 503 audit_unavailable. " +
-	"Errors are JSON: {\"detail\": message} or {\"error\": code, \"detail\": message}; SCIM routes follow RFC 7644."
+	"Errors are JSON: {\"detail\": message} or {\"error\": code, \"detail\": message}; SCIM routes follow RFC 7644. " +
+	"Every /api/... route is also served under /api/v1/... (same auth, audit and limits), which is the stable prefix for integrations; " +
+	"see docs/api/compatibility.md. The v1 aliases are not listed as separate paths."
 
 func (s *Server) securitySchemes() oamap {
 	return oamap{
