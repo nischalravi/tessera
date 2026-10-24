@@ -274,6 +274,13 @@ func (l ErrorList) Error() string {
 // never ride in the Spec. It does not validate; call Validate.
 func ParseSpec(raw []byte) (*Spec, error) {
 	raw = bytes.TrimSpace(raw)
+	if len(raw) > 0 && raw[0] == '"' { // a JSON string holding the YAML or JSON text
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return nil, errors.New("rest config: not a valid string")
+		}
+		raw = bytes.TrimSpace([]byte(text))
+	}
 	if len(raw) == 0 {
 		return nil, errors.New("rest config is empty")
 	}
@@ -293,19 +300,60 @@ func ParseSpec(raw []byte) (*Spec, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	var s Spec
-	if err := dec.Decode(&s); err != nil {
+	var a specFields
+	if err := dec.Decode(&a); err != nil {
 		return nil, fmt.Errorf("rest config: %v", err)
 	}
 	if dec.More() {
 		return nil, errors.New("rest config: trailing data")
 	}
+	s := Spec(a)
 	return &s, nil
+}
+
+// specFields is Spec without its UnmarshalJSON, so ParseSpec can decode into it.
+type specFields Spec
+
+// UnmarshalJSON reads a Spec from a JSON object or from a string holding JSON or YAML, strictly,
+// so a Spec can be a field of a larger JSON document (a connection's config).
+func (s *Spec) UnmarshalJSON(b []byte) error {
+	p, err := ParseSpec(b)
+	if err != nil {
+		return err
+	}
+	*s = *p
+	return nil
 }
 
 // Validate checks a Spec and returns every problem, not just the first. rt
 // decides what the base URL may be (https only in prod).
-func (s *Spec) Validate(rt connsync.Runtime) ErrorList {
+func (s *Spec) Validate(rt connsync.Runtime) ErrorList { return s.validate(rt, false) }
+
+// ValidateShape is Validate without the environment's URL policy: the base and
+// token URLs need only be well-formed http(s) URLs. It is for callers that do
+// not know the environment (the readiness config check); whoever saves or
+// runs the spec applies Validate.
+func (s *Spec) ValidateShape() ErrorList { return s.validate(connsync.Runtime{}, true) }
+
+// checkURL validates a configured URL: by the environment's policy, or for its shape only.
+func checkURL(raw string, rt connsync.Runtime, shapeOnly bool) error {
+	if !shapeOnly {
+		_, err := connsync.ParseBaseURL(raw, rt)
+		return err
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	switch {
+	case err != nil || u.Host == "" || len(raw) > 512:
+		return errors.New("base URL is not a valid URL")
+	case u.Scheme != "https" && u.Scheme != "http":
+		return errors.New("base URL must be https")
+	case u.User != nil || u.RawQuery != "" || u.Fragment != "":
+		return errors.New("base URL must not contain user info, a query or a fragment")
+	}
+	return nil
+}
+
+func (s *Spec) validate(rt connsync.Runtime, shapeOnly bool) ErrorList {
 	var errs ErrorList
 	bad := func(field, format string, a ...any) {
 		errs = append(errs, FieldError{field, fmt.Sprintf(format, a...)})
@@ -314,10 +362,10 @@ func (s *Spec) Validate(rt connsync.Runtime) ErrorList {
 	if s.System != "" && !systemRE.MatchString(s.System) {
 		bad("system", "must be lower-case letters, digits, - or _, up to 32 characters")
 	}
-	if _, err := connsync.ParseBaseURL(s.BaseURL, rt); err != nil {
+	if err := checkURL(s.BaseURL, rt, shapeOnly); err != nil {
 		bad("base_url", "%v", err)
 	}
-	s.validateAuth(rt, bad)
+	s.validateAuth(rt, shapeOnly, bad)
 	for k, v := range s.Headers {
 		switch {
 		case !hdrNameRE.MatchString(k):
@@ -372,12 +420,12 @@ func (s *Spec) Validate(rt connsync.Runtime) ErrorList {
 	return errs
 }
 
-func (s *Spec) validateAuth(rt connsync.Runtime, bad func(string, string, ...any)) {
+func (s *Spec) validateAuth(rt connsync.Runtime, shapeOnly bool, bad func(string, string, ...any)) {
 	a := s.Auth
 	switch a.Type {
 	case AuthOAuth2:
-		if _, err := connsync.ParseBaseURL(a.TokenURL, rt); err != nil {
-			bad("auth.token_url", "%v", err)
+		if err := checkURL(a.TokenURL, rt, shapeOnly); err != nil {
+			bad("auth.token_url", "%v", strings.Replace(err.Error(), "base URL", "token URL", 1))
 		} else if u, _ := url.Parse(a.TokenURL); u.Path == "" || u.Path == "/" {
 			bad("auth.token_url", "must include the token endpoint path")
 		}

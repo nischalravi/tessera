@@ -89,7 +89,12 @@ type Fake struct {
 
 // New starts a fake with n users (u001...), two groups and one entitlement,
 // and auth mode "bearer".
-func New(n int) *Fake {
+func New(n int) *Fake { return start(n, false) }
+
+// NewTLS is New served over TLS with a self-signed certificate (use the embedded Server.Client()).
+func NewTLS(n int) *Fake { return start(n, true) }
+
+func start(n int, useTLS bool) *Fake {
 	f := &Fake{Auth: "bearer", Users: map[string]*User{}, Groups: map[string]*Group{}, PageSize: 10}
 	for i := 1; i <= n; i++ {
 		id := fmt.Sprintf("u%03d", i)
@@ -103,7 +108,11 @@ func New(n int) *Fake {
 	f.nextID = n
 	f.Groups["g1"] = &Group{ID: "g1", Name: "Engineers", Members: []string{"u001", "u002", "u003"}}
 	f.Groups["g2"] = &Group{ID: "g2", Name: "Admins", Admin: true, Members: []string{"u001"}}
-	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
+	if useTLS {
+		f.Server = httptest.NewTLSServer(http.HandlerFunc(f.serve))
+	} else {
+		f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
+	}
 	return f
 }
 

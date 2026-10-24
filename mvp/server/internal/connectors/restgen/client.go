@@ -198,6 +198,8 @@ func NewClient(spec *Spec, sec Secrets, rt connsync.Runtime, hc *http.Client) (*
 	lim := spec.Limits.norm()
 	c := &Client{spec: spec, lim: lim, base: base, secrets: sec, Now: time.Now, Sleep: connsync.SleepCtx}
 	c.stats.Limit, c.stats.Remaining = -1, -1
+	// the ports the spec names explicitly (https://api.example.com:9443) are allowed for those hosts only
+	hc = safehttp.WithConfiguredPorts(hc, spec.BaseURL, spec.Auth.TokenURL)
 	cp := *hc
 	cp.Timeout = time.Duration(lim.TimeoutSeconds) * time.Second
 	c.hc = &cp

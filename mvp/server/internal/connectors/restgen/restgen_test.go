@@ -956,20 +956,19 @@ func TestNewClient_RefusesHTTPInProd(t *testing.T) {
 }
 
 func TestSafehttpGuardsTheConnector(t *testing.T) {
-	// a production client refuses a loopback target even when the spec names it
+	// the spec is accepted (dev runtime), but a production outbound client refuses a loopback target
 	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod})
 	if err != nil {
 		t.Fatal(err)
 	}
 	f := newFake(t, 2)
-	spec := baseSpec(f, "offset")
-	spec.BaseURL = strings.Replace(f.URL, "http://", "https://", 1)
-	s, err := New(spec, bearerSecrets(), connsync.Runtime{Env: config.Prod}, hc)
+	s, err := New(baseSpec(f, "offset"), bearerSecrets(), devRT, hc)
 	if err != nil {
-		t.Skipf("spec refused earlier: %v", err) // an IP literal is not a domain
+		t.Fatal(err)
 	}
+	noSleep(s.c)
 	if _, err := s.Discover(context.Background()); err == nil {
-		t.Error("a loopback target was reached in prod")
+		t.Error("a loopback target was reached with the production client")
 	}
 	if n := len(f.Requests()); n != 0 {
 		t.Errorf("%d requests reached the loopback server", n)

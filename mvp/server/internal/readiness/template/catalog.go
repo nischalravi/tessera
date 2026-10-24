@@ -3,7 +3,7 @@ package template
 import "slices"
 
 // TemplateIDs are the connector templates that ship (base is extended, not used directly).
-var TemplateIDs = []string{"ad", "ldap", "entra", "okta", "google", "workday", "scim_app"}
+var TemplateIDs = []string{"ad", "ldap", "entra", "okta", "google", "workday", "scim_app", "rest_generic"}
 
 // Categories group checklist items in the UI (§10.2).
 var Categories = []string{"access", "ownership", "transport", "scope", "identity_keys", "account_status",
@@ -15,7 +15,7 @@ var ConfigFields = []string{"host", "port", "bind_dn", "ca_bundle", "base_dns", 
 	"org_url", "tenant_id", "cloud", "customer", "domain", "base_url", "tenant_host", "api_version", "interface",
 	"time_zone", "role", "correlation_key", "hr_id_attribute", "technical_owner", "business_owner",
 	"expected_counts", "stale_days", "sync_schedule", "write_mode", "write_scope", "hybrid", "use_dirsync",
-	"privileged_expected", "demo_fixed_checks", "credential"}
+	"privileged_expected", "demo_fixed_checks", "rest", "credential"}
 
 // CheckSpec describes a check id the templates may reference (§5.4). The
 // check implementations live in internal/readiness/checks, whose registry
@@ -66,7 +66,7 @@ var Checks = map[string]CheckSpec{
 	"tls_chain":                 live(OpConnect, "ad", "ldap"),
 	"bind":                      live(OpAuthenticate, "ad", "ldap"),
 	"token_acquire":             live(OpAuthenticate, "entra", "okta", "google"),
-	"auth_ok":                   live(OpAuthenticate, "scim_app", "workday"),
+	"auth_ok":                   live(OpAuthenticate, "scim_app", "workday", "rest_generic"),
 	"bind_identity":             live(OpAuthenticate, "ldap"),
 	"ad_svc_groups":             live(OpEffectiveRight, "ad"),
 	"ad_effective_rights":       live(OpEffectiveRight, "ad"),
@@ -103,11 +103,12 @@ var Checks = map[string]CheckSpec{
 	"group_rules_readable":      live(OpSample, "okta"),
 	"signin_activity_available": live(OpSample, "entra"),
 	"deprovisioned_visible":     live(OpSample, "okta"),
-	"rate_headroom":             live(OpRateLimits, "entra", "okta", "google", "scim_app"),
+	"rate_headroom":             live(OpRateLimits, "entra", "okta", "google", "scim_app", "rest_generic"),
 	"scim_discovery":            live(OpRootInfo, "scim_app"),
 	"members_complete":          live(OpSample, "scim_app"),
+	"mapping_applied":           live(OpSample, "rest_generic"),
 	"field_inventory":           live(OpSample, "workday"),
-	"endpoint_reachable":        live(OpConnect, "workday", "scim_app"),
+	"endpoint_reachable":        live(OpConnect, "workday", "scim_app", "rest_generic"),
 
 	// data checks over the staged snapshot
 	"key_unique":            data(),

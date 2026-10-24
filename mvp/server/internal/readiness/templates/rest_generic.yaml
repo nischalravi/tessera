@@ -1,0 +1,142 @@
+# Generic REST connector: any HTTP/JSON system described by a declarative spec,
+# read as an identity source and optionally written as a provisioning target
+# (issue #552, internal/connectors/restgen). Writes stay off until the base
+# write-back items pass and the two-administrator activation (DR-10) is done.
+template: rest_generic
+version: 1.0.0
+extends: base@1
+display_name: Generic REST application
+connector_types: [rest_generic]
+role: account_source
+default_correlation_key: id
+default_hr_id_attribute: employeeNumber
+required_attributes:
+  user: [id, username]
+  group: [id, name]
+recommended_attributes:
+  user: [email, employeeNumber]
+items:
+  - id: rest.endpoint
+    title: Base URL is HTTPS and reachable through safehttp
+    category: transport
+    level: required
+    why: "Prevents SSRF and clear-text transport; a private address is never dialled."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the application's documented API URL."
+    config_fields: [rest]
+
+  - id: rest.auth
+    title: The credential is accepted (OAuth client credentials, API key, basic or bearer)
+    category: access
+    level: required
+    why: "A credential the system refuses means every sync fails; prefer OAuth with short-lived tokens."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Check the auth type, the client id or user name in the config, and the sealed secret."
+    depends_on: [rest.endpoint]
+    config_fields: [rest, credential]
+
+  - id: rest.users.mapped
+    title: Listing users returns records and the field mapping is applied to them
+    category: scope
+    level: required
+    why: "A wrong items path or JSONPath yields empty or half-mapped accounts, which looks like everyone leaving."
+    verify:
+      - kind: live
+        check: mapping_applied
+    remediation:
+      hint: "Fix users.items_path and users.fields; every mapped field must appear in at least one record."
+    depends_on: [rest.auth]
+    config_fields: [rest]
+
+  - id: rest.key.id
+    title: The record id is the key; populated and unique on every account
+    category: identity_keys
+    level: required
+    why: "User names and e-mail addresses are renamed and reused; the id is stable."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: id }
+    remediation:
+      hint: "Map users.fields.id to the system's immutable id."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: rest.key.correlate
+    title: E-mail or an employee number mapped for correlation to HR
+    category: identity_keys
+    level: recommended
+    why: "Needed to correlate accounts to people."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: employeeNumber, min: 0.95 }
+    remediation:
+      hint: "Map users.fields.email, or attr.employeeNumber."
+    config_fields: [hr_id_attribute]
+
+  - id: rest.status
+    title: Account status mapped; the application's deletion semantics recorded
+    category: account_status
+    level: required
+    why: "Hard deletes look like disappearances; soft deletes look like active accounts."
+    verify:
+      - kind: attestation
+      - kind: data
+        check: status_mapped
+    remediation:
+      hint: "Map users.fields.status and list users.active_values."
+
+  - id: rest.groups.members
+    title: Group and entitlement membership expanded and reviewed against the application
+    category: groups
+    level: recommended
+    why: "Membership that is truncated or not expanded hides access."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Compare a sample group's members in Tessera with the application's own console."
+
+  - id: rest.entitlements
+    title: Entitlements captured and administrator roles tagged privileged
+    category: groups
+    level: recommended
+    why: "Application administrators are privileged access."
+    verify:
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "Map entitlements.fields.privileged or list privileged_values."
+    config_fields: [privileged_expected]
+
+  - id: rest.ratelimit
+    title: 429 with Retry-After honoured; no throttling during validation
+    category: change_tracking
+    level: recommended
+    why: "Throttling yields partial snapshots."
+    verify:
+      - kind: live
+        check: rate_headroom
+        params: { min_remaining: 0.5 }
+    remediation:
+      hint: "Lower limits.requests_per_second."
+    depends_on: [rest.auth]
+    config_fields: [rest]
+
+  - id: rest.writes.reviewed
+    title: Write operations reviewed in the dry run (exact requests) before write-back is switched on
+    category: write_back
+    level: recommended
+    why: "Request templates are code-like; the dry run shows the exact requests before anything is sent."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Run Provisioning, then Dry run, and review each request."
+    applies_when: { write_mode: [dry_run, scoped] }
+    config_fields: [write_mode, write_scope]
