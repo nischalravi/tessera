@@ -49,6 +49,9 @@ func users(s *reconcile.Snapshot) []*store.StagedAccount {
 
 func init() {
 	data("key_unique", func(s *reconcile.Snapshot, p Params) Result {
+		if s.Meta.Inventory {
+			return notAccounts()
+		}
 		attr := p.String("attr", s.Meta.CorrelationKey)
 		var missing []string
 		for _, cls := range s.Classes() {
@@ -69,6 +72,9 @@ func init() {
 		return pass(attr+" is populated and unique on every staged object.", obs)
 	})
 	data("correlation_rate", func(s *reconcile.Snapshot, p Params) Result {
+		if s.Meta.Inventory {
+			return notAccounts()
+		}
 		us := users(s)
 		n := 0
 		for _, a := range us {
@@ -83,6 +89,9 @@ func init() {
 		return pass(fmt.Sprintf("%s of accounts correlate to a person (tier 1 or 2).", pct(n, len(us))), obs)
 	})
 	data("fill_rate", func(s *reconcile.Snapshot, p Params) Result {
+		if s.Meta.Inventory {
+			return notAccounts()
+		}
 		class := mainClass(s)
 		attrs := []string{p.String("attr", "")}
 		min := p.Float("min", 0.95)
@@ -365,4 +374,12 @@ func countExpired(s *reconcile.Snapshot) int {
 		}
 	}
 	return n
+}
+
+// notAccounts is the answer of an account data check for an inventory source
+// (findings, snapshots or contractor records): there is no account population
+// to measure, and the source's own live checks carry the evidence instead.
+func notAccounts() Result {
+	return pass("Not applicable: this source reports findings or records, not an account population.",
+		map[string]any{"inventory": true})
 }

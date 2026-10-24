@@ -46,21 +46,30 @@ func New(src Source, now func() time.Time) (*Connector, error) {
 //
 // rt and hc come from the validated server configuration; FromEnv never builds a client.
 func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc *http.Client) (connectors.Connector, error) {
-	ref := getenv("TESSERA_GITHUB_SCAN_TOKEN")
-	if ref == "" {
-		return nil, errors.New("TESSERA_GITHUB_SCAN_TOKEN (a file: or env: reference) is required")
-	}
-	tok, err := connsync.ResolveSecret(ref, getenv)
+	cfg, err := RESTConfigFromEnv(getenv)
 	if err != nil {
-		return nil, fmt.Errorf("TESSERA_GITHUB_SCAN_TOKEN: %w", err)
+		return nil, err
 	}
 	clock := func() time.Time { return time.Now().UTC() }
-	src, err := NewREST(RESTConfig{APIURL: getenv("TESSERA_GITHUB_SCAN_API_URL"), Org: getenv("TESSERA_GITHUB_SCAN_ORG"), Token: tok},
-		rt, hc, clock)
+	src, err := NewREST(cfg, rt, hc, clock)
 	if err != nil {
 		return nil, err
 	}
 	return New(src, clock)
+}
+
+// RESTConfigFromEnv is the environment mapping of FromEnv on its own, so a
+// governed connection (internal/connectors/governed) reads its settings the same way.
+func RESTConfigFromEnv(getenv func(string) string) (RESTConfig, error) {
+	ref := getenv("TESSERA_GITHUB_SCAN_TOKEN")
+	if ref == "" {
+		return RESTConfig{}, errors.New("TESSERA_GITHUB_SCAN_TOKEN (a file: or env: reference) is required")
+	}
+	tok, err := connsync.ResolveSecret(ref, getenv)
+	if err != nil {
+		return RESTConfig{}, fmt.Errorf("TESSERA_GITHUB_SCAN_TOKEN: %w", err)
+	}
+	return RESTConfig{APIURL: getenv("TESSERA_GITHUB_SCAN_API_URL"), Org: getenv("TESSERA_GITHUB_SCAN_ORG"), Token: tok}, nil
 }
 
 func (*Connector) System() string      { return System }

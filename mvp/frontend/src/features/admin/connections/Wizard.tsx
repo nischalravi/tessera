@@ -3,9 +3,9 @@
  * mapping → validate → dry run → review and activate. Every step's gate is enforced by the
  * server; the UI shows the same blockers the server returns.
  */
-import { FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowRightLeft, Briefcase, CircleCheck, FlaskConical, Search, Users, Play, Power, ShieldCheck, Trash2, Wand2 } from "lucide-react";
+import { ArrowRightLeft, Bot, Briefcase, CircleCheck, Database, FlaskConical, HardHat, Search, Users, Play, Power, ShieldCheck, Trash2, Wand2 } from "lucide-react";
 import {
   Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, ScimPreset, readiness, useApi,
 } from "../../../api";
@@ -18,6 +18,7 @@ import {
   BlockerList, CONNECTOR_TYPES, GateCallout, STATE_LABEL, ScoreCell, SimulatedBadge, StateBadge, observedText, useAction,
 } from "./shared";
 import { CAPABILITIES, CATEGORIES, Capability, Category, filterGallery, groupGallery, metaOf, nextIndex } from "./gallery";
+import { GOVERNED, settingValues, settingsPatch } from "./governed";
 
 // ---------------------------------------------------------------- step 1
 /** The spec as editable text: JSON, since that is what the server stores. */
@@ -82,7 +83,8 @@ export function NewConnection() {
   );
 }
 
-const CAP_ICON = { "Identity source": Users, "Provisioning target": ArrowRightLeft, "HR source": Briefcase } as const;
+const CAP_ICON = { "Identity source": Users, "Provisioning target": ArrowRightLeft, "HR source": Briefcase, "Access inventory": Database,
+  "Contractor source": HardHat, "Agent discovery": Bot } as const;
 
 /** App-gallery picker for the connector type: search, category and capability chips, grouped tiles. */
 function TypeGallery({ type, onPick, taken }: { type: string; onPick: (id: string) => void; taken: (id: string) => boolean }) {
@@ -214,6 +216,8 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
   const rev = conn.pending_revision ?? conn.active_revision!;
   const cfg = rev.config;
   const tid = conn.template.id;
+  const gov = GOVERNED[conn.connector_type]; // the connector types the server already had (vaults, ERP, AWS, ...)
+  const writes = !gov || tid === "pam" || tid === "erp"; // the others only read
   const { data: presets } = useApi<ScimPreset[]>(cfg.preset ? "/scim/presets" : null);
   const toast = useToast();
   const [v, setV] = useState<Record<string, string>>({});
@@ -226,8 +230,9 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       group_filter: cfg.group_filter ?? "", exp_users: cfg.expected_counts ? String(cfg.expected_counts.users) : "",
       exp_groups: cfg.expected_counts ? String(cfg.expected_counts.groups) : "", privileged: privToText(cfg.privileged_expected),
       correlation_key: cfg.correlation_key ?? "", hr_id_attribute: cfg.hr_id_attribute ?? "", stale_days: String(cfg.stale_days ?? ""),
-      sync_schedule: cfg.sync_schedule ?? "", write_mode: cfg.write_mode ?? "off",
+      sync_schedule: cfg.sync_schedule ?? "", write_mode: cfg.write_mode ?? "off", write_scope: (cfg.write_scope ?? []).join("\n"),
       rest: restText(cfg.rest),
+      ...settingValues(conn.connector_type, cfg.settings),
     });
     // Reset only when the saved config itself changes (not on credential changes),
     // so unsaved edits survive saving the credential.
@@ -252,6 +257,10 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
     if (step === "connect") {
       (["host", "bind_dn", "ca_bundle", "org_url", "tenant_id", "cloud", "customer", "domain", "base_url", "tenant_host", "interface", "time_zone", "technical_owner", "business_owner"] as const).forEach(str);
       if (v.port && Number(v.port) !== cfg.port) next.port = Number(v.port);
+      if (gov) {
+        const sp = settingsPatch(conn.connector_type, v, cfg.settings);
+        if (sp) next.settings = sp;
+      }
       // the spec is sent as the text the admin wrote (JSON or YAML); the server parses and validates it strictly
       if (tid === "rest_generic" && v.rest !== restText(cfg.rest)) (next as Record<string, unknown>).rest = v.rest.trim() === "" ? null : v.rest;
     }
@@ -267,6 +276,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       (["correlation_key", "hr_id_attribute", "sync_schedule"] as const).forEach(str);
       if (Number(v.stale_days || 0) !== (cfg.stale_days ?? 0)) next.stale_days = Number(v.stale_days || 0);
       if (v.write_mode !== (cfg.write_mode ?? "off")) next.write_mode = v.write_mode as ConnConfig["write_mode"];
+      if (writes && v.write_scope !== (cfg.write_scope ?? []).join("\n")) next.write_scope = lines(v.write_scope);
     }
     if (Object.keys(next).length === 0) {
       toast("Nothing changed", { kind: "info" });
@@ -304,6 +314,8 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             {tid === "google" && <>{input("customer", "Customer", "my_customer or the customer id")}{input("domain", "Primary domain")}</>}
             {tid === "workday" && <>{input("tenant_host", "Tenant host", "*.workday.com or *.myworkday.com")}{input("interface", "Interface", "get_workers or raas")}{input("time_zone", "Tenant time zone")}</>}
             {tid === "scim_app" && input("base_url", "SCIM base URL", scimUrlHint(cfg.preset, presets))}
+            {gov?.baseUrl && input("base_url", gov.baseUrl.label, gov.baseUrl.hint, { "aria-required": gov.baseUrl.required })}
+            {gov?.settings.map((f) => <Fragment key={f.key}>{input(`settings.${f.key}`, f.label, f.hint, { "aria-required": !!f.required })}</Fragment>)}
             {tid === "rest_generic" && (
               <Field label="REST connector spec (JSON or YAML)"
                 hint="Base URL (https only), auth type, the resources to read with their pagination and JSONPath mapping, and optional write operations as request templates. No secret goes here: the credential below is sealed. Errors name the field.">
@@ -313,18 +325,34 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             {input("technical_owner", "Technical owner", "Accountable for the connection and its findings (base.owner).")}
             {input("business_owner", "Business owner")}
           </div>
-          <fieldset className="card stack-sm" style={{ background: "var(--surface-2)" }}>
-            <legend className="small"><b>Credential</b> {rev.credential.present ? <Badge tone="ok">{rev.credential.kind} reference set</Badge> : <Badge tone="warning">Missing</Badge>}</legend>
-            <div className="form-grid">
-              <Field label="Vault or agent reference" hint="vault:<path> or agent:<id>/<name>. Preferred: the secret never reaches Tessera.">
-                <input className="input" value={ref} onChange={(e) => setRef(e.target.value)} placeholder="vault:kv/tessera/ad-corp" />
+          {gov && gov.credential === null && (
+            <Callout tone="info">This connection holds no credential: it reads a recorded snapshot from this tenant&apos;s directory.</Callout>
+          )}
+          {gov?.credential && (
+            <fieldset className="card stack-sm" style={{ background: "var(--surface-2)" }}>
+              <legend className="small"><b>{gov.credential.label}</b> {rev.credential.present ? <Badge tone="ok">stored sealed</Badge> : <Badge tone="warning">Missing</Badge>}</legend>
+              <Field label="Secret" hint={`${gov.credential.hint} Write-only: sealed under the key, never returned, logged or exported. Tessera must open it to read the system, so a vault reference cannot be used here.`}>
+                {gov.credential.area
+                  ? <textarea className="input" rows={3} autoComplete="off" spellCheck={false} value={secret} onChange={(e) => setSecret(e.target.value)} />
+                  : <input className="input" type="password" autoComplete="new-password" value={secret} onChange={(e) => setSecret(e.target.value)} />}
               </Field>
-              <Field label="Or the secret" hint="Write-only. Never returned, logged or exported.">
-                <input className="input" type="password" autoComplete="new-password" value={secret} onChange={(e) => setSecret(e.target.value)} disabled={!!ref.trim()} />
-              </Field>
-            </div>
-            <div><Button size="sm" onClick={saveCredential} disabled={busy === "cred" || (!ref.trim() && !secret)}>Save credential</Button></div>
-          </fieldset>
+              <div><Button size="sm" onClick={saveCredential} disabled={busy === "cred" || !secret}>Save credential</Button></div>
+            </fieldset>
+          )}
+          {!gov && (
+            <fieldset className="card stack-sm" style={{ background: "var(--surface-2)" }}>
+              <legend className="small"><b>Credential</b> {rev.credential.present ? <Badge tone="ok">{rev.credential.kind} reference set</Badge> : <Badge tone="warning">Missing</Badge>}</legend>
+              <div className="form-grid">
+                <Field label="Vault or agent reference" hint="vault:<path> or agent:<id>/<name>. Preferred: the secret never reaches Tessera.">
+                  <input className="input" value={ref} onChange={(e) => setRef(e.target.value)} placeholder="vault:kv/tessera/ad-corp" />
+                </Field>
+                <Field label="Or the secret" hint="Write-only. Never returned, logged or exported.">
+                  <input className="input" type="password" autoComplete="new-password" value={secret} onChange={(e) => setSecret(e.target.value)} disabled={!!ref.trim()} />
+                </Field>
+              </div>
+              <div><Button size="sm" onClick={saveCredential} disabled={busy === "cred" || (!ref.trim() && !secret)}>Save credential</Button></div>
+            </fieldset>
+          )}
         </>
       )}
       {step === "scope" && (
@@ -339,7 +367,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
           )}
           {input("exp_users", "Expected users", "From the directory's own console (base.scope.count).", { inputMode: "numeric" })}
           {input("exp_groups", "Expected groups", undefined, { inputMode: "numeric" })}
-          {tid !== "workday" && area("privileged", "Privileged groups and expected members", "One group per line: Group name: member, member. Members not listed become RF-08 findings.")}
+          {tid !== "workday" && !gov && area("privileged", "Privileged groups and expected members", "One group per line: Group name: member, member. Members not listed become RF-08 findings.")}
         </div>
       )}
       {step === "mapping" && (
@@ -348,11 +376,14 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
           {input("hr_id_attribute", "HR id attribute", "Tier-1 correlation to the HR worker id (for AD usually employeeID).")}
           {input("stale_days", "Dormancy threshold (days)", "Default 90 (PCI DSS v4 8.2.6).", { inputMode: "numeric" })}
           {input("sync_schedule", "Sync schedule", "Full sync at least weekly plus incremental.")}
-          <Field label="Write-back" hint="Write-enabled connections need a second approver (DR-10).">
-            <select className="input" value={v.write_mode ?? "off"} onChange={set("write_mode")}>
-              <option value="off">Off (read only)</option><option value="dry_run">Dry run</option><option value="scoped">Scoped</option>
-            </select>
-          </Field>
+          {writes && (
+            <Field label="Write-back" hint="Write-enabled connections need a second approver (DR-10).">
+              <select className="input" value={v.write_mode ?? "off"} onChange={set("write_mode")}>
+                <option value="off">Off (read only)</option><option value="dry_run">Dry run</option><option value="scoped">Scoped</option>
+              </select>
+            </Field>
+          )}
+          {writes && (v.write_mode ?? "off") !== "off" && area("write_scope", "Write scope", gov ? "One per line: the safe ids or roles write-back may change. A vault's write scope is checked against the service user's own rights." : "One per line: the containers or groups write-back may change.")}
         </div>
       )}
       <div className="row"><Button type="submit" variant="primary" disabled={busy === "save"}>{busy === "save" ? "Saving…" : "Save"}</Button><span className="small faint">Editing evidence-bearing fields makes that evidence stale.</span></div>
