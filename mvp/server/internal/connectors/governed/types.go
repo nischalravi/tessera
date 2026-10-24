@@ -33,6 +33,8 @@ const (
 	Beeline     = "beeline"
 	CSVFeed     = "csvfeed"
 	AgentCore   = "agentcore"
+	AzureRBAC   = "azurerbac"
+	GCPIAM      = "gcpiam"
 )
 
 // Type describes one governed connector type.
@@ -61,6 +63,8 @@ var Types = []Type{
 	{ID: Beeline, Template: "vms", System: "beeline", Vendor: "beeline", Feature: true},
 	{ID: CSVFeed, Template: "vms", System: "csv", Vendor: "csv", Feature: true},
 	{ID: AgentCore, Template: "agentcore", System: "aws-agentcore", Vendor: AgentCore},
+	{ID: AzureRBAC, Template: "azurerbac", System: "azure", Vendor: AzureRBAC},
+	{ID: GCPIAM, Template: "gcpiam", System: "gcp", Vendor: GCPIAM},
 }
 
 // Lookup returns the type with the id.
@@ -108,6 +112,18 @@ func SettingSpecs(typ string) []Setting {
 			{"page_size", "Page size", "1 to 1000, default 100.", false}}
 	case CSVFeed:
 		return []Setting{{"csv_path", "CSV path under the base URL", "The feed is fetched over HTTPS. The credential is an optional bearer token.", true}}
+	case AzureRBAC:
+		return []Setting{
+			{"tenant_id", "Directory (tenant) id", "The Entra tenant GUID. The credential is the application's client secret, or a PEM with its certificate and RSA private key.", true},
+			{"client_id", "Application (client) id", "A service principal with Reader at the scopes to read (and Microsoft.Authorization/roleEligibilityScheduleInstances/read for PIM).", true},
+			{"subscription_ids", "Subscription ids", "Comma separated GUIDs. Empty with no management groups: every subscription the application can list.", false},
+			{"management_group_ids", "Management group ids", "Comma separated. Empty with no subscriptions: every management group the application can list.", false},
+			{"include_eligible", "Read PIM eligible assignments", "true or false (default false). Needs Entra ID P2 and the read permission above.", false}}
+	case GCPIAM:
+		return []Setting{
+			{"organization_id", "Organization id", "The numeric organization id. Its folders and projects are walked. The credential is a service account key (JSON).", false},
+			{"folder_ids", "Folder ids", "Comma separated numeric ids; each is walked. Optional.", false},
+			{"project_ids", "Project ids", "Comma separated. Optional. Set at least one of organization, folders or projects.", false}}
 	case AWSOrg:
 		return []Setting{
 			{"role_name", "Reader role name", "The role assumed in each account. Default TesseraReader.", false},
@@ -143,6 +159,10 @@ var (
 	regionRE  = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d{1,2}$`)
 	accountRE = regexp.MustCompile(`^\d{12}$`)
 	extIDRE   = regexp.MustCompile(`^[\w+=,.@:/-]{2,1000}$`)
+	guidRE    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	mgRE      = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
+	numRE     = regexp.MustCompile(`^[0-9]{1,20}$`)
+	projectRE = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 )
 
 // SettingError is one invalid setting.
@@ -182,7 +202,11 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 				bad(s.Key, "must be 1 to 256 printable characters")
 			}
 		case "client_id":
-			if !clientRE.MatchString(v) {
+			if typ == AzureRBAC {
+				if !guidRE.MatchString(v) {
+					bad(s.Key, "must be the application (client) GUID")
+				}
+			} else if !clientRE.MatchString(v) {
 				bad(s.Key, "must be 1 to 256 characters without spaces")
 			}
 		case "org":
@@ -233,9 +257,46 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 			if !extIDRE.MatchString(v) {
 				bad(s.Key, "is not a valid external id")
 			}
+		case "tenant_id":
+			if !guidRE.MatchString(v) {
+				bad(s.Key, "must be the directory (tenant) GUID")
+			}
+		case "subscription_ids":
+			checkList(v, 200, guidRE, "a subscription GUID", s.Key, bad)
+		case "management_group_ids":
+			checkList(v, 200, mgRE, "a management group id", s.Key, bad)
+		case "include_eligible":
+			if v != "true" && v != "false" {
+				bad(s.Key, "must be true or false")
+			}
+		case "organization_id":
+			if !numRE.MatchString(v) {
+				bad(s.Key, "must be the numeric organization id")
+			}
+		case "folder_ids":
+			checkList(v, 200, numRE, "a numeric folder id", s.Key, bad)
+		case "project_ids":
+			checkList(v, 200, projectRE, "a project id", s.Key, bad)
 		}
 	}
+	if typ == GCPIAM && strings.TrimSpace(set["organization_id"])+strings.TrimSpace(set["folder_ids"])+strings.TrimSpace(set["project_ids"]) == "" {
+		bad("organization_id", "set an organization, folders or projects to read")
+	}
 	return errs
+}
+
+// checkList validates a comma separated setting: at most max entries, each matching re.
+func checkList(v string, max int, re *regexp.Regexp, what, key string, bad func(k, format string, a ...any)) {
+	list := List(v)
+	if len(list) > max {
+		bad(key, "at most %d entries", max)
+	}
+	for _, e := range list {
+		if !re.MatchString(e) {
+			bad(key, "an entry is not %s", what)
+			return
+		}
+	}
 }
 
 func clip(s string) string {

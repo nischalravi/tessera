@@ -30,6 +30,8 @@ var govConfig = map[string]string{
 	"beeline":     `{"base_url":"https://bl.example.com","correlation_key":"worker_id"}`,
 	"csvfeed":     `{"base_url":"https://feeds.example.com","correlation_key":"worker_id","settings":{"csv_path":"/c.csv"}}`,
 	"agentcore":   `{"settings":{"snapshot":"agentcore.json"}}`,
+	"azurerbac":   `{"correlation_key":"id","settings":{"tenant_id":"11111111-2222-3333-4444-555555555555","client_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}}`,
+	"gcpiam":      `{"correlation_key":"id","settings":{"organization_id":"123456789012"}}`,
 }
 
 func createGov(t *testing.T, s *Service, st Scope, typ, name, cfg string) string {
@@ -82,6 +84,9 @@ func TestGoverned_CreateEveryType(t *testing.T) {
 			}
 			if req, _ := governed.BaseURLUse(gt.ID); req {
 				required++
+			}
+			if gt.ID == governed.GCPIAM {
+				required++ // none of its settings is required alone, but one scope must be named
 			}
 			if len(errs) != required {
 				t.Errorf("empty config: %d errors %v, want %d", len(errs), errs, required)
@@ -474,7 +479,7 @@ func TestGoverned_ERPWriteScopeAttestedWhenUnsupported(t *testing.T) {
 
 func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 	reg := template.MustDefault()
-	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore"} {
+	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam"} {
 		r, ok := reg.Get(id)
 		if !ok {
 			t.Fatalf("no template %s", id)
@@ -482,7 +487,7 @@ func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 		if got := slices.Sorted(slices.Values(r.ConnectorTypes)); !slices.Equal(got, governedTypesOf(id)) {
 			t.Errorf("%s covers %v", id, r.ConnectorTypes)
 		}
-		wantInv := id == "awsorg" || id == "githubscan" || id == "vms"
+		wantInv := id == "awsorg" || id == "githubscan" || id == "vms" || id == "azurerbac" || id == "gcpiam"
 		if r.Inventory != wantInv {
 			t.Errorf("%s inventory = %v", id, r.Inventory)
 		}
