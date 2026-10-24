@@ -108,6 +108,13 @@ func Check(tx *store.TenantTx, scope string, steps []Step) ([]Issue, error) {
 				issues = append(issues, Issue{Step: s.ID, Code: "questionnaire_not_found", Msg: "the questionnaire does not exist or is retired"})
 			}
 		}
+		if s.When != nil && s.When.Dataset != "" {
+			if _, err := tx.DatasetByName(s.When.Dataset); errors.Is(err, store.ErrNotFound) {
+				issues = append(issues, Issue{Step: s.ID, Code: "dataset_not_found", Msg: "the dataset does not exist"})
+			} else if err != nil {
+				return nil, err
+			}
+		}
 		if s.GroupID != "" {
 			if _, err := tx.GrpGroup(store.GroupID(s.GroupID)); errors.Is(err, store.ErrNotFound) {
 				issues = append(issues, Issue{Step: s.ID, Code: "group_not_found", Msg: "the group does not exist"})
@@ -430,6 +437,7 @@ type Resolved struct {
 	Name    string
 	Version int
 	Def     Definition
+	sets    Sets // the datasets its conditions name
 }
 
 func resolveTarget(tx *store.TenantTx, kind, target string) (*Resolved, error) {
@@ -454,7 +462,11 @@ func resolveTarget(tx *store.TenantTx, kind, target string) (*Resolved, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Resolved{ID: w.ID, Name: w.Name, Version: w.Version, Def: d}, nil
+	sets, err := loadSets(tx, d)
+	if err != nil {
+		return nil, err
+	}
+	return &Resolved{ID: w.ID, Name: w.Name, Version: w.Version, Def: d, sets: sets}, nil
 }
 
 // ForItem is the workflow that routes requests for a catalog item: the item's own, else the
@@ -473,7 +485,70 @@ func ForRequestType(tx *store.TenantTx, requestType string) (*Resolved, error) {
 
 // Resolve compiles the workflow for a request's attributes.
 func (r *Resolved) Resolve(attrs map[string]string) (*Plan, error) {
-	return r.Def.Compile(r.ID, r.Version, attrs)
+	return r.Def.compile(r.ID, r.Version, attrs, r.sets)
+}
+
+// datasetNames lists the datasets a definition's conditions name.
+func (d Definition) datasetNames() []string {
+	var out []string
+	for _, s := range d.Steps {
+		if s.When != nil && s.When.Dataset != "" && !slices.Contains(out, s.When.Dataset) {
+			out = append(out, s.When.Dataset)
+		}
+	}
+	return out
+}
+
+func loadSets(tx *store.TenantTx, d Definition) (Sets, error) {
+	names := d.datasetNames()
+	if len(names) == 0 {
+		return nil, nil
+	}
+	sets := Sets{}
+	for _, n := range names {
+		ds, err := tx.DatasetByName(n)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		vals, err := tx.DatasetValues(ds.ID, ds.Count+1, 0)
+		if err != nil {
+			return nil, err
+		}
+		set := make(map[string]bool, len(vals))
+		for _, v := range vals {
+			set[v] = true
+		}
+		sets[n] = set
+	}
+	return sets, nil
+}
+
+// DatasetsInUse lists the datasets the conditions of active workflows (at their current version) name.
+func DatasetsInUse(tx *store.TenantTx) (map[string][]string, error) {
+	ws, err := tx.Workflows()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, w := range ws {
+		if w.Status != "active" {
+			continue
+		}
+		v, err := tx.WorkflowVersion(w.ID, w.Version)
+		if err != nil {
+			return nil, err
+		}
+		d, err := parseDef(v)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range d.datasetNames() {
+			out[n] = append(out[n], w.Name)
+		}
+	}
+	return out, nil
 }
 
 // Record stores a request's resolved plan as its run.

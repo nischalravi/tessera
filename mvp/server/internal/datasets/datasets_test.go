@@ -10,6 +10,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/datasets"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
+	"github.com/nischalravi/tessera/mvp/server/internal/workflow"
 )
 
 func code(err error) string {
@@ -109,6 +110,78 @@ func TestDatasetLifecycle(t *testing.T) {
 		}
 		if _, err := datasets.Get(c, d.ID); code(err) != "dataset_not_found" {
 			t.Errorf("after delete: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A workflow condition reads a dataset by name: routing follows its values, the editor refuses an unknown
+// dataset, and a dataset a live workflow names can be neither renamed nor deleted.
+func TestDatasetInWorkflowCondition(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	now := storetest.Now
+	err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		ds, err := datasets.Create(c, datasets.Spec{Name: "Restricted", Values: []string{"okta"}}, "t", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		steps := func(name string) []workflow.Step {
+			return []workflow.Step{
+				{ID: "c", Type: workflow.TypeCondition, When: &workflow.Cond{Attribute: "system", Op: workflow.OpIn, Dataset: name}, Then: "d", Else: "m"},
+				{ID: "m", Type: workflow.TypeApproval, Approver: workflow.ApproverManager, Next: "end"},
+				{ID: "d", Type: workflow.TypeApproval, Approver: workflow.ApproverDecider}}
+		}
+		if is, err := workflow.Check(c, store.WorkflowScopeAccess, steps("Nope")); err != nil || len(is) != 1 || is[0].Code != "dataset_not_found" {
+			t.Fatalf("unknown dataset: %v %v", is, err)
+		}
+		w, err := workflow.Create(c, workflow.Spec{Name: "By system", Scope: store.WorkflowScopeAccess, Steps: steps("Restricted")}, "t", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := workflow.SetTargets(c, w.ID, []workflow.Target{{Kind: store.WFTargetRequestType, TargetID: workflow.RequestAccess}}, "t", now); err != nil {
+			t.Fatal(err)
+		}
+		route := func(system string) string {
+			r, err := workflow.ForRequestType(c, workflow.RequestAccess)
+			if err != nil || r == nil {
+				t.Fatalf("resolve: %v %v", r, err)
+			}
+			p, err := r.Resolve(map[string]string{"system": system})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return p.Stages[0].Approver
+		}
+		if got := route("okta"); got != workflow.ApproverDecider {
+			t.Errorf("in the dataset: %s", got)
+		}
+		if got := route("aws"); got != workflow.ApproverManager {
+			t.Errorf("not in the dataset: %s", got)
+		}
+		if _, err := datasets.Edit(c, ds.ID, []string{"aws"}, []string{"okta"}, "t", now); err != nil {
+			t.Fatal(err)
+		}
+		if got := route("aws"); got != workflow.ApproverDecider {
+			t.Errorf("after the dataset changed: %s", got)
+		}
+		if err := datasets.Delete(c, ds.ID, "t", now); code(err) != "dataset_in_use" {
+			t.Errorf("delete while in use: %v", err)
+		}
+		cur, _ := datasets.Get(c, ds.ID)
+		if _, err := datasets.Update(c, ds.ID, cur.Version, "Renamed", "", "t", now); code(err) != "dataset_in_use" {
+			t.Errorf("rename while in use: %v", err)
+		}
+		if _, err := datasets.Update(c, ds.ID, cur.Version, "Restricted", "new text", "t", now); err != nil {
+			t.Errorf("a description change while in use: %v", err)
+		}
+		if _, err := workflow.Retire(c, w.ID, "t", now); err != nil {
+			t.Fatal(err)
+		}
+		if err := datasets.Delete(c, ds.ID, "t", now); err != nil {
+			t.Errorf("delete after retiring: %v", err)
 		}
 		return nil
 	})

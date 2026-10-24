@@ -18,6 +18,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/cfgerr"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/workflow"
 )
 
 // Limits.
@@ -175,6 +176,9 @@ func Update(tx *store.TenantTx, id string, ver int, name, description, by string
 		return nil, err
 	}
 	if name != cur.Name {
+		if err := inUse(tx, cur.Name); err != nil {
+			return nil, err
+		}
 		if _, err := tx.DatasetByName(name); err == nil {
 			return nil, cfgerr.Refuse(409, "name_taken", "a dataset with this name exists")
 		} else if !errors.Is(err, store.ErrNotFound) {
@@ -193,10 +197,25 @@ func Update(tx *store.TenantTx, id string, ver int, name, description, by string
 	return tx.Dataset(id)
 }
 
+// inUse refuses a rename or delete of a dataset a live workflow condition names.
+func inUse(tx *store.TenantTx, name string) error {
+	use, err := workflow.DatasetsInUse(tx)
+	if err != nil {
+		return err
+	}
+	if len(use[name]) > 0 {
+		return cfgerr.Refuse(409, "dataset_in_use", "an active workflow uses this dataset: change or retire it first")
+	}
+	return nil
+}
+
 // Delete removes a dataset and its values.
 func Delete(tx *store.TenantTx, id, by string, now time.Time) error {
 	cur, err := load(tx, id)
 	if err != nil {
+		return err
+	}
+	if err := inUse(tx, cur.Name); err != nil {
 		return err
 	}
 	if err := tx.DeleteDataset(id); err != nil {
