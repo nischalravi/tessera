@@ -204,7 +204,7 @@ func WithConfiguredPorts(c *http.Client, urls ...string) *http.Client {
 	if !ok {
 		return c
 	}
-	m := make(ports, len(g.ports)+len(urls))
+	m := make(ports, len(g.ports))
 	for k := range g.ports {
 		m[k] = true
 	}

@@ -32,6 +32,7 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   "scim:jumpcloud": { vendor: "jumpcloud", publisher: "JumpCloud", category: "Identity providers", capabilities: ["Provisioning target"] },
   "scim:keycloak": { vendor: "keycloak", publisher: "Keycloak", category: "Identity providers", capabilities: ["Provisioning target"] },
   "scim:auth0": { vendor: "auth0", publisher: "Auth0", category: "Identity providers", capabilities: ["Provisioning target"] },
+  rest_generic: { vendor: "rest_generic", publisher: "Declarative JSON or YAML spec", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
 };
 
 export interface GalleryType { id: string; label: string; blurb: string; demo: boolean }

@@ -2575,6 +2575,108 @@ assignment back through provisioning.
   service (`oracle.go`). Both are exercised by `erpfake` (paging over 230 roles and users, a refused token, 429, 5xx,
   malformed, failing and dropped writes). Paths are settings; the first real tenant should confirm field names.
 
+### Generic REST connector (issue #552)
+
+`internal/connectors/restgen` makes any HTTP/JSON system an identity source and a provisioning target from a
+declarative **spec** (JSON or YAML), with no code. It is the long-tail escape hatch for systems with no dedicated
+connector. In the New connection gallery it is the **Generic REST API** tile (connector type `rest_generic`,
+template `rest_generic`).
+
+```yaml
+base_url: https://api.acme.example/v2          # https only (plain http to loopback only in dev)
+auth:                                          # oauth2_client_credentials | api_key | basic | bearer
+  type: oauth2_client_credentials
+  token_url: https://auth.acme.example/oauth/token
+  client_id: tessera
+  scopes: [users.read, groups.read]            # the client secret is NOT here: it is the sealed credential
+limits: { requests_per_second: 5, burst: 5, max_attempts: 4, timeout_seconds: 15, max_response_bytes: 2097152 }
+users:
+  path: /users
+  items_path: $.data                           # where the records are; empty = the whole body
+  pagination: { style: cursor, cursor_param: after, next_path: $.meta.next, size_param: limit, page_size: 100 }
+  fields:                                      # Tessera field -> JSONPath in one record
+    id: $.id                                   # required: the stable id
+    username: $.login
+    email: $.email
+    display_name: $.name
+    status: $.state                            # active when it is one of active_values (default active, enabled, true, 1, yes)
+    department: $.dept
+    last_login_at: $.last_seen                 # RFC 3339, a date, or Unix seconds/milliseconds
+    attr.employeeNumber: $.hr.number           # kept as an account attribute
+groups:
+  path: /groups
+  items_path: $.groups
+  fields: { id: $.id, name: $.name }
+  members: { ids_path: "$.member_ids[*]" }     # ids inside the record, or { path: /groups/{id}/members, items_path: $.data, id_path: $.user.id }
+entitlements:                                  # roles and entitlements: groups of kind role
+  path: /roles
+  items_path: $.roles
+  fields: { id: $.id, name: $.name, privileged: $.admin }
+  privileged_values: ["true"]
+  members: { path: "/roles/{id}/users", items_path: $.users, id_path: $.id }
+writes:                                        # request templates; see below
+  lookup:  { method: GET, path: "/users/{username}", record_path: $.user }
+  create:  { method: POST, path: /users, expect: [201],
+             body: { login: "${username}", email: "${email}", name: "${display_name}" } }
+  update:  { method: PATCH, path: "/users/{external_id}", body: { email: "${attr.email}", dept: "${attr.department}" } }
+  disable: { method: PATCH, path: "/users/{external_id}", body: { state: suspended } }
+  delete:  { method: DELETE, path: "/users/{external_id}" }
+  add_member:    { method: PUT,    path: "/groups/{group_id}/members/{external_id}" }
+  remove_member: { method: DELETE, path: "/groups/{group_id}/members/{external_id}" }
+  is_member:     { method: GET,    path: "/groups/{group_id}/members/{external_id}" }
+```
+
+- **Secrets.** The spec holds none, and decoding is strict (an unknown key, a `password`, or a static `Authorization`,
+  `*-Key` or `*-Token` header is refused). The credential is the connection's sealed credential: the bare secret for
+  the auth type, or a JSON object of `client_secret`, `api_key`, `password` or `token`. OAuth tokens are cached and
+  refetched after a 401. API keys go in a header (`auth.name`, optional `auth.prefix`) or a query parameter.
+- **Pagination.** `none`, `page` (`page_param`, `size_param`, `page_size`), `offset`, `cursor` (`cursor_param`,
+  `next_path`), `link_header` (the `rel="next"` Link) and `next_url` (`next_path` to the next URL). A short or empty
+  page ends page and offset walks. A next link must stay on the base URL's origin, so the credential never follows a
+  response to another host; a repeated page address or cursor is an error, never an endless loop.
+- **JSONPath.** `$`, `.name`, `['name']`, `[n]`, `[*]`, `.*`. Filters, slices and `..` are refused when the spec is
+  saved. Large integer ids stay exact.
+- **Membership expansion.** `ids_path` reads user ids from the group record; `members.path` lists them per group
+  (`{id}` is the group's id). Ids are the users' `id` field. A group is `group:<id>`, an entitlement
+  `entitlement:<id>` (kind `role`), and each member an account `member_of` edge.
+- **Writes** (`create`, `update`, `disable`, `delete`, `add_member`, `remove_member`) are request templates over the
+  provisioning target kind **`rest`**. Path placeholders `{username}`, `{external_id}`, `{email}`, `{display_name}`,
+  `{group_id}`, `{group_name}` (and `{attr.<name>}` in update bodies) are **escaped as one path segment** (a `/` is
+  `%2F`; `.` and `..` are refused), query values are encoded, and the body is a JSON value with `"${name}"`
+  substitution, so a user name can never change the endpoint or break out of the JSON. An unset lone `"${x}"`
+  leaves its member out. Every change reads first (`lookup`, `is_member`) so a repeated request converges, and
+  `Verify` re-reads. `lookup` and `is_member` are required with the writes they check.
+- **Dry run.** `POST /api/provisioning/targets/{id}/dry-run` (the existing preview) shows the exact requests of a
+  change: reads are sent, every write is listed with its rendered body and not sent, and the OAuth token request is
+  the one POST that really happens so the reads can authenticate. `restgen.Target.Plan` renders the same requests
+  with no network at all.
+- **Limits.** A token bucket (`requests_per_second`, `burst`), `429` and `503` retried within `max_attempts`
+  honouring `Retry-After` up to `max_retry_wait_seconds` (a longer wait is returned as an error, not slept),
+  `502`/`504` and transport failures retried for idempotent methods only, `timeout_seconds` per request,
+  `max_response_bytes` per response (also bounded by the server's outbound client), `max_pages` and `max_records`
+  per listing (a listing cut short marks the result `Partial`, so the deletion guard holds every removal).
+  All calls go through `internal/safehttp`.
+- **Validation on save** names every bad field (`rest.users.fields.id`, `writes.lookup`, ...). A connection's
+  `PATCH /api/connections/{id}/config` takes `"rest"` as an object or as a string of YAML/JSON text, and the server
+  applies the environment's URL policy (https only in prod). `PUT /api/provisioning/targets/{id}` with
+  `"kind": "rest"` takes `"rest"` (without `base_url`, which is the target's own) and a `token`; it answers
+  `422 invalid_rest` with `fields`.
+- **Readiness checklist** (`rest_generic` template): the endpoint is reachable over verified TLS, the credential is
+  accepted, **listing users returns records with the mapping applied** (`mapping_applied`: more than zero users, every
+  mapped field filled, no repeated ids), key uniqueness, status mapping, rate headroom, and the base write-back items.
+  What gates writes: a REST target's `write_back` is off by default and is switched on only through
+  `PUT /api/provisioning/targets/{id}`, which needs the connections-manage permission and a fresh step-up
+  authentication; the dry run above shows the exact requests first. Writes are **not** behind the two-administrator
+  activation of DR-10, which gates a connection revision's activation, not a provisioning target's write-back.
+  Changing where a credential is sent (a REST target's base URL, token URL origin, auth type or key field) needs
+  the secret entered again; on a connection config the stored credential is cleared by such an edit.
+- **As a connector.** `TESSERA_CONNECTORS=rest` with `TESSERA_REST_SPEC=/abs/path/spec.yaml` and
+  `TESSERA_REST_CREDENTIAL=env:NAME|file:/path` (a literal secret is refused) discovers users, groups and
+  entitlements like the other production connectors. Tests run against `restgen/fakerest` (every pagination style
+  and auth mode, throttling, failures, oversize and looping responses, a hostile next link). Staged dry-run
+  reconciliation for `rest_generic` connections arrives with the live-connector work for the other non-demo types
+  (`readiness.connectorFor`).
+
 ### Identity containment (kill switch)
 
 A disabled account does not end its live sessions, refresh tokens or OAuth consents. Two plan

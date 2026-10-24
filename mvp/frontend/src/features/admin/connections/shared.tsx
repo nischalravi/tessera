@@ -127,4 +127,5 @@ export const CONNECTOR_TYPES: { id: string; label: string; template: string; dem
   { id: "scim:jumpcloud", label: "JumpCloud", template: "scim_app", demo: false, blurb: "SCIM 2.0 preset." },
   { id: "scim:keycloak", label: "Keycloak (SCIM extension)", template: "scim_app", demo: false, blurb: "Needs a SCIM extension installed." },
   { id: "scim:auth0", label: "Auth0", template: "scim_app", demo: false, blurb: "Needs a plan with Enterprise Connections." },
+  { id: "rest_generic", label: "Generic REST API", template: "rest_generic", demo: false, blurb: "Any HTTP/JSON system, mapped by a declarative spec, no code (issue #552)." },
 ];

@@ -47,6 +47,8 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   onelogin: { color: "#1d4ed8", glyph: <g {...stroke} stroke="#1d4ed8"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="10" r="2.5" /><path d="M7.5 17c.8-2.4 2.6-3.5 4.5-3.5s3.7 1.1 4.5 3.5" /></g> },
   // cloud with a lock (cloud directory)
   jumpcloud: { color: "#0f766e", glyph: <g {...stroke} stroke="#0f766e"><path d="M7 18a4 4 0 01-.6-7.95A5.5 5.5 0 0117 9.5a4.2 4.2 0 01.5 8.5z" /><rect x="9.5" y="12" width="5" height="4" rx=".8" /></g> },
+  // curly braces around a request arrow: a JSON API described by a spec
+  rest_generic: { color: "#7c3aed", glyph: <g {...stroke} stroke="#7c3aed"><path d="M8 3.5C6 3.5 5.5 4.6 5.5 6.2v2.1c0 1.2-.7 2.2-2 2.7 1.3.5 2 1.5 2 2.7v2.1c0 1.6.5 2.7 2.5 2.7M16 3.5c2 0 2.5 1.1 2.5 2.7v2.1c0 1.2.7 2.2 2 2.7-1.3.5-2 1.5-2 2.7v2.1c0 1.6-.5 2.7-2.5 2.7" /><path d="M9.5 12h5M12.5 9.5l2.5 2.5-2.5 2.5" /></g> },
   // protocol glyph: two-way arrows
   scim_app: { color: "#475569", glyph: <g {...stroke} stroke="#475569"><path d="M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4" /></g> },
 };
