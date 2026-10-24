@@ -208,3 +208,8 @@ frozen clock) or are refused before anything is written.
 * `179` `POST /scim/v2/Users`: the server is read-only, so a write is `405`.
 
 SCIM answers are `application/scim+json`; the replay compares the body only.
+
+Changed with issue #587 (complete OpenAPI document): `159` `GET /docs` and `160` `GET /redoc` now
+point the Swagger UI and ReDoc at `/api/openapi.json`, the document of every registered route, instead
+of `/openapi.json` (the original core-route document, which is still served unchanged). Only the spec URL
+inside the page body differs.

@@ -18,8 +18,8 @@ import (
 // groups from LDAP and Active Directory (GR-10, design
 // docs/design/groups-grouper-parity.md §9.1). It goes through the same narrow
 // client as the Prober, which has no Add, Modify, Delete, ModifyDN or
-// arbitrary extended operation, and through safedial: ports 389 (StartTLS
-// required) and 636 (LDAPS) only, TLS 1.2 or later, blocked addresses
+// arbitrary extended operation, and through safedial: any port with an explicit TLS mode
+// (ldaps or starttls; none only in dev), TLS 1.2 or later, blocked addresses
 // refused, and the bind password is sent only on a connection safedial calls
 // Secure.
 
@@ -61,7 +61,8 @@ func (e Entry) First(attr string) string {
 // for the run and is never logged.
 type ReadConfig struct {
 	Host     string
-	Port     int // 636 (LDAPS) or 389 (StartTLS)
+	Port     int    // 1 to 65535
+	TLSMode  string // ldaps, starttls or none (dev only); empty infers from the port
 	BindDN   string
 	Password Secret
 	// Dialer is the safedial dialer, built with the loader's CA bundle.
@@ -82,7 +83,7 @@ func OpenReader(ctx context.Context, cfg ReadConfig) (*Reader, error) {
 	if cfg.BindDN == "" || cfg.Password == "" {
 		return nil, errBind // go-ldap would send an empty password as an anonymous bind
 	}
-	conn, err := cfg.Dialer.Dial(ctx, cfg.Host, cfg.Port, false)
+	conn, err := cfg.Dialer.DialMode(ctx, cfg.Host, cfg.Port, cfg.TLSMode, false)
 	if err != nil {
 		return nil, err
 	}

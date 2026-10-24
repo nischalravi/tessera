@@ -86,6 +86,7 @@ func (s *Server) registerRoutes() {
 	s.handle(P, "/api/hris/events/{event_id}/execute", phased, needStepUp(auth.PermHRISExecute, auth.StepUpPolicy), s.hrisExecute).asJob(jobs.Provision, "")
 	s.handle(G, "/api/jml/leaver-plan/{identity_id}", read, need(auth.PermGraphRead), s.leaverPlan)
 	s.handle(G, "/openapi.json", noTenant, need(auth.PermAuthenticated), s.openAPI)
+	s.handle(G, "/api/openapi.json", noTenant, need(auth.PermGraphRead), s.fullOpenAPIHandler)
 	s.handle(G, "/docs", noTenant, need(auth.PermAuthenticated), s.swaggerUI)
 	s.handle(G, "/docs/oauth2-redirect", noTenant, need(auth.PermAuthenticated), s.swaggerRedirect)
 	s.handle(G, "/redoc", noTenant, need(auth.PermAuthenticated), s.redoc)

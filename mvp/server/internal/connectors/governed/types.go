@@ -38,6 +38,8 @@ const (
 	SuccessFactors = "successfactors"
 	AzureRBAC      = "azurerbac"
 	GCPIAM         = "gcpiam"
+	ServiceNow     = "servicenow"
+	Atlassian      = "atlassian"
 	UnixSSH        = "unixssh"
 )
 
@@ -70,6 +72,8 @@ var Types = []Type{
 	{ID: SuccessFactors, Template: "successfactors", System: "successfactors", Vendor: SuccessFactors},
 	{ID: AzureRBAC, Template: "azurerbac", System: "azure", Vendor: AzureRBAC},
 	{ID: GCPIAM, Template: "gcpiam", System: "gcp", Vendor: GCPIAM},
+	{ID: ServiceNow, Template: "servicenow", System: "servicenow", Vendor: ServiceNow},
+	{ID: Atlassian, Template: "atlassian", System: "atlassian", Vendor: Atlassian},
 	{ID: UnixSSH, Template: "unixssh", System: "unix", Vendor: UnixSSH},
 }
 
@@ -138,6 +142,16 @@ func SettingSpecs(typ string) []Setting {
 			{"organization_id", "Organization id", "The numeric organization id. Its folders and projects are walked. The credential is a service account key (JSON).", false},
 			{"folder_ids", "Folder ids", "Comma separated numeric ids; each is walked. Optional.", false},
 			{"project_ids", "Project ids", "Comma separated. Optional. Set at least one of organization, folders or projects.", false}}
+	case ServiceNow:
+		return []Setting{
+			{"auth_mode", "Sign-in", "basic (default: an integration user and its password) or oauth (an OAuth client with the client credentials grant). The credential is the password or the client secret.", false},
+			{"username", "Integration user", "Required for basic: a dedicated user with read access to sys_user, sys_user_group, sys_user_grmember, sys_user_has_role and sys_user_role.", false},
+			{"client_id", "OAuth client id", "Required for oauth: the client id of the instance's OAuth inbound integration.", false}}
+	case Atlassian:
+		return []Setting{
+			{"email", "Account e-mail", "The dedicated account whose API token is the credential. It needs Browse users and groups; to write back, site administration.", true},
+			{"org_id", "Organization id", "Optional: adds the organization admin API (product access). The credential is then JSON with api_token and admin_api_key.", false},
+			{"project_keys", "Project keys", "Comma separated, at most 50. Optional: the projects whose project roles are read.", false}}
 	case UnixSSH:
 		return []Setting{
 			{"host", "Host", "The host name or IP address of the Unix or Linux host. Private, loopback and link-local addresses are refused from the server.", true},
@@ -162,7 +176,7 @@ func SettingSpecs(typ string) []Setting {
 // it is empty; AWS and AgentCore take none.
 func BaseURLUse(typ string) (required, takes bool) {
 	switch typ {
-	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed, SuccessFactors:
+	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed, SuccessFactors, ServiceNow, Atlassian:
 		return true, true
 	case GitHubScan:
 		return false, true
@@ -187,6 +201,9 @@ var (
 	mgRE      = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
 	numRE     = regexp.MustCompile(`^[0-9]{1,20}$`)
 	projectRE = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+	emailRE   = regexp.MustCompile(`^[^\x00-\x1f\x7f\s@]{1,128}@[^\x00-\x1f\x7f\s@]{1,128}$`)
+	orgIDRE   = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+	jiraKeyRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{1,99}$`)
 	sshUserRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
 	sshHostRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
 	// hostKeyRE is the shape only (the connector parses the key itself): a fingerprint, or a public key line.
@@ -233,6 +250,10 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 			} else if typ == SuccessFactors {
 				if !sfUserRE.MatchString(v) {
 					bad(s.Key, "must be 1 to 128 printable characters without a colon")
+				}
+			} else if typ == ServiceNow {
+				if !clientRE.MatchString(v) {
+					bad(s.Key, "must be 1 to 256 characters without spaces")
 				}
 			} else if !userRE.MatchString(v) {
 				bad(s.Key, "must be 1 to 256 printable characters")
@@ -317,6 +338,20 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 			checkList(v, 200, guidRE, "a subscription GUID", s.Key, bad)
 		case "management_group_ids":
 			checkList(v, 200, mgRE, "a management group id", s.Key, bad)
+		case "auth_mode":
+			if v != "basic" && v != "oauth" {
+				bad(s.Key, "must be basic or oauth")
+			}
+		case "email":
+			if !emailRE.MatchString(v) {
+				bad(s.Key, "must be an e-mail address")
+			}
+		case "org_id":
+			if !orgIDRE.MatchString(v) {
+				bad(s.Key, "must be the organization id (letters, digits and hyphens)")
+			}
+		case "project_keys":
+			checkList(v, 50, jiraKeyRE, "a Jira project key", s.Key, bad)
 		case "host":
 			if _, err := netip.ParseAddr(v); err != nil && !sshHostRE.MatchString(v) {
 				bad(s.Key, "must be a host name or an IP address (no scheme, port or path)")
@@ -348,6 +383,26 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 	}
 	if typ == GCPIAM && strings.TrimSpace(set["organization_id"])+strings.TrimSpace(set["folder_ids"])+strings.TrimSpace(set["project_ids"]) == "" {
 		bad("organization_id", "set an organization, folders or projects to read")
+	}
+	if typ == ServiceNow {
+		// the sign-in decides which of the two identities is needed, and the other must not be set
+		user, client := strings.TrimSpace(set["username"]), strings.TrimSpace(set["client_id"])
+		switch strings.TrimSpace(set["auth_mode"]) {
+		case "oauth":
+			if client == "" {
+				bad("client_id", "required for oauth")
+			}
+			if user != "" {
+				bad("username", "applies to basic sign-in only")
+			}
+		case "", "basic":
+			if user == "" {
+				bad("username", "required for basic sign-in")
+			}
+			if client != "" {
+				bad("client_id", "applies to oauth sign-in only")
+			}
+		}
 	}
 	return errs
 }

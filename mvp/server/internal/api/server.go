@@ -128,6 +128,9 @@ type Config struct {
 	// Env is TESSERA_ENV: "dev" allows activating non-demo connector types,
 	// and is otherwise informational.
 	Env string
+	// Deprecations announce the removal of /api/v1 routes (Deprecation and Sunset
+	// headers; at least 6 months' notice, enforced at startup).
+	Deprecations []Deprecation
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string
@@ -287,9 +290,13 @@ type Server struct {
 	// built from the routes on first use (stepup_policy.go).
 	stepUps     stepup.Catalog
 	stepUpsOnce sync.Once
-	authn       *auth.Authenticator
-	limits      *limiters
-	guests      *sponsorship.Service
+	// spec is the complete OpenAPI document (openapi_full.go), built on first use.
+	spec     []byte
+	specErr  error
+	specOnce sync.Once
+	authn    *auth.Authenticator
+	limits   *limiters
+	guests   *sponsorship.Service
 	// guestLife runs the guest lifecycle: reminders, transfer tasks, conversion, deprovisioning (issue #74)
 	guestLife *guestlife.Service
 
@@ -610,6 +617,7 @@ func New(cfg Config) *Server {
 	s.registerAdminClientRoutes()
 	s.registerOpsRoutes()
 	s.checkPublicRoutes()
+	s.checkDeprecations()
 	return s
 }
 
@@ -642,6 +650,7 @@ func (s *Server) Handler() http.Handler {
 	h = s.rateLimit(h)
 	h = s.logRequests(h)
 	h = s.securityHeaders(h)
+	h = s.versioned(h)
 	// The probes /livez and /readyz are answered before the API pipeline
 	// (rate limit, audit, sessions): see probes. Metrics wrap everything.
 	return obs.Instrument(s.probes(h))
