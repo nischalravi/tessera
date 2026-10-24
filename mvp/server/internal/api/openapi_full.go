@@ -135,7 +135,7 @@ func (s *Server) securitySchemes() oamap {
 	return oamap{
 		"session": oamap{"type": "apiKey", "in": "cookie", "name": s.authn.Cookies.Name(), "description": "Browser session from the tenant's OIDC sign-in."},
 		"oauth2": oamap{"type": "oauth2", "description": "Machine client: client credentials grant. Replace {tenant} with the tenant slug.",
-			"flows": oamap{"clientCredentials": oamap{"tokenUrl": "/t/{tenant}/oauth/token", "scopes": scopeDescriptions()}}},
+			"flows": oamap{"clientCredentials": oamap{"tokenUrl": "/t/{tenant}/oauth/token", "scopes": scopeDescriptions()}}}, // #nosec G101 -- OpenAPI token endpoint path, not a credential
 	}
 }
 
