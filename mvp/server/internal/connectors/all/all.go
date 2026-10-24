@@ -30,6 +30,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
@@ -72,6 +73,12 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 		connectors.Factories[system] = func(now time.Time) (connectors.Connector, error) {
 			return erp.FromEnv(system, os.Getenv, rt, hc, func() time.Time { return now })
 		}
+	}
+	// Databases (issue #553): "sql" reads accounts, roles and grants of one PostgreSQL, MySQL,
+	// SQL Server or Oracle database (TESSERA_SQL_*). It dials through the safehttp address
+	// policy and ignores hc.
+	connectors.Factories["sql"] = func(time.Time) (connectors.Connector, error) {
+		return sqldb.FromEnv(os.Getenv, os.ReadFile, rt)
 	}
 	connectors.Factories["aws-agentcore"] = func(now time.Time) (connectors.Connector, error) {
 		return agentcore.FromEnv(os.Getenv, now)

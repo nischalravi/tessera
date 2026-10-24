@@ -16,6 +16,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/okta"
@@ -40,6 +41,10 @@ const (
 	// ERP targets: role assignment in SAP and Oracle (internal/connectors/erp).
 	KindSAP    = "sap"
 	KindOracle = "oracle"
+	// KindSQL is a database (PostgreSQL, MySQL, SQL Server, Oracle): native accounts and roles,
+	// or an application's own tables (issue #553, internal/connectors/sqldb). The target's
+	// Settings.SQL holds the connection; the credential is the database password.
+	KindSQL = "sql"
 )
 
 // ERPKinds are the ERP target kinds; the kind is the system's name in internal/connectors/erp.
@@ -69,6 +74,8 @@ type Settings struct {
 	// instead of calling the target itself, and the agent's report finishes
 	// the operation (issue #302). SCIM and Okta targets only.
 	AgentID string `json:"agent_id,omitempty"`
+	// SQL is the database connection of a KindSQL target (no secret in it).
+	SQL *sqldb.Config `json:"sql,omitempty"`
 	// Discovery is the last read of the target's ServiceProviderConfig and
 	// ResourceTypes (issue #542). It is informational and never gates provisioning.
 	Discovery *DiscoveryRecord `json:"discovery,omitempty"`
@@ -279,6 +286,8 @@ func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) 
 		return e.buildVault(hc, pt, token, s)
 	case KindSAP, KindOracle:
 		return e.buildERP(hc, pt, token, s)
+	case KindSQL:
+		return e.buildSQL(token, s)
 	}
 	return nil, fmt.Errorf("unknown target kind %q", pt.Kind)
 }
@@ -310,6 +319,15 @@ func (e *Engine) buildERP(hc *http.Client, pt *store.ProvTarget, token string, s
 		return nil, err
 	}
 	return &erp.Target{S: sys}, nil
+}
+
+// buildSQL builds the target of a database. The credential is the database password; the
+// connection dials through the safehttp address policy, not through the HTTP client.
+func (e *Engine) buildSQL(token string, s Settings) (target.Connector, error) {
+	if s.SQL == nil {
+		return nil, errors.New("the database settings are missing")
+	}
+	return sqldb.NewTarget(*s.SQL, connsync.NewSecret(token), e.Runtime)
 }
 
 func (e *Engine) workerCtx(ctx context.Context) context.Context {

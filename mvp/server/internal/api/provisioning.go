@@ -14,6 +14,9 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -84,6 +87,8 @@ type targetView struct {
 	Fault          string `json:"fault,omitempty"`
 	OnDeprovision  string `json:"on_deprovision,omitempty"` // "delete": accounts are deleted after the grace period (issue #74)
 	AgentID        string `json:"agent_id,omitempty"`       // the Directory Agent that reaches this target (issue #302)
+	// SQL is a database target's connection (no secret in it; issue #553).
+	SQL *sqldb.Config `json:"sql,omitempty"`
 	// Discovery is the last read of a SCIM target's ServiceProviderConfig and ResourceTypes (issue #542).
 	Discovery     *provision.DiscoveryRecord `json:"discovery,omitempty"`
 	WriteBack     bool                       `json:"write_back"`
@@ -96,7 +101,7 @@ func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, SQL: st.SQL, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -268,6 +273,8 @@ type targetInput struct {
 	// The base URL must then be https, and its host:port must be on the agent's
 	// own allowed_push_targets.
 	AgentID string `json:"agent_id"`
+	// SQL is the database connection of a sql target (issue #553). The password is token.
+	SQL *sqldb.Config `json:"sql"`
 }
 
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
@@ -286,6 +293,24 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		if in.Fault != "" {
 			return st, badRequest("invalid_fault", "fault applies to the dev fake target only")
 		}
+	case provision.KindSQL:
+		// a database: the connection is the sql object, the base URL is derived from it (no
+		// credential in it) so the origin check that keeps a stored password from moving still works
+		if in.SQL == nil {
+			return st, badRequest("invalid_sql", "sql (the database settings) is required for a sql target")
+		}
+		rt := connsync.Runtime{Env: config.Dev}
+		if s.cfg.Env == "prod" {
+			rt.Env = config.Prod
+		}
+		if err := in.SQL.Validate(rt); err != nil {
+			return st, badRequest("invalid_sql", err.Error())
+		}
+		if in.Fault != "" || in.AgentID != "" {
+			return st, badRequest("invalid_sql", "fault and agent_id do not apply to a sql target")
+		}
+		in.BaseURL = "sql://" + net.JoinHostPort(strings.ToLower(in.SQL.Host), strconv.Itoa(in.SQL.EffectivePort())) + "/" + in.SQL.Engine
+		st.SQL = in.SQL
 	case provision.KindFake:
 		if s.cfg.FakeTargetURL == "" {
 			return st, badRequest("fake_unavailable", "the fake target is available only in dev (TESSERA_DEV_FAKE_TARGET)")
@@ -299,7 +324,7 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta, cyberark, delinea, beyondtrust, sap, oracle or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, cyberark, delinea, beyondtrust, sap, oracle, sql or fake")
 	}
 	vault := slices.Contains(provision.PAMKinds, in.Kind) || slices.Contains(provision.ERPKinds, in.Kind) // a target with a path root and a user:secret credential
 	switch {
@@ -422,6 +447,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	case moved && len(t.CredentialEnc) > 0:
 		return 0, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "credential_required",
 			Msg: "changing the target's kind or origin (scheme, host, port) needs a new token; the stored credential does not move with it"}
+	case in.Kind == provision.KindSQL && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "a sql target needs the database password as token")
 	case in.Kind == provision.KindOkta && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
 	case isUserSecretKind(in.Kind) && len(t.CredentialEnc) == 0:

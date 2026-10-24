@@ -3,7 +3,7 @@ package template
 import "slices"
 
 // TemplateIDs are the connector templates that ship (base is extended, not used directly).
-var TemplateIDs = []string{"ad", "ldap", "entra", "okta", "google", "workday", "scim_app"}
+var TemplateIDs = []string{"ad", "ldap", "entra", "okta", "google", "workday", "scim_app", "sql"}
 
 // Categories group checklist items in the UI (§10.2).
 var Categories = []string{"access", "ownership", "transport", "scope", "identity_keys", "account_status",
@@ -15,7 +15,7 @@ var ConfigFields = []string{"host", "port", "bind_dn", "ca_bundle", "base_dns", 
 	"org_url", "tenant_id", "cloud", "customer", "domain", "base_url", "tenant_host", "api_version", "interface",
 	"time_zone", "role", "correlation_key", "hr_id_attribute", "technical_owner", "business_owner",
 	"expected_counts", "stale_days", "sync_schedule", "write_mode", "write_scope", "hybrid", "use_dirsync",
-	"privileged_expected", "demo_fixed_checks", "credential"}
+	"privileged_expected", "demo_fixed_checks", "credential", "sql"}
 
 // CheckSpec describes a check id the templates may reference (§5.4). The
 // check implementations live in internal/readiness/checks, whose registry

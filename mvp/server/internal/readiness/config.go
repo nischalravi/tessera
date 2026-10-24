@@ -11,6 +11,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 )
 
@@ -51,6 +54,9 @@ type ConnConfig struct {
 	Hybrid             bool                `json:"hybrid,omitempty"`
 	UseDirSync         bool                `json:"use_dirsync,omitempty"`
 	PrivilegedExpected map[string][]string `json:"privileged_expected,omitempty"`
+	// SQL is the database connector's settings (template sql, issue #553). It holds no
+	// secret: the password is the sealed credential.
+	SQL *sqldb.Config `json:"sql,omitempty"`
 	// DemoFixedChecks is the demo scenario toggle: simulated checks listed
 	// here pass (for example after "fixing" ranged retrieval). Demo types only.
 	DemoFixedChecks []string `json:"demo_fixed_checks,omitempty"`
@@ -216,6 +222,13 @@ func Validate(cfg ConnConfig, t *template.Resolved) []FieldError {
 		text("time_zone", cfg.TimeZone, 64)
 	case "scim_app":
 		httpsURL("base_url", cfg.BaseURL, nil)
+	case "sql":
+		if cfg.SQL == nil {
+			bad("sql", "required: the database settings")
+		} else if err := cfg.SQL.Validate(connsync.Runtime{Env: config.Prod}); err != nil {
+			// a stored connection follows the production rules (no tls disable)
+			bad("sql", "%v", err)
+		}
 	}
 	if cfg.CorrelationKey == "" || !attrRE.MatchString(cfg.CorrelationKey) {
 		bad("correlation_key", "required: an attribute name")
