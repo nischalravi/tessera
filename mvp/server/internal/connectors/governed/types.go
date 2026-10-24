@@ -293,7 +293,8 @@ func checkList(v string, max int, re *regexp.Regexp, what, key string, bad func(
 	}
 	for _, e := range list {
 		if !re.MatchString(e) {
-			bad(key, "%q is not %s", clip(e), what)
+			bad(key, "an entry is not %s", what)
+			return
 		}
 	}
 }

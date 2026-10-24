@@ -108,6 +108,10 @@ func (f *fake) handler() http.Handler {
 				write(map[string]any{"name": "roles/owner", "title": "Owner", "includedPermissions": []string{"resourcemanager.projects.setIamPolicy", "storage.objects.get"}})
 			case "roles/storage.objectViewer":
 				write(map[string]any{"name": "roles/storage.objectViewer", "title": "Storage Object Viewer", "includedPermissions": []string{"storage.objects.get"}})
+			case "roles/viewer":
+				write(map[string]any{"title": "Viewer", "includedPermissions": []string{"resourcemanager.projects.get"}})
+			case "roles/custom.thing":
+				write(map[string]any{"title": "Thing", "includedPermissions": []string{"storage.objects.list"}})
 			case "roles/iam.serviceAccountUser":
 				write(map[string]any{"title": "Service Account User", "includedPermissions": []string{"iam.serviceAccounts.actAs"}})
 			default:
@@ -148,6 +152,14 @@ var policies = map[string]map[string]any{
 		bind("roles/custom.thing", "principalSet://iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/*")}},
 	"projects/beta-proj-22": {"bindings": []any{bind("roles/storage.objectViewer", "user:bob@example.com")}},
 	"projects/sec-proj-123": {},
+	// roles.get answers 404 for every role here: privilege must not be guessed quietly
+	"projects/gamma-proj-33": {"bindings": []any{
+		bind("roles/iam.serviceAccountTokenCreator", "user:eve@example.com"),
+		bind("roles/custom.keyman", "user:eve@example.com"),
+		map[string]any{"role": "roles/storage.objectViewer", "members": []string{"user:eve@example.com"},
+			"condition": map[string]any{"title": "same", "expression": "resource.name.startsWith('a')"}},
+		map[string]any{"role": "roles/storage.objectViewer", "members": []string{"user:eve@example.com"},
+			"condition": map[string]any{"title": "same", "expression": "resource.name.startsWith('b')"}}}},
 }
 
 func (f *fake) tokenEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -487,5 +499,47 @@ func TestIngestsIntoTheGraph(t *testing.T) {
 		if d := st.Discovery; d.Accounts != 4 || d.Permissions != 7 || d.Resources != 5 || d.Edges == 0 {
 			t.Errorf("sync %d: %+v", i, d)
 		}
+	}
+}
+
+// A role that cannot be read is said so (Partial), the well-known privileged roles stay privileged without
+// roles.get, and conditions that differ only in their expression are different permissions.
+func TestUnreadableRolesArePartialAndKnownPrivilegedRolesStayPrivileged(t *testing.T) {
+	r := newRig(t, &fake{})
+	res, err := r.open(t, func(c *gcpiam.Config) { c.OrganizationID, c.ProjectIDs = "", []string{"gamma-proj-33"} }).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Partial, "bound roles could not be read") {
+		t.Errorf("partial = %q", res.Partial)
+	}
+	priv := map[string]bool{}
+	cond := 0
+	for _, p := range res.Permissions {
+		priv[p.ExternalID] = p.Privileged
+		if strings.HasPrefix(p.ExternalID, "projects/gamma-proj-33|roles/storage.objectViewer|c") {
+			cond++
+		}
+	}
+	if !priv["projects/gamma-proj-33|roles/iam.serviceAccountTokenCreator"] {
+		t.Error("serviceAccountTokenCreator must be privileged even when roles.get fails")
+	}
+	if priv["projects/gamma-proj-33|roles/custom.keyman"] {
+		t.Error("an unreadable custom role is judged by name only")
+	}
+	if cond != 2 {
+		t.Errorf("%d conditional permissions, want 2 (one per expression)", cond)
+	}
+}
+
+func TestKnownPrivilegedRoles(t *testing.T) {
+	for _, name := range []string{"roles/owner", "roles/editor", "roles/iam.securityAdmin", "roles/iam.serviceAccountTokenCreator", "roles/iam.serviceAccountUser",
+		"roles/iam.serviceAccountKeyAdmin", "roles/resourcemanager.organizationAdmin", "roles/iam.workloadIdentityUser"} {
+		if !gcpiam.PrivilegedRole(name, nil, false) {
+			t.Errorf("%s is not privileged", name)
+		}
+	}
+	if gcpiam.PrivilegedRole("roles/viewer", nil, false) || gcpiam.PrivilegedRole("roles/storage.objectViewer", []string{"storage.objects.get"}, true) {
+		t.Error("a viewer role is privileged")
 	}
 }

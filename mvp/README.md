@@ -2654,7 +2654,7 @@ with the OAuth client credentials flow at `login.microsoftonline.com` for the sc
 `https://management.azure.com/.default`, with a client secret or a certificate (the credential is then
 a PEM holding the certificate and its RSA private key; the connector sends a PS256 client assertion with
 `x5t#S256`). It lists subscriptions (`GET /subscriptions`, 2022-12-01) and management groups (2020-05-01)
-unless the settings name them, then per scope reads `roleDefinitions` and `roleAssignments`
+unless the settings name them (a configured management group brings the subscriptions below it, through its descendants), then per scope reads `roleDefinitions` and `roleAssignments`
 (Microsoft.Authorization, api-version 2022-04-01) and, when `include_eligible` is true, the PIM
 `roleEligibilityScheduleInstances` (2020-10-01). Settings: `tenant_id`, `client_id`, `subscription_ids`,
 `management_group_ids`, `include_eligible`. The application needs Reader at the scopes.
@@ -2676,7 +2676,8 @@ never read as access held now; a conditional binding is its own permission (`...
 Inheritance is not flattened: Google resources carry `parent:<resource>` tags. Azure principals are
 object ids and Google groups are not expanded: names and members come from the Entra and Google Workspace
 connections of the same tenant. A scope or resource that cannot be read (403, 404) is skipped and the result
-is marked partial, which holds back deletions (`DiscoveryResult.Partial`); nothing readable at all is an error.
+is marked partial (`DiscoveryResult.Partial`; today the ingest deletion guard holds back removal of identities and
+account status only, not permissions or edges, which a follow-up will make respect it); nothing readable at all is an error.
 
 *Network.* Every call goes through `internal/safehttp`. The endpoints are fixed to the public cloud:
 `management.azure.com` and `login.microsoftonline.com`; `cloudresourcemanager.googleapis.com`,

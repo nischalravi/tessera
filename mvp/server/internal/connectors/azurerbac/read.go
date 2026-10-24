@@ -53,20 +53,51 @@ func (c *Connector) list(ctx context.Context, path string, q url.Values, each fu
 	})
 }
 
-// Scopes returns the scopes to read: the configured subscriptions and management groups, or every
-// one the application can list.
-func (c *Connector) Scopes(ctx context.Context) ([]Scope, error) {
-	var out []Scope
+// Scopes returns the scopes to read: the configured subscriptions and management groups (a
+// configured management group also brings every subscription below it, listed through its
+// descendants), or every one the application can list. partial says why the list may be short.
+func (c *Connector) Scopes(ctx context.Context) (out []Scope, partial string, err error) {
 	if len(c.cfg.SubscriptionIDs)+len(c.cfg.ManagementGroupIDs) > 0 {
+		seen := map[string]bool{}
+		add := func(sc Scope) {
+			if k := lower(sc.ID); !seen[k] {
+				seen[k] = true
+				out = append(out, sc)
+			}
+		}
 		for _, m := range c.cfg.ManagementGroupIDs {
-			out = append(out, Scope{ID: mgPrefix + m, Name: m})
+			add(Scope{ID: mgPrefix + m, Name: m})
+			err := c.list(ctx, "/providers/Microsoft.Management/managementGroups/"+url.PathEscape(m)+"/descendants", url.Values{"api-version": {apiMgmtGroups}}, func(raw json.RawMessage) error {
+				var d struct {
+					ID         string `json:"id"`
+					Name       string `json:"name"`
+					Type       string `json:"type"`
+					Properties struct {
+						DisplayName string `json:"displayName"`
+					} `json:"properties"`
+				}
+				if json.Unmarshal(raw, &d) != nil || !strings.HasSuffix(lower(d.Type), "/subscriptions") || !guidRE.MatchString(d.Name) {
+					return nil
+				}
+				add(Scope{ID: "/subscriptions/" + lower(d.Name), Name: nonEmpty(d.Properties.DisplayName, d.Name)})
+				if len(out) > maxScopes {
+					return errors.New("azurerbac: more than 5000 scopes; narrow the subscription and management group lists")
+				}
+				return nil
+			})
+			if err != nil {
+				if !unreadable(err) {
+					return nil, "", fmt.Errorf("descendants of %s: %w", m, err)
+				}
+				partial = "the subscriptions below management group " + m + " could not be listed"
+			}
 		}
-		for _, s := range c.cfg.SubscriptionIDs {
-			out = append(out, Scope{ID: "/subscriptions/" + lower(s), Name: s})
+		for _, sub := range c.cfg.SubscriptionIDs {
+			add(Scope{ID: "/subscriptions/" + lower(sub), Name: sub})
 		}
-		return out, nil
+		return out, partial, nil
 	}
-	err := c.list(ctx, "/subscriptions", url.Values{"api-version": {apiSubscriptions}}, func(raw json.RawMessage) error {
+	err = c.list(ctx, "/subscriptions", url.Values{"api-version": {apiSubscriptions}}, func(raw json.RawMessage) error {
 		var s struct {
 			SubscriptionID string `json:"subscriptionId"`
 			DisplayName    string `json:"displayName"`
@@ -85,7 +116,7 @@ func (c *Connector) Scopes(ctx context.Context) ([]Scope, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("subscriptions: %w", err)
+		return nil, "", fmt.Errorf("subscriptions: %w", err)
 	}
 	err = c.list(ctx, "/providers/Microsoft.Management/managementGroups", url.Values{"api-version": {apiMgmtGroups}}, func(raw json.RawMessage) error {
 		var m struct {
@@ -100,10 +131,15 @@ func (c *Connector) Scopes(ctx context.Context) ([]Scope, error) {
 		out = append(out, Scope{ID: mgPrefix + m.Name, Name: nonEmpty(m.Properties.DisplayName, m.Name)})
 		return nil
 	})
-	if err != nil && connsync.Status(err) != http.StatusForbidden && connsync.Status(err) != http.StatusNotFound {
-		return nil, fmt.Errorf("management groups: %w", err)
+	if err != nil {
+		if !unreadable(err) {
+			return nil, "", fmt.Errorf("management groups: %w", err)
+		}
+		// optional: a reader on subscriptions only cannot list them, but then what is assigned at a
+		// management group is not seen, which is said rather than hidden
+		partial = "management groups could not be listed, so assignments at management groups are not read"
 	}
-	return out, nil // management groups are optional: a reader on subscriptions only cannot list them
+	return out, partial, nil
 }
 
 func nonEmpty(a, b string) string {
@@ -182,8 +218,10 @@ func (c *Connector) assignments(ctx context.Context, scope string, eligible bool
 	if eligible {
 		path, q = scope+"/providers/Microsoft.Authorization/roleEligibilityScheduleInstances", url.Values{"api-version": {apiEligibility}}
 	}
-	if eligible || strings.HasPrefix(scope, mgPrefix) {
-		q.Set("$filter", "atScope()") // at and above the scope; what is below is read from its own scope
+	if strings.HasPrefix(scope, mgPrefix) {
+		// at and above the management group; what is below is read from the subscriptions. At a
+		// subscription no filter is sent, so resource groups and resources below it are read too.
+		q.Set("$filter", "atScope()")
 	}
 	return c.list(ctx, path, q, func(raw json.RawMessage) error {
 		var a assignmentJSON
@@ -227,14 +265,19 @@ func unreadable(err error) bool {
 }
 
 // Read lists the scopes, then the role definitions and assignments (and eligible assignments) of
-// each. A scope the application cannot read is skipped and the snapshot is flagged Partial, which
-// holds back deletions; no readable scope at all is an error.
+// each. A scope the application cannot read is skipped and the snapshot is flagged Partial (today the
+// ingest deletion guard holds back removal of identities and account status only, not permissions
+// or edges); no readable scope at all is an error.
 func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
-	scopes, err := c.Scopes(ctx)
+	scopes, partial, err := c.Scopes(ctx)
 	if err != nil {
 		return nil, err
 	}
 	snap := &Snapshot{Scopes: scopes, Roles: map[string]RoleDef{}}
+	var reasons []string
+	if partial != "" {
+		reasons = append(reasons, partial)
+	}
 	byID := map[string]Assignment{}
 	var skipped []string
 	var lastErr error
@@ -259,7 +302,7 @@ func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 				if !unreadable(err) {
 					return nil, fmt.Errorf("eligible assignments of %s: %w", sc.Name, err)
 				}
-				snap.Partial = "eligible (PIM) assignments could not be read at " + sc.Name
+				reasons = append(reasons, "eligible (PIM) assignments could not be read at "+sc.Name)
 			}
 		}
 	}
@@ -267,8 +310,9 @@ func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 		return nil, fmt.Errorf("no scope could be read: %w", lastErr)
 	}
 	if len(skipped) > 0 {
-		snap.Partial = fmt.Sprintf("%d of %d scopes could not be read (%s)", len(skipped), len(scopes), strings.Join(first(skipped, 3), ", "))
+		reasons = append(reasons, fmt.Sprintf("%d of %d scopes could not be read (%s)", len(skipped), len(scopes), strings.Join(first(skipped, 3), ", ")))
 	}
+	snap.Partial = strings.Join(reasons, "; ")
 	for _, a := range byID {
 		snap.Assignments = append(snap.Assignments, a)
 	}
@@ -319,7 +363,7 @@ type Probe struct {
 // Probe acquires a token, lists the scopes and reads the assignments and role definitions of the
 // first few; nothing is kept.
 func (c *Connector) Probe(ctx context.Context) (Probe, error) {
-	scopes, err := c.Scopes(ctx)
+	scopes, _, err := c.Scopes(ctx)
 	if err != nil {
 		return Probe{}, err
 	}

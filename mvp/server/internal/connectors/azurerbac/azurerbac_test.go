@@ -104,6 +104,11 @@ func (f *fake) handler(base func() string) http.Handler {
 			write(map[string]any{"value": []any{
 				map[string]any{"subscriptionId": subB, "displayName": "Dev", "state": "Enabled"},
 				map[string]any{"subscriptionId": "cccc3333-0000-0000-0000-000000000003", "displayName": "Old", "state": "Disabled"}}})
+		case path == "/providers/Microsoft.Management/managementGroups/corp/descendants":
+			write(map[string]any{"value": []any{
+				map[string]any{"type": "Microsoft.Management/managementGroups", "name": "child", "id": "/providers/Microsoft.Management/managementGroups/child"},
+				map[string]any{"type": "/subscriptions", "name": subA, "properties": map[string]any{"displayName": "Prod"}},
+				map[string]any{"type": "/subscriptions", "name": subB, "properties": map[string]any{"displayName": "Dev"}}}})
 		case path == "/providers/Microsoft.Management/managementGroups":
 			if q.Get("api-version") != "2020-05-01" {
 				w.WriteHeader(400)
@@ -155,7 +160,12 @@ func (f *fake) handler(base func() string) http.Handler {
 				write(map[string]any{"value": []any{a}})
 			}
 		case strings.HasSuffix(path, "/providers/Microsoft.Authorization/roleEligibilityScheduleInstances"):
-			if q.Get("api-version") != "2020-10-01" || q.Get("$filter") != "atScope()" {
+			// atScope() only at a management group: at a subscription it would hide what is below it
+			wantFilter := ""
+			if strings.HasPrefix(path, "/providers/Microsoft.Management") {
+				wantFilter = "atScope()"
+			}
+			if q.Get("api-version") != "2020-10-01" || q.Get("$filter") != wantFilter {
 				w.WriteHeader(400)
 				return
 			}
@@ -165,7 +175,9 @@ func (f *fake) handler(base func() string) http.Handler {
 				e["properties"].(map[string]any)["endDateTime"] = "2027-01-01T00:00:00Z"
 				ex := assign("/subscriptions/"+subA+"/providers/Microsoft.Authorization/roleEligibilityScheduleInstances/e2", spP, "User", "/subscriptions/"+subA, ownerRole)
 				ex["properties"].(map[string]any)["status"] = "Revoked"
-				write(map[string]any{"value": []any{e, ex}})
+				rg := assign("/subscriptions/"+subA+"/providers/Microsoft.Authorization/roleEligibilityScheduleInstances/e3", userP, "User", "/subscriptions/"+subA+"/resourceGroups/rg1", readerRole)
+				rg["properties"].(map[string]any)["status"] = "Provisioned"
+				write(map[string]any{"value": []any{e, ex, rg}})
 				return
 			}
 			write(map[string]any{"value": []any{}})
@@ -283,10 +295,11 @@ func TestDiscoverMapsAssignmentsAndEligibility(t *testing.T) {
 		priv   bool
 		res    string
 	}{
-		scope + "|" + ownerRole:                     {"Owner", true, scope},
-		scope + "/resourcegroups/rg1|" + readerRole: {"Reader", false, scope + "/resourcegroups/rg1"},
-		scope + "|" + customRole:                    {"Key Rotator", false, scope},
-		scope + "|" + ownerRole + "|eligible":       {"Owner (eligible)", true, scope},
+		scope + "|" + ownerRole:                                   {"Owner", true, scope},
+		scope + "/resourcegroups/rg1|" + readerRole:               {"Reader", false, scope + "/resourcegroups/rg1"},
+		scope + "|" + customRole:                                  {"Key Rotator", false, scope},
+		scope + "|" + ownerRole + "|eligible":                     {"Owner (eligible)", true, scope},
+		scope + "/resourcegroups/rg1|" + readerRole + "|eligible": {"Reader (eligible)", false, scope + "/resourcegroups/rg1"},
 	} {
 		p, ok := perms[id]
 		if !ok || p.Action != want.action || p.Privileged != want.priv || p.ResourceExternalID != want.res {
@@ -299,7 +312,7 @@ func TestDiscoverMapsAssignmentsAndEligibility(t *testing.T) {
 			cond = p.Action
 		}
 	}
-	if cond != "Reader (conditional)" || len(res.Permissions) != 5 {
+	if cond != "Reader (conditional)" || len(res.Permissions) != 6 {
 		t.Errorf("conditional = %q, %d permissions", cond, len(res.Permissions))
 	}
 	kinds := map[string]string{}
@@ -336,7 +349,7 @@ func TestDiscoverMapsAssignmentsAndEligibility(t *testing.T) {
 			t.Errorf("missing edge %s in %v", want, edges)
 		}
 	}
-	if len(res.Edges) != 5 { // the duplicate assignment adds none; the revoked eligibility adds none
+	if len(res.Edges) != 6 { // the duplicate assignment adds none; the revoked eligibility adds none
 		t.Errorf("%d edges", len(res.Edges))
 	}
 }
@@ -386,7 +399,7 @@ func TestUnreadableScopeIsPartialAndNoReadableScopeIsAnError(t *testing.T) {
 	if _, err := r.open(t).Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "no scope could be read") {
 		t.Errorf("err = %v", err)
 	}
-	// PIM not available (no P2 licence): the rest is read, held back from deletions
+	// PIM not available (no P2 licence): the rest is read and the gap is said
 	r = newRig(t, &fake{deny: map[string]int{"/subscriptions/" + subA + "/providers/Microsoft.Authorization/roleEligibility": 403}})
 	res, err = r.open(t).Discover(context.Background())
 	if err != nil || !strings.Contains(res.Partial, "eligible (PIM)") || len(res.Permissions) == 0 {
@@ -559,8 +572,41 @@ func TestIngestsIntoTheGraph(t *testing.T) {
 		if err != nil {
 			t.Fatalf("sync %d: %v", i, err)
 		}
-		if d := st.Discovery; d.Accounts != 2 || d.Groups != 1 || d.Permissions != 5 || d.Edges != 5 || d.Resources != 4 {
+		if d := st.Discovery; d.Accounts != 2 || d.Groups != 1 || d.Permissions != 6 || d.Edges != 6 || d.Resources != 4 {
 			t.Errorf("sync %d: %+v", i, d)
 		}
+	}
+}
+
+// A management group named alone brings the subscriptions below it (through its descendants), so their
+// own assignments, and the eligibility below the subscription, are read.
+func TestManagementGroupAloneEnumeratesItsSubscriptions(t *testing.T) {
+	r := newRig(t, &fake{})
+	c := r.open(t, func(c *azurerbac.Config) { c.ManagementGroupIDs = []string{"corp"} })
+	res, err := c.Discover(context.Background())
+	if err != nil || res.Partial != "" {
+		t.Fatalf("res.Partial = %q, err = %v", res.Partial, err)
+	}
+	kinds := map[string]bool{}
+	for _, x := range res.Resources {
+		kinds[x.ExternalID] = true
+	}
+	if !kinds["/subscriptions/"+subA] || !kinds["/subscriptions/"+subB] || r.f.srv.Count("/subscriptions/"+subA+"/providers/Microsoft.Authorization/roleAssignments") == 0 {
+		t.Errorf("resources = %v, requests = %v", kinds, r.f.srv.Requests())
+	}
+	// descendants refused: the management group itself is still read, and the gap is said
+	r = newRig(t, &fake{deny: map[string]int{"/providers/Microsoft.Management/managementGroups/corp/descendants": 403}})
+	res, err = r.open(t, func(c *azurerbac.Config) { c.ManagementGroupIDs = []string{"corp"} }).Discover(context.Background())
+	if err != nil || !strings.Contains(res.Partial, "below management group corp could not be listed") {
+		t.Errorf("partial = %q, err = %v", res.Partial, err)
+	}
+}
+
+// Management groups the application cannot list are said to be missing, not silently dropped.
+func TestUnlistableManagementGroupsArePartial(t *testing.T) {
+	r := newRig(t, &fake{deny: map[string]int{"/providers/Microsoft.Management/managementGroups": 403}})
+	res, err := r.open(t, func(c *azurerbac.Config) { c.IncludeEligible = false }).Discover(context.Background())
+	if err != nil || !strings.Contains(res.Partial, "management groups could not be listed") {
+		t.Errorf("partial = %q, err = %v", res.Partial, err)
 	}
 }

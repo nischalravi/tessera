@@ -39,15 +39,16 @@ type Binding struct {
 	Role        string
 	Members     []string
 	Conditional bool
-	// ConditionTitle is the condition's title, kept for the permission's name.
-	ConditionTitle string
+	// ConditionTitle and ConditionExpr identify the condition: two bindings of one role that differ
+	// only by condition are different permissions.
+	ConditionTitle, ConditionExpr string
 }
 
 // Role is what roles.get returned for a bound role.
 type Role struct {
 	Name, Title string
 	Permissions []string
-	Known       bool // false: the role could not be read, privilege is judged by its name
+	Known       bool // false: the role could not be read; privilege is judged by the known-privileged list and its name
 }
 
 // Snapshot is what one read found.
@@ -231,7 +232,8 @@ func (c *Connector) policy(ctx context.Context, name string) ([]Binding, error) 
 			Role      string   `json:"role"`
 			Members   []string `json:"members"`
 			Condition *struct {
-				Title string `json:"title"`
+				Title      string `json:"title"`
+				Expression string `json:"expression"`
 			} `json:"condition"`
 		} `json:"bindings"`
 	}
@@ -245,7 +247,7 @@ func (c *Connector) policy(ctx context.Context, name string) ([]Binding, error) 
 		}
 		bd := Binding{Role: b.Role, Members: b.Members, Conditional: b.Condition != nil}
 		if b.Condition != nil {
-			bd.ConditionTitle = b.Condition.Title
+			bd.ConditionTitle, bd.ConditionExpr = b.Condition.Title, b.Condition.Expression
 		}
 		out = append(out, bd)
 	}
@@ -297,7 +299,8 @@ func unreadable(err error) bool {
 
 // Read lists the resources, reads each policy, the bound roles and the service accounts of the
 // projects. A resource whose policy cannot be read (403, 404) is skipped and the snapshot is flagged
-// Partial, which holds back deletions; none readable is an error. A project whose service accounts
+// Partial (today the ingest deletion guard holds back removal of identities and account status only,
+// not permissions or edges); none readable is an error. A project whose service accounts
 // cannot be listed (IAM API off, no permission) keeps the service accounts its policies name.
 func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 	res, err := c.Resources(ctx)
@@ -343,11 +346,29 @@ func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 		}
 	}
 	sort.Strings(roles)
+	var unread []string
 	for i, name := range roles {
 		if i >= maxRoles {
+			unread = append(unread, roles[i:]...)
 			break
 		}
-		snap.Roles[name] = c.role(ctx, name)
+		r := c.role(ctx, name)
+		snap.Roles[name] = r
+		if !r.Known {
+			unread = append(unread, name)
+		}
+	}
+	if len(unread) > 0 {
+		// a role whose permissions are unknown is judged by name, which can miss (a custom role
+		// that can set policy), so the result says it is not the whole picture
+		if len(unread) > 3 {
+			unread = append(unread[:3:3], "...")
+		}
+		reason := fmt.Sprintf("bound roles could not be read (%s); their privilege is judged by name", strings.Join(unread, ", "))
+		if snap.Partial != "" {
+			reason = snap.Partial + "; " + reason
+		}
+		snap.Partial = reason
 	}
 	return snap, nil
 }
@@ -392,13 +413,25 @@ var setIAM = map[string]bool{"iam.serviceaccounts.actas": true, "iam.serviceacco
 	"iam.serviceaccounts.implicitdelegation": true, "iam.serviceaccounts.signblob": true, "iam.serviceaccounts.signjwt": true,
 	"iam.serviceaccountkeys.create": true, "iam.roles.update": true, "resourcemanager.projects.setiampolicy": true}
 
+// knownPrivileged are predefined roles that can change who has access or act as another identity. They
+// are privileged even when roles.get fails.
+var knownPrivileged = map[string]bool{
+	"roles/owner": true, "roles/editor": true,
+	"roles/iam.securityadmin": true, "roles/iam.serviceaccounttokencreator": true, "roles/iam.serviceaccountuser": true,
+	"roles/iam.serviceaccountkeyadmin": true, "roles/iam.serviceaccountadmin": true, "roles/iam.serviceaccountopenidtokencreator": true,
+	"roles/iam.workloadidentityuser": true, "roles/iam.workloadidentitypooladmin": true, "roles/iam.roleadmin": true,
+	"roles/iam.organizationroleadmin": true, "roles/resourcemanager.organizationadmin": true, "roles/resourcemanager.folderadmin": true,
+	"roles/resourcemanager.projectiamadmin": true, "roles/resourcemanager.folderiamadmin": true, "roles/orgpolicy.policyadmin": true,
+	"roles/iam.denyadmin": true,
+}
+
 // privilegedRole reports whether a role can change who has access or act as another identity: the
 // basic Owner and Editor roles, a role holding a setIamPolicy permission or a service account
 // impersonation permission. A role that could not be read is judged by its name.
 func privilegedRole(r Role) bool {
 	l := strings.ToLower(r.Name)
-	if l == "roles/owner" || l == "roles/editor" {
-		return true
+	if knownPrivileged[l] {
+		return true // whatever roles.get said or failed to say
 	}
 	if !r.Known {
 		return strings.HasSuffix(l, "admin")
@@ -494,7 +527,7 @@ func build(s *Snapshot) *connectors.DiscoveryResult {
 			}
 			id, action := rn+"|"+b.Role, b.Role
 			if b.Conditional {
-				sum := sha256.Sum256([]byte(b.ConditionTitle))
+				sum := sha256.Sum256([]byte(b.ConditionTitle + "\x00" + b.ConditionExpr))
 				id += "|c" + hex.EncodeToString(sum[:4])
 				action += " (conditional)"
 			}
@@ -533,4 +566,9 @@ func build(s *Snapshot) *connectors.DiscoveryResult {
 		}
 	}
 	return res
+}
+
+// PrivilegedRole is privilegedRole for a role named name with the given permissions (known: roles.get answered).
+func PrivilegedRole(name string, permissions []string, known bool) bool {
+	return privilegedRole(Role{Name: name, Permissions: permissions, Known: known})
 }
