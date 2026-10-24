@@ -214,6 +214,17 @@ type changeType struct {
 	// afterSubmit runs in the transaction that records the request, once it is inserted (breach.item.attest
 	// marks its item in progress); nil for the other types.
 	afterSubmit func(e *env, ch *store.AdminChange, v any) error
+	// afterEnd runs in the transaction that rejects, cancels or expires a request; nil for the other types.
+	afterEnd func(e *env, ch *store.AdminChange, v any) error
+}
+
+// ended runs the type's afterEnd hook for a request that ended without being applied.
+func (e *env) ended(ch *store.AdminChange) error {
+	typ, v, err := decodeStored(ch)
+	if err != nil || typ.afterEnd == nil {
+		return nil
+	}
+	return typ.afterEnd(e, ch, v)
 }
 
 // typed builds a changeType for payload struct T. prep may fill server-chosen
@@ -498,6 +509,9 @@ func (s *Service) decide(ctx context.Context, p *auth.Principal, id uuid.UUID, p
 		if ch, err = tx.AdminChange(id); err != nil {
 			return err
 		}
+		if err := s.env(tx, now, ch.RequestedBy).ended(ch); err != nil {
+			return err
+		}
 		return s.env(tx, now, ch.RequestedBy).transition(ch, trans, p.Display)
 	})
 	if err != nil {
@@ -672,6 +686,9 @@ func (s *Service) ExpireDue(ctx context.Context, t tenancy.ID) (int, error) {
 			}
 			ch, err := tx.AdminChange(d.ID)
 			if err != nil {
+				return err
+			}
+			if err := s.env(tx, now, ch.RequestedBy).ended(ch); err != nil {
 				return err
 			}
 			return s.env(tx, now, ch.RequestedBy).transition(ch, TransExpired, "system")
