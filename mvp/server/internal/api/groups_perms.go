@@ -172,10 +172,14 @@ func (s *Server) permsEffective(r *http.Request, p *params) (int, any, error) {
 		Allowed     bool             `json:"allowed"`
 		Conditional bool             `json:"conditional"`
 		Via         []permAssignView `json:"via"`
+		Note        string           `json:"note,omitempty"`
 	}
 	items := make([]item, len(eff))
 	for i, e := range eff {
-		items[i] = item{e.Resource, e.Action, e.Allowed, e.Conditional, viewAll(e.Via)}
+		items[i] = item{Resource: e.Resource, Action: e.Action, Allowed: e.Allowed, Conditional: e.Conditional, Via: viewAll(e.Via)}
+		if e.Conditional && !e.Allowed {
+			items[i].Note = "denies unless its limit is evaluated and false; denies when a context value is missing"
+		}
 	}
 	return http.StatusOK, map[string]any{"identity": identity, "as_of": store.RT(at), "truncated": truncated, "permissions": items}, nil
 }
@@ -242,8 +246,12 @@ func (s *Server) permsCheck(r *http.Request, p *params) (int, any, error) {
 	if failed == nil {
 		failed = []string{}
 	}
+	missing := d.ContextMissing
+	if missing == nil {
+		missing = []string{}
+	}
 	return http.StatusOK, map[string]any{"identity": identity, "resource": q.Resource, "action": q.Action, "as_of": store.RT(at),
-		"allowed": d.Allowed, "reason": d.Reason, "via": viewAll(d.Via), "limits_failed": failed, "context": ctx}, nil
+		"allowed": d.Allowed, "reason": d.Reason, "via": viewAll(d.Via), "limits_failed": failed, "context_missing": missing, "context": ctx}, nil
 }
 
 func (s *Server) permsCedar(r *http.Request, _ *params) (int, any, error) {

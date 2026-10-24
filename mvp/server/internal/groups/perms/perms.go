@@ -369,12 +369,17 @@ type Decision struct {
 	Reason string `json:"reason"`
 	// Via are the assignments at the winning rank.
 	Via []*Assignment `json:"-"`
-	// Conditional is set on an allow whose every winning assignment has limits,
-	// when the decision was made without a context.
+	// Conditional is set, when the decision was made without a context, on an
+	// allow whose every winning allow has limits, and on a deny whose every
+	// winning disallow has limits (it holds unless a limit is evaluated and fails,
+	// and when a context value is missing).
 	Conditional bool `json:"conditional,omitempty"`
 	// LimitsFailed lists assignments that applied but were set aside because a
 	// limit did not hold for the context.
 	LimitsFailed []string `json:"limits_failed,omitempty"`
+	// ContextMissing lists the context keys that a disallow's limit needed and the
+	// caller did not supply (or supplied malformed): the disallow held for them.
+	ContextMissing []string `json:"context_missing,omitempty"`
 }
 
 // Decide applies the heuristics (design §10.10): of the assignments that reach
@@ -431,6 +436,20 @@ func (s *Set) Decide(sub Subject, q Query, ctx Context, now time.Time) (*Decisio
 			switch {
 			case err != nil && a.Disallowed:
 				// fail closed: a deny whose limit cannot be read stays in force
+			case a.Disallowed:
+				// fail closed: a deny whose limit needs a context value that is
+				// missing or malformed stays in force; only a limit that was
+				// evaluated and failed sets it aside
+				ok, miss := HoldsClosed(c, ctx)
+				if !ok {
+					d.LimitsFailed = append(d.LimitsFailed, a.ID)
+					continue
+				}
+				for _, k := range miss {
+					if !slices.Contains(d.ContextMissing, k) {
+						d.ContextMissing = append(d.ContextMissing, k)
+					}
+				}
 			case err != nil || !c.Holds(ctx): // an allow whose limit does not compile never holds
 				d.LimitsFailed = append(d.LimitsFailed, a.ID)
 				continue
@@ -454,9 +473,16 @@ func (s *Set) Decide(sub Subject, q Query, ctx Context, now time.Time) (*Decisio
 			break
 		}
 	}
-	if d.Allowed && ctx == nil {
+	if ctx == nil {
+		// Without a context the verdict is conditional when every assignment that
+		// decides it (the allows of an allow, the disallows of a deny) has limits.
+		// A limited deny holds unless a limit is evaluated and fails, and also when
+		// a context value is missing (fail closed).
 		d.Conditional = true
 		for _, a := range winners {
+			if a.Disallowed == d.Allowed {
+				continue
+			}
 			if len(a.Limits) == 0 {
 				d.Conditional = false
 			}
