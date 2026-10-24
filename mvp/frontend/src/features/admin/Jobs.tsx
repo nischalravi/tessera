@@ -171,7 +171,7 @@ function ScheduleToggle({ schedule: r, onDone }: { schedule: QueueSchedule; onDo
   };
   return (
     <>
-    <Button size="sm" icon={<Play size={13} />} disabled={busy} onClick={runNow} aria-label={`Run ${label} now`}>Run now</Button>{" "}
+    <Button size="sm" icon={<Play size={13} />} disabled={busy} onClick={runNow} aria-label={`Run now: ${label}`}>Run now</Button>{" "}
     {r.name.startsWith("custom.") && <><Button size="sm" variant="danger" icon={<Trash2 size={13} />} disabled={busy} onClick={remove} aria-label={`Delete ${r.name}`}>Delete</Button>{" "}</>}
     <Button size="sm" icon={r.enabled ? <Pause size={13} /> : <Play size={13} />} disabled={busy} onClick={toggle} aria-label={`${r.enabled ? "Pause" : "Resume"} ${label}`}>
       {r.enabled ? "Pause" : "Resume"}
