@@ -98,6 +98,7 @@ POST   /api/alerts/{alert_id}/assign                 alerts.manage   -  # issue 
 GET    /api/ownership                                graph.read      -  # issue #167
 PUT    /api/ownership/{kind}/{object_key}            ownership.manage -  # issue #167
 POST   /api/ownership/bulk                           ownership.manage -  # issue #167
+GET    /api/openapi.json                             auth.self       -  # issue #587
 GET    /openapi.json                                 auth.self       -  #
 GET    /docs                                         auth.self       -  #
 GET    /docs/oauth2-redirect                         auth.self       -  #
