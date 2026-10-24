@@ -6338,3 +6338,32 @@ It writes a private JSON report, refusing overwrites without `--force`,
 without opening the database or changing access. Native vendor compatibility is
 unverified; unsupported logic is reported as blocking diagnostics.
 See [the contract, examples and phase limits](../docs/migration-assessment.md).
+
+### LDAP and Active Directory provisioning (issue #586)
+
+- **Target kinds `ldap` and `ad`** (`PUT /api/provisioning/targets/{connection}` with an `ldap` settings object; the bind
+  password is `token`). Package `internal/connectors/ldapwrite`. Write-back is off by default and the engine's approval
+  gates and deletion guard apply (disable and delete are guarded).
+- **Operations.** `create_account` (DN template, `${user.*}` attribute templates, candidate account names tried until one is
+  unique across `unique_attrs`, optional disabled start, random initial password from `password`), `update_account`
+  (allow-listed `update_attrs`; `attrs {"tessera.enabled":"true|false"}` enables or disables; `{"tessera.password":"reset"}`
+  sets a new random password when `allow_password_reset` is on), `disable_account` (AD `userAccountControl` bit 2, or
+  `nsaccountlock`, `ppolicy`, or a configured attribute; optional move to `disabled_ou`), `delete_account`, and
+  `add_entitlement` / `remove_entitlement` (`member`, `uniqueMember` or `memberUid`).
+- **Safety.** LDAPS (636) or StartTLS (389) only, dialled through `internal/safedial`; a bind or password never goes on a
+  clear connection. Every written DN must be below a `write_scope` OU. Templates escape values (RFC 4514 for DNs, RFC 4515
+  for filters). Each change reads first and is re-read to verify. Generated passwords are never stored, logged or returned
+  (AD accounts must change them at next sign-in). Errors are fixed text.
+- **Privilege.** `write_scope` cannot be a naming-context root, `CN=Users`, `CN=Builtin`, `CN=System`,
+  `CN=Configuration`, `OU=Domain Controllers`, or anything under them. Templates and update maps cannot set privilege-bearing
+  attributes (per flavor, compared without case): AD `nTSecurityDescriptor`, `msDS-KeyCredentialLink`, delegation and
+  `servicePrincipalName`, `altSecurityIdentities`, `sIDHistory`, `adminCount`, `scriptPath`, `userCertificate`,
+  `primaryGroupID`, and `userPrincipalName` (create only); POSIX `uidNumber`, `gidNumber`, `authPassword`, Samba hashes,
+  `sshPublicKey`, `homeDirectory`, `loginShell`. The target refuses to change an account or group with `adminCount=1` or an
+  `objectSid` ending in RID 500, 512, 516, 518, 519, 544, 548, 549 or 551, unless `allow_tier0` is set (dev only; refused
+  in production).
+- **LDAP passwords.** The Password Modify operation (RFC 3062) is used when the server advertises it, so the server hashes the
+  value. Otherwise `userPassword` is written, and the server must hash cleartext on write (OpenLDAP `ppolicy_hash_cleartext`,
+  389-DS `passwordStorageScheme`); without that the value is stored as sent.
+- **Not yet.** Reaching a private directory through the Directory Agent (the agent push job handles SCIM and Okta only), group
+  create/update, and showing a reset password to the user. Tests use an in-process fake (`ldapwrite/ldapfake`).
