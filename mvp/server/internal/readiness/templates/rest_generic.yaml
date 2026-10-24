@@ -1,7 +1,7 @@
 # Generic REST connector: any HTTP/JSON system described by a declarative spec,
 # read as an identity source and optionally written as a provisioning target
-# (issue #552, internal/connectors/restgen). Writes stay off until the base
-# write-back items pass and the two-administrator activation (DR-10) is done.
+# (issue #552, internal/connectors/restgen). The base write-back items apply
+# when write_mode is not off; a target's write_back switch is separate (step-up).
 template: rest_generic
 version: 1.0.0
 extends: base@1

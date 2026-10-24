@@ -84,6 +84,19 @@ func TestProvisioning_RESTTarget(t *testing.T) {
 		}
 	})
 
+	t.Run("moving where the secret is sent needs the secret again", func(t *testing.T) {
+		elsewhere := strings.Replace(spec, f.URL+"/oauth/token", "http://127.0.0.1:1/oauth/token", 1)
+		if out := put(f.URL, elsewhere, "", 422); out["error"] != "credential_required" {
+			t.Errorf("a new token_url kept the stored credential: %v", out)
+		}
+		bearer := strings.Replace(spec, `"type": "oauth2_client_credentials"`, `"type": "bearer"`, 1)
+		if out := put(f.URL, bearer, "", 422); out["error"] != "credential_required" {
+			t.Errorf("a new auth type kept the stored credential: %v", out)
+		}
+		put(f.URL, elsewhere, fakerest.ClientSecret, 200) // re-entered: accepted
+		put(f.URL, spec, fakerest.ClientSecret, 200)      // and back
+	})
+
 	t.Run("dry run shows the exact writes and sends none", func(t *testing.T) {
 		out := h.c.json("POST", "/api/provisioning/targets/"+h.conn+"/dry-run",
 			`{"kind":"create_account","username":"new/user","email":"n@example.com"}`, 200).(map[string]any)

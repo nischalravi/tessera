@@ -440,6 +440,14 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	// stored token must never follow the target to another origin or kind: an
 	// edit that moves it has to bring a new token (#315).
 	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL))
+	if existing && !moved && in.Kind == provision.KindREST {
+		// where a REST target sends its secret is also in the spec: the token URL's origin, the auth type and
+		// the header or query parameter. Moving any of them moves the credential.
+		var os provision.Settings
+		if json.Unmarshal([]byte(old.Settings), &os) != nil || restDestination(os.REST, old.BaseURL) != restDestination(st.REST, in.BaseURL) {
+			moved = true
+		}
+	}
 	if existing && !moved {
 		// an edit that leaves the destination alone keeps what discovery found there
 		var os provision.Settings
@@ -503,6 +511,16 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, viewTarget(saved, conn.Name), nil
+}
+
+// restDestination is the secret destination of a stored REST spec, whose own base URL is the target's.
+func restDestination(raw json.RawMessage, baseURL string) string {
+	spec, err := restgen.ParseSpec(raw)
+	if err != nil {
+		return "unreadable"
+	}
+	spec.BaseURL = baseURL
+	return spec.SecretDestination()
 }
 
 // isUserSecretKind: the kinds whose credential is "user:secret" (vaults and ERPs).

@@ -18,13 +18,13 @@ import (
 
 // Credentials the fake accepts.
 const (
-	Bearer       = "bearer-secret-token"
-	APIKey       = "api-key-secret-value"
-	Password     = "basic-secret-password"
+	Bearer       = "bearer-secret-token"   // #nosec G101 -- test-only credential of the fake REST server, never used outside tests
+	APIKey       = "api-key-secret-value"  // #nosec G101 -- test-only credential of the fake REST server, never used outside tests
+	Password     = "basic-secret-password" // #nosec G101 -- test-only credential of the fake REST server, never used outside tests
 	ClientID     = "client-1"
-	ClientSecret = "client-secret-value"
+	ClientSecret = "client-secret-value" // #nosec G101 -- test-only credential of the fake REST server, never used outside tests
 	Username     = "svc-tessera"
-	OAuthToken   = "oauth-access-token"
+	OAuthToken   = "oauth-access-token" // #nosec G101 -- test-only credential of the fake REST server, never used outside tests
 )
 
 // User is a record of the fake.

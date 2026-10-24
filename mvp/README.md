@@ -2638,8 +2638,13 @@ writes:                                        # request templates; see below
   `422 invalid_rest` with `fields`.
 - **Readiness checklist** (`rest_generic` template): the endpoint is reachable over verified TLS, the credential is
   accepted, **listing users returns records with the mapping applied** (`mapping_applied`: more than zero users, every
-  mapped field filled, no repeated ids), key uniqueness, status mapping, rate headroom, and the base write-back items:
-  writes stay `off` until the dry run is reviewed and the two-administrator activation (DR-10) is done.
+  mapped field filled, no repeated ids), key uniqueness, status mapping, rate headroom, and the base write-back items.
+  What gates writes: a REST target's `write_back` is off by default and is switched on only through
+  `PUT /api/provisioning/targets/{id}`, which needs the connections-manage permission and a fresh step-up
+  authentication; the dry run above shows the exact requests first. Writes are **not** behind the two-administrator
+  activation of DR-10, which gates a connection revision's activation, not a provisioning target's write-back.
+  Changing where a credential is sent (a REST target's base URL, token URL origin, auth type or key field) needs
+  the secret entered again; on a connection config the stored credential is cleared by such an edit.
 - **As a connector.** `TESSERA_CONNECTORS=rest` with `TESSERA_REST_SPEC=/abs/path/spec.yaml` and
   `TESSERA_REST_CREDENTIAL=env:NAME|file:/path` (a literal secret is refused) discovers users, groups and
   entitlements like the other production connectors. Tests run against `restgen/fakerest` (every pagination style

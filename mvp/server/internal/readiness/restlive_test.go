@@ -179,3 +179,55 @@ func TestPatchConfig_RESTEnvironmentPolicy(t *testing.T) {
 		}
 	}
 }
+
+// Moving where a REST connection sends its credential (host, auth type, key field) drops the stored credential,
+// so an edit cannot point a secret given for one place at another; other edits keep it.
+func TestPatchConfig_RESTDestinationChangeClearsTheCredential(t *testing.T) {
+	st := newStore(t)
+	s := NewService(template.MustDefault(), "dev")
+	id := readyREST(t, s, st, restConfig("https://api.example.com"))
+	hasCred := func() bool {
+		var b *Bundle
+		write(t, st, func(c *store.TenantTx) error {
+			var err error
+			b, err = s.Current(c, id, t0)
+			return err
+		})
+		return b.Rev.SecretRef != nil
+	}
+	patch := func(p string) {
+		write(t, st, func(c *store.TenantTx) error { _, err := s.PatchConfig(c, id, []byte(p), "admin", t0); return err })
+	}
+	if !hasCred() {
+		t.Fatal("no credential to start with")
+	}
+	patch(`{"stale_days":60}`)
+	users := `"users":{"path":"/offset/users","fields":{"id":"$.id","username":"$.login"}}`
+	patch(`{"rest":{"base_url":"https://api.example.com/","auth":{"type":"bearer"},` + users + `}}`) // same origin
+	if !hasCred() {
+		t.Fatal("an edit that keeps the destination dropped the credential")
+	}
+	for name, spec := range map[string]string{
+		"host":     `{"base_url":"https://evil.example.com","auth":{"type":"bearer"},` + users + `}`,
+		"api key":  `{"base_url":"https://api.example.com","auth":{"type":"api_key","in":"query","name":"k"},` + users + `}`,
+		"key name": `{"base_url":"https://api.example.com","auth":{"type":"api_key","in":"header","name":"X-A"},` + users + `}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			// restore the original destination and a credential, then move
+			write(t, st, func(c *store.TenantTx) error {
+				if _, err := s.PatchConfig(c, id, []byte(`{"rest":{"base_url":"https://api.example.com","auth":{"type":"bearer"},`+users+`}}`), "admin", t0); err != nil {
+					return err
+				}
+				_, err := s.SetCredential(c, id, CredentialInput{Reference: "vault:kv/acme"}, "admin", t0)
+				return err
+			})
+			if !hasCred() {
+				t.Fatal("credential not restored")
+			}
+			patch(`{"rest":` + spec + `}`)
+			if hasCred() {
+				t.Errorf("moving the destination (%s) kept the stored credential", name)
+			}
+		})
+	}
+}

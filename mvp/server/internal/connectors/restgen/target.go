@@ -277,12 +277,22 @@ func (t *Target) lookup(ctx context.Context, what string, v Vars) (user, bool, e
 	}
 	ip, _ := optionalPath(op.RecordPath)
 	items := selectItems(ip, doc)
-	if len(items) == 0 {
-		return user{}, false, nil
+	if len(items) != 1 {
+		// a search endpoint may answer several fuzzy matches or none: never guess which one is meant
+		// (an absent account is a 404)
+		return user{}, false, target.Permanent("lookup: the answer holds %d records, expected exactly one (answer 404 when the account is absent)", len(items))
 	}
 	u, ok := t.um.mapUser(items[0])
 	if !ok {
 		return user{}, false, target.Permanent("lookup: the answer has no id or username under the users mapping")
+	}
+	// the record must be the one asked for: ids compare exactly, user names as the SCIM and Okta targets do
+	if want := v[varExternalID]; want != "" {
+		if u.id != want {
+			return user{}, false, target.Permanent("lookup: the answer is a different account than the one asked for")
+		}
+	} else if want := v[varUsername]; want == "" || !strings.EqualFold(u.username, want) {
+		return user{}, false, target.Permanent("lookup: the answer is a different account than the one asked for")
 	}
 	return u, true, nil
 }

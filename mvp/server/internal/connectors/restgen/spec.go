@@ -722,3 +722,36 @@ func safePath(p string) bool {
 	}
 	return !strings.Contains(p, "//")
 }
+
+// SecretDestination names everything that decides where the credential is sent and how: the origins of the base
+// URL and the token URL, the auth type, the header or query parameter (with its prefix), and the client id or
+// user name. Two specs with the same destination send a stored secret to the same place the same way; when it
+// differs, the secret must be entered again, or whoever edits the config could point a stored credential at a
+// host or field of their choosing.
+func (s *Spec) SecretDestination() string {
+	origin := func(raw string) string {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || u.Host == "" {
+			return ""
+		}
+		port := u.Port()
+		if port == "" {
+			port = map[string]string{"https": "443", "http": "80"}[strings.ToLower(u.Scheme)]
+		}
+		return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Hostname()) + ":" + port
+	}
+	a := s.Auth
+	return strings.Join([]string{origin(s.BaseURL), a.Type, origin(a.TokenURL), a.In, strings.ToLower(a.Name), a.Prefix, a.ClientID, a.Username}, "|")
+}
+
+// DestinationOf is SecretDestination of a stored spec (JSON); "" when it cannot be read.
+func DestinationOf(raw []byte) string {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return ""
+	}
+	s, err := ParseSpec(raw)
+	if err != nil {
+		return ""
+	}
+	return s.SecretDestination()
+}
