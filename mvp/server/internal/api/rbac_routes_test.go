@@ -98,6 +98,7 @@ POST   /api/alerts/{alert_id}/assign                 alerts.manage   -  # issue 
 GET    /api/ownership                                graph.read      -  # issue #167
 PUT    /api/ownership/{kind}/{object_key}            ownership.manage -  # issue #167
 POST   /api/ownership/bulk                           ownership.manage -  # issue #167
+GET    /api/openapi.json                             graph.read      -  # issue #587
 GET    /openapi.json                                 auth.self       -  #
 GET    /docs                                         auth.self       -  #
 GET    /docs/oauth2-redirect                         auth.self       -  #
@@ -497,6 +498,10 @@ GET    /api/queue/jobs                               jobs.read       -  # issue 
 GET    /api/queue/schedules                          jobs.read       -  #
 GET    /api/queue/workers                            jobs.read       -  # issue #302
 POST   /api/queue/jobs/{job_id}/retry                jobs.manage     STEP_UP_POLICY  #
+GET    /api/queue/schedule-kinds                     jobs.read       -  # issue #588
+POST   /api/queue/schedules                          jobs.manage     STEP_UP_POLICY  # issue #588
+DELETE /api/queue/schedules/{name}                   jobs.manage     STEP_UP_POLICY  # issue #588
+POST   /api/queue/schedules/{name}/run               jobs.manage     STEP_UP_POLICY  # issue #588
 POST   /api/queue/schedules/{name}/pause             jobs.manage     STEP_UP_POLICY  # issue #497
 POST   /api/queue/schedules/{name}/resume            jobs.manage     STEP_UP_POLICY  # issue #497
 GET    /api/queue/limits                             connections.read    -  # issue #302

@@ -322,6 +322,20 @@ var scopePermissions = map[Scope][]Permission{
 		PermBreakGlassRecover, PermConfigTransport, PermAlertsConfigure, PermSiemConfigure, PermConditionalAccessManage},
 }
 
+// ScopesFor lists the token scopes that grant a permission, in the order of
+// the scope catalog (the OpenAPI document states them per route). Every scope
+// grants PermAuthenticated; a permission no scope grants (a cookie-only one)
+// has none.
+func ScopesFor(p Permission) []Scope {
+	var out []Scope
+	for _, sc := range []Scope{ScopeRead, ScopeWrite, ScopeAudit, ScopeAdmin, ScopeEmailDSN} {
+		if p == PermAuthenticated || slices.Contains(scopePermissions[sc], p) || slices.Contains(scopeOnlyPermissions[sc], p) {
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
 // perms returns the union of the roles' permissions.
 func perms(roles RoleSet) PermissionSet {
 	out := PermissionSet{}

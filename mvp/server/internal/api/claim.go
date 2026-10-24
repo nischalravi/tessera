@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"io"
 	"net/http"
 	"strings"
@@ -200,7 +201,7 @@ func (s *Server) claimSession(r *http.Request, c *claimReq) (*store.ClaimSession
 		if err != nil {
 			return err
 		}
-		if perr := s.claimSvc.VerifyProof(tx, x, r.Header.Get(claim.ProofHeader), r.Method, r.URL.Path, c.bodyHash, c.now); perr != nil {
+		if perr := s.claimSvc.VerifyProof(tx, x, r.Header.Get(claim.ProofHeader), r.Method, oauth.RequestPath(r), c.bodyHash, c.now); perr != nil {
 			if !claim.IsProofError(perr) {
 				return perr
 			}
@@ -386,7 +387,7 @@ func (s *Server) claimStart(w http.ResponseWriter, r *http.Request, p *params) (
 	var proof claim.Proof
 	var perr error
 	if kerr == nil {
-		proof, perr = claim.Verify(pub, r.Header.Get(claim.ProofHeader), r.Method, r.URL.Path, "", c.bodyHash, c.now, replays)
+		proof, perr = claim.Verify(pub, r.Header.Get(claim.ProofHeader), r.Method, oauth.RequestPath(r), "", c.bodyHash, c.now, replays)
 	}
 	if kerr != nil || len(b.Token) == 0 || len(b.Token) > 256 || perr != nil {
 		// a malformed request is refused before any token is touched, whatever the token is

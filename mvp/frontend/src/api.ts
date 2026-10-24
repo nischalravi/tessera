@@ -3391,7 +3391,8 @@ export interface Progress { pass: number; total: number; skipped: number }
 export interface TemplateRef { id: string; version: string; pin: string; display_name: string; overlay_version: number }
 
 export interface ConnConfig {
-  host?: string; port?: number; bind_dn?: string; ca_bundle?: string; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
+  host?: string; port?: number; tls_mode?: "ldaps" | "starttls" | "none"; page_size?: number;
+  attr_map?: { ldap: string; target: string; scope: "account" | "identity" }[]; bind_dn?: string; ca_bundle?: string; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
   org_url?: string; tenant_id?: string; cloud?: string; customer?: string; domain?: string; base_url?: string; preset?: string;
   tenant_host?: string; api_version?: string; interface?: string; time_zone?: string;
   correlation_key?: string; hr_id_attribute?: string; technical_owner?: string; business_owner?: string;
@@ -4226,7 +4227,7 @@ export interface ProvOpDetail extends ProvOp { payload: { account?: Record<strin
 export interface ProvDiscovery { checked_at: string; agent_advertised: boolean; service_provider_config: boolean; resource_types: string[]; error?: string }
 
 export interface ProvTarget {
-  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle" | "salesforce"; base_url: string; api_root?: string;
+  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle" | "salesforce" | "servicenow" | "atlassian"; base_url: string; api_root?: string;
   dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; agent_id?: string; discovery?: ProvDiscovery; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
@@ -4332,6 +4333,15 @@ export const queue = {
     api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/pause`, { ...(reason ? { reason } : {}), ...(resumeAfterHours ? { resume_after_hours: resumeAfterHours } : {}) }),
   /** Lets a paused schedule fire again: once if it came due while paused, then on its cadence. */
   resumeSchedule: (name: string) => api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/resume`, {}),
+  /** The job kinds an admin may schedule (issue #588). */
+  scheduleKinds: () => api<{ kinds: { kind: string; label: string; description: string; payload: string }[]; name_prefix: string; min_interval_seconds: number }>("/queue/schedule-kinds"),
+  /** Creates a custom schedule, named custom.<name> (step-up, audited). */
+  createSchedule: (name: string, kind: string, spec: string, payload?: Record<string, unknown>) =>
+    api<QueueSchedule>("/queue/schedules", { name, kind, spec, ...(payload ? { payload } : {}) }),
+  /** Deletes a custom schedule; a built-in one can only be paused. */
+  deleteSchedule: (name: string) => api<{ deleted: boolean }>(`/queue/schedules/${encodeURIComponent(name)}`, undefined, "DELETE"),
+  /** Queues a schedule's job now (once a minute at most). */
+  runSchedule: (name: string) => api<{ queued: boolean; kind: string }>(`/queue/schedules/${encodeURIComponent(name)}/run`, {}),
 };
 
 // ------------------------------------------------- config transport (#170)

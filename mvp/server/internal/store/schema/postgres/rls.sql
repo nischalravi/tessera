@@ -2333,3 +2333,18 @@ DROP POLICY IF EXISTS tenant_isolation ON dataset_values;
 CREATE POLICY tenant_isolation ON dataset_values
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+-- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
+DO $roles$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'tessera_app') THEN
+		EXECUTE format('GRANT USAGE ON SCHEMA %I TO tessera_app', current_schema());
+		EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO tessera_app', current_schema());
+		EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO tessera_app', current_schema());
+		REVOKE UPDATE, DELETE, TRUNCATE ON audit_events, audit_checkpoints FROM tessera_app;
+		GRANT UPDATE (anchor_status, anchor_ref, anchored_at, anchor_attempts) ON audit_checkpoints TO tessera_app;
+		-- the migration bookkeeping is the owner's alone
+		EXECUTE format('REVOKE ALL ON %I.schema_migrations FROM tessera_app', current_schema());
+	END IF;
+END
+$roles$;

@@ -20,7 +20,7 @@ func TestUpgradeProvTargetKinds_AddsRESTToTheEightKindTable(t *testing.T) {
 	if err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE name = 'provisioning_targets'`).Scan(&ddl); err != nil {
 		t.Fatal(err)
 	}
-	eight := strings.Replace(ddl, "'sap','oracle','rest','sql','salesforce'", "'sap','oracle'", 1)
+	eight := strings.Replace(ddl, "'sap','oracle','rest','sql','salesforce','servicenow','atlassian'", "'sap','oracle'", 1)
 	if eight == ddl {
 		t.Fatal("the schema does not list the rest kind")
 	}
