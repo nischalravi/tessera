@@ -21,6 +21,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
+	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -83,6 +84,7 @@ type targetView struct {
 	Kind           string `json:"kind"`
 	BaseURL        string `json:"base_url"`
 	Dialect        string `json:"dialect,omitempty"`
+	Preset         string `json:"preset,omitempty"` // SCIM vendor preset (quirk flags), when the target was set up from one
 	APIRoot        string `json:"api_root,omitempty"`
 	Fault          string `json:"fault,omitempty"`
 	OnDeprovision  string `json:"on_deprovision,omitempty"` // "delete": accounts are deleted after the grace period (issue #74)
@@ -101,7 +103,7 @@ func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -257,7 +259,9 @@ type targetInput struct {
 	Kind    string `json:"kind"`
 	BaseURL string `json:"base_url"`
 	Dialect string `json:"dialect"`
-	Fault   string `json:"fault"`
+	// Preset is a SCIM vendor preset id (provision/scim): its PATCH quirks apply to this target.
+	Preset string `json:"preset"`
+	Fault  string `json:"fault"`
 	// APIRoot overrides the API path of a vault target.
 	APIRoot string `json:"api_root"`
 	// Rest is the declarative spec of a REST target (kind rest): base URL, auth type, mapping and the
@@ -329,6 +333,12 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		return st, badRequest("invalid_api_root", "api_root must be an absolute path")
 	}
 	st.Dialect, st.APIRoot = in.Dialect, in.APIRoot
+	if in.Preset != "" {
+		if _, ok := scimpreset.PresetByID(in.Preset); !ok || in.Kind != provision.KindSCIM {
+			return st, badRequest("invalid_preset", "preset must be the id of a SCIM vendor preset, on a scim target")
+		}
+		st.Preset = in.Preset
+	}
 	if in.Kind == provision.KindOkta || vault || in.Kind == provision.KindREST {
 		st.Dialect = ""
 	}

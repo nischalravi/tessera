@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 )
@@ -45,6 +46,12 @@ type Client struct {
 	// Header is added to every request (the dev fake target reads its fault
 	// mode from one).
 	Header http.Header
+	// Quirks are the PATCH dialect differences of a vendor preset. The zero
+	// value (all fields empty) means nothing is confirmed: standard form, with
+	// the fallbacks below.
+	Quirks Quirks
+
+	caps atomic.Pointer[Capabilities] // set by Discover; nil until then
 }
 
 // flexBool reads a SCIM boolean sent as a JSON boolean or, as Entra and some
@@ -107,11 +114,17 @@ func (c *Client) url(path string, q url.Values) string {
 // do sends one request and returns the status and body. A transport failure
 // is a retryable *target.Error.
 func (c *Client) do(ctx context.Context, method, op, path string, q url.Values, key string, body any) (int, []byte, error) {
+	st, b, _, err := c.doH(ctx, method, op, path, q, key, body, nil)
+	return st, b, err
+}
+
+// doH is do with extra request headers (If-Match) and the response headers (ETag).
+func (c *Client) doH(ctx context.Context, method, op, path string, q url.Values, key string, body any, extra http.Header) (int, []byte, http.Header, error) {
 	var rd *bytes.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, nil, err
 		}
 		rd = bytes.NewReader(b)
 	} else {
@@ -119,7 +132,7 @@ func (c *Client) do(ctx context.Context, method, op, path string, q url.Values, 
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.url(path, q), rd)
 	if err != nil {
-		return 0, nil, target.Permanent("%s: bad target URL: %v", op, err)
+		return 0, nil, nil, target.Permanent("%s: bad target URL: %v", op, err)
 	}
 	for k, v := range c.Header {
 		req.Header[k] = v
@@ -134,27 +147,31 @@ func (c *Client) do(ctx context.Context, method, op, path string, q url.Values, 
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
+	for k, v := range extra {
+		req.Header[k] = v
+	}
 	if key != "" && method != http.MethodGet {
 		req.Header.Set("Idempotency-Key", key)
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return 0, nil, target.Transport(op, err)
+		return 0, nil, nil, target.Transport(op, err)
 	}
 	defer resp.Body.Close()
 	b, err := target.ReadBody(resp, maxBody)
 	if err != nil {
-		return 0, nil, target.Transport(op, err)
+		return 0, nil, nil, target.Transport(op, err)
 	}
-	return resp.StatusCode, b, nil
+	return resp.StatusCode, b, resp.Header, nil
 }
 
 func detail(b []byte) string {
 	var e struct {
-		Detail string `json:"detail"`
+		Detail   string `json:"detail"`
+		ScimType string `json:"scimType"`
 	}
 	_ = json.Unmarshal(b, &e)
-	return e.Detail
+	return errorDetail(e.ScimType, e.Detail)
 }
 
 var safeFilter = strings.NewReplacer(`\`, `\\`, `"`, `\"`)
@@ -163,14 +180,18 @@ var safeFilter = strings.NewReplacer(`\`, `\\`, `"`, `\"`)
 // pages (startIndex is 1-based, per RFC 7644 3.4.2).
 func (c *Client) list(ctx context.Context, op, path, filter string) ([]json.RawMessage, int, error) {
 	var out []json.RawMessage
+	size := c.pageLen()
 	for start := 1; ; {
-		q := url.Values{"filter": {filter}, "startIndex": {strconv.Itoa(start)}, "count": {strconv.Itoa(pageSize)}}
+		q := url.Values{"startIndex": {strconv.Itoa(start)}, "count": {strconv.Itoa(size)}}
+		if filter != "" {
+			q.Set("filter", filter)
+		}
 		st, b, err := c.do(ctx, http.MethodGet, op, path, q, "", nil)
 		if err != nil {
 			return nil, 0, err
 		}
 		if st != http.StatusOK {
-			return nil, st, target.Fail(op, st, detail(b))
+			return nil, st, failStatus(op, st, b)
 		}
 		var p listPage
 		if err := json.Unmarshal(b, &p); err != nil {
@@ -179,14 +200,14 @@ func (c *Client) list(ctx context.Context, op, path, filter string) ([]json.RawM
 		out = append(out, p.Resources...)
 		n := len(p.Resources)
 		start += n
-		if n == 0 || start > p.TotalResults || start > maxPages*pageSize {
+		if n == 0 || start > p.TotalResults || start > maxPages*size {
 			return out, st, nil
 		}
 	}
 }
 
 func (c *Client) findUser(ctx context.Context, username string) (*user, error) {
-	rs, _, err := c.list(ctx, "find user", "/Users", `userName eq "`+safeFilter.Replace(username)+`"`)
+	rs, _, err := c.list(ctx, "find user", "/Users", c.filterFor(`userName eq "`+safeFilter.Replace(username)+`"`))
 	if err != nil {
 		return nil, err
 	}
@@ -205,8 +226,10 @@ func (c *Client) findUser(ctx context.Context, username string) (*user, error) {
 // findGroup finds a group by external id, then by display name. A server that
 // rejects the externalId filter (400) falls through to the name.
 func (c *Client) findGroup(ctx context.Context, g target.Group) (*group, error) {
-	try := func(filter string) (*group, error) {
-		rs, st, err := c.list(ctx, "find group", "/Groups", filter)
+	// A service that does not support filtering is listed whole and matched
+	// here, by the same key the filter would have used.
+	try := func(filter string, match func(group) bool) (*group, error) {
+		rs, st, err := c.list(ctx, "find group", "/Groups", c.filterFor(filter))
 		if err != nil {
 			var te *target.Error
 			if st == http.StatusBadRequest && asTarget(err, &te) {
@@ -214,22 +237,24 @@ func (c *Client) findGroup(ctx context.Context, g target.Group) (*group, error) 
 			}
 			return nil, err
 		}
-		if len(rs) == 0 {
-			return nil, nil
+		for _, r := range rs {
+			var out group
+			if err := json.Unmarshal(r, &out); err != nil {
+				return nil, target.Permanent("find group: unreadable group: %v", err)
+			}
+			if c.filterSupported() || match(out) {
+				return &out, nil
+			}
 		}
-		var out group
-		if err := json.Unmarshal(rs[0], &out); err != nil {
-			return nil, target.Permanent("find group: unreadable group: %v", err)
-		}
-		return &out, nil
+		return nil, nil
 	}
 	if g.ExternalID != "" {
-		if out, err := try(`externalId eq "` + safeFilter.Replace(g.ExternalID) + `"`); err != nil || out != nil {
+		if out, err := try(`externalId eq "`+safeFilter.Replace(g.ExternalID)+`"`, func(x group) bool { return x.ExternalID == g.ExternalID }); err != nil || out != nil {
 			return out, err
 		}
 	}
 	if g.Name != "" {
-		return try(`displayName eq "` + safeFilter.Replace(g.Name) + `"`)
+		return try(`displayName eq "`+safeFilter.Replace(g.Name)+`"`, func(x group) bool { return strings.EqualFold(x.DisplayName, g.Name) })
 	}
 	return nil, nil
 }
@@ -249,7 +274,7 @@ func asTarget(err error, out **target.Error) bool {
 func (c *Client) isMember(ctx context.Context, groupID, userID string) (bool, error) {
 	seen := map[string]bool{}
 	for start, pages := 1, 0; pages < maxPages; pages++ {
-		q := url.Values{"attributes": {"members"}, "startIndex": {strconv.Itoa(start)}, "count": {strconv.Itoa(pageSize)}}
+		q := url.Values{"attributes": {"members"}, "startIndex": {strconv.Itoa(start)}, "count": {strconv.Itoa(c.pageLen())}}
 		st, b, err := c.do(ctx, http.MethodGet, "read group", "/Groups/"+url.PathEscape(groupID), q, "", nil)
 		if err != nil {
 			return false, err
@@ -258,7 +283,7 @@ func (c *Client) isMember(ctx context.Context, groupID, userID string) (bool, er
 			return false, nil
 		}
 		if st != http.StatusOK {
-			return false, target.Fail("read group", st, detail(b))
+			return false, failStatus("read group", st, b)
 		}
 		var g group
 		if err := json.Unmarshal(b, &g); err != nil {
@@ -288,7 +313,7 @@ func (c *Client) isMember(ctx context.Context, groupID, userID string) (bool, er
 // ---------------------------------------------------------------- patch
 
 func (c *Client) opName(op string) string {
-	if c.Dialect == Entra {
+	if c.Dialect == Entra || c.Quirks.OpCase == CaseTitle {
 		return strings.ToUpper(op[:1]) + op[1:]
 	}
 	return op
@@ -296,7 +321,7 @@ func (c *Client) opName(op string) string {
 
 // boolValue renders a boolean the way the dialect sends it.
 func (c *Client) boolValue(b bool) any {
-	if c.Dialect == Entra {
+	if c.Dialect == Entra || c.Quirks.BoolAsString == Yes {
 		if b {
 			return "True"
 		}
@@ -306,16 +331,27 @@ func (c *Client) boolValue(b bool) any {
 }
 
 func (c *Client) patch(ctx context.Context, op, path, id, key string, ops ...map[string]any) error {
+	if !c.patchSupported() {
+		return c.putOps(ctx, op, path, id, key, ops)
+	}
 	body := map[string]any{"schemas": []string{schemaPatch}, "Operations": ops}
-	st, b, err := c.do(ctx, http.MethodPatch, op, path+"/"+url.PathEscape(id), nil, key, body)
+	h, err := c.ifMatch(ctx, op, path, id)
+	if err != nil {
+		return err
+	}
+	st, b, _, err := c.doH(ctx, http.MethodPatch, op, path+"/"+url.PathEscape(id), nil, key, body, h)
 	if err != nil {
 		return err
 	}
 	switch st {
 	case http.StatusOK, http.StatusNoContent:
 		return nil
+	case http.StatusNotImplemented:
+		// The service does not do PATCH whatever its ServiceProviderConfig
+		// said (or discovery was never run): read-modify-write instead.
+		return c.putOps(ctx, op, path, id, key, ops)
 	}
-	return target.Fail(op, st, detail(b))
+	return failStatus(op, st, b)
 }
 
 var attrRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9.:\[\]" =-]{0,79}$`)
@@ -352,14 +388,18 @@ func (c *Client) Apply(ctx context.Context, r target.Request) error {
 		if err != nil || u == nil {
 			return err
 		}
-		st, b, err := c.do(ctx, http.MethodDelete, "delete account", "/Users/"+url.PathEscape(u.ID), nil, r.Key, nil)
+		h, err := c.ifMatch(ctx, "delete account", "/Users", u.ID)
+		if err != nil {
+			return err
+		}
+		st, b, _, err := c.doH(ctx, http.MethodDelete, "delete account", "/Users/"+url.PathEscape(u.ID), nil, r.Key, nil, h)
 		if err != nil {
 			return err
 		}
 		if st == http.StatusNoContent || st == http.StatusOK || st == http.StatusNotFound {
 			return nil
 		}
-		return target.Fail("delete account", st, detail(b))
+		return failStatus("delete account", st, b)
 	case target.AddEntitlement, target.RemoveEntitlement:
 		return c.membership(ctx, r)
 	}
@@ -390,7 +430,7 @@ func (c *Client) create(ctx context.Context, r target.Request) error {
 	if st == http.StatusCreated || st == http.StatusOK || st == http.StatusConflict {
 		return nil
 	}
-	return target.Fail("create account", st, detail(b))
+	return failStatus("create account", st, b)
 }
 
 func (c *Client) update(ctx context.Context, r target.Request) error {
@@ -450,13 +490,13 @@ func (c *Client) membership(ctx context.Context, r target.Request) error {
 // value-list form, as Entra's own provisioning client does.
 func (c *Client) removeMember(ctx context.Context, groupID, userID, key string) error {
 	byValue := map[string]any{"op": c.opName("remove"), "path": "members", "value": []member{{Value: userID}}}
-	if c.Dialect == Entra {
+	if c.Dialect == Entra || c.Quirks.MemberRemove == RemoveByValue || c.Quirks.ValueFilterOK == No {
 		return c.patch(ctx, "remove entitlement", "/Groups", groupID, key, byValue)
 	}
 	byFilter := map[string]any{"op": c.opName("remove"), "path": `members[value eq "` + safeFilter.Replace(userID) + `"]`}
 	err := c.patch(ctx, "remove entitlement", "/Groups", groupID, key, byFilter)
 	var te *target.Error
-	if asTarget(err, &te) && (te.Status == http.StatusBadRequest || te.Status == http.StatusNotImplemented) {
+	if c.Quirks.MemberRemove != RemoveByFilter && asTarget(err, &te) && (te.Status == http.StatusBadRequest || te.Status == http.StatusNotImplemented) {
 		return c.patch(ctx, "remove entitlement", "/Groups", groupID, key, byValue)
 	}
 	return err
@@ -532,7 +572,7 @@ func (c *Client) verifyUpdate(ctx context.Context, u *user, r target.Request) (t
 		return target.Verdict{}, err
 	}
 	if st != http.StatusOK {
-		return target.Verdict{}, target.Fail("read user", st, detail(b))
+		return target.Verdict{}, failStatus("read user", st, b)
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(b, &raw); err != nil {

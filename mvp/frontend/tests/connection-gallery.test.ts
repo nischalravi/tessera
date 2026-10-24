@@ -10,7 +10,7 @@ const T = [
   ["demo-workday", "Workday (demo)", "The demo HR source", true], ["ad", "Active Directory", "Through the Directory Agent", false],
   ["ldap", "OpenLDAP / 389-DS", "Generic LDAP", false], ["entra", "Microsoft Entra ID", "Microsoft Graph", false],
   ["okta", "Okta", "OAuth service app", false], ["google", "Google Workspace", "Domain-wide delegation", false],
-  ["workday", "Workday", "Integration system user", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false],
+  ["workday", "Workday", "Integration system user", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false], ["scim:auth0", "Auth0", "Enterprise connection", false],
   ["rest_generic", "Generic REST API", "Any HTTP/JSON system, mapped by a declarative spec", false],
 ].map(([id, label, blurb, demo]) => ({ id, label, blurb, demo })) as { id: string; label: string; blurb: string; demo: boolean }[];
 const none = { q: "", category: "" as const, capability: "" as const };

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 )
 
@@ -37,7 +38,10 @@ type ConnConfig struct {
 	Domain            string   `json:"domain,omitempty"`
 	BaseURL           string   `json:"base_url,omitempty"`
 	// Rest is a generic REST connection's spec (internal/connectors/restgen). It holds no secret.
-	Rest               *restgen.Spec       `json:"rest,omitempty"`
+	Rest *restgen.Spec `json:"rest,omitempty"`
+	// Preset is the id of the SCIM vendor preset (provision/scim) a scim_app
+	// connection was created from; it selects the base URL check and quirks.
+	Preset             string              `json:"preset,omitempty"`
 	TenantHost         string              `json:"tenant_host,omitempty"`
 	APIVersion         string              `json:"api_version,omitempty"`
 	Interface          string              `json:"interface,omitempty"`
@@ -219,6 +223,14 @@ func Validate(cfg ConnConfig, t *template.Resolved) []FieldError {
 		text("time_zone", cfg.TimeZone, 64)
 	case "scim_app":
 		httpsURL("base_url", cfg.BaseURL, nil)
+		if p, ok := scimpreset.PresetByID(cfg.Preset); ok {
+			// Vendor-specific shape on top of the generic https check.
+			if err := p.ValidateBaseURL(cfg.BaseURL); err != nil && cfg.BaseURL != "" {
+				bad("base_url", "%s", err)
+			}
+		} else if cfg.Preset != "" {
+			bad("preset", "unknown SCIM preset %q", cfg.Preset)
+		}
 	case "rest_generic":
 		if cfg.Rest == nil {
 			bad("rest", "required: the connector spec (base URL, auth, resources and mapping)")
@@ -227,6 +239,9 @@ func Validate(cfg ConnConfig, t *template.Resolved) []FieldError {
 		for _, e := range cfg.Rest.ValidateShape() {
 			bad("rest."+e.Field, "%s", e.Msg)
 		}
+	}
+	if t.ID != "scim_app" && cfg.Preset != "" {
+		bad("preset", "only a SCIM application has a preset")
 	}
 	if cfg.CorrelationKey == "" || !attrRE.MatchString(cfg.CorrelationKey) {
 		bad("correlation_key", "required: an attribute name")
