@@ -2,12 +2,11 @@ package readiness
 
 import (
 	"encoding/json"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"slices"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
 // TestLiveAttest_StaleWhenBindIdentityOrTrustChanges: a substitute attestation
@@ -41,10 +40,14 @@ func TestLiveAttest_StaleWhenBindIdentityOrTrustChanges(t *testing.T) {
 				mustItem(t, before, itemReadonly).ItemHash, t0, DefaultLiveTTL); !ok {
 				t.Fatalf("attestation not fresh before the change: %s", why)
 			}
-			write(t, st, func(c *store.TenantTx) error {
-				_, err := s.PatchConfig(c, id, []byte(tc.patch), "admin", t0)
-				return err
-			})
+			if tc.stale {
+				patchAndRecredential(t, st, s, id, tc.patch, CredentialInput{Secret: bindPassword})
+			} else {
+				write(t, st, func(c *store.TenantTx) error {
+					_, err := s.PatchConfig(c, id, []byte(tc.patch), "admin", t0)
+					return err
+				})
+			}
 			b, _ := current(st, s, id, t0)
 			a := b.Evidence.LiveAttestations[itemReadonly]
 			if a == nil {

@@ -112,8 +112,8 @@ func TestReader_RefusesPlainAndWrongPorts(t *testing.T) {
 	if _, _, err := openReader(t, d, 389, "cn=reader,dc=lab,dc=test", "reader-pw"); !errors.Is(err, safedial.ErrNoTLS) {
 		t.Errorf("a server without StartTLS: err = %v, want ErrNoTLS", err)
 	}
-	if _, _, err := openReader(t, readerDir(1), 3268, "cn=reader,dc=lab,dc=test", "reader-pw"); !errors.Is(err, safedial.ErrPort) {
-		t.Errorf("port 3268: err = %v, want ErrPort", err)
+	if _, _, err := openReader(t, readerDir(1), 3306, "cn=reader,dc=lab,dc=test", "reader-pw"); !errors.Is(err, safedial.ErrPort) {
+		t.Errorf("port 3306: err = %v, want ErrPort", err)
 	}
 	// no bind was sent to the plain server
 	d2 := readerDir(1)

@@ -33,6 +33,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
+	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/roles/mining"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -91,6 +92,7 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.SweepDrift, queue.Kind{Handler: tracked(jobs.SweepDrift, s.queueDriftSweep), Actor: "drift.sweeper"})
 	q.Register(jobs.GuestLifecycle, queue.Kind{Handler: tracked(jobs.GuestLifecycle, s.queueGuestLifecycleSweep), Actor: guestlife.Sweeper})
 	q.Register(jobs.RoleMining, queue.Kind{Handler: s.queueRoleMining, Actor: mining.Worker})
+	q.Register(jobs.ReviewTick, queue.Kind{Handler: s.queueReviewTick, Actor: reviews.Scheduler})
 	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
 	q.Register(jobs.CertificateExpiry, queue.Kind{Handler: s.queueCertificateExpiry, Actor: "certificate.sweeper"})
 	q.Register(jobs.ArchiveSweep, queue.Kind{Handler: s.queueArchive, Actor: archive.Actor})
@@ -321,6 +323,17 @@ func (s *Server) queueCertificateExpiry(ctx context.Context, j queue.Job) (any, 
 	return map[string]int{"raised": raised, "resolved": resolved}, nil
 }
 
+func (s *Server) queueReviewTick(ctx context.Context, j queue.Job) (any, error) {
+	pols, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	return nil, s.store.InTenant(ctx, j.Tenant, func(tx *store.TenantTx) error {
+		_, err := reviews.Tick(tx, s.clock(), pols)
+		return err
+	})
+}
+
 func (s *Server) queueMaintenance(ctx context.Context, j queue.Job) (any, error) {
 	now := s.clock()
 	return nil, s.store.InTenant(ctx, j.Tenant, func(tx *store.TenantTx) error {
@@ -346,6 +359,7 @@ func (s *Server) registerQueueRoutes() {
 	s.handle(http.MethodPost, "/api/queue/jobs/{job_id}/retry", write, needStepUp(auth.PermJobsManage, auth.StepUpPolicy), s.retryQueueJob)
 	s.handle(http.MethodPost, "/api/queue/schedules/{name}/pause", write, needStepUp(auth.PermJobsManage, auth.StepUpPolicy), s.pauseQueueSchedule)
 	s.handle(http.MethodPost, "/api/queue/schedules/{name}/resume", write, needStepUp(auth.PermJobsManage, auth.StepUpPolicy), s.resumeQueueSchedule)
+	s.registerQueueScheduleRoutes()
 	s.registerConnectionLimitRoutes()
 }
 

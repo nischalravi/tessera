@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"slices"
@@ -14,10 +15,12 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
 )
 
 // ConnConfig is the typed, secret-free configuration of a connection
@@ -26,6 +29,14 @@ import (
 type ConnConfig struct {
 	Host string `json:"host,omitempty"`
 	Port int    `json:"port,omitempty"`
+	// TLSMode is ldaps, starttls or none (dev only). Unset: ldaps for port
+	// 636, starttls otherwise (TLSModeOf). The Required TLS check fails on none.
+	TLSMode string `json:"tls_mode,omitempty"`
+	// PageSize is the paged-search page of a sync, 1 to 10000 (unset: 500).
+	PageSize int `json:"page_size,omitempty"`
+	// AttrMap are extra LDAP attributes ingest stores on the account: each
+	// maps an LDAP attribute to an account or identity attribute name.
+	AttrMap []AttrMapping `json:"attr_map,omitempty"`
 	// BindDN is the LDAP bind identity (not a secret; the password is the
 	// sealed credential). CABundle is the PEM of the CA that signed the
 	// directory's certificate (public); empty means the system roots.
@@ -73,6 +84,25 @@ type ConnConfig struct {
 	// The keys each type takes are closed; the secret is the sealed credential.
 	Settings map[string]string `json:"settings,omitempty"`
 }
+
+// AttrMapping maps one LDAP attribute to a Tessera attribute. Scope is
+// "account" or "identity": which of the two the value describes.
+type AttrMapping struct {
+	LDAP   string `json:"ldap"`
+	Target string `json:"target"`
+	Scope  string `json:"scope"`
+}
+
+// Bounds of the LDAP sync settings.
+const (
+	MaxPageSize = 10000
+	MaxAttrMap  = 32
+)
+
+// TLSModeOf is the connection's TLS mode: the stored one, or ldaps for port 636
+// and starttls for any other port, so a connection saved before tls_mode
+// existed behaves as before.
+func TLSModeOf(cfg ConnConfig) string { return safedial.InferMode(cfg.TLSMode, cfg.Port) }
 
 // ExpectedCounts are the object counts the owner reads from the directory's own console.
 type ExpectedCounts struct {
@@ -133,24 +163,52 @@ type FieldError struct {
 }
 
 var (
-	hostRE     = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
-	guidRE     = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	dnRE       = regexp.MustCompile(`(?i)^([a-z][a-z0-9-]*=[^,]+)(,\s*[a-z][a-z0-9-]*=[^,]+)*$`)
-	attrRE     = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,63}$`)
-	printable  = regexp.MustCompile(`^[^\x00-\x1f\x7f]*$`)
-	cloudNames = []string{"global", "usgov", "china"}
-	interfaces = []string{"get_workers", "raas"}
+	hostRE       = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+	guidRE       = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	dnRE         = regexp.MustCompile(`(?i)^([a-z][a-z0-9-]*=[^,]+)(,\s*[a-z][a-z0-9-]*=[^,]+)*$`)
+	attrRE       = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,63}$`)
+	apiVersionRE = regexp.MustCompile(`^v[0-9]{1,3}(\.[0-9]{1,2})?$`)
+	printable    = regexp.MustCompile(`^[^\x00-\x1f\x7f]*$`)
+	cloudNames   = []string{"global", "usgov", "china"}
+	interfaces   = []string{"get_workers", "raas"}
 	// governedTemplates are the templates of the connector types in internal/connectors/governed.
-	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh"}
+	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "servicenow", "atlassian"}
 )
 
 // Validate checks a config for a template. It returns every problem rather
 // than the first, so the UI can mark each field.
 func Validate(cfg ConnConfig, t *template.Resolved) []FieldError { return ValidateConn(cfg, t, "") }
 
-// ValidateConn is Validate for a connector type: templates that cover several
-// types (erp, pam, vms) check the settings of the type the connection has.
+// ValidateConn is ValidateConnEnv for production: tls_mode none is refused.
 func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []FieldError {
+	return ValidateConnEnv(cfg, t, connectorType, config.Prod)
+}
+
+// ldapHost checks the host of a directory and says what is wrong with it.
+func ldapHost(v string) string {
+	switch {
+	case v == "":
+		return "required"
+	case strings.Contains(v, "://"):
+		return "a host name like ldap.example.com, without a scheme such as ldaps://"
+	case strings.ContainsAny(v, " \t"):
+		return "a host name like ldap.example.com, not the connection's name (no spaces)"
+	case strings.Contains(v, "/"):
+		return "a host name like ldap.example.com, without a path"
+	}
+	if _, err := netip.ParseAddr(v); err == nil || hostRE.MatchString(v) {
+		return ""
+	}
+	if strings.Contains(v, ":") {
+		return "a host name or IP address without a port; the port is its own field"
+	}
+	return "a host name like ldap.example.com or an IP address"
+}
+
+// ValidateConnEnv is Validate for a connector type: templates that cover several
+// types (erp, pam, vms) check the settings of the type the connection has. env
+// is the server environment; tls_mode none is accepted only in dev.
+func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env string) []FieldError {
 	var errs []FieldError
 	bad := func(field, format string, args ...any) {
 		errs = append(errs, FieldError{field, fmt.Sprintf(format, args...)})
@@ -186,9 +244,40 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 	}
 	switch t.ID {
 	case "ad", "ldap":
-		host("host", cfg.Host)
-		if cfg.Port != 389 && cfg.Port != 636 {
-			bad("port", "must be 389 (StartTLS) or 636 (LDAPS)")
+		if m := ldapHost(cfg.Host); m != "" {
+			bad("host", "%s", m)
+		}
+		if !safedial.PortAllowed(cfg.Port) {
+			bad("port", "must be 389, 636, or a port from 1024 up (for example 3890 or 6360), and not a database or admin port such as 3306 or 6379")
+		}
+		switch cfg.TLSMode {
+		case "", safedial.ModeLDAPS, safedial.ModeStartTLS:
+		case safedial.ModeNone:
+			if env != config.Dev {
+				bad("tls_mode", "none (plain LDAP) is not allowed in production; use ldaps or starttls")
+			}
+		default:
+			bad("tls_mode", "must be ldaps, starttls or none")
+		}
+		if cfg.PageSize < 0 || cfg.PageSize > MaxPageSize {
+			bad("page_size", "must be from 1 to %d", MaxPageSize)
+		}
+		if len(cfg.AttrMap) > MaxAttrMap {
+			bad("attr_map", "at most %d attributes", MaxAttrMap)
+		}
+		seen := map[[2]string]bool{}
+		for i, m := range cfg.AttrMap {
+			switch {
+			case !ldap.ValidAttrName(m.LDAP):
+				bad("attr_map", "attr_map[%d]: not an LDAP attribute name (letters, digits and hyphens, starting with a letter)", i)
+			case !ldap.ValidAttrName(m.Target):
+				bad("attr_map", "attr_map[%d]: not a valid Tessera attribute name", i)
+			case m.Scope != "account" && m.Scope != "identity":
+				bad("attr_map", "attr_map[%d]: scope must be account or identity", i)
+			case seen[[2]string{m.Scope, strings.ToLower(m.Target)}]:
+				bad("attr_map", "attr_map[%d]: target is mapped twice", i)
+			}
+			seen[[2]string{m.Scope, strings.ToLower(m.Target)}] = true
 		}
 		if len(cfg.BaseDNs) == 0 {
 			bad("base_dns", "at least one base DN is required")
@@ -238,6 +327,9 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 			bad("interface", "must be one of %s", strings.Join(interfaces, ", "))
 		}
 		text("time_zone", cfg.TimeZone, 64)
+		if cfg.APIVersion != "" && !apiVersionRE.MatchString(cfg.APIVersion) {
+			bad("api_version", "must look like v44.0")
+		}
 	case "scim_app", "salesforce":
 		httpsURL("base_url", cfg.BaseURL, nil)
 		if p, ok := scimpreset.PresetByID(cfg.Preset); ok {
@@ -248,7 +340,7 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 		} else if cfg.Preset != "" {
 			bad("preset", "unknown SCIM preset %q", cfg.Preset)
 		}
-	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh":
+	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "servicenow", "atlassian":
 		typ := connectorType
 		if typ == "" && len(t.ConnectorTypes) > 0 {
 			typ = t.ConnectorTypes[0]
