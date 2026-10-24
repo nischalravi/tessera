@@ -128,6 +128,8 @@ type Config struct {
 	// Env is TESSERA_ENV: "dev" allows activating non-demo connector types,
 	// and is otherwise informational.
 	Env string
+	// ClientRate is the default rate limit of every machine client (clientlimit.go).
+	ClientRate ClientRate
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string
@@ -285,11 +287,12 @@ type Server struct {
 	routes []*route
 	// stepUps is the catalog of actions the tenant step-up policy may name,
 	// built from the routes on first use (stepup_policy.go).
-	stepUps     stepup.Catalog
-	stepUpsOnce sync.Once
-	authn       *auth.Authenticator
-	limits      *limiters
-	guests      *sponsorship.Service
+	stepUps      stepup.Catalog
+	stepUpsOnce  sync.Once
+	authn        *auth.Authenticator
+	limits       *limiters
+	clientLimits *clientLimiter
+	guests       *sponsorship.Service
 	// guestLife runs the guest lifecycle: reminders, transfer tasks, conversion, deprovisioning (issue #74)
 	guestLife *guestlife.Service
 
@@ -432,7 +435,7 @@ func New(cfg Config) *Server {
 		cfg.Helpdesk = &helpdesk.Service{HTTP: hc, Containment: cfg.Containment, Clock: cfg.Clock, Simulated: cfg.Env != "prod"}
 	}
 	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal, archive: cfg.Archive,
+		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), clientLimits: newClientLimiter(cfg.ClientRate), provSeal: provSeal, archive: cfg.Archive,
 		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.oauthapps = &oauthapps.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
 	s.ghtokens = &ghtokens.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
@@ -608,6 +611,7 @@ func New(cfg Config) *Server {
 	s.registerAdminRoutes()
 	s.registerBreakGlassRoutes()
 	s.registerAdminClientRoutes()
+	s.registerClientLimitRoutes()
 	s.registerOpsRoutes()
 	s.checkPublicRoutes()
 	return s

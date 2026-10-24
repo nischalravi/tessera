@@ -1074,3 +1074,24 @@ func TestLoad_ShutdownAndLogFormat(t *testing.T) {
 		}
 	}
 }
+
+// TestClientRate: the default token bucket of machine clients (issue #587).
+func TestClientRate(t *testing.T) {
+	dev := map[string]string{"TESSERA_ENV": "dev"}
+	c, err := config.Load(env(dev))
+	if err != nil || c.ClientRateBurst != 120 || c.ClientRatePerMinute != 600 {
+		t.Fatalf("default = %d/%d, %v; want 120/600", c.ClientRateBurst, c.ClientRatePerMinute, err)
+	}
+	c, err = config.Load(env(with(dev, "TESSERA_API_CLIENT_RATE_BURST", "10", "TESSERA_API_CLIENT_RATE_PER_MINUTE", "0")))
+	if err != nil || c.ClientRateBurst != 10 || c.ClientRatePerMinute != 0 {
+		t.Errorf("set = %d/%d, %v; want 10/0 (off)", c.ClientRateBurst, c.ClientRatePerMinute, err)
+	}
+	for k, bad := range map[string][]string{"TESSERA_API_CLIENT_RATE_BURST": {"0", "-1", "many", "100001"},
+		"TESSERA_API_CLIENT_RATE_PER_MINUTE": {"-1", "fast", "600001"}} {
+		for _, v := range bad {
+			if _, err := config.Load(env(with(dev, k, v))); err == nil {
+				t.Errorf("%s=%q was accepted", k, v)
+			}
+		}
+	}
+}

@@ -2319,3 +2319,10 @@ DROP POLICY IF EXISTS tenant_isolation ON agent_links;
 CREATE POLICY tenant_isolation ON agent_links
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE api_client_limits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_client_limits FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON api_client_limits;
+CREATE POLICY tenant_isolation ON api_client_limits
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

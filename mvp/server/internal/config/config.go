@@ -179,6 +179,11 @@ type Config struct {
 	// before it ends its owners are warned (TESSERA_SOD_WARN_DAYS, default 14).
 	SoDMaxMitigationDays int
 	SoDWarnDays          int
+	// ClientRateBurst and ClientRatePerMinute are the default token bucket of every machine client
+	// (TESSERA_API_CLIENT_RATE_BURST, default 120; TESSERA_API_CLIENT_RATE_PER_MINUTE, default 600; 0 turns
+	// the limit off). A client's own limit (POST /api/admin/api-clients/{id}/rate-limit) replaces it.
+	ClientRateBurst     int
+	ClientRatePerMinute int
 	// MetricsAddr is TESSERA_METRICS_ADDR: where the internal /metrics
 	// listener binds (host:port). Empty means no metrics listener. Dev and
 	// test default to MetricsDefaultAddr (loopback); production defaults to
@@ -462,6 +467,8 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.NotifyDigestHour = integer("TESSERA_NOTIFY_DIGEST_HOUR", 8, 0, 23)
 	c.SoDMaxMitigationDays = integer("TESSERA_SOD_MAX_MITIGATION_DAYS", 365, 1, 3650)
 	c.SoDWarnDays = integer("TESSERA_SOD_WARN_DAYS", 14, 1, 365)
+	c.ClientRateBurst = integer("TESSERA_API_CLIENT_RATE_BURST", 120, 1, 100000)
+	c.ClientRatePerMinute = integer("TESSERA_API_CLIENT_RATE_PER_MINUTE", 600, 0, 600000)
 	c.Mail = loadMail(getenv, prod, integer, bad)
 	c.ShutdownGrace = loadDuration(getenv, "TESSERA_SHUTDOWN_GRACE", 25*time.Second, time.Second, 10*time.Minute, bad)
 	c.ShutdownDrainDelay = loadDuration(getenv, "TESSERA_SHUTDOWN_DRAIN_DELAY", 0, 0, 2*time.Minute, bad)
