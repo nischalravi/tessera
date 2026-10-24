@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
 )
@@ -170,5 +171,25 @@ func TestHumanize(t *testing.T) {
 		if got := humanize(in); got != want {
 			t.Errorf("humanize(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestOpenAPI_NeedsGraphRead: the document describes the whole API, so it is
+// for callers who can read the graph (a viewer), not any signed-in user.
+func TestOpenAPI_NeedsGraphRead(t *testing.T) {
+	t.Parallel()
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	now := storetest.Now
+	viewer := signIn(t, f.DB, f.B.ID, authtest.User{Email: "v@b.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, now)
+	noData := signIn(t, f.DB, f.B.ID, authtest.User{Email: "bg@b.example", Roles: []auth.Role{auth.RoleBreakGlass}}, authtest.Phr, now)
+	if rec := reqDo(h, viewer, "GET", "/api/openapi.json", ""); rec.Code != 200 {
+		t.Errorf("viewer: %d", rec.Code)
+	}
+	if rec := reqDo(h, noData, "GET", "/api/openapi.json", ""); rec.Code != 403 {
+		t.Errorf("a role without graph.read: %d, want 403", rec.Code)
+	}
+	if rec := serveOnce(h, "GET", "/api/openapi.json", ""); rec.Code != 401 {
+		t.Errorf("anonymous: %d", rec.Code)
 	}
 }
