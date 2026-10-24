@@ -374,6 +374,7 @@ func New(cfg Config) *Server {
 		}
 		cfg.Readiness.Runner.Gov = wire.Options(gc, connsync.Runtime{Env: cfg.Env, AllowLoopback: cfg.Env == config.Dev},
 			cfg.LoaderDataDir, cfg.Env == config.Prod)
+		cfg.Readiness.Runner.REST.Client = cfg.OutboundHTTP
 	}
 	if cfg.Agents == nil {
 		cfg.Agents = &agent.Service{DB: cfg.Store, Hub: agent.NewHub(nil), Clock: cfg.Clock}

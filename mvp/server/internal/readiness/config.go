@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 )
@@ -37,6 +38,8 @@ type ConnConfig struct {
 	Customer          string   `json:"customer,omitempty"`
 	Domain            string   `json:"domain,omitempty"`
 	BaseURL           string   `json:"base_url,omitempty"`
+	// Rest is a generic REST connection's spec (internal/connectors/restgen). It holds no secret.
+	Rest *restgen.Spec `json:"rest,omitempty"`
 	// Preset is the id of the SCIM vendor preset (provision/scim) a scim_app
 	// connection was created from; it selects the base URL check and quirks.
 	Preset             string              `json:"preset,omitempty"`
@@ -258,6 +261,14 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 		}
 		for _, se := range governed.ValidateSettings(typ, cfg.Settings) {
 			bad("settings."+se.Key, "%s", se.Msg)
+		}
+	case "rest_generic":
+		if cfg.Rest == nil {
+			bad("rest", "required: the connector spec (base URL, auth, resources and mapping)")
+			break
+		}
+		for _, e := range cfg.Rest.ValidateShape() {
+			bad("rest."+e.Field, "%s", e.Msg)
 		}
 	}
 	if t.ID != "scim_app" && cfg.Preset != "" {

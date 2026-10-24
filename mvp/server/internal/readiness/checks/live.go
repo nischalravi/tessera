@@ -520,6 +520,20 @@ func init() {
 		}
 		return pass("Group membership is complete on list calls.", obs)
 	}))
+	live("mapping_applied", template.OpSample, sample(connectors.SampleQuery{Op: "mapping"}, func(env Env, _ Params, s connectors.SampleStats) Result {
+		obs := map[string]any{"mapped": s.Objects, "pages": s.Pages, "unmapped_fields": len(s.Missing)}
+		switch {
+		case s.Objects == 0:
+			return fail("Listing users returned no record the mapping could read (check items_path and fields.id and fields.username).", obs)
+		case len(s.Missing) > 0:
+			obs["missing"] = s.Missing
+			return fail("Mapped fields no record filled: "+strings.Join(s.Missing, ", "), obs)
+		case len(s.Findings) > 0:
+			obs["findings"] = s.Findings
+			return fail("The listing is inconsistent: "+strings.Join(s.Findings, "; "), obs)
+		}
+		return pass(fmt.Sprintf("%d users read over %d pages with every mapped field filled.", s.Objects, s.Pages), obs)
+	}))
 	live("field_inventory", template.OpSample, sample(connectors.SampleQuery{Op: "fields", Limit: 1}, func(env Env, p Params, s connectors.SampleStats) Result {
 		var found []string
 		for _, f := range s.Fields {

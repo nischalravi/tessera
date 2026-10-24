@@ -64,6 +64,8 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   csvfeed: { color: "#3f4a5a", glyph: <g {...stroke} stroke="#3f4a5a"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M3.5 9.5h17M3.5 14.5h17M9.5 4.5v15" /></g> },
   // agent: a robot head
   agentcore: { color: "#6d28d9", glyph: <g {...stroke} stroke="#6d28d9"><rect x="5" y="8" width="14" height="10" rx="2.5" /><circle cx="9.5" cy="13" r="1.2" /><circle cx="14.5" cy="13" r="1.2" /><path d="M12 8V5M10 5h4M3 12v2M21 12v2" /></g> },
+  // curly braces around a request arrow: a JSON API described by a spec
+  rest_generic: { color: "#7c3aed", glyph: <g {...stroke} stroke="#7c3aed"><path d="M8 3.5C6 3.5 5.5 4.6 5.5 6.2v2.1c0 1.2-.7 2.2-2 2.7 1.3.5 2 1.5 2 2.7v2.1c0 1.6.5 2.7 2.5 2.7M16 3.5c2 0 2.5 1.1 2.5 2.7v2.1c0 1.2.7 2.2 2 2.7-1.3.5-2 1.5-2 2.7v2.1c0 1.6-.5 2.7-2.5 2.7" /><path d="M9.5 12h5M12.5 9.5l2.5 2.5-2.5 2.5" /></g> },
   // protocol glyph: two-way arrows
   scim_app: { color: "#475569", glyph: <g {...stroke} stroke="#475569"><path d="M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4" /></g> },
 };

@@ -213,6 +213,14 @@ func (tx *TenantTx) UpdateRevisionSecret(id string, ref, version, configHash str
 	return err
 }
 
+// ClearRevisionSecret removes a revision's credential reference (the credential must be entered again) and
+// stores the config hash that goes with that.
+func (tx *TenantTx) ClearRevisionSecret(id, configHash string, now time.Time) error {
+	_, err := tx.exec(revisionsSetSecret, sql.Named("secret_ref", nil), sql.Named("secret_version", nil),
+		sql.Named("config_hash", configHash), sql.Named("now", RT(now)), sql.Named("id", id))
+	return err
+}
+
 // BumpEvidence records that evidence a gate reads changed (attestation,
 // skip, run, finding acceptance), so a concurrent activation's CAS fails.
 func (tx *TenantTx) BumpEvidence(id string, now time.Time) error {

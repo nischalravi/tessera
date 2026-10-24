@@ -3382,6 +3382,8 @@ export interface ConnConfig {
   privileged_expected?: Record<string, string[]>; demo_fixed_checks?: string[];
   /** Non-secret options of the governed connector types (awsorg, githubscan, sap, oracle, vaults, contractor feeds, agentcore). */
   settings?: Record<string, string>;
+  /** Generic REST connection: the declarative spec (base URL, auth type, mapping, write operations). Holds no secret. */
+  rest?: Record<string, unknown>;
 }
 
 /** One vendor tile of the SCIM preset library (GET /api/scim/presets). "unknown" means the vendor's public docs did not confirm the fact. */

@@ -21,6 +21,17 @@ import { CAPABILITIES, CATEGORIES, Capability, Category, filterGallery, groupGal
 import { GOVERNED, settingValues, settingsPatch } from "./governed";
 
 // ---------------------------------------------------------------- step 1
+/** The spec as editable text: JSON, since that is what the server stores. */
+const restText = (r: Record<string, unknown> | undefined) => (r ? JSON.stringify(r, null, 2) : "");
+
+const REST_EXAMPLE = `base_url: https://api.example.com/v2
+auth: { type: bearer }
+users:
+  path: /users
+  items_path: $.data
+  pagination: { style: cursor, cursor_param: after, next_path: $.meta.next }
+  fields: { id: $.id, username: $.login, email: $.email, status: $.state }`;
+
 export function NewConnection() {
   const nav = useNavigate();
   const toast = useToast();
@@ -220,6 +231,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       exp_groups: cfg.expected_counts ? String(cfg.expected_counts.groups) : "", privileged: privToText(cfg.privileged_expected),
       correlation_key: cfg.correlation_key ?? "", hr_id_attribute: cfg.hr_id_attribute ?? "", stale_days: String(cfg.stale_days ?? ""),
       sync_schedule: cfg.sync_schedule ?? "", write_mode: cfg.write_mode ?? "off", write_scope: (cfg.write_scope ?? []).join("\n"),
+      rest: restText(cfg.rest),
       ...settingValues(conn.connector_type, cfg.settings),
     });
     // Reset only when the saved config itself changes (not on credential changes),
@@ -249,6 +261,8 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
         const sp = settingsPatch(conn.connector_type, v, cfg.settings);
         if (sp) next.settings = sp;
       }
+      // the spec is sent as the text the admin wrote (JSON or YAML); the server parses and validates it strictly
+      if (tid === "rest_generic" && v.rest !== restText(cfg.rest)) (next as Record<string, unknown>).rest = v.rest.trim() === "" ? null : v.rest;
     }
     if (step === "scope") {
       (["user_filter", "group_filter"] as const).forEach(str);
@@ -302,6 +316,12 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             {tid === "scim_app" && input("base_url", "SCIM base URL", scimUrlHint(cfg.preset, presets))}
             {gov?.baseUrl && input("base_url", gov.baseUrl.label, gov.baseUrl.hint, { "aria-required": gov.baseUrl.required })}
             {gov?.settings.map((f) => <Fragment key={f.key}>{input(`settings.${f.key}`, f.label, f.hint, { "aria-required": !!f.required })}</Fragment>)}
+            {tid === "rest_generic" && (
+              <Field label="REST connector spec (JSON or YAML)"
+                hint="Base URL (https only), auth type, the resources to read with their pagination and JSONPath mapping, and optional write operations as request templates. No secret goes here: the credential below is sealed. Errors name the field.">
+                <textarea className="input mono" value={v.rest ?? ""} onChange={set("rest")} rows={14} spellCheck={false} placeholder={REST_EXAMPLE} />
+              </Field>
+            )}
             {input("technical_owner", "Technical owner", "Accountable for the connection and its findings (base.owner).")}
             {input("business_owner", "Business owner")}
           </div>
