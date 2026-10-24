@@ -3381,6 +3381,8 @@ export interface ConnConfig {
   write_mode?: "off" | "dry_run" | "scoped"; write_scope?: string[]; hybrid?: boolean; use_dirsync?: boolean;
   privileged_expected?: Record<string, string[]>; demo_fixed_checks?: string[];
   sql?: SQLConfig;
+  /** Non-secret options of the governed connector types (awsorg, githubscan, sap, oracle, vaults, contractor feeds, agentcore). */
+  settings?: Record<string, string>;
   /** Generic REST connection: the declarative spec (base URL, auth type, mapping, write operations). Holds no secret. */
   rest?: Record<string, unknown>;
 }

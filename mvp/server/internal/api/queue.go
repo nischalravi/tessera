@@ -19,6 +19,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/archive"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	guestlife "github.com/nischalravi/tessera/mvp/server/internal/guests/lifecycle"
@@ -121,7 +122,10 @@ func (s *Server) newQueue() *queue.Queue {
 // parts (so an on-demand sync and a queued one run the same code).
 func (s *Server) workerDeps() *worker.Deps {
 	return &worker.Deps{DB: s.store, Clock: func() time.Time { return s.clock() }, Log: s.log.With("component", "worker"),
-		Connectors: s.cfg.Connectors, Provision: s.prov, Guard: s.guard, SyncSchedule: s.cfg.ConnectorSyncSchedule}
+		Connectors: s.cfg.Connectors, Provision: s.prov, Guard: s.guard, SyncSchedule: s.cfg.ConnectorSyncSchedule,
+		Governed: func(ctx context.Context, t tenancy.ID, now time.Time) ([]connectors.Connector, map[string]error, error) {
+			return s.readiness.GovernedConnectors(ctx, s.store, t, now)
+		}}
 }
 
 // inProcessKinds are the queue kinds of the worker pool that this process
