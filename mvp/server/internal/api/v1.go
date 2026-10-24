@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"net/http"
 	"strconv"
 	"strings"
@@ -67,7 +68,8 @@ func (s *Server) versioned(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		r2 := r.Clone(r.Context())
+		// proofs bound to the URL (DPoP htu, the claim proof) check the path the client sent
+		r2 := r.Clone(oauth.WithRequestPath(r.Context(), r.URL.Path))
 		r2.URL.Path = v1Base + rest
 		if r.URL.RawPath != "" {
 			r2.URL.RawPath = v1Base + strings.TrimPrefix(r.URL.RawPath, v1Prefix)

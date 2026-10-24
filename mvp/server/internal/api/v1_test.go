@@ -137,3 +137,24 @@ func TestV1_DeprecationPolicy(t *testing.T) {
 		c.Deprecations = []Deprecation{{Method: "GET", Pattern: "/api/violations", Deprecated: dep, Sunset: dep.Add(minSunsetNotice)}}
 	})
 }
+
+// TestV1_DPoPProofBoundToRequestedPath: a DPoP proof is checked against the
+// path the client sent, so a DPoP-bound machine client can use /api/v1.
+func TestV1_DPoPProofBoundToRequestedPath(t *testing.T) {
+	e := newOAuthEnv(t)
+	m := e.addMachine("tenant-a", []string{"viewer"}, []string{"tessera:read"}, true)
+	tok := e.machineToken(m, "tenant-a", "tessera:read")
+	if rec := e.call(tok, "GET", "/api/v1/summary", ""); rec.Code != 200 {
+		t.Fatalf("proof for /api/v1/summary on /api/v1/summary: %d %s", rec.Code, rec.Body)
+	}
+	if rec := e.call(tok, "GET", "/api/summary", ""); rec.Code != 200 {
+		t.Errorf("unversioned path: %d", rec.Code)
+	}
+	// a proof made for the other path is refused
+	rec := e.call(tok, "GET", "/api/v1/summary", "", func(r *http.Request) {
+		r.Header.Set("DPoP", e.proof(tok.key, "GET", publicBase+"/api/summary", tok.access, ""))
+	})
+	if rec.Code != 401 {
+		t.Errorf("a proof for /api/summary on /api/v1/summary: %d, want 401", rec.Code)
+	}
+}
