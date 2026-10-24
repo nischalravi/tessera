@@ -7,7 +7,7 @@ import { Fragment, FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useR
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowRightLeft, Bot, Briefcase, CircleCheck, Database, FlaskConical, HardHat, Search, Users, Play, Power, ShieldCheck, Trash2, Wand2 } from "lucide-react";
 import {
-  Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, readiness, useApi,
+  Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, ScimPreset, readiness, useApi,
 } from "../../../api";
 import { SourceDeletionGuard } from "../SourceDeletionGuard";
 import { VendorLogo, vendorForType } from "../../../components/VendorLogo"; // not in the barrel: keeps the brand marks out of the main chunk
@@ -28,15 +28,20 @@ export function NewConnection() {
   const [type, setType] = useState("demo-ad");
   const [name, setName] = useState("Active Directory (demo)");
   const [busy, setBusy] = useState(false);
+  // A SCIM vendor tile has the id "scim:<preset>" and creates a scim_app connection pre-filled from the preset.
+  const presetOf = (id: string) => (id.startsWith("scim:") ? id.slice(5) : undefined);
   const pick = (id: string) => {
     setType(id);
-    setName(CONNECTOR_TYPES.find((t) => t.id === id)!.label);
+    setName(CONNECTOR_TYPES.find((t) => t.id === id)?.label ?? "");
   };
   const create = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     try {
-      const c = await readiness.create({ name: name.trim(), connector_type: type });
+      const preset = presetOf(type);
+      const c = await readiness.create(preset
+        ? { name: name.trim(), connector_type: "scim_app", config: { preset } }
+        : { name: name.trim(), connector_type: type });
       toast(`${c.name} created as a draft`);
       nav(`/admin/connections/${c.id}?step=connect`);
     } catch (x) {
@@ -188,6 +193,13 @@ function Field({ label, hint, children }: { label: string; hint?: ReactNode; chi
   return <label className="field">{label}{children}{hint && <span className="hint">{hint}</span>}</label>;
 }
 
+/** Hint under the SCIM base URL: the vendor's documented URL shape and plan note when the connection came from a preset. */
+function scimUrlHint(preset: string | undefined, presets: ScimPreset[] | null | undefined): ReactNode {
+  const p = preset ? presets?.find((x) => x.id === preset) : undefined;
+  if (!p) return "HTTPS only.";
+  return <>HTTPS only.{p.base_url_example ? <> {p.name} URLs look like <code>{p.base_url_example}</code>.</> : <> {p.name}'s URL shape is not confirmed; any HTTPS URL is accepted.</>} {p.hint}</>;
+}
+
 /** The config form of one step; saves only the fields that changed. */
 function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect" | "scope" | "mapping"; onSaved: () => void }) {
   const rev = conn.pending_revision ?? conn.active_revision!;
@@ -195,6 +207,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
   const tid = conn.template.id;
   const gov = GOVERNED[conn.connector_type]; // the connector types the server already had (vaults, ERP, AWS, ...)
   const writes = !gov || tid === "pam" || tid === "erp"; // the others only read
+  const { data: presets } = useApi<ScimPreset[]>(cfg.preset ? "/scim/presets" : null);
   const toast = useToast();
   const [v, setV] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -286,7 +299,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             {tid === "entra" && <>{input("tenant_id", "Tenant id", "The directory GUID from the Overview page, not a domain.")}{input("cloud", "Cloud", "global, usgov or china")}</>}
             {tid === "google" && <>{input("customer", "Customer", "my_customer or the customer id")}{input("domain", "Primary domain")}</>}
             {tid === "workday" && <>{input("tenant_host", "Tenant host", "*.workday.com or *.myworkday.com")}{input("interface", "Interface", "get_workers or raas")}{input("time_zone", "Tenant time zone")}</>}
-            {tid === "scim_app" && input("base_url", "SCIM base URL", "HTTPS only.")}
+            {tid === "scim_app" && input("base_url", "SCIM base URL", scimUrlHint(cfg.preset, presets))}
             {gov?.baseUrl && input("base_url", gov.baseUrl.label, gov.baseUrl.hint, { "aria-required": gov.baseUrl.required })}
             {gov?.settings.map((f) => <Fragment key={f.key}>{input(`settings.${f.key}`, f.label, f.hint, { "aria-required": !!f.required })}</Fragment>)}
             {input("technical_owner", "Technical owner", "Accountable for the connection and its findings (base.owner).")}

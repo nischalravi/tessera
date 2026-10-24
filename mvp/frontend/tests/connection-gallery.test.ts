@@ -11,7 +11,7 @@ const T = [
   ["demo-workday", "Workday (demo)", "The demo HR source", true], ["ad", "Active Directory", "Through the Directory Agent", false],
   ["ldap", "OpenLDAP / 389-DS", "Generic LDAP", false], ["entra", "Microsoft Entra ID", "Microsoft Graph", false],
   ["okta", "Okta", "OAuth service app", false], ["google", "Google Workspace", "Domain-wide delegation", false],
-  ["workday", "Workday", "Integration system user", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false],
+  ["workday", "Workday", "Integration system user", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false], ["scim:auth0", "Auth0", "Enterprise connection", false],
   ["awsorg", "AWS Organizations and IAM", "Reader role in each account", false], ["githubscan", "GitHub (code scan)", "Reads MCP configuration", false],
   ["sap", "SAP", "Roles and transaction codes", false], ["oracle", "Oracle Fusion Applications", "Roles of Oracle Fusion", false],
   ["cyberark", "CyberArk Privileged Access Manager", "Safes and vaulted accounts", false], ["beyondtrust", "BeyondTrust Password Safe", "Smart rules", false],

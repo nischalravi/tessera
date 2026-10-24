@@ -27,6 +27,7 @@ func (s *Server) registerReadinessRoutes() {
 	G, P := http.MethodGet, http.MethodPost
 	s.handle(G, "/api/readiness/templates", read, need(auth.PermConnectionsRead), s.rd(s.listTemplates))
 	s.handle(G, "/api/readiness/templates/{type}", read, need(auth.PermConnectionsRead), s.rd(s.getTemplate))
+	s.handle(G, "/api/scim/presets", read, need(auth.PermConnectionsRead), s.rd(s.listSCIMPresets))
 	s.handle(http.MethodPut, "/api/readiness/overlays/{type}", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.putOverlay))
 	s.handle(G, "/api/readiness/openapi.json", noTenant, need(auth.PermAuthenticated), s.readinessOpenAPI)
 	s.handle(G, "/api/connections", read, need(auth.PermConnectionsRead), s.rd(s.listConnections))

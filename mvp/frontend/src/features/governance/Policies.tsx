@@ -5,7 +5,7 @@ import { Group, IdentityDetail, IdentityRow, Policy, SimResult, Violation, simul
 import { useIdentityActions } from "../../app/actions";
 import { Badge, Button, Callout, DataTable, EmptyState, Loading, Page, Sev, SimulationView, Tabs, useSelected } from "../../components";
 import { ViolationPanel } from "../directory/Panels";
-import { SodFunctionsView, SodRisksView, SodRulesetsView } from "./SodModel";
+import { SodFunctionsView, SodRisksView, SodRulesetsView } from "./SodModelViews";
 
 function Simulator() {
   const { data: idents } = useApi<IdentityRow[]>("/identities?status=active");
