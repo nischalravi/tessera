@@ -356,9 +356,12 @@ func (f *Fake) dropGroupRows(a Row) {
 }
 
 func (f *Fake) create(w http.ResponseWriter, object string, body Row) {
-	row := Row{"Id": f.newID(object)}
+	id := f.newID(object)
+	row := Row{"Id": id}
 	for k, v := range body {
-		row[k] = v
+		if k != "Id" { // Salesforce assigns the id; the body cannot set it
+			row[k] = v
+		}
 	}
 	switch object {
 	case "User":
@@ -402,5 +405,5 @@ func (f *Fake) create(w http.ResponseWriter, object string, body Row) {
 		}
 	}
 	f.objects[object] = append(f.objects[object], row)
-	writeJSON(w, http.StatusCreated, map[string]any{"id": row["Id"], "success": true, "errors": []string{}})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "success": true, "errors": []string{}}) // the generated id, never request input
 }
