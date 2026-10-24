@@ -304,6 +304,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/workflows/{id}") || strings.HasPrefix(rt.Pattern, "/api/service-account-requests/{id}") {
 			continue // TestWorkflowsAPI_CrossTenant, TestServiceAccountsAPI_CrossTenant (UUIDs, not fixture ids)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/datasets/{id}") {
+			continue // TestDatasetsAPI (UUIDs, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
 			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
 		}
@@ -605,6 +608,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if path == "/api/questionnaires/{id}" {
 			continue // TestQuestionnairesAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if path == "/api/datasets/{id}" || path == "/api/datasets/{id}/contains" {
+			continue // TestDatasetsAPI (UUIDs, not fixture ids)
 		}
 		if path == "/api/workflows/{id}" || path == "/api/service-account-requests/{id}" {
 			continue // TestWorkflowsAPI_CrossTenant, TestServiceAccountsAPI_CrossTenant (UUIDs, not fixture ids)

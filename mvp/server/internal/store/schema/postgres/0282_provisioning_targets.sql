@@ -9,7 +9,7 @@ CREATE TABLE provisioning_targets (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
   connection_id TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql','salesforce','servicenow','atlassian')),
+  kind TEXT NOT NULL CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql','salesforce','servicenow','atlassian','ldap','ad')),
   base_url TEXT NOT NULL,
   settings TEXT NOT NULL DEFAULT '{}',
   credential_enc BYTEA,

@@ -78,6 +78,9 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 	}
 	ctx = audit.SetPrincipal(ctx, ap)
 	r = r.WithContext(ctx)
+	if !s.limitClient(w, r, p) {
+		return r, false
+	}
 	if !auth.SafeMethod(r.Method) {
 		if hasBody(r) && !jsonContentType(r) && !bodyTypeIs(r, rt.spec.BodyType, rt.spec.BodyTypes) {
 			detail := "request bodies must be application/json"

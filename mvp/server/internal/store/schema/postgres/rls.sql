@@ -2320,6 +2320,20 @@ CREATE POLICY tenant_isolation ON agent_links
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE datasets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE datasets FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON datasets;
+CREATE POLICY tenant_isolation ON datasets
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE dataset_values ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dataset_values FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON dataset_values;
+CREATE POLICY tenant_isolation ON dataset_values
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE access_request_comments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE access_request_comments FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON access_request_comments;
@@ -2331,6 +2345,13 @@ ALTER TABLE access_request_attachments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE access_request_attachments FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON access_request_attachments;
 CREATE POLICY tenant_isolation ON access_request_attachments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE api_client_limits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_client_limits FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON api_client_limits;
+CREATE POLICY tenant_isolation ON api_client_limits
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
