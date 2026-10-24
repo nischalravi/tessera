@@ -298,6 +298,8 @@ var tables = []string{
 	"grp_provisioners", "grp_provisionable", "grp_sync_groups", "grp_sync_runs", "grp_sync_ops",
 	// group event sinks (schema/0379_group_event_sinks.sql)
 	"grp_event_sinks", "grp_sink_dead_letters",
+	// certification actions on review items (schema/0912_review_item_events.sql)
+	"review_item_events", "review_campaign_locks",
 	// datasets: named lookup tables and their values (schema/0910_datasets.sql)
 	"datasets", "dataset_values",
 	// questionnaires, their versions, attachments and answers (schema/0450_questionnaires.sql)
