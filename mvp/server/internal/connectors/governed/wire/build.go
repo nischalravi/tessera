@@ -13,7 +13,9 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
@@ -45,6 +47,15 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 		cn, err = successfactors.FromEnv(getenv, now(), rt, hc)
 	case governed.AgentCore:
 		cn, err = agentcore.FromEnv(getenv, now())
+	case governed.AzureRBAC, governed.GCPIAM:
+		if getenv, err = n.Overrides(getenv); err != nil {
+			return nil, err
+		}
+		if p.Type == governed.AzureRBAC {
+			cn, err = azurerbac.FromEnv(getenv, rt, hc, now)
+		} else {
+			cn, err = gcpiam.FromEnv(getenv, rt, hc, now)
+		}
 	}
 	if err != nil {
 		return nil, err

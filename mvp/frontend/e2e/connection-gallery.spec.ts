@@ -5,10 +5,11 @@ import { ALICE, report, seriousViolations, settle } from "./helpers";
 
 // one tile per connector type: counted from the gallery's own metadata, so a new type does not break the spec
 const TILES = Object.keys(GALLERY_META).length;
-const METAS = Object.entries(GALLERY_META);
-const HR = METAS.filter(([, m]) => m.capabilities.includes("HR source")).length;
-const HR_DEMO = METAS.filter(([, m]) => m.capabilities.includes("HR source") && m.category === "Demo / simulated").length;
-const OKTA = METAS.filter(([id, m]) => `${id} ${m.publisher}`.toLowerCase().includes("okta")).length; // the Okta tiles (search also reads labels)
+const META = Object.values(GALLERY_META);
+// expected counts of the filters the search and chip test uses, derived from the same metadata
+const OKTA = META.filter((m) => m.vendor === "okta").length;
+const HR = META.filter((m) => m.capabilities.includes("HR source")).length;
+const HR_DEMO = META.filter((m) => m.capabilities.includes("HR source") && m.category === "Demo / simulated").length;
 
 // New connection, step 1: the app-gallery picker. A radiogroup of tiles (roving tabindex), filter chips, search.
 

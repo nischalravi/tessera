@@ -15,8 +15,10 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
@@ -116,6 +118,40 @@ func Prober(p governed.Params, n governed.Net) (connectors.Prober, error) {
 			return nil, err
 		}
 		return &vmsProber{r: r, base: p.BaseURL, hc: n.HC, typ: p.Type}, nil
+	case governed.AzureRBAC, governed.GCPIAM:
+		getenv, err := p.Env()
+		if err == nil {
+			getenv, err = n.Overrides(getenv)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if p.Type == governed.AzureRBAC {
+			cfg, err := azurerbac.ConfigFromEnv(getenv)
+			if err != nil {
+				return nil, err
+			}
+			c, err := azurerbac.New(cfg, n.RT, n.HC, n.Clock)
+			if err != nil {
+				return nil, err
+			}
+			return &cloudProber{id: cfg.ClientID, probe: func(ctx context.Context) (cloudProbe, error) {
+				r, err := c.Probe(ctx)
+				return cloudProbe{mode: c.Mode(), counts: map[string]int{"scope": r.Scopes, "assignment": r.Assignments, "role": r.Roles}}, err
+			}, refused: azurerbac.ErrCredential}, nil
+		}
+		cfg, err := gcpiam.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := gcpiam.New(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		return &cloudProber{id: c.Identity(), probe: func(ctx context.Context) (cloudProbe, error) {
+			r, err := c.Probe(ctx)
+			return cloudProbe{mode: "json_key", counts: map[string]int{"resource": r.Resources, "binding": r.Bindings}}, err
+		}, refused: gcpiam.ErrCredential}, nil
 	case governed.AWSOrg:
 		if n.AWS == nil {
 			return nil, errors.New("awsorg: no AWS client")
@@ -410,6 +446,56 @@ func (p *erpProber) Sample(ctx context.Context, _ connectors.SampleQuery) (conne
 	}
 	return connectors.SampleStats{Objects: min(len(p.roles)+len(users), connectors.MaxSample), Available: true,
 		PerClass: map[string]int{"role": len(p.roles), "user": len(users)}}, nil
+}
+
+// ---------------------------------------------------------------- Azure RBAC and Google Cloud IAM
+
+// cloudProbe is what one probe read: how the connection authenticated and counts per class.
+type cloudProbe struct {
+	mode   string
+	counts map[string]int
+}
+
+// cloudProber probes a cloud entitlement connector with one bounded read (the first few scopes or
+// resources). The endpoints are fixed (the public cloud), so there is no transport check of the
+// connection's own: Connect reports nothing and the template has no endpoint item.
+type cloudProber struct {
+	noop
+	id      string
+	probe   func(context.Context) (cloudProbe, error)
+	refused error
+	res     cloudProbe
+	err     error
+	read    bool
+}
+
+func (p *cloudProber) load(ctx context.Context) error {
+	if !p.read {
+		p.res, p.err = p.probe(ctx)
+		p.read = true
+	}
+	return p.err
+}
+
+func (p *cloudProber) Authenticate(ctx context.Context) (connectors.AuthInfo, error) {
+	if err := p.load(ctx); err != nil {
+		if errors.Is(err, p.refused) || denied(err) {
+			return connectors.AuthInfo{OK: false, Mode: p.res.mode}, nil
+		}
+		return connectors.AuthInfo{}, err
+	}
+	return connectors.AuthInfo{OK: true, Identity: p.id, Mode: p.res.mode}, nil
+}
+
+func (p *cloudProber) Sample(ctx context.Context, _ connectors.SampleQuery) (connectors.SampleStats, error) {
+	if err := p.load(ctx); err != nil {
+		return connectors.SampleStats{}, err
+	}
+	n := 0
+	for _, c := range p.res.counts {
+		n += c
+	}
+	return connectors.SampleStats{Objects: min(n, connectors.MaxSample), Available: true, PerClass: p.res.counts}, nil
 }
 
 // ---------------------------------------------------------------- GitHub

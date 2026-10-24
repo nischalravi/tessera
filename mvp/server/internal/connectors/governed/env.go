@@ -23,6 +23,37 @@ type Net struct {
 	HC  *http.Client
 	AWS func(p Params) (connectors.Prober, error)
 	Now func() time.Time
+	// Endpoints are dev and test endpoint overrides of the cloud entitlement connectors (a fake
+	// Azure or Google), keyed by the connector's own TESSERA_AZURE_* and TESSERA_GCP_* variable.
+	// The server never sets them; a dev runtime applies them and any other runtime refuses a
+	// connection that is given one (Overrides).
+	Endpoints map[string]string
+}
+
+// endpointKeys are the overrides Net.Endpoints may hold.
+var endpointKeys = map[string]bool{"TESSERA_AZURE_MANAGEMENT_URL": true, "TESSERA_AZURE_AUTHORITY_URL": true,
+	"TESSERA_GCP_CRM_URL": true, "TESSERA_GCP_IAM_URL": true, "TESSERA_GCP_TOKEN_URL": true}
+
+// Overrides layers n.Endpoints over getenv. It refuses them outside the dev runtime, and refuses an
+// unknown key, so a production connection can only reach the public cloud endpoints.
+func (n Net) Overrides(getenv func(string) string) (func(string) string, error) {
+	if len(n.Endpoints) == 0 {
+		return getenv, nil
+	}
+	if n.RT.Env != config.Dev {
+		return nil, errors.New("governed: endpoint overrides are a dev setting and are refused outside dev")
+	}
+	for k := range n.Endpoints {
+		if !endpointKeys[k] {
+			return nil, fmt.Errorf("governed: %q is not an endpoint override", k)
+		}
+	}
+	return func(k string) string {
+		if v, ok := n.Endpoints[k]; ok {
+			return v
+		}
+		return getenv(k)
+	}, nil
 }
 
 // Clock returns the run's clock (the wall clock when none is set).
@@ -77,6 +108,14 @@ func (p Params) Env() (func(string) string, error) {
 		if p.Prod {
 			m["TESSERA_ENV"] = config.Prod
 		}
+	case AzureRBAC:
+		m["TESSERA_AZURE_TENANT_ID"], m["TESSERA_AZURE_CLIENT_ID"] = set("tenant_id"), set("client_id")
+		m["TESSERA_AZURE_SUBSCRIPTIONS"], m["TESSERA_AZURE_MANAGEMENT_GROUPS"] = set("subscription_ids"), set("management_group_ids")
+		m["TESSERA_AZURE_ELIGIBLE"] = set("include_eligible")
+		m["TESSERA_AZURE_CREDENTIAL"] = "env:" + secretVar // no endpoint override is ever set: a connection reaches the public cloud only
+	case GCPIAM:
+		m["TESSERA_GCP_ORG_ID"], m["TESSERA_GCP_FOLDER_IDS"], m["TESSERA_GCP_PROJECT_IDS"] = set("organization_id"), set("folder_ids"), set("project_ids")
+		m["TESSERA_GCP_KEY"] = "env:" + secretVar // likewise no endpoint override
 	default:
 		return nil, fmt.Errorf("governed: %s is read by its own feature, not by the connector sync", p.Type)
 	}

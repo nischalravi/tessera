@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { siAtlassian, siAuth0, siBox, siDatabricks, siDropbox, siGithub, siGoogle, siKeycloak, siOkta, siSap, siSnowflake, siZendesk, siZoom } from "simple-icons";
+import { siAtlassian, siAuth0, siBox, siDatabricks, siDropbox, siGithub, siGooglecloud, siGoogle, siKeycloak, siOkta, siSap, siSnowflake, siZendesk, siZoom } from "simple-icons";
 
 /**
  * A recognizable mark per system on a fixed light "logo plate" (white, subtle border, both themes) so brand colours
@@ -21,6 +21,7 @@ const BRAND: Record<string, { path: string; hex: string }> = {
   auth0: { path: siAuth0.path, hex: siAuth0.hex },
   keycloak: { path: siKeycloak.path, hex: siKeycloak.hex },
   sap: { path: siSap.path, hex: siSap.hex },
+  gcp: { path: siGooglecloud.path, hex: siGooglecloud.hex },
 };
 
 const stroke = { fill: "none", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" } as const;
@@ -39,6 +40,8 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   aws: { color: "#b45309", glyph: <g {...stroke} stroke="#b45309"><path d="M7 18a4 4 0 01-.6-7.95A5.5 5.5 0 0117 9.5a4.2 4.2 0 01.5 8.5z" /><path d="M9 21h6" /></g> },
   // cloud with a person (SaaS CRM)
   salesforce: { color: "#0b6fa8", glyph: <g {...stroke} stroke="#0b6fa8"><path d="M7 19a4 4 0 01-.6-7.95A5.5 5.5 0 0117 10.5a4.2 4.2 0 01.5 8.5z" /></g> },
+  // cloud over a grid of role tiles (no simple-icons mark for Azure in 16.30.0: an original glyph, not vendor artwork)
+  azure: { color: "#0f6cbd", glyph: <g {...stroke} stroke="#0f6cbd"><path d="M7 14a4 4 0 01-.6-7.95A5.5 5.5 0 0117 5.5a4.2 4.2 0 01.5 8.5" /><rect x="6" y="16" width="4" height="4" rx=".8" /><rect x="14" y="16" width="4" height="4" rx=".8" /><path d="M10 18h4M12 14v2" /></g> },
   // database cylinder (no single vendor: PostgreSQL, MySQL, SQL Server and Oracle share this tile)
   sql: { color: "#1d5f8a", glyph: <g {...stroke} stroke="#1d5f8a"><ellipse cx="12" cy="5.5" rx="7.5" ry="3" /><path d="M4.5 5.5v13c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-13M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3" /></g> },
   // no simple-icons mark in 16.30.0 for these four: original glyphs, not vendor artwork
@@ -87,7 +90,7 @@ export function VendorLogo({ vendor, label, size = 56 }: { vendor: string; label
 }
 
 // Connector type and system names that share another system's mark.
-const ALIAS: Record<string, string> = { awsorg: "aws", githubscan: "github", "github-scan": "github", "aws-agentcore": "agentcore", csv: "csvfeed", successfactors: "sap" };
+const ALIAS: Record<string, string> = { awsorg: "aws", azurerbac: "azure", gcpiam: "gcp", githubscan: "github", "github-scan": "github", "aws-agentcore": "agentcore", csv: "csvfeed", successfactors: "sap" };
 
 /** The logo vendor for a connection: the first id that has a mark ("demo-okta" is Okta), else the generic protocol glyph. */
 export function vendorForType(...ids: string[]): string {
