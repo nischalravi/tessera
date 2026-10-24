@@ -62,7 +62,7 @@ const (
 type Spec struct {
 	// System is the system name records carry ("rest" by default); lower-case letters, digits, "-" and "_".
 	System  string            `json:"system,omitempty"`
-	BaseURL string            `json:"base_url"`
+	BaseURL string            `json:"base_url,omitempty"`
 	Auth    Auth              `json:"auth"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Limits  Limits            `json:"limits,omitempty"`

@@ -268,7 +268,7 @@ func (t *Target) lookup(ctx context.Context, what string, v Vars) (user, bool, e
 	if resp.Status == http.StatusNotFound {
 		return user{}, false, nil
 	}
-	if !accepted(op, resp.Status) {
+	if !accepted(op, resp) {
 		return user{}, false, fail("lookup", resp)
 	}
 	doc, err := resp.JSON()
@@ -299,13 +299,22 @@ func (t *Target) isMember(ctx context.Context, what string, v Vars) (bool, error
 	if resp.Status == http.StatusNotFound {
 		return false, nil
 	}
-	if !accepted(op, resp.Status) {
+	if !accepted(op, resp) {
 		return false, fail("is_member", resp)
 	}
 	return true, nil
 }
 
-func accepted(op *Operation, status int) bool {
+// DryRunHeader marks the empty answer a dry run gives a held-back write
+// (provision.DryRun). Such an answer counts as accepted whatever the
+// operation expects, so the steps after the write still show.
+const DryRunHeader = "X-Tessera-Dry-Run"
+
+func accepted(op *Operation, r *Response) bool {
+	status := r.Status
+	if status == http.StatusNoContent && r.Header.Get(DryRunHeader) != "" {
+		return true
+	}
 	if len(op.Expect) > 0 {
 		return slices.Contains(op.Expect, status)
 	}
@@ -318,7 +327,7 @@ func (t *Target) send(ctx context.Context, name string, op *Operation, v Vars, k
 	if err != nil {
 		return err
 	}
-	if !accepted(op, resp.Status) {
+	if !accepted(op, resp) {
 		return fail(name, resp)
 	}
 	return nil
