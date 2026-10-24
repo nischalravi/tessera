@@ -84,8 +84,26 @@ func TestQueueSchedulesCustom(t *testing.T) {
 	}); err != nil || queued != 1 {
 		t.Errorf("queued jobs with the schedule's payload = %d (%v)", queued, err)
 	}
+	if rec := corrDo(h, admin, "POST", "/api/queue/schedules", `{"name":"custom.other","kind":"connector_sync","spec":"0 3 * * *","payload":{"mode":"full"}}`); rec.Code != 409 {
+		t.Errorf("a second full-sync schedule: %d %s", rec.Code, rec.Body)
+	}
+	if rec := corrDo(h, admin, "POST", "/api/queue/schedules", `{"name":"custom.fast","kind":"connector_sync","spec":"@every 10m","payload":{"mode":"full"}}`); rec.Code != 400 && rec.Code != 422 {
+		t.Errorf("a full sync every 10 minutes: %d %s", rec.Code, rec.Body)
+	}
+	if rec := corrDo(h, admin, "POST", "/api/queue/schedules", `{"name":"custom.inc","kind":"connector_sync","spec":"@every 5m","payload":{"mode":"incremental"}}`); rec.Code != 201 {
+		t.Errorf("an incremental sync every 5 minutes: %d %s", rec.Code, rec.Body)
+	}
+	if rec := corrDo(h, admin, "POST", "/api/queue/schedules/custom.inc/run", ""); rec.Code != 200 {
+		t.Errorf("run an incremental sync: %d %s", rec.Code, rec.Body)
+	}
+	if rec := corrDo(h, admin, "POST", "/api/queue/schedules/custom.inc/run", ""); rec.Code != 409 || !strings.Contains(rec.Body.String(), "already_running") {
+		t.Errorf("run while one is queued: %d %s", rec.Code, rec.Body)
+	}
 	if rec := corrDo(h, admin, "POST", "/api/queue/schedules/custom.nightly-sync/pause", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"enabled":false`) {
 		t.Errorf("pause: %d %s", rec.Code, rec.Body)
+	}
+	if rec := corrDo(h, admin, "POST", run, ""); rec.Code != 409 || !strings.Contains(rec.Body.String(), "schedule_paused") {
+		t.Errorf("run a paused schedule: %d %s", rec.Code, rec.Body)
 	}
 	if rec := corrDo(h, admin, "POST", "/api/queue/schedules/custom.nightly-sync/resume", ""); rec.Code != 200 {
 		t.Errorf("resume: %d %s", rec.Code, rec.Body)
@@ -103,7 +121,13 @@ func TestQueueSchedulesCustom(t *testing.T) {
 		t.Errorf("delete again: %d", rec.Code)
 	}
 	got := auditActions(t, f, f.A.ID)
-	for _, a := range []string{"queue.schedule_created", "queue.schedule_run_now", "queue.schedule_deleted", "queue.schedule_paused", "queue.schedule_resumed"} {
+	if got["queue.schedule_run_now"] != 2 {
+		t.Errorf("audit queue.schedule_run_now = %d", got["queue.schedule_run_now"])
+	}
+	if got["queue.schedule_created"] != 2 {
+		t.Errorf("audit queue.schedule_created = %d", got["queue.schedule_created"])
+	}
+	for _, a := range []string{"queue.schedule_deleted", "queue.schedule_paused", "queue.schedule_resumed"} {
 		if got[a] != 1 {
 			t.Errorf("audit %s = %d (%v)", a, got[a], got)
 		}

@@ -13,6 +13,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/queue"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -33,7 +34,9 @@ const (
 	customSchedulePrefix = "custom."
 	maxCustomSchedules   = 50
 	minScheduleInterval  = time.Minute
-	maxScheduleAttempts  = 10
+	// minFullSyncInterval: a full sync reads every record of every connection, so it may not run more often.
+	minFullSyncInterval = 15 * time.Minute
+	maxScheduleAttempts = 10
 )
 
 var customScheduleNameRE = regexp.MustCompile(`^custom\.[a-z0-9][a-z0-9_.-]{0,60}$`)
@@ -135,8 +138,12 @@ func (s *Server) createQueueSchedule(_ http.ResponseWriter, r *http.Request, _ *
 		return nil, badRequest("invalid_spec", "the spec is @every <duration> or five cron fields")
 	}
 	now := s.clock().UTC()
-	if sp.Next(sp.First(now)).Sub(sp.First(now)) < minScheduleInterval {
+	gap := sp.Next(sp.First(now)).Sub(sp.First(now))
+	if gap < minScheduleInterval {
 		return nil, badRequest("interval_too_short", "a schedule runs at most once a minute")
+	}
+	if kind.Kind == jobs.ConnectorSync && payload == `{"mode":"full"}` && gap < minFullSyncInterval {
+		return nil, badRequest("interval_too_short", "a full sync runs at most every 15 minutes")
 	}
 	if in.MaxAttempts == 0 {
 		in.MaxAttempts = 3
@@ -156,6 +163,9 @@ func (s *Server) createQueueSchedule(_ http.ResponseWriter, r *http.Request, _ *
 		}
 		if strings.HasPrefix(e.Name, customSchedulePrefix) {
 			custom++
+			if e.Kind == kind.Kind && e.Payload == payload {
+				return nil, &httpError{http.StatusConflict, "a custom schedule of this kind and mode exists"}
+			}
 		}
 	}
 	if custom >= maxCustomSchedules {
@@ -214,6 +224,20 @@ func (s *Server) runQueueSchedule(_ http.ResponseWriter, r *http.Request, p *par
 		return nil, err
 	}
 	now := s.clock().UTC()
+	if !cur.Enabled || (cur.PausedUntil != nil && cur.PausedUntil.After(now)) {
+		return nil, badRequest409("schedule_paused", "this schedule is paused; resume it to run it")
+	}
+	for _, st := range []string{store.QueueQueued, store.QueueRunning, store.QueueFailed} {
+		js, err := c.QueueJobs(store.QueueJobFilter{Kind: cur.Kind, Status: st, Limit: 200})
+		if err != nil {
+			return nil, err
+		}
+		for _, j := range js {
+			if j.Payload == cur.Payload {
+				return nil, badRequest409("already_running", "a job of this kind is already queued or running")
+			}
+		}
+	}
 	key := "run-now:" + name + ":" + now.Format("200601021504")
 	created, err := s.queue.EnqueueTx(c, cur.Kind, cur.Payload, key, now, cur.MaxAttempts)
 	if err != nil {
@@ -226,4 +250,8 @@ func (s *Server) runQueueSchedule(_ http.ResponseWriter, r *http.Request, p *par
 		return nil, err
 	}
 	return map[string]any{"queued": true, "kind": cur.Kind}, nil
+}
+
+func badRequest409(code, msg string) error {
+	return &readiness.Error{Status: http.StatusConflict, Code: code, Msg: msg}
 }
