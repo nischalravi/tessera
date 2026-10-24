@@ -2334,6 +2334,13 @@ CREATE POLICY tenant_isolation ON dataset_values
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE api_client_limits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_client_limits FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON api_client_limits;
+CREATE POLICY tenant_isolation ON api_client_limits
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN

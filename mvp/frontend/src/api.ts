@@ -4227,7 +4227,7 @@ export interface ProvOpDetail extends ProvOp { payload: { account?: Record<strin
 export interface ProvDiscovery { checked_at: string; agent_advertised: boolean; service_provider_config: boolean; resource_types: string[]; error?: string }
 
 export interface ProvTarget {
-  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle" | "salesforce" | "servicenow" | "atlassian"; base_url: string; api_root?: string;
+  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle" | "salesforce" | "servicenow" | "atlassian" | "ldap" | "ad"; base_url: string; api_root?: string;
   dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; agent_id?: string; discovery?: ProvDiscovery; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
@@ -4453,6 +4453,28 @@ export const apiClients = {
   keys: (clientId: string, mode: "add" | "replace", jwks: unknown) => api<ApiClient>(`/admin/api-clients/${encodeURIComponent(clientId)}/keys`, { mode, jwks }),
   revoke: (clientId: string) => api<ApiClient>(`/admin/api-clients/${encodeURIComponent(clientId)}/revoke`, {}),
 };
+
+/** The complete OpenAPI 3.1 document of the API (GET /api/openapi.json), saved as a file. */
+export async function downloadApiSpec(): Promise<void> {
+  const res = await fetch("/api/openapi.json", { credentials: "same-origin" });
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "tessera-openapi.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 // ------------------------------------------------------------ log retention and the archive (issue #298)
 

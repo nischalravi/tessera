@@ -759,6 +759,9 @@ GET    /api/admin/api-clients/{client_id}            admin.read      -  # issue 
 POST   /api/admin/api-clients                        admin.change.request STEP_UP_ADMIN  # issue #498
 POST   /api/admin/api-clients/{client_id}/keys       admin.change.request STEP_UP_ADMIN  # issue #498
 POST   /api/admin/api-clients/{client_id}/revoke     admin.change.request STEP_UP_ADMIN  # issue #498
+GET    /api/admin/api-clients/{client_id}/rate-limit admin.read      -  # issue #587
+PUT    /api/admin/api-clients/{client_id}/rate-limit admin.change.request STEP_UP_ADMIN  # issue #587
+DELETE /api/admin/api-clients/{client_id}/rate-limit admin.change.request STEP_UP_ADMIN  # issue #587
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16

@@ -40,7 +40,16 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
   (tenant admin) or Pat (policy admin) with a passkey.
 * API: http://127.0.0.1:8000. OpenAPI docs are at http://127.0.0.1:8000/docs
   Every `/api/...` route is also served under `/api/v1/...` (same auth, audit and limits); `Deprecation`/`Sunset` headers and the compatibility policy are in `docs/api/compatibility.md` (issue #587).
+  On `/api/v1` errors are one envelope `{"error":{"code","message","field?"}}` and lists are `{"items","next_cursor"}` with `limit` and `cursor` (`internal/api/v1_contract.go`); the unversioned paths and their parity fixtures are unchanged.
   The complete OpenAPI 3.1 document of every registered route (permission, token scopes, step-up, errors) is `GET /api/openapi.json`, built from the route table (issue #587); `/openapi.json` stays the original core-route document.
+* Machine-client rate limits (issue #587): every OAuth client has a token bucket per tenant and client. The default is
+  `TESSERA_API_CLIENT_RATE_BURST` (120) requests at once, refilled at `TESSERA_API_CLIENT_RATE_PER_MINUTE` (600; `0` turns the
+  limit off, which production refuses unless `TESSERA_API_CLIENT_RATE_ALLOW_OFF=true`). A client's own limit is `PUT /api/admin/api-clients/{client_id}/rate-limit` `{burst, per_minute}` (admin
+  change request, step-up; `GET` reads the limit in force, `DELETE` returns to the default; table `api_client_limits`;
+  a change applies within 30 seconds). Answers carry `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` and
+  `RateLimit-Policy`; a refused request is `429 rate_limited` with `Retry-After`, is audited (`http.request`, status 429,
+  the client as actor) and counted in `tessera_api_client_rate_limited_total`. Buckets are per process. Users with a
+  session are not limited by it.
 * Dev IdP: http://127.0.0.1:8001 (see [Signing in](#signing-in))
 
 Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`
@@ -1451,6 +1460,7 @@ and Run now.
 Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
 `internal/admin`, routes in `internal/api/admin_routes.go`, UI under Settings → Admin: Users,
 Authentication, Change requests, API clients, and a banner on every page while a change is pending).
+Admin → API developer (`/admin/api-developer`, issue #587) lists the tenant's machine clients with their scopes, downloads the OpenAPI document (`GET /api/openapi.json`) and shows curl examples for the token flow; clients are registered under API clients.
 
 **Four-eyes compares people, not user ids** (#402). One person can hold several platform users (sign-in makes one
 per IdP connection and subject), so two users are the same actor when their ids match or both are linked to the
@@ -6337,3 +6347,32 @@ It writes a private JSON report, refusing overwrites without `--force`,
 without opening the database or changing access. Native vendor compatibility is
 unverified; unsupported logic is reported as blocking diagnostics.
 See [the contract, examples and phase limits](../docs/migration-assessment.md).
+
+### LDAP and Active Directory provisioning (issue #586)
+
+- **Target kinds `ldap` and `ad`** (`PUT /api/provisioning/targets/{connection}` with an `ldap` settings object; the bind
+  password is `token`). Package `internal/connectors/ldapwrite`. Write-back is off by default and the engine's approval
+  gates and deletion guard apply (disable and delete are guarded).
+- **Operations.** `create_account` (DN template, `${user.*}` attribute templates, candidate account names tried until one is
+  unique across `unique_attrs`, optional disabled start, random initial password from `password`), `update_account`
+  (allow-listed `update_attrs`; `attrs {"tessera.enabled":"true|false"}` enables or disables; `{"tessera.password":"reset"}`
+  sets a new random password when `allow_password_reset` is on), `disable_account` (AD `userAccountControl` bit 2, or
+  `nsaccountlock`, `ppolicy`, or a configured attribute; optional move to `disabled_ou`), `delete_account`, and
+  `add_entitlement` / `remove_entitlement` (`member`, `uniqueMember` or `memberUid`).
+- **Safety.** LDAPS (636) or StartTLS (389) only, dialled through `internal/safedial`; a bind or password never goes on a
+  clear connection. Every written DN must be below a `write_scope` OU. Templates escape values (RFC 4514 for DNs, RFC 4515
+  for filters). Each change reads first and is re-read to verify. Generated passwords are never stored, logged or returned
+  (AD accounts must change them at next sign-in). Errors are fixed text.
+- **Privilege.** `write_scope` cannot be a naming-context root, `CN=Users`, `CN=Builtin`, `CN=System`,
+  `CN=Configuration`, `OU=Domain Controllers`, or anything under them. Templates and update maps cannot set privilege-bearing
+  attributes (per flavor, compared without case): AD `nTSecurityDescriptor`, `msDS-KeyCredentialLink`, delegation and
+  `servicePrincipalName`, `altSecurityIdentities`, `sIDHistory`, `adminCount`, `scriptPath`, `userCertificate`,
+  `primaryGroupID`, and `userPrincipalName` (create only); POSIX `uidNumber`, `gidNumber`, `authPassword`, Samba hashes,
+  `sshPublicKey`, `homeDirectory`, `loginShell`. The target refuses to change an account or group with `adminCount=1` or an
+  `objectSid` ending in RID 500, 512, 516, 518, 519, 544, 548, 549 or 551, unless `allow_tier0` is set (dev only; refused
+  in production).
+- **LDAP passwords.** The Password Modify operation (RFC 3062) is used when the server advertises it, so the server hashes the
+  value. Otherwise `userPassword` is written, and the server must hash cleartext on write (OpenLDAP `ppolicy_hash_cleartext`,
+  389-DS `passwordStorageScheme`); without that the value is stored as sent.
+- **Not yet.** Reaching a private directory through the Directory Agent (the agent push job handles SCIM and Okta only), group
+  create/update, and showing a reset password to the user. Tests use an in-process fake (`ldapwrite/ldapfake`).

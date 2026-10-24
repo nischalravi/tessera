@@ -27,3 +27,22 @@ A route or field to be removed in v1 is first deprecated, and stays working for 
 - `Link: <url>; rel="deprecation"` when a migration guide exists.
 
 The server refuses to start with a deprecation whose Sunset is less than 6 months (180 days) after its Deprecation date (`api.Config.Deprecations`). The OpenAPI document (`GET /api/openapi.json`) is the reference for what each route needs.
+
+## Errors and lists on v1
+
+These apply to `/api/v1` only; the unversioned `/api` paths keep their older shapes for the UI.
+
+**One error envelope.** Every answer with status 400 or more is
+`{"error": {"code": "...", "message": "...", "field": "...", "details": {...}}}`. `code` is stable and machine readable
+(`forbidden`, `step_up_required`, `rate_limited`, `validation_error`, `invalid_cursor`, ...; a status with no route code gets
+`not_found`, `conflict`, `internal_error`, ...). `message` is for people and may change. `field` names the offending input when
+known. `details` carries extra fields of the error, such as the step-up challenge or the list of validation errors.
+
+**Lists.** A list answers `{"items": [...], "next_cursor": "..." | null}`. Query `limit` (1 to 500, default 100) and `cursor`
+(the `next_cursor` of the previous page; absent or null on the last page). A cursor is bound to its route and its other
+query parameters; used with different ones it is `400 invalid_cursor`. `filter`, `sort` and other parameters are the route's
+own, where it has them. Routes that already page natively with `limit` and `offset` (the groups lists) keep their body and gain
+`next_cursor`. `GET /api/v1/audit` pages by keyset (`before_seq`), so it reaches every event; a `null` cursor always means
+the end. A short list of small routes (policies, connectors, identities, accounts, groups, resources, violations) is cut by the
+server from the full answer; if that answer is larger than 1 MiB it is sent whole, unpaged, with `Tessera-Paging: skipped`,
+never truncated. Every other route is not paged by cursor: its own parameters apply, and a `cursor` is `400 paging_unsupported`.
