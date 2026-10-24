@@ -33,6 +33,8 @@ const (
 	Beeline     = "beeline"
 	CSVFeed     = "csvfeed"
 	AgentCore   = "agentcore"
+	// SuccessFactors is SAP SuccessFactors Employee Central, a read-only HR source.
+	SuccessFactors = "successfactors"
 )
 
 // Type describes one governed connector type.
@@ -61,6 +63,7 @@ var Types = []Type{
 	{ID: Beeline, Template: "vms", System: "beeline", Vendor: "beeline", Feature: true},
 	{ID: CSVFeed, Template: "vms", System: "csv", Vendor: "csv", Feature: true},
 	{ID: AgentCore, Template: "agentcore", System: "aws-agentcore", Vendor: AgentCore},
+	{ID: SuccessFactors, Template: "successfactors", System: "successfactors", Vendor: SuccessFactors},
 }
 
 // Lookup returns the type with the id.
@@ -99,6 +102,13 @@ func SettingSpecs(typ string) []Setting {
 			{"token_path", "OAuth token path", "Optional.", false}}
 	case GitHubScan:
 		return []Setting{{"org", "Organization", "The GitHub organization to scan. The credential is a read-only token (Contents and Metadata: read).", true}}
+	case SuccessFactors:
+		return []Setting{
+			{"auth", "Authentication", "basic (the credential is the API user's password) or saml_bearer (the credential is the PEM private key and certificate registered on the OAuth client). Default basic.", false},
+			{"company_id", "Company id", "The SuccessFactors company id.", true},
+			{"username", "API user", "A dedicated API user with read-only permissions. With saml_bearer the assertion is issued for this user.", true},
+			{"client_id", "OAuth client id (API key)", "Required with saml_bearer.", false},
+			{"legal_entity", "Legal entity", "Optional: read only the jobs of this legal entity (company).", false}}
 	case AgentCore:
 		return []Setting{{"snapshot", "Snapshot file", "A recorded AgentCore snapshot (JSON) in this tenant's directory under TESSERA_LOADER_DATA_DIR. There is no live AgentCore client; refused in prod.", true}}
 	case Fieldglass, Beeline:
@@ -125,7 +135,7 @@ func SettingSpecs(typ string) []Setting {
 // it is empty; AWS and AgentCore take none.
 func BaseURLUse(typ string) (required, takes bool) {
 	switch typ {
-	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed:
+	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed, SuccessFactors:
 		return true, true
 	case GitHubScan:
 		return false, true
@@ -143,6 +153,9 @@ var (
 	regionRE  = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d{1,2}$`)
 	accountRE = regexp.MustCompile(`^\d{12}$`)
 	extIDRE   = regexp.MustCompile(`^[\w+=,.@:/-]{2,1000}$`)
+	companyRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	sfUserRE  = regexp.MustCompile(`^[^\x00-\x1f\x7f:]{1,128}$`)
+	entityRE  = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,64}$`)
 )
 
 // SettingError is one invalid setting.
@@ -178,8 +191,24 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 		}
 		switch s.Key {
 		case "username":
-			if !userRE.MatchString(v) {
+			if typ == SuccessFactors {
+				if !sfUserRE.MatchString(v) {
+					bad(s.Key, "must be 1 to 128 printable characters without a colon")
+				}
+			} else if !userRE.MatchString(v) {
 				bad(s.Key, "must be 1 to 256 printable characters")
+			}
+		case "auth":
+			if v != "basic" && v != "saml_bearer" {
+				bad(s.Key, "must be basic or saml_bearer")
+			}
+		case "company_id":
+			if !companyRE.MatchString(v) {
+				bad(s.Key, "must be a plain company id (letters, digits, . _ -)")
+			}
+		case "legal_entity":
+			if !entityRE.MatchString(v) {
+				bad(s.Key, "must be 1 to 64 printable characters")
 			}
 		case "client_id":
 			if !clientRE.MatchString(v) {
@@ -234,6 +263,9 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 				bad(s.Key, "is not a valid external id")
 			}
 		}
+	}
+	if typ == SuccessFactors && strings.TrimSpace(set["auth"]) == "saml_bearer" && strings.TrimSpace(set["client_id"]) == "" {
+		bad("client_id", "required with saml_bearer")
 	}
 	return errs
 }

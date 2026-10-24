@@ -17,6 +17,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 )
 
 // Connector builds the connector of a connection by the connector's own
@@ -40,6 +41,8 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 		cn, err = erp.FromEnv(p.Type, getenv, rt, hc, now)
 	case governed.GitHubScan:
 		cn, err = githubscan.FromEnv(getenv, now(), rt, hc)
+	case governed.SuccessFactors:
+		cn, err = successfactors.FromEnv(getenv, now(), rt, hc)
 	case governed.AgentCore:
 		cn, err = agentcore.FromEnv(getenv, now())
 	}

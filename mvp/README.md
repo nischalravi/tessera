@@ -92,7 +92,8 @@ server/
                         production read connectors (see Production connectors)
       githubscan/       GitHub org scan for MCP configs and agent credentials (see AI agent discovery)
       agentcore/        AWS Bedrock AgentCore agents, fixture-only (see AI agent discovery)
-      all/              registers okta, entra, google, workday, github-scan and aws-agentcore (imported by cmd/tessera)
+      successfactors/   SAP SuccessFactors HR source over OData v2 (see SAP SuccessFactors HR source)
+      all/              registers okta, entra, google, workday, successfactors, github-scan and aws-agentcore (imported by cmd/tessera)
     ingest/             phased, idempotent upsert of connector output (cross-system refs resolve)
     store/              schema, row types and parameterized queries (database/sql, no ORM)
     audit/              hash-chained audit ledger: Record, the http.request middleware (fail-closed
@@ -2790,6 +2791,55 @@ writes:                                        # request templates; see below
   and auth mode, throttling, failures, oversize and looping responses, a hostile next link). Staged dry-run
   reconciliation for `rest_generic` connections arrives with the live-connector work for the other non-demo types
   (`readiness.connectorFor`).
+
+### SAP SuccessFactors HR source (issue #556)
+
+`internal/connectors/successfactors` reads SuccessFactors Employee Central as an authoritative HR source over the
+OData v2 API, like the Workday source. The New connection gallery has an **SAP SuccessFactors** tile (category
+Directories & HR, capability HR source, the SAP mark; template `successfactors`, role `authoritative`).
+
+- **Read-only.** Every request is a GET (the only POST is the OAuth token request). There is no write-back: a
+  connection with `write_mode` other than `off` is refused, and the template's write-back items stay not applicable.
+- **Entities.** `User` (login, name, e-mail, title, status), `EmpEmployment` (person id `personIdExternal`, start and
+  end dates), `EmpJob` (department with its `departmentNav` name, job title, `managerId`, location, cost center,
+  legal entity; only the job in force today), `PerPerson` (the name of a person with no `User` row, for example a
+  leaver; a 403 here is tolerated and names fall back to ids). Only named fields are requested (`$select`): no
+  date of birth, national id, compensation or bank details. Collections are followed through server-side paging
+  (`__next`, absolute or relative); a link that leaves the configured host is refused. Every read is a full read.
+- **Mapping.** A person is an identity keyed by the person id (user id when there is none) with the work e-mail for
+  correlation, plus a `successfactors` account keyed by the user id, `member_of` a `department` group. Manager comes
+  from the job's `managerId` (`NO_MANAGER` is none). Account attributes: `user_id`, `person_id`, `work_email`,
+  `status`, `hire_date`, `termination_date`, `department`, `title`, `manager`, `location`, `cost_center`,
+  `legal_entity`. The open end `9999-12-31` is read as no end; OData dates (`/Date(ms)/`, ISO) are read in UTC.
+- **Effective dating** follows Workday: a person whose start date is ahead is not an identity yet (only a pending
+  joiner event exists); an end date ahead leaves the person active with a pending leaver event; a rehire takes the
+  latest employment. Events (`StreamEvents`): employment start is a `joiner` (historical once it has taken effect),
+  employment end a `leaver`, a new job row that changes department or manager a `mover`; ids are
+  `sf-evt-<kind>-<user id>-<date>`, so a repeat read yields the same events. The window is 30 days (`EVENT_WINDOW`).
+- **Authentication.** `basic`: the credential is the API user's password, sent as `user@companyId:password`.
+  `saml_bearer` (OAuth 2.0 SAML bearer): the credential is a PEM bundle with the RSA private key and the certificate
+  registered on the OAuth client; Tessera signs a short-lived SAML 2.0 assertion (RSA-SHA256, enveloped, exclusive
+  c14n; issuer and `api_key` are the client id, subject is the API user, audience `www.successfactors.com`,
+  recipient `<api server>/oauth/token`) and exchanges it at `/oauth/token`; the token is cached until shortly before
+  it expires and renewed after a 401. The credential is sealed (`internal/seal`) and never returned or logged.
+- **Host.** `base_url` must be an `https` host on a documented data-center domain: `*.successfactors.com`,
+  `*.successfactors.eu`, `*.sapsf.com`, `*.sapsf.cn`, `*.sapsf.eu` (no apex, port, path or user info; the template's
+  `host_allowlist` and the connector's list are tested to be the same). The only exception is a loopback address in a
+  dev runtime with `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, which is how tests reach a fake; `internal/config` refuses
+  that variable with `TESSERA_ENV=prod`, and a runtime that did not come from a loaded configuration has the
+  production rules. All HTTP goes through `internal/safehttp`. `$filter` values (the legal entity) are escaped as
+  OData string literals (single quotes doubled, control characters refused).
+- **Settings** of a connection: `company_id` and `username` (the API user) are required; `auth` (`basic` default or
+  `saml_bearer`), `client_id` (required with `saml_bearer`) and `legal_entity` (read one legal entity) are optional.
+- **Readiness.** Checks: endpoint reachable, authentication accepted, users readable, field inventory (no forbidden
+  field is requested), person id unique, manager and e-mail fill rates, plus attestations (dedicated API user,
+  read-only permission role, target population includes leavers and pre-hires, sync schedule).
+- **As an env connector.** `TESSERA_CONNECTORS=successfactors` with `TESSERA_SUCCESSFACTORS_BASE_URL`, `_COMPANY_ID`,
+  `_USER`, `_AUTH`, `_PASSWORD` (basic) or `_CLIENT_ID` and `_PRIVATE_KEY` (saml_bearer), the two secrets as
+  `env:NAME` or `file:/path` references, and optional `_LEGAL_ENTITY`, `_EMIT_IDENTITIES`, `_EVENT_WINDOW`.
+- **Tests** run against a fake OData server (`successfactors/fake_test.go`; no real network): paging, dates, effective
+  dating, events, both auth modes (the assertion's signature is verified against the certificate), the host
+  allowlist and the dev-only loopback exception, filter escaping, secrets never in errors, read-only methods.
 
 ### Identity containment (kill switch)
 
