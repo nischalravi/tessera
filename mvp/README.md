@@ -1374,7 +1374,6 @@ change in the target system and checks that it happened.
   unverified write therefore leaves the review item open, the account active and the JIT grant in place.
   Mismatch findings remain open during retry or cancellation and resolve only after successful verification.
   Retrying (or deciding again, or the next `POST …/retry`) re-queues the same operation.
-Admin → API developer (`/admin/api-developer`, issue #587) lists the tenant's machine clients with their scopes, downloads the OpenAPI document (`GET /api/openapi.json`) and shows curl examples for the token flow; clients are registered under API clients.
 * **Write-back is per connection and off by default.** A target (`provisioning_targets`, schema
   `0224`, one per connection) has a `write_back` switch. Off: the change edits the graph at once, as
   before, and nothing reaches the target (so the parity fixtures are unchanged). On: the change goes
@@ -1443,6 +1442,7 @@ and Run now.
 Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
 `internal/admin`, routes in `internal/api/admin_routes.go`, UI under Settings → Admin: Users,
 Authentication, Change requests, API clients, and a banner on every page while a change is pending).
+Admin → API developer (`/admin/api-developer`, issue #587) lists the tenant's machine clients with their scopes, downloads the OpenAPI document (`GET /api/openapi.json`) and shows curl examples for the token flow; clients are registered under API clients.
 
 **Four-eyes compares people, not user ids** (#402). One person can hold several platform users (sign-in makes one
 per IdP connection and subject), so two users are the same actor when their ids match or both are linked to the
