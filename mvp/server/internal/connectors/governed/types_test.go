@@ -7,7 +7,7 @@ import (
 
 func TestLookup(t *testing.T) {
 	want := map[string]string{"awsorg": "awsorg", "githubscan": "githubscan", "sap": "erp", "oracle": "erp", "cyberark": "pam",
-		"beyondtrust": "pam", "delinea": "pam", "fieldglass": "vms", "beeline": "vms", "csvfeed": "vms", "agentcore": "agentcore", "azurerbac": "azurerbac", "gcpiam": "gcpiam", "successfactors": "successfactors"}
+		"beyondtrust": "pam", "delinea": "pam", "fieldglass": "vms", "beeline": "vms", "csvfeed": "vms", "agentcore": "agentcore", "azurerbac": "azurerbac", "gcpiam": "gcpiam", "successfactors": "successfactors", "unixssh": "unixssh"}
 	if len(Types) != len(want) {
 		t.Errorf("%d types, want %d", len(Types), len(want))
 	}
@@ -24,7 +24,7 @@ func TestLookup(t *testing.T) {
 		t.Error("ldap is not a governed type")
 	}
 	// the connectors that read straight into the graph, and the ones that hand over to a feature
-	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false, "azurerbac": false, "gcpiam": false, "successfactors": false,
+	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false, "azurerbac": false, "gcpiam": false, "successfactors": false, "unixssh": false,
 		"awsorg": true, "fieldglass": true, "beeline": true, "csvfeed": true} {
 		if got, _ := Lookup(id); got.Feature != feature {
 			t.Errorf("%s feature = %v", id, got.Feature)
@@ -48,6 +48,7 @@ func TestValidateSettings(t *testing.T) {
 			"subscription_ids": "aaaa1111-0000-0000-0000-000000000001, bbbb2222-0000-0000-0000-000000000002", "management_group_ids": "corp,Platform_1", "include_eligible": "true"},
 		GCPIAM:         {"organization_id": "123456789012", "folder_ids": "1000,2000", "project_ids": "alpha-proj-1, beta-proj-22"},
 		SuccessFactors: {"company_id": "ACME_prod", "username": "tessera-api"},
+		UnixSSH:        {"host": "host1.example.com", "port": "2222", "username": "tessera", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "use_sudo": "true"},
 	}
 	for typ, set := range good {
 		if errs := ValidateSettings(typ, set); len(errs) != 0 {
@@ -99,6 +100,16 @@ func TestValidateSettings(t *testing.T) {
 		{AzureRBAC, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "management_group_ids": "a/b"}, "management_group_ids"},
 		{AzureRBAC, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "include_eligible": "yes"}, "include_eligible"},
 		{AzureRBAC, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "management_url": "https://x.example"}, "management_url"},
+		{UnixSSH, map[string]string{"username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8"}, "host"},
+		{UnixSSH, map[string]string{"host": "https://h.example.com", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8"}, "host"},
+		{UnixSSH, map[string]string{"host": "h.example.com:22", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8"}, "host"},
+		{UnixSSH, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "port": "0"}, "port"},
+		{UnixSSH, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "port": "70000"}, "port"},
+		{UnixSSH, map[string]string{"host": "h", "username": "bad user; rm", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8"}, "username"},
+		{UnixSSH, map[string]string{"host": "h", "username": "u"}, "host_key"},
+		{UnixSSH, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:short"}, "host_key"},
+		{UnixSSH, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "use_sudo": "yes"}, "use_sudo"},
+		{UnixSSH, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "command": "id"}, "command"},
 		{GCPIAM, map[string]string{}, "organization_id"},
 		{GCPIAM, map[string]string{"organization_id": "organizations/1"}, "organization_id"},
 		{GCPIAM, map[string]string{"folder_ids": "a"}, "folder_ids"},

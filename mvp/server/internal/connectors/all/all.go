@@ -36,6 +36,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
@@ -61,7 +62,10 @@ import (
 // eligible assignments (TESSERA_AZURE_*); "gcp" reads Google Cloud IAM policies, roles and service
 // accounts (TESSERA_GCP_*). Both reach the public cloud only: an endpoint override is refused in prod.
 //
-// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, azure, gcp, github-scan and aws-agentcore factories. hc is the
+// Unix and Linux over SSH (issue #558): "unix" reads accounts, groups and sudoers rules of one host
+// (TESSERA_UNIXSSH_*) with a pinned host key and a key credential; it is read-only.
+//
+// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, azure, gcp, unix, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -108,6 +112,9 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	}
 	connectors.Factories["azure"] = func(now time.Time) (connectors.Connector, error) {
 		return azurerbac.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["unix"] = func(time.Time) (connectors.Connector, error) {
+		return unixssh.FromEnv(os.Getenv, rt)
 	}
 	connectors.Factories["gcp"] = func(now time.Time) (connectors.Connector, error) {
 		return gcpiam.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })

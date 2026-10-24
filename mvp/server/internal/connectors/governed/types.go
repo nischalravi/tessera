@@ -13,6 +13,7 @@ package governed
 import (
 	"fmt"
 	"io"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strconv"
@@ -37,6 +38,7 @@ const (
 	SuccessFactors = "successfactors"
 	AzureRBAC      = "azurerbac"
 	GCPIAM         = "gcpiam"
+	UnixSSH        = "unixssh"
 )
 
 // Type describes one governed connector type.
@@ -68,6 +70,7 @@ var Types = []Type{
 	{ID: SuccessFactors, Template: "successfactors", System: "successfactors", Vendor: SuccessFactors},
 	{ID: AzureRBAC, Template: "azurerbac", System: "azure", Vendor: AzureRBAC},
 	{ID: GCPIAM, Template: "gcpiam", System: "gcp", Vendor: GCPIAM},
+	{ID: UnixSSH, Template: "unixssh", System: "unix", Vendor: UnixSSH},
 }
 
 // Lookup returns the type with the id.
@@ -135,6 +138,13 @@ func SettingSpecs(typ string) []Setting {
 			{"organization_id", "Organization id", "The numeric organization id. Its folders and projects are walked. The credential is a service account key (JSON).", false},
 			{"folder_ids", "Folder ids", "Comma separated numeric ids; each is walked. Optional.", false},
 			{"project_ids", "Project ids", "Comma separated. Optional. Set at least one of organization, folders or projects.", false}}
+	case UnixSSH:
+		return []Setting{
+			{"host", "Host", "The host name or IP address of the Unix or Linux host. Private, loopback and link-local addresses are refused from the server.", true},
+			{"port", "SSH port", "1 to 65535, default 22.", false},
+			{"username", "SSH user", "A dedicated account. Its private key is the credential. It runs only getent, lastlog and the sudoers read.", true},
+			{"host_key", "Host key", "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A host whose key differs is refused.", true},
+			{"use_sudo", "Read sudoers through sudo", "true or false (default false). Needs NOPASSWD sudo entries for exactly the two read commands (see the README).", false}}
 	case AWSOrg:
 		return []Setting{
 			{"role_name", "Reader role name", "The role assumed in each account. Default TesseraReader.", false},
@@ -177,6 +187,10 @@ var (
 	mgRE      = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
 	numRE     = regexp.MustCompile(`^[0-9]{1,20}$`)
 	projectRE = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+	sshUserRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
+	sshHostRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+	// hostKeyRE is the shape only (the connector parses the key itself): a fingerprint, or a public key line.
+	hostKeyRE = regexp.MustCompile(`^(SHA256:[A-Za-z0-9+/]{43}|[^\s\x00-\x1f\x7f]{1,255} [^\x00-\x1f\x7f]{16,1000})$`)
 )
 
 // SettingError is one invalid setting.
@@ -212,7 +226,11 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 		}
 		switch s.Key {
 		case "username":
-			if typ == SuccessFactors {
+			if typ == UnixSSH {
+				if !sshUserRE.MatchString(v) {
+					bad(s.Key, "must be an account name (letters, digits, _ . -, at most 32)")
+				}
+			} else if typ == SuccessFactors {
 				if !sfUserRE.MatchString(v) {
 					bad(s.Key, "must be 1 to 128 printable characters without a colon")
 				}
@@ -299,7 +317,19 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 			checkList(v, 200, guidRE, "a subscription GUID", s.Key, bad)
 		case "management_group_ids":
 			checkList(v, 200, mgRE, "a management group id", s.Key, bad)
-		case "include_eligible":
+		case "host":
+			if _, err := netip.ParseAddr(v); err != nil && !sshHostRE.MatchString(v) {
+				bad(s.Key, "must be a host name or an IP address (no scheme, port or path)")
+			}
+		case "port":
+			if n, err := strconv.Atoi(v); err != nil || n < 1 || n > 65535 {
+				bad(s.Key, "must be between 1 and 65535")
+			}
+		case "host_key":
+			if !hostKeyRE.MatchString(v) {
+				bad(s.Key, "must be a SHA256:<fingerprint> or a public key line (ssh-ed25519 AAAA...)")
+			}
+		case "include_eligible", "use_sudo":
 			if v != "true" && v != "false" {
 				bad(s.Key, "must be true or false")
 			}

@@ -26,7 +26,7 @@ func TestTemplates_Lint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(reg.IDs(), ","); got != "ad,agentcore,awsorg,azurerbac,entra,erp,gcpiam,githubscan,google,ldap,okta,pam,rest_generic,salesforce,scim_app,sql,successfactors,vms,workday" {
+	if got := strings.Join(reg.IDs(), ","); got != "ad,agentcore,awsorg,azurerbac,entra,erp,gcpiam,githubscan,google,ldap,okta,pam,rest_generic,salesforce,scim_app,sql,successfactors,unixssh,vms,workday" {
 		t.Errorf("templates = %s", got)
 	}
 	for _, id := range reg.IDs() {

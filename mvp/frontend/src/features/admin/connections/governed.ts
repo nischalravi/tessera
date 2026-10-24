@@ -29,6 +29,7 @@ export const SETTING_KEYS: Record<string, string[]> = {
   successfactors: ["auth", "company_id", "username", "user_id", "client_id", "legal_entity"],
   azurerbac: ["tenant_id", "client_id", "subscription_ids", "management_group_ids", "include_eligible"],
   gcpiam: ["organization_id", "folder_ids", "project_ids"],
+  unixssh: ["host", "port", "username", "host_key", "use_sudo"],
 };
 
 const VAULT_URL = { label: "Vault URL", hint: "The vault's HTTPS host name, no path.", required: true };
@@ -117,6 +118,16 @@ export const GOVERNED: Record<string, GovType> = {
       { key: "project_ids", label: "Project ids", hint: "Comma separated. Set at least one of organization, folders or projects." },
     ],
     credential: { label: "Service account key (JSON)", hint: "The whole key file of a service account with viewer roles (Security Reviewer).", area: true },
+  },
+  unixssh: {
+    settings: [
+      { key: "host", label: "Host", required: true, hint: "The host name or IP address. Private, loopback and link-local addresses are refused from the server." },
+      { key: "port", label: "SSH port", hint: "1 to 65535, default 22." },
+      { key: "username", label: "SSH user", required: true, hint: "A dedicated, unprivileged account. It runs only getent, lastlog and the sudoers read." },
+      { key: "host_key", label: "Host key", required: true, hint: "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A host whose key differs is refused." },
+      { key: "use_sudo", label: "Read sudoers through sudo", hint: "true or false (default false). Needs NOPASSWD sudo entries for exactly the two read commands (see the README)." },
+    ],
+    credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
   },
   agentcore: {
     settings: [{ key: "snapshot", label: "Snapshot file", required: true, hint: "A recorded AgentCore snapshot (JSON) in this tenant's directory. There is no live AgentCore client; refused in prod." }],

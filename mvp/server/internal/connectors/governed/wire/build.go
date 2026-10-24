@@ -20,6 +20,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
 )
 
 // Connector builds the connector of a connection by the connector's own
@@ -47,6 +48,8 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 		cn, err = successfactors.FromEnv(getenv, now(), rt, hc)
 	case governed.AgentCore:
 		cn, err = agentcore.FromEnv(getenv, now())
+	case governed.UnixSSH:
+		cn, err = unixssh.FromEnv(getenv, rt)
 	case governed.AzureRBAC, governed.GCPIAM:
 		if getenv, err = n.Overrides(getenv); err != nil {
 			return nil, err

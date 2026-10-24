@@ -116,6 +116,10 @@ func (p Params) Env() (func(string) string, error) {
 	case GCPIAM:
 		m["TESSERA_GCP_ORG_ID"], m["TESSERA_GCP_FOLDER_IDS"], m["TESSERA_GCP_PROJECT_IDS"] = set("organization_id"), set("folder_ids"), set("project_ids")
 		m["TESSERA_GCP_KEY"] = "env:" + secretVar // likewise no endpoint override
+	case UnixSSH:
+		m[pre+"HOST"], m[pre+"PORT"], m[pre+"USER"] = set("host"), set("port"), set("username")
+		m[pre+"HOST_KEY"], m[pre+"SUDO"] = set("host_key"), set("use_sudo")
+		m[pre+"KEY"] = "env:" + secretVar
 	default:
 		return nil, fmt.Errorf("governed: %s is read by its own feature, not by the connector sync", p.Type)
 	}

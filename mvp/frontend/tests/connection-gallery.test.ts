@@ -13,7 +13,7 @@ const T = [
   ["okta", "Okta", "OAuth service app", false], ["google", "Google Workspace", "Domain-wide delegation", false],
   ["workday", "Workday", "Integration system user", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false], ["scim:auth0", "Auth0", "Enterprise connection", false],
   ["awsorg", "AWS Organizations and IAM", "Reader role in each account", false],
-  ["azurerbac", "Azure RBAC", "Role assignments of subscriptions", false], ["gcpiam", "Google Cloud IAM", "IAM policies of an organization", false], ["githubscan", "GitHub (code scan)", "Reads MCP configuration", false],
+  ["azurerbac", "Azure RBAC", "Role assignments of subscriptions", false], ["gcpiam", "Google Cloud IAM", "IAM policies of an organization", false], ["unixssh", "Unix/Linux host (SSH)", "Local accounts, groups and sudoers rules", false], ["githubscan", "GitHub (code scan)", "Reads MCP configuration", false],
   ["sap", "SAP", "Roles and transaction codes", false], ["oracle", "Oracle Fusion Applications", "Roles of Oracle Fusion", false],
   ["cyberark", "CyberArk Privileged Access Manager", "Safes and vaulted accounts", false], ["beyondtrust", "BeyondTrust Password Safe", "Smart rules", false],
   ["delinea", "Delinea Secret Server", "Folders and secrets", false], ["fieldglass", "SAP Fieldglass", "Contractor assignments", false],
@@ -52,7 +52,7 @@ test("chips filter by category and capability, and combine with search", () => {
 
 test("the connectors the server already had are in the gallery under their categories", () => {
   const want: Record<string, string[]> = {
-    "Cloud & IaaS": ["awsorg", "azurerbac", "gcpiam"], "Source code": ["githubscan"], ERP: ["sap", "oracle"], "Privileged access": ["cyberark", "beyondtrust", "delinea"],
+    "Cloud & IaaS": ["awsorg", "azurerbac", "gcpiam"], "Servers & hosts": ["unixssh"], "Source code": ["githubscan"], ERP: ["sap", "oracle"], "Privileged access": ["cyberark", "beyondtrust", "delinea"],
     "Contractor & VMS": ["fieldglass", "beeline", "csvfeed"], "AI agents": ["agentcore"],
   };
   for (const [category, types] of Object.entries(want)) {
@@ -66,6 +66,8 @@ test("the connectors the server already had are in the gallery under their categ
   assert.deepEqual(ids({ capability: "Access inventory", category: "Cloud & IaaS" }), ["awsorg", "azurerbac", "gcpiam"]);
   assert.deepEqual(ids({ q: "azure" }), ["azurerbac"]);
   assert.deepEqual(ids({ q: "google cloud" }), ["gcpiam"]);
+  assert.deepEqual(ids({ q: "sudoers" }), ["unixssh"]);
+  assert.deepEqual(ids({ capability: "Access inventory", category: "Servers & hosts" }), ["unixssh"]);
   assert.deepEqual(ids({ q: "  privileged " }), ["cyberark"]);
 });
 
@@ -78,6 +80,7 @@ test("every type has a logo: a simple-icons mark or an original glyph", () => {
   assert.match(src, /siSap\b/, "the SAP mark");
   assert.match(src, /siGithub\b/, "the GitHub mark");
   assert.match(src, /siGooglecloud\b/, "the Google Cloud mark");
+  assert.match(src, /siLinux\b/, "the Linux mark");
 });
 
 test("groups follow category order and drop empty ones", () => {
