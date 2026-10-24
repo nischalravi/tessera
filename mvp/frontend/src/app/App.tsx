@@ -110,6 +110,7 @@ const AdminUsers = named(() => import("../features/admin/Users"), "Users");
 const IdpConnections = named(() => import("../features/admin/IdpConnections"), "IdpConnections");
 const ChangeRequests = named(() => import("../features/admin/ChangeRequests"), "ChangeRequests");
 const ApiClients = named(() => import("../features/admin/ApiClients"), "ApiClients");
+const ApiDeveloper = named(() => import("../features/admin/ApiDeveloper"), "ApiDeveloper");
 const PlatformHealth = named(() => import("../features/admin/PlatformHealth"), "PlatformHealth");
 const ChangeBanner = named(() => import("../features/admin/ChangeBanner"), "ChangeBanner");
 const BreakGlass = named(() => import("../features/admin/BreakGlass"), "BreakGlass");
@@ -279,6 +280,7 @@ export default function App() {
                     <Route path="/admin/authentication" element={<IdpConnections />} />
                     <Route path="/admin/change-requests" element={<ChangeRequests />} />
                     <Route path="/admin/api-clients" element={<ApiClients />} />
+                    <Route path="/admin/api-developer" element={<ApiDeveloper />} />
                     <Route path="/admin/break-glass" element={<BreakGlass />} />
                     <Route path="/admin/platform-health" element={<PlatformHealth />} />
                     <Route path="/admin/event-sinks" element={<EventSinks />} />
