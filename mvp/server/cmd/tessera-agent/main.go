@@ -92,9 +92,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 // ldapProber is the agent's ProberFactory: the read-only LDAP prober, dialing
 // through the agent-local safedial Dialer the Executor built.
 func ldapProber(s agent.ProberSpec) (connectors.Prober, error) {
-	return ldap.New(ldap.Config{Host: s.Target.Host, Port: s.Target.Port, BindDN: s.Config.BindDN,
+	return ldap.New(ldap.Config{Host: s.Target.Host, Port: s.Target.Port, TLSMode: s.Target.TLSMode, BindDN: s.Config.BindDN,
+		PageSize: s.Config.PageSize, AttrMap: attrMap(s.Config.AttrMap),
 		Password: ldap.Secret(s.Password), BaseDNs: s.Config.BaseDNs, UserFilter: s.Config.UserFilter,
 		RootCAs: s.RootCAs, Dialer: s.Dialer})
+}
+
+func attrMap(in []agent.AttrMap) []ldap.AttrMap {
+	out := make([]ldap.AttrMap, len(in))
+	for i, m := range in {
+		out[i] = ldap.AttrMap{LDAP: m.LDAP, Target: m.Target, Scope: m.Scope}
+	}
+	return out
 }
 
 // ldapSyncer is the agent's SyncerFactory product: it reads the directory's
@@ -102,7 +111,8 @@ func ldapProber(s agent.ProberSpec) (connectors.Prober, error) {
 type ldapSyncer struct{ p *ldap.Prober }
 
 func ldapSync(s agent.ProberSpec) (agent.Syncer, error) {
-	p, err := ldap.New(ldap.Config{Host: s.Target.Host, Port: s.Target.Port, BindDN: s.Config.BindDN,
+	p, err := ldap.New(ldap.Config{Host: s.Target.Host, Port: s.Target.Port, TLSMode: s.Target.TLSMode, BindDN: s.Config.BindDN,
+		PageSize: s.Config.PageSize, AttrMap: attrMap(s.Config.AttrMap),
 		Password: ldap.Secret(s.Password), BaseDNs: s.Config.BaseDNs, UserFilter: s.Config.UserFilter,
 		RootCAs: s.RootCAs, Dialer: s.Dialer})
 	if err != nil {
@@ -123,7 +133,11 @@ func (l ldapSyncer) Discover(ctx context.Context, lim agent.SyncLimits) (*agent.
 		if a.Disabled {
 			st = "disabled"
 		}
-		out.Accounts = append(out.Accounts, agent.SyncAccount{ExternalID: a.ExternalID, Username: a.Username, Email: a.Email, Status: st})
+		sa := agent.SyncAccount{ExternalID: a.ExternalID, Username: a.Username, Email: a.Email, Status: st}
+		for _, x := range a.Extra {
+			sa.Extra = append(sa.Extra, agent.SyncExtra{Scope: x.Scope, Target: x.Target, Value: x.Value})
+		}
+		out.Accounts = append(out.Accounts, sa)
 	}
 	for _, g := range ls.Groups {
 		out.Groups = append(out.Groups, agent.SyncGroup{ExternalID: g.ExternalID, Name: g.Name})

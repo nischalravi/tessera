@@ -122,6 +122,8 @@ func (o Op) Valid() bool {
 type Target struct {
 	Host string `json:"host"`
 	Port int    `json:"port"`
+	// TLSMode is ldaps, starttls or none; empty infers it from the port.
+	TLSMode string `json:"tls_mode,omitempty"`
 }
 
 // ProbeConfig is the non-secret connection settings a job carries. CredName
@@ -133,6 +135,17 @@ type ProbeConfig struct {
 	UserFilter string   `json:"user_filter,omitempty"`
 	// CABundle is the connection's PEM CA bundle (public certificates).
 	CABundle string `json:"ca_bundle,omitempty"`
+	// PageSize is the paged-search page of a sync (0: the default, 500).
+	PageSize int `json:"page_size,omitempty"`
+	// AttrMap are extra LDAP attributes a sync reads for each account.
+	AttrMap []AttrMap `json:"attr_map,omitempty"`
+}
+
+// AttrMap maps one LDAP attribute to a Tessera account or identity attribute.
+type AttrMap struct {
+	LDAP   string `json:"ldap"`
+	Target string `json:"target"`
+	Scope  string `json:"scope"` // account | identity
 }
 
 // Job is one typed operation for one agent. Arg is the object reference of
@@ -288,8 +301,21 @@ func validateTarget(t Target, c ProbeConfig) error {
 	if t.Host == "" || len(t.Host) > 253 || strings.ContainsAny(t.Host, "/@ \t\r\n\x00") {
 		return errors.New("target host is not valid")
 	}
-	if t.Port != safedial.PortLDAPS && t.Port != safedial.PortStartTLS {
-		return fmt.Errorf("target port must be %d or %d", safedial.PortStartTLS, safedial.PortLDAPS)
+	if t.Port < 1 || t.Port > 65535 {
+		return errors.New("target port must be from 1 to 65535")
+	}
+	switch t.TLSMode {
+	case "", safedial.ModeLDAPS, safedial.ModeStartTLS, safedial.ModeNone:
+	default:
+		return errors.New("target tls_mode must be ldaps, starttls or none")
+	}
+	if c.PageSize < 0 || c.PageSize > 10000 || len(c.AttrMap) > maxList {
+		return errors.New("config is not valid")
+	}
+	for _, m := range c.AttrMap {
+		if !validAttrName(m.LDAP) || !validAttrName(m.Target) || (m.Scope != "account" && m.Scope != "identity") {
+			return errors.New("config is not valid")
+		}
 	}
 	if len(c.BindDN) > maxItem || !validCredName(c.CredName) || len(c.UserFilter) > maxFilter || len(c.CABundle) > maxCA ||
 		len(c.BaseDNs) > maxList {
@@ -332,4 +358,21 @@ func ParseRef(ref string) (agentID, name string, ok bool) {
 		return "", "", false
 	}
 	return agentID, name, true
+}
+
+// validAttrName is an RFC 4512 descr: a letter, then letters, digits and hyphens.
+func validAttrName(s string) bool {
+	if s == "" || len(s) > 128 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
 }

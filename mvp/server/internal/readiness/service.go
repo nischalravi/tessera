@@ -64,6 +64,8 @@ type Bundle struct {
 	Evidence   *Evidence
 	Eval       *Evaluation
 	LiveTTL    time.Duration
+	// Env is the server environment (TESSERA_ENV): tls_mode none is valid only in dev.
+	Env string
 
 	// cred is the opened credential of a real revision, loaded by Validate
 	// for one run. It never leaves the bundle and prints as [redacted].
@@ -123,7 +125,7 @@ func (s *Service) Load(c *store.TenantTx, rev *store.ConnectionRevision, now tim
 	if err != nil {
 		return nil, err
 	}
-	b := &Bundle{Conn: conn, Rev: rev, Template: tmpl, Config: cfg, Hash: hashInput(conn, rev, cfg), LiveTTL: s.LiveTTL}
+	b := &Bundle{Conn: conn, Rev: rev, Template: tmpl, Config: cfg, Hash: hashInput(conn, rev, cfg), LiveTTL: s.LiveTTL, Env: s.Env}
 	if err := b.Hash.Normalize(); err != nil {
 		return nil, err
 	}

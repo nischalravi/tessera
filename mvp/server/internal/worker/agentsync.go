@@ -35,9 +35,9 @@ func AgentSyncPayload(c *store.Connection, rev *store.ConnectionRevision) (agent
 	if err != nil {
 		return "", spec, false, err
 	}
-	spec = agent.SyncSpec{System: c.System, Target: agent.Target{Host: cfg.Host, Port: cfg.Port},
+	spec = agent.SyncSpec{System: c.System, Target: agent.Target{Host: cfg.Host, Port: cfg.Port, TLSMode: cfg.TLSMode},
 		Config: agent.ProbeConfig{BindDN: cfg.BindDN, CredName: cred, BaseDNs: cfg.BaseDNs, UserFilter: cfg.UserFilter,
-			CABundle: cfg.CABundle}}
+			CABundle: cfg.CABundle, PageSize: cfg.PageSize, AttrMap: attrMap(cfg.AttrMap)}}
 	if err := spec.Validate(); err != nil {
 		return "", spec, false, fmt.Errorf("connection %s: %w", c.Name, err)
 	}

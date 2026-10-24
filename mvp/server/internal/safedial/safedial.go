@@ -9,8 +9,10 @@
 //     net.Dialer Control hook checks the final socket address as well.
 //   - Blocked: loopback, RFC 1918, link-local and cloud metadata, CGNAT,
 //     multicast, reserved and translation ranges (see safehttp).
-//   - Ports: 636 (LDAPS, TLS from the first byte) and 389 (StartTLS, which
-//     the caller must complete before any credential is sent). No other port.
+//   - Ports: any port from 1 to 65535, with an explicit TLS mode: ldaps (TLS
+//     from the first byte), starttls (which the caller must complete before
+//     any credential is sent) or none (dev only; never Secure, so no
+//     credential is sent). Unset infers ldaps for 636 and starttls otherwise.
 //   - TLS 1.2 or later; connect and handshake timeouts.
 //
 // A private target is refused unless it is on the operator's dev-only
@@ -52,8 +54,10 @@ const (
 )
 
 var (
-	// ErrPort: the port is not 389 or 636.
-	ErrPort = errors.New("safedial: port not allowed (LDAP ports 389 and 636 only)")
+	// ErrPort: the port is not a valid TCP port (1 to 65535).
+	ErrPort = errors.New("safedial: port not allowed (a port from 1 to 65535)")
+	// ErrTLSMode: the TLS mode is unknown, or "none" outside dev.
+	ErrTLSMode = errors.New("safedial: TLS mode not allowed")
 	// ErrBlockedAddress: the host is or resolves to a blocked address.
 	ErrBlockedAddress = errors.New("safedial: destination address not allowed")
 	// ErrHost: the host is empty or not a plain host name or IP.
@@ -64,6 +68,27 @@ var (
 	// ErrNoTLS: the connection is not (yet) protected by TLS 1.2 or later.
 	ErrNoTLS = errors.New("safedial: connection is not protected by TLS")
 )
+
+// TLS modes of an LDAP connection (issue #585). "none" is plain LDAP: only the
+// dev dialer opens it, and a plain connection is never Secure, so no
+// credential is ever sent on it.
+const (
+	ModeLDAPS    = "ldaps"
+	ModeStartTLS = "starttls"
+	ModeNone     = "none"
+)
+
+// InferMode is the TLS mode of a connection that does not name one: LDAPS for
+// port 636, StartTLS for any other port, so a saved connection keeps behaving as it did.
+func InferMode(mode string, port int) string {
+	switch {
+	case mode != "":
+		return mode
+	case port == PortLDAPS:
+		return ModeLDAPS
+	}
+	return ModeStartTLS
+}
 
 // Options configure a Dialer.
 type Options struct {
@@ -176,8 +201,22 @@ func (c *Conn) Secure() bool { return c.state != nil && c.state.Version >= tls.V
 // deferred so Inspect can report why a chain is bad; such a connection must
 // be closed without sending anything but the handshake.
 func (d *Dialer) Dial(ctx context.Context, host string, port int, inspect bool) (*Conn, error) {
-	if port != PortStartTLS && port != PortLDAPS {
+	return d.DialMode(ctx, host, port, "", inspect)
+}
+
+// DialMode is Dial with an explicit TLS mode (ModeLDAPS, ModeStartTLS or
+// ModeNone); empty infers it from the port. ModeNone is refused outside dev,
+// and its connection is never Secure.
+func (d *Dialer) DialMode(ctx context.Context, host string, port int, mode string, inspect bool) (*Conn, error) {
+	if port < 1 || port > 65535 {
 		return nil, fmt.Errorf("%w: %d", ErrPort, port)
+	}
+	mode = InferMode(mode, port)
+	switch {
+	case mode == ModeLDAPS || mode == ModeStartTLS:
+	case mode == ModeNone && d.o.Env == config.Dev:
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrTLSMode, mode)
 	}
 	host = strings.TrimSuffix(strings.TrimSpace(host), ".")
 	if host == "" || strings.ContainsAny(host, "/@ \t\r\n") {
@@ -187,8 +226,8 @@ func (d *Dialer) Dial(ctx context.Context, host string, port int, inspect bool) 
 	if err != nil {
 		return nil, err
 	}
-	c := &Conn{Conn: raw, Host: host, Port: port, StartTLSPort: port == PortStartTLS, cfg: d.TLSConfig(host, inspect)}
-	if port == PortLDAPS {
+	c := &Conn{Conn: raw, Host: host, Port: port, StartTLSPort: mode == ModeStartTLS, cfg: d.TLSConfig(host, inspect)}
+	if mode == ModeLDAPS {
 		tc := tls.Client(raw, c.cfg)
 		hctx, cancel := context.WithTimeout(ctx, d.o.HandshakeTimeout)
 		defer cancel()
@@ -423,7 +462,7 @@ const (
 // are 389 or 636. Wildcards and broad CIDRs (shorter than /16 for IPv4, /64
 // for IPv6) are refused.
 func ParseAllow(s string) ([]AllowEntry, error) {
-	return ParseAllowPorts(s, PortStartTLS, PortLDAPS)
+	return parseAllow(s, func(p int) bool { return p >= 1 && p <= 65535 }, "from 1 to 65535")
 }
 
 // Ports of an HTTPS target an agent may push to (issue #302); the same set
@@ -443,6 +482,10 @@ func ParseAllowHTTPS(s string) ([]AllowEntry, error) {
 
 // ParseAllowPorts is ParseAllow with the ports an entry may name.
 func ParseAllowPorts(s string, ports ...int) ([]AllowEntry, error) {
+	return parseAllow(s, func(p int) bool { return slices.Contains(ports, p) }, portList(ports))
+}
+
+func parseAllow(s string, portOK func(int) bool, portText string) ([]AllowEntry, error) {
 	var out []AllowEntry
 	for _, raw := range strings.Split(s, ",") {
 		raw = strings.TrimSpace(raw)
@@ -458,8 +501,8 @@ func ParseAllowPorts(s string, ports ...int) ([]AllowEntry, error) {
 		}
 		hostPart, portPart := raw[:i], raw[i+1:]
 		port, err := strconv.Atoi(portPart)
-		if err != nil || !slices.Contains(ports, port) {
-			return nil, fmt.Errorf("%q: port must be %s", raw, portList(ports))
+		if err != nil || !portOK(port) {
+			return nil, fmt.Errorf("%q: port must be %s", raw, portText)
 		}
 		hostPart = strings.TrimSuffix(strings.TrimPrefix(hostPart, "["), "]")
 		e := AllowEntry{Port: port}
