@@ -188,8 +188,20 @@ func (t *Target) Apply(ctx context.Context, r target.Request) error {
 	if !safeName.MatchString(name) {
 		return target.Permanent("the account name %q is not allowed: use letters, digits and _ . @ $ # %% : -, at most 128 characters, starting with a letter, digit or _", shorten(name))
 	}
-	if ent := entitlement(r.Group); (r.Kind == target.AddEntitlement || r.Kind == target.RemoveEntitlement) && !safeName.MatchString(ent) {
-		return target.Permanent("the role name %q is not allowed: use letters, digits and _ . @ $ # %% : -, at most 128 characters, starting with a letter, digit or _", shorten(ent))
+	// The value that reaches DDL is rebuilt from the constant alphabet (cleanIdent), not copied.
+	name, err = cleanIdent(name)
+	if err != nil {
+		return target.Permanent("the account name is not allowed: %v", err)
+	}
+	cleanEnt := ""
+	if r.Kind == target.AddEntitlement || r.Kind == target.RemoveEntitlement {
+		ent := entitlement(r.Group)
+		if !safeName.MatchString(ent) {
+			return target.Permanent("the role name %q is not allowed: use letters, digits and _ . @ $ # %% : -, at most 128 characters, starting with a letter, digit or _", shorten(ent))
+		}
+		if cleanEnt, err = cleanIdent(ent); err != nil {
+			return target.Permanent("the role name is not allowed: %v", err)
+		}
 	}
 	var stmts []string
 	switch r.Kind {
@@ -215,7 +227,7 @@ func (t *Target) Apply(ctx context.Context, r target.Request) error {
 			stmts, err = statements(t.cfg.Engine, opDrop, name, "")
 		}
 	case target.AddEntitlement, target.RemoveEntitlement:
-		ent := entitlement(r.Group)
+		ent := cleanEnt
 		has := exists && st.member(t, id, ent)
 		switch {
 		case r.Kind == target.AddEntitlement && !exists:
@@ -242,6 +254,26 @@ func (t *Target) Apply(ctx context.Context, r target.Request) error {
 // whitespace, control and non-ASCII characters are refused, so a Windows DOMAIN\user login or a
 // name with spaces cannot be provisioned here.
 var safeName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.@$#%:-]{0,127}$`)
+
+// identAlphabet is every character a name that reaches DDL may have (the same set as safeName).
+const identAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.@$#%:-"
+
+// cleanIdent rebuilds name one character at a time from identAlphabet, so the result is made of
+// the constant's bytes, never of the input's. Any character outside the alphabet is an error.
+func cleanIdent(name string) (string, error) {
+	if len(name) == 0 || len(name) > maxIdent {
+		return "", errIdent
+	}
+	out := make([]byte, 0, len(name))
+	for _, r := range name {
+		i := strings.IndexRune(identAlphabet, r)
+		if i < 0 {
+			return "", fmt.Errorf("%w: character not allowed", errIdent)
+		}
+		out = append(out, identAlphabet[i])
+	}
+	return string(out), nil
+}
 
 func shorten(s string) string {
 	s = strings.ToValidUTF8(s, "?")
