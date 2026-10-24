@@ -9,7 +9,9 @@
 //     net.Dialer Control hook checks the final socket address as well.
 //   - Blocked: loopback, RFC 1918, link-local and cloud metadata, CGNAT,
 //     multicast, reserved and translation ranges (see safehttp).
-//   - Ports: any port from 1 to 65535, with an explicit TLS mode: ldaps (TLS
+//   - Ports: 389, 636 and any port from 1024 up (LLDAP uses 3890, LDAPS often
+//     6360), except well-known database, cache and admin ports (BlockedPort),
+//     so an LDAP probe cannot be aimed at them. An explicit TLS mode: ldaps (TLS
 //     from the first byte), starttls (which the caller must complete before
 //     any credential is sent) or none (dev only; never Secure, so no
 //     credential is sent). Unset infers ldaps for 636 and starttls otherwise.
@@ -54,8 +56,8 @@ const (
 )
 
 var (
-	// ErrPort: the port is not a valid TCP port (1 to 65535).
-	ErrPort = errors.New("safedial: port not allowed (a port from 1 to 65535)")
+	// ErrPort: the port is not an allowed LDAP port (see PortAllowed).
+	ErrPort = errors.New("safedial: port not allowed")
 	// ErrTLSMode: the TLS mode is unknown, or "none" outside dev.
 	ErrTLSMode = errors.New("safedial: TLS mode not allowed")
 	// ErrBlockedAddress: the host is or resolves to a blocked address.
@@ -77,6 +79,23 @@ const (
 	ModeStartTLS = "starttls"
 	ModeNone     = "none"
 )
+
+// blockedPorts are well-known non-LDAP services at or above 1024 that a
+// directory connection is never pointed at.
+var blockedPorts = map[int]bool{1433: true, 1521: true, 2049: true, 2375: true, 2376: true, 2379: true, 3306: true, 3389: true,
+	5432: true, 5900: true, 5984: true, 6379: true, 8500: true, 9200: true, 9300: true, 11211: true, 27017: true}
+
+// PortAllowed reports whether a directory connection may use the port: 389,
+// 636, or 1024 to 65535 outside the blocked service ports. Ports below 1024
+// other than the two LDAP ports (ssh, smtp, http, https and the like) are not
+// directory ports. This bounds what a probe can reach; the address policy
+// (blocked ranges, rebinding checks) applies regardless.
+func PortAllowed(p int) bool {
+	if p == PortStartTLS || p == PortLDAPS {
+		return true
+	}
+	return p >= 1024 && p <= 65535 && !blockedPorts[p]
+}
 
 // InferMode is the TLS mode of a connection that does not name one: LDAPS for
 // port 636, StartTLS for any other port, so a saved connection keeps behaving as it did.
@@ -208,7 +227,7 @@ func (d *Dialer) Dial(ctx context.Context, host string, port int, inspect bool) 
 // ModeNone); empty infers it from the port. ModeNone is refused outside dev,
 // and its connection is never Secure.
 func (d *Dialer) DialMode(ctx context.Context, host string, port int, mode string, inspect bool) (*Conn, error) {
-	if port < 1 || port > 65535 {
+	if !PortAllowed(port) {
 		return nil, fmt.Errorf("%w: %d", ErrPort, port)
 	}
 	mode = InferMode(mode, port)
@@ -462,7 +481,7 @@ const (
 // are 389 or 636. Wildcards and broad CIDRs (shorter than /16 for IPv4, /64
 // for IPv6) are refused.
 func ParseAllow(s string) ([]AllowEntry, error) {
-	return parseAllow(s, func(p int) bool { return p >= 1 && p <= 65535 }, "from 1 to 65535")
+	return parseAllow(s, PortAllowed, "389, 636, or 1024 and above (not a database or admin port)")
 }
 
 // Ports of an HTTPS target an agent may push to (issue #302); the same set

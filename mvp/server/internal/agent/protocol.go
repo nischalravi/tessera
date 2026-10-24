@@ -301,8 +301,8 @@ func validateTarget(t Target, c ProbeConfig) error {
 	if t.Host == "" || len(t.Host) > 253 || strings.ContainsAny(t.Host, "/@ \t\r\n\x00") {
 		return errors.New("target host is not valid")
 	}
-	if t.Port < 1 || t.Port > 65535 {
-		return errors.New("target port must be from 1 to 65535")
+	if !safedial.PortAllowed(t.Port) {
+		return errors.New("target port is not an allowed directory port")
 	}
 	switch t.TLSMode {
 	case "", safedial.ModeLDAPS, safedial.ModeStartTLS, safedial.ModeNone:

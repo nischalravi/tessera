@@ -112,8 +112,8 @@ func New(cfg Config) (*Prober, error) {
 	if cfg.Host == "" {
 		return nil, errors.New("ldap: host is required")
 	}
-	if cfg.Port < 1 || cfg.Port > 65535 {
-		return nil, errors.New("ldap: port must be from 1 to 65535")
+	if !safedial.PortAllowed(cfg.Port) {
+		return nil, errors.New("ldap: port is not an allowed directory port")
 	}
 	if cfg.PageSize < 0 || cfg.PageSize > MaxPageSize {
 		return nil, fmt.Errorf("ldap: page size must be 1 to %d", MaxPageSize)

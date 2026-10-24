@@ -246,8 +246,8 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 		if m := ldapHost(cfg.Host); m != "" {
 			bad("host", "%s", m)
 		}
-		if cfg.Port < 1 || cfg.Port > 65535 {
-			bad("port", "must be a port from 1 to 65535")
+		if !safedial.PortAllowed(cfg.Port) {
+			bad("port", "must be 389, 636, or a port from 1024 up (for example 3890 or 6360), and not a database or admin port such as 3306 or 6379")
 		}
 		switch cfg.TLSMode {
 		case "", safedial.ModeLDAPS, safedial.ModeStartTLS:

@@ -555,7 +555,10 @@ func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialI
 		return nil, unprocessable("invalid_credential", "send either secret or reference, not both")
 	case in.Reference != "":
 		if !refRE.MatchString(in.Reference) {
-			return nil, unprocessable("invalid_credential", "reference must look like vault:<path> or agent:<id>/<name>")
+			if strings.Contains(in.Reference, "=") && strings.Contains(in.Reference, ",") {
+				return nil, unprocessable("invalid_credential", "that looks like a distinguished name: enter the bind DN in Bind DN, and the password in Or the secret; this field is only a reference such as vault:<path> or agent:<id>/<name>")
+			}
+			return nil, unprocessable("invalid_credential", "reference must look like vault:<path> or agent:<id>/<name>; the bind DN goes in Bind DN and the password in Or the secret")
 		}
 		if strings.HasPrefix(in.Reference, "agent:") {
 			id, _, ok := agent.ParseRef(in.Reference)
