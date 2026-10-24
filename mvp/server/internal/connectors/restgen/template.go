@@ -105,7 +105,7 @@ func expandNode(n any, v Vars) (any, bool) {
 	case string:
 		return interpolate(t, v)
 	case []any:
-		out := make([]any, 0, len(t))
+		out := []any{}
 		for _, e := range t {
 			if r, ok := expandNode(e, v); ok {
 				out = append(out, r)
@@ -113,7 +113,7 @@ func expandNode(n any, v Vars) (any, bool) {
 		}
 		return out, true
 	case map[string]any:
-		out := make(map[string]any, len(t))
+		out := map[string]any{}
 		for k, e := range t {
 			if r, ok := expandNode(e, v); ok {
 				out[k] = r

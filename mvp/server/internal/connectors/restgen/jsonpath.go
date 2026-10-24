@@ -116,7 +116,7 @@ func (p *Path) Select(v any) []any {
 				case []any:
 					next = append(next, t...)
 				case map[string]any:
-					keys := make([]string, 0, len(t))
+					var keys []string
 					for k := range t {
 						keys = append(keys, k)
 					}
