@@ -60,6 +60,9 @@ type Request struct {
 type Verdict struct {
 	OK                 bool
 	Expected, Observed string
+	// Waiting says a person has to act (a ticket is open): the engine keeps the operation pending and re-reads
+	// later without counting the wait against its verification limit.
+	Waiting bool
 }
 
 // Connector applies and verifies changes in one target system.

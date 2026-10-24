@@ -248,9 +248,15 @@ func (r *rebindResolver) LookupNetIP(context.Context, string, string) ([]netip.A
 
 func TestSafedial_PortAllowlist(t *testing.T) {
 	d, _ := New(Options{Env: config.Dev, Resolver: &fakeResolver{}})
-	for _, p := range []int{0, 22, 80, 443, 3306, 3268, 3269, 8080, 65535, -1} {
+	for _, p := range []int{0, 22, 80, 443, 1023, 3306, 6379, 27017, 65536, -1} {
 		if _, err := d.Dial(context.Background(), "93.184.216.34", p, false); !errors.Is(err, ErrPort) {
 			t.Errorf("port %d: got %v; want ErrPort", p, err)
+		}
+	}
+	for p, want := range map[int]bool{389: true, 636: true, 3890: true, 6360: true, 3268: true, 8443: true, 65535: true, 1024: true,
+		0: false, 22: false, 443: false, 3306: false, 5432: false, 65536: false} {
+		if PortAllowed(p) != want {
+			t.Errorf("PortAllowed(%d) = %v", p, !want)
 		}
 	}
 	for _, h := range []string{"", " ", "a/b", "user@host", "a b"} {
@@ -390,14 +396,14 @@ func TestSafedial_ProdRefusesAllowlist(t *testing.T) {
 
 func TestParseAllow(t *testing.T) {
 	good := []string{"", "192.168.1.10:636", "lab.example:389", "10.1.0.0/16:636", "[fd12:3456::1]:636", "[fd12:3456:789a:1::/64]:636",
-		"192.168.1.10:636, nas.lan:389"}
+		"192.168.1.10:636, nas.lan:389", "192.168.1.10:6360", "lldap.lan:3890"}
 	for _, s := range good {
 		if _, err := ParseAllow(s); err != nil {
 			t.Errorf("%q: %v", s, err)
 		}
 	}
-	bad := []string{"*", "*.lan:636", "0.0.0.0/0:636", "10.0.0.0/8:636", "::/0:636", "[fd00::/16]:636", "192.168.1.10", "192.168.1.10:80",
-		"192.168.1.10:0", "host_name:636", ":636", "user@host:636", "192.168.1.10:6360", "10.0.0.0/33:636", "http://x:636"}
+	bad := []string{"*", "*.lan:636", "0.0.0.0/0:636", "10.0.0.0/8:636", "::/0:636", "[fd00::/16]:636", "192.168.1.10", "192.168.1.10:80", "192.168.1.10:443", "10.1.0.1:3306",
+		"192.168.1.10:0", "host_name:636", ":636", "user@host:636", "10.0.0.0/33:636", "http://x:636"}
 	for _, s := range bad {
 		if _, err := ParseAllow(s); err == nil {
 			t.Errorf("%q accepted", s)
@@ -509,5 +515,30 @@ func TestSafedial_HTTPClient(t *testing.T) {
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://wrongname.corp.example/ok", nil)
 	if _, err := c2.Do(req); err == nil || !errors.Is(err, ErrHandshake) {
 		t.Errorf("a certificate for another host name: %v", err)
+	}
+}
+
+// TestSafedial_ModeNone: plain LDAP (tls_mode none) is opened only in dev, is
+// never Secure so no credential is sent, and an unknown mode is refused.
+func TestSafedial_ModeNone(t *testing.T) {
+	res := &fakeResolver{addrs: map[string][]netip.Addr{"ldap.lab.example": {netip.MustParseAddr("93.184.216.34")}}}
+	prod, _ := New(Options{Env: config.Prod, Resolver: res, dial: (&recDial{}).dial})
+	if _, err := prod.DialMode(context.Background(), "ldap.lab.example", 3890, ModeNone, false); !errors.Is(err, ErrTLSMode) {
+		t.Errorf("prod none: %v", err)
+	}
+	dev, _ := New(Options{Env: config.Dev, Resolver: res, dial: (&recDial{}).dial})
+	if _, err := dev.DialMode(context.Background(), "ldap.lab.example", 3890, "ssl", false); !errors.Is(err, ErrTLSMode) {
+		t.Errorf("unknown mode: %v", err)
+	}
+	c, err := dev.DialMode(context.Background(), "ldap.lab.example", 3890, ModeNone, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if c.Secure() {
+		t.Error("a plain connection must never be Secure")
+	}
+	if InferMode("", 636) != ModeLDAPS || InferMode("", 3890) != ModeStartTLS || InferMode("none", 636) != ModeNone {
+		t.Error("InferMode")
 	}
 }

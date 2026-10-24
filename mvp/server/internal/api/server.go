@@ -287,8 +287,12 @@ type Server struct {
 	routes []*route
 	// stepUps is the catalog of actions the tenant step-up policy may name,
 	// built from the routes on first use (stepup_policy.go).
-	stepUps      stepup.Catalog
-	stepUpsOnce  sync.Once
+	stepUps     stepup.Catalog
+	stepUpsOnce sync.Once
+	// spec is the complete OpenAPI document (openapi_full.go), built on first use.
+	spec         []byte
+	specErr      error
+	specOnce     sync.Once
 	authn        *auth.Authenticator
 	limits       *limiters
 	clientLimits *clientLimiter

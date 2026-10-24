@@ -60,6 +60,8 @@ const (
 	MaxSyncMembers  = 100000
 
 	maxSyncText = 256
+	// maxExtra bounds the mapped attributes of one account.
+	maxExtra = 32
 	// pullPollEvery is how often a long-poll looks for a new job.
 	pullPollEvery = 2 * time.Second
 )
@@ -100,6 +102,15 @@ type SyncAccount struct {
 	Username   string `json:"username"`
 	Email      string `json:"email,omitempty"`
 	Status     string `json:"status"`
+	// Extra are the values of the connection's attribute map.
+	Extra []SyncExtra `json:"extra,omitempty"`
+}
+
+// SyncExtra is one mapped attribute value of an account.
+type SyncExtra struct {
+	Scope  string `json:"scope"` // account | identity
+	Target string `json:"target"`
+	Value  string `json:"value"`
 }
 
 // SyncGroup is a security group read from the directory.
@@ -145,6 +156,14 @@ func (r *SyncResult) Validate() error {
 	for _, a := range r.Accounts {
 		if !text(a.ExternalID, true) || !text(a.Username, true) || !text(a.Email, false) || (a.Status != "active" && a.Status != "disabled") {
 			return errors.New("an account is not valid")
+		}
+		if len(a.Extra) > maxExtra {
+			return errors.New("an account is not valid")
+		}
+		for _, x := range a.Extra {
+			if (x.Scope != "account" && x.Scope != "identity") || !validAttrName(x.Target) || !text(x.Value, true) {
+				return errors.New("an account is not valid")
+			}
 		}
 		accts[a.ExternalID] = true
 	}
