@@ -25,7 +25,10 @@ func TestAmend_CommentsAttachmentsApprovers(t *testing.T) {
 
 	// comments: the requester and the current approver may; an outsider may not (404)
 	for _, who := range []requests.Actor{r.alice, r.carol} {
-		if err := run(func(c *store.TenantTx) error { _, err := requests.AddComment(c, id, who, " please hurry ", r.now); return err }); err != nil {
+		if err := run(func(c *store.TenantTx) error {
+			_, err := requests.AddComment(c, id, who, " please hurry ", r.now)
+			return err
+		}); err != nil {
 			t.Errorf("%s comments: %v", who.Display, err)
 		}
 	}
@@ -47,7 +50,10 @@ func TestAmend_CommentsAttachmentsApprovers(t *testing.T) {
 
 	// attachments: off by default, then metadata only with a size cap
 	spec := requests.AttachmentSpec{Name: "ticket.pdf", ContentType: "application/pdf", SizeBytes: 1234, Reference: "https://tickets.example/1"}
-	if err := run(func(c *store.TenantTx) error { _, err := requests.AddAttachment(c, id, r.alice, spec, r.now); return err }); code(err) != "attachments_not_allowed" {
+	if err := run(func(c *store.TenantTx) error {
+		_, err := requests.AddAttachment(c, id, r.alice, spec, r.now)
+		return err
+	}); code(err) != "attachments_not_allowed" {
 		t.Errorf("attachments off: %v", err)
 	}
 	do(func(c *store.TenantTx) error {
@@ -56,36 +62,57 @@ func TestAmend_CommentsAttachmentsApprovers(t *testing.T) {
 		_, _, err := requests.SaveSettings(c, s, ver, r.pat, r.now)
 		return err
 	})
-	if err := run(func(c *store.TenantTx) error { _, err := requests.AddAttachment(c, id, r.alice, spec, r.now); return err }); err != nil {
+	if err := run(func(c *store.TenantTx) error {
+		_, err := requests.AddAttachment(c, id, r.alice, spec, r.now)
+		return err
+	}); err != nil {
 		t.Errorf("attach: %v", err)
 	}
 	big := spec
 	big.SizeBytes = requests.MaxAttachmentBytes + 1
-	if err := run(func(c *store.TenantTx) error { _, err := requests.AddAttachment(c, id, r.alice, big, r.now); return err }); code(err) != "attachment_too_large" {
+	if err := run(func(c *store.TenantTx) error {
+		_, err := requests.AddAttachment(c, id, r.alice, big, r.now)
+		return err
+	}); code(err) != "attachment_too_large" {
 		t.Errorf("oversize: %v", err)
 	}
 	neg := spec
 	neg.SizeBytes = -1
-	if err := run(func(c *store.TenantTx) error { _, err := requests.AddAttachment(c, id, r.alice, neg, r.now); return err }); code(err) != "attachment_too_large" {
+	if err := run(func(c *store.TenantTx) error {
+		_, err := requests.AddAttachment(c, id, r.alice, neg, r.now)
+		return err
+	}); code(err) != "attachment_too_large" {
 		t.Errorf("negative size: %v", err)
 	}
 	noName := spec
 	noName.Name = ""
-	if err := run(func(c *store.TenantTx) error { _, err := requests.AddAttachment(c, id, r.alice, noName, r.now); return err }); code(err) != "invalid_attachment" {
+	if err := run(func(c *store.TenantTx) error {
+		_, err := requests.AddAttachment(c, id, r.alice, noName, r.now)
+		return err
+	}); code(err) != "invalid_attachment" {
 		t.Errorf("no name: %v", err)
 	}
 	for i := 1; i < requests.MaxLineAttachments; i++ {
-		if err := run(func(c *store.TenantTx) error { _, err := requests.AddAttachment(c, id, r.alice, spec, r.now); return err }); err != nil {
+		if err := run(func(c *store.TenantTx) error {
+			_, err := requests.AddAttachment(c, id, r.alice, spec, r.now)
+			return err
+		}); err != nil {
 			t.Fatalf("attachment %d: %v", i, err)
 		}
 	}
-	if err := run(func(c *store.TenantTx) error { _, err := requests.AddAttachment(c, id, r.alice, spec, r.now); return err }); code(err) != "too_many_attachments" {
+	if err := run(func(c *store.TenantTx) error {
+		_, err := requests.AddAttachment(c, id, r.alice, spec, r.now)
+		return err
+	}); code(err) != "too_many_attachments" {
 		t.Errorf("attachment cap: %v", err)
 	}
 
 	// approvers: not the requester, not a duplicate, not the beneficiary; the manager may add zed
 	add := func(who requests.Actor, ident int64) error {
-		return run(func(c *store.TenantTx) error { _, err := requests.AddApprover(c, id, who, ident, "needs a second look", r.now); return err })
+		return run(func(c *store.TenantTx) error {
+			_, err := requests.AddApprover(c, id, who, ident, "needs a second look", r.now)
+			return err
+		})
 	}
 	zedID := *r.zed.IdentityID
 	if err := add(r.alice, zedID); code(err) != "self_approval" {
@@ -103,7 +130,10 @@ func TestAmend_CommentsAttachmentsApprovers(t *testing.T) {
 	if err := add(r.carol, 999999); code(err) != "invalid_approver" {
 		t.Errorf("unknown: %v", err)
 	}
-	if err := run(func(c *store.TenantTx) error { _, err := requests.AddApprover(c, id, r.carol, zedID, " ", r.now); return err }); code(err) != "reason_required" {
+	if err := run(func(c *store.TenantTx) error {
+		_, err := requests.AddApprover(c, id, r.carol, zedID, " ", r.now)
+		return err
+	}); code(err) != "reason_required" {
 		t.Errorf("no reason: %v", err)
 	}
 	if err := add(r.carol, zedID); err != nil {
@@ -132,7 +162,10 @@ func TestAmend_CommentsAttachmentsApprovers(t *testing.T) {
 		t.Error("no grant after the last stage")
 	}
 	// a closed line takes no amendment
-	if err := run(func(c *store.TenantTx) error { _, err := requests.AddComment(c, id, r.alice, "late", r.now); return err }); code(err) != "not_pending" {
+	if err := run(func(c *store.TenantTx) error {
+		_, err := requests.AddComment(c, id, r.alice, "late", r.now)
+		return err
+	}); code(err) != "not_pending" {
 		t.Errorf("comment on an approved line: %v", err)
 	}
 	if err := add(r.pat, r.ids["bob"]); code(err) != "not_pending" {
