@@ -106,7 +106,8 @@ func SettingSpecs(typ string) []Setting {
 		return []Setting{
 			{"auth", "Authentication", "basic (the credential is the API user's password) or saml_bearer (the credential is the PEM private key and certificate registered on the OAuth client). Default basic.", false},
 			{"company_id", "Company id", "The SuccessFactors company id.", true},
-			{"username", "API user", "A dedicated API user with read-only permissions. With saml_bearer the assertion is issued for this user.", true},
+			{"username", "API user", "A dedicated API user with read-only permissions. The login name for basic authentication.", true},
+			{"user_id", "SAML user id", "With saml_bearer: the user id the assertion is issued for (its NameID), when it differs from the login name. Default: the API user.", false},
 			{"client_id", "OAuth client id (API key)", "Required with saml_bearer.", false},
 			{"legal_entity", "Legal entity", "Optional: read only the jobs of this legal entity (company).", false}}
 	case AgentCore:
@@ -197,6 +198,10 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 				}
 			} else if !userRE.MatchString(v) {
 				bad(s.Key, "must be 1 to 256 printable characters")
+			}
+		case "user_id":
+			if !entityRE.MatchString(v) {
+				bad(s.Key, "must be 1 to 64 printable characters")
 			}
 		case "auth":
 			if v != "basic" && v != "saml_bearer" {

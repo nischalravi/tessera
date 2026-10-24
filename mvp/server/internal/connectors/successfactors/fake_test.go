@@ -187,7 +187,7 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 	case "EmpEmployment":
 		rows = f.emps
 	case "EmpJob":
-		rows = f.applyJobFilter(r.URL.Query().Get("$filter"))
+		rows = f.applyJobFilter(r.URL.Query())
 	case "PerPerson":
 		if f.perPersonStatus != 0 {
 			w.WriteHeader(f.perPersonStatus)
@@ -231,7 +231,18 @@ var (
 )
 
 // applyJobFilter understands the one filter shape the connector sends.
-func (f *fake) applyJobFilter(filter string) []row {
+func (f *fake) applyJobFilter(q url.Values) []row {
+	filter := q.Get("$filter")
+	// EmpJob is effective-dated: without fromDate and toDate only the rows in force today exist
+	winFrom, winTo := now0, now0
+	if q.Get("fromDate") != "" || q.Get("toDate") != "" {
+		var err1, err2 error
+		winFrom, err1 = time.Parse("2006-01-02", q.Get("fromDate"))
+		winTo, err2 = time.Parse("2006-01-02", q.Get("toDate"))
+		if err1 != nil || err2 != nil {
+			f.t.Errorf("bad fromDate/toDate %v", q)
+		}
+	}
 	m := leRE.FindStringSubmatch(filter)
 	if m == nil {
 		f.t.Errorf("unexpected EmpJob filter %q", filter)
@@ -249,6 +260,9 @@ func (f *fake) applyJobFilter(filter string) []row {
 	for _, j := range f.jobs {
 		s, e := parseTime(j["startDate"].(string)), parseTime(j["endDate"].(string))
 		if s.After(to) || e != nil && e.Before(from) {
+			continue
+		}
+		if s.After(winTo.Add(24*time.Hour-time.Second)) || e != nil && e.Before(winFrom) {
 			continue
 		}
 		if company != "" && j["company"] != company {

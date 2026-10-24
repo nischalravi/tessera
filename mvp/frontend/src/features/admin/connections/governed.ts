@@ -26,7 +26,7 @@ export const SETTING_KEYS: Record<string, string[]> = {
   beeline: ["workers_path", "token_path", "page_size"],
   csvfeed: ["csv_path"],
   agentcore: ["snapshot"],
-  successfactors: ["auth", "company_id", "username", "client_id", "legal_entity"],
+  successfactors: ["auth", "company_id", "username", "user_id", "client_id", "legal_entity"],
 };
 
 const VAULT_URL = { label: "Vault URL", hint: "The vault's HTTPS host name, no path.", required: true };
@@ -91,7 +91,8 @@ export const GOVERNED: Record<string, GovType> = {
     settings: [
       { key: "auth", label: "Authentication", hint: "basic (default) or saml_bearer. With saml_bearer the credential is the PEM private key and certificate registered on the OAuth client." },
       { key: "company_id", label: "Company id", required: true, hint: "The SuccessFactors company id." },
-      { key: "username", label: "API user", required: true, hint: "A dedicated API user with read-only permissions. With saml_bearer the assertion is issued for this user." },
+      { key: "username", label: "API user", required: true, hint: "A dedicated API user with read-only permissions. The login name for basic authentication." },
+      { key: "user_id", label: "SAML user id", hint: "With saml_bearer: the user id the assertion is issued for, when it differs from the login name. Default: the API user." },
       { key: "client_id", label: "OAuth client id (API key)", hint: "Required with saml_bearer." },
       { key: "legal_entity", label: "Legal entity", hint: "Optional: read only the jobs of this legal entity." },
     ],

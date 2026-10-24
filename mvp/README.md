@@ -2830,7 +2830,7 @@ Directories & HR, capability HR source, the SAP mark; template `successfactors`,
   production rules. All HTTP goes through `internal/safehttp`. `$filter` values (the legal entity) are escaped as
   OData string literals (single quotes doubled, control characters refused).
 - **Settings** of a connection: `company_id` and `username` (the API user) are required; `auth` (`basic` default or
-  `saml_bearer`), `client_id` (required with `saml_bearer`) and `legal_entity` (read one legal entity) are optional.
+  `saml_bearer`), `user_id` (the SAML NameID when it differs from the login name; default the username), `client_id` (required with `saml_bearer`) and `legal_entity` (read one legal entity) are optional. `EmpJob` is effective-dated, so its reads send `fromDate` and `toDate` (a window around today for events); without them SuccessFactors answers as of today only.
 - **Readiness.** Checks: endpoint reachable, authentication accepted, users readable, field inventory (no forbidden
   field is requested), person id unique, manager and e-mail fill rates, plus attestations (dedicated API user,
   read-only permission role, target population includes leavers and pre-hires, sync schedule).

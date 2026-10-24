@@ -23,6 +23,14 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 )
 
+// nameID is the user the SAML assertion is issued for.
+func nameID(cfg Config) string {
+	if cfg.UserID != "" {
+		return cfg.UserID
+	}
+	return cfg.Username
+}
+
 // basicHeader is the Authorization value of basic authentication:
 // base64(user@company:password), the form SuccessFactors takes. A user that
 // already carries @company is sent as is.
@@ -70,7 +78,7 @@ func newSAMLSource(cfg Config, base *url.URL, api *connsync.Client, now func() t
 	tokenAPI.Authorize, tokenAPI.OnUnauthorized = nil, nil
 	u := *base
 	u.Path = tokenPath
-	return &samlSource{signer: signer, cert: der, clientID: cfg.ClientID, company: cfg.CompanyID, user: cfg.Username,
+	return &samlSource{signer: signer, cert: der, clientID: cfg.ClientID, company: cfg.CompanyID, user: nameID(cfg),
 		tokenURL: u.String(), api: &tokenAPI, now: now}, nil
 }
 

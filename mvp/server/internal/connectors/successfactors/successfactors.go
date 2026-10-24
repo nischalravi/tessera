@@ -108,6 +108,9 @@ type Config struct {
 	// Username is the API user's id. Basic sends it as user@company id; the SAML
 	// assertion is issued for it.
 	Username string
+	// UserID is the user the SAML assertion is issued for (its NameID); the
+	// username is used when empty. SuccessFactors logins and user ids can differ.
+	UserID string
 	// Password is the API user's password (basic).
 	Password connsync.Secret
 	// ClientID is the registered OAuth client's API key (SAML bearer).
@@ -162,6 +165,9 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 		if _, _, err := parseKeyBundle(cfg.PrivateKey.Reveal()); err != nil {
 			return nil, err
 		}
+	}
+	if cfg.UserID != "" && !entityRE.MatchString(cfg.UserID) {
+		return nil, errors.New("successfactors: the SAML user id must be 1 to 64 printable characters")
 	}
 	if cfg.LegalEntity != "" && !entityRE.MatchString(cfg.LegalEntity) {
 		return nil, errors.New("successfactors: the legal entity must be 1 to 64 printable characters")
@@ -222,6 +228,7 @@ func loopbackAllowed(u *url.URL, rt connsync.Runtime) bool {
 //	TESSERA_SUCCESSFACTORS_COMPANY_ID    company id
 //	TESSERA_SUCCESSFACTORS_AUTH          basic (default) or saml_bearer
 //	TESSERA_SUCCESSFACTORS_USER          API user id
+//	TESSERA_SUCCESSFACTORS_USER_ID       user id the SAML assertion is issued for (default: the user)
 //	TESSERA_SUCCESSFACTORS_PASSWORD      reference to the password (basic): file:/abs/path or env:NAME
 //	TESSERA_SUCCESSFACTORS_CLIENT_ID     OAuth client API key (saml_bearer)
 //	TESSERA_SUCCESSFACTORS_PRIVATE_KEY   reference to the PEM key and certificate (saml_bearer)
@@ -240,7 +247,7 @@ func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc 
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	const p = "TESSERA_SUCCESSFACTORS_"
 	cfg := Config{BaseURL: getenv(p + "BASE_URL"), CompanyID: getenv(p + "COMPANY_ID"), Auth: getenv(p + "AUTH"),
-		Username: getenv(p + "USER"), ClientID: getenv(p + "CLIENT_ID"), LegalEntity: getenv(p + "LEGAL_ENTITY"), EmitIdentities: true}
+		Username: getenv(p + "USER"), UserID: getenv(p + "USER_ID"), ClientID: getenv(p + "CLIENT_ID"), LegalEntity: getenv(p + "LEGAL_ENTITY"), EmitIdentities: true}
 	if v := getenv(p + "EMIT_IDENTITIES"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {

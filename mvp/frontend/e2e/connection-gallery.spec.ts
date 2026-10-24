@@ -5,6 +5,10 @@ import { ALICE, report, seriousViolations, settle } from "./helpers";
 
 // one tile per connector type: counted from the gallery's own metadata, so a new type does not break the spec
 const TILES = Object.keys(GALLERY_META).length;
+const METAS = Object.entries(GALLERY_META);
+const HR = METAS.filter(([, m]) => m.capabilities.includes("HR source")).length;
+const HR_DEMO = METAS.filter(([, m]) => m.capabilities.includes("HR source") && m.category === "Demo / simulated").length;
+const OKTA = METAS.filter(([id, m]) => `${id} ${m.publisher}`.toLowerCase().includes("okta")).length; // the Okta tiles (search also reads labels)
 
 // New connection, step 1: the app-gallery picker. A radiogroup of tiles (roving tabindex), filter chips, search.
 
@@ -48,12 +52,12 @@ test("search and chips narrow the tiles, and an empty result says so", async ({ 
   await settle(page);
   const radios = page.getByRole("radiogroup", { name: "Connector type" }).getByRole("radio");
   await page.getByRole("searchbox", { name: "Search connector types" }).fill("okta");
-  await expect(radios).toHaveCount(2);
+  await expect(radios).toHaveCount(OKTA);
   await page.getByRole("searchbox", { name: "Search connector types" }).fill("");
   await page.getByRole("button", { name: "HR source" }).click();
-  await expect(radios).toHaveCount(2);
+  await expect(radios).toHaveCount(HR);
   await page.getByRole("button", { name: "Demo / simulated" }).click();
-  await expect(radios).toHaveCount(1);
+  await expect(radios).toHaveCount(HR_DEMO);
   await page.getByRole("searchbox", { name: "Search connector types" }).fill("zzz");
   await expect(page.getByRole("heading", { name: "No systems match" })).toBeVisible();
   await page.getByRole("button", { name: "Clear search and filters" }).click();

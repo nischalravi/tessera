@@ -130,7 +130,10 @@ func (c *Connector) readJobs(ctx context.Context, from, to time.Time, each func(
 	if err != nil {
 		return err
 	}
-	q := url.Values{"$select": {selJob}, "$expand": {"departmentNav"}, "$filter": {f}}
+	// EmpJob is effective-dated: without fromDate and toDate SuccessFactors answers as of today
+	// and never returns a past or future row, whatever the $filter says.
+	q := url.Values{"$select": {selJob}, "$expand": {"departmentNav"}, "$filter": {f},
+		"fromDate": {from.UTC().Format("2006-01-02")}, "toDate": {to.UTC().Format("2006-01-02")}}
 	return wrap("jobs", listAll(ctx, c, "EmpJob", q, func(j oJob) error {
 		if j.UserID != "" && len(j.UserID) <= 128 {
 			each(j)
@@ -381,9 +384,14 @@ func (c *Connector) Probe(ctx context.Context, limit int) (Probe, error) {
 		return out, errNoRows
 	}
 	seen := map[string]bool{}
+	allowed := map[string]bool{}
+	for _, f := range strings.Split(selUser, ",") {
+		allowed[f] = true
+	}
 	for _, row := range page.D.Results {
 		for k := range row {
-			if !strings.HasPrefix(k, "__") && !seen[k] {
+			// only the fields asked for: a remote key name is never echoed
+			if allowed[k] && !seen[k] {
 				seen[k] = true
 				out.Fields = append(out.Fields, k)
 			}

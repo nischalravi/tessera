@@ -593,3 +593,64 @@ func TestConfigFromEnv(t *testing.T) {
 		t.Errorf("saml without a key: %v", err)
 	}
 }
+
+func TestJobReadsAskForTheEffectiveWindow(t *testing.T) {
+	f := newFake(t)
+	c := f.connector(Config{})
+	var got []string
+	if err := c.readJobs(context.Background(), d(2026, 9, 1), d(2027, 1, 1), func(j oJob) { got = append(got, string(j.UserID)+"/"+string(j.SeqNumber)) }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(got, "1003/1") || !slices.Contains(got, "1001/1") {
+		t.Errorf("future and past rows must come back with fromDate and toDate: %v", got)
+	}
+	// without the window the (fake) server answers as of today and never returns them
+	got = nil
+	f.jobs = f.jobs[:2]
+	q := url.Values{"$filter": {"startDate le " + odataTime(d(2027, 1, 1)) + " and endDate ge " + odataTime(d(2026, 9, 1))}}
+	if rows := f.applyJobFilter(q); len(rows) != 1 {
+		t.Errorf("today-only default returned %d rows", len(rows))
+	}
+	found := false
+	for _, qs := range f.queries {
+		found = found || strings.Contains(qs, "fromDate=2026-09-01") && strings.Contains(qs, "toDate=2027-01-01")
+	}
+	if !found {
+		t.Errorf("no fromDate/toDate in %v", f.queries)
+	}
+}
+
+func TestSAMLNameIDIsSeparateFromTheLogin(t *testing.T) {
+	f := newFake(t)
+	bundle, _ := keyBundle(t)
+	c := f.connector(Config{Auth: AuthSAML, ClientID: clientID, PrivateKey: connsync.NewSecret(bundle), UserID: "sfapi-0042"})
+	f.basic = ""
+	if _, err := c.Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := base64.StdEncoding.DecodeString(f.forms[0].Get("assertion"))
+	doc := etree.NewDocument()
+	if err := doc.ReadFromBytes(raw); err != nil {
+		t.Fatal(err)
+	}
+	if got := doc.Root().FindElement("./Subject/NameID").Text(); got != "sfapi-0042" {
+		t.Errorf("NameID %q", got)
+	}
+	if b := basicHeader(Config{Username: apiUser, CompanyID: company, UserID: "x"}); !strings.Contains(b, "Basic ") {
+		t.Error(b)
+	}
+}
+
+func TestProbeNeverEchoesUnknownKeys(t *testing.T) {
+	f := newFake(t)
+	f.users[0]["leakedKeyName_SSN"] = "x"
+	p, err := f.connector(Config{}).Probe(context.Background(), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range p.Fields {
+		if !strings.Contains(selUser, k) {
+			t.Errorf("field %q is not one that was asked for", k)
+		}
+	}
+}

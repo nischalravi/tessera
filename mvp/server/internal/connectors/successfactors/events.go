@@ -35,7 +35,7 @@ func (c *Connector) StreamEvents(ctx context.Context, _ *time.Time, yield func(c
 	// every job row that overlaps the window, including future-dated ones; the
 	// row before a change ends the day before it starts, so look two days back
 	byUser := map[string][]oJob{}
-	far := now.AddDate(10, 0, 0)
+	far := now.AddDate(2, 0, 0) // how far ahead a future-dated change is looked for
 	if err := c.readJobs(ctx, from.AddDate(0, 0, -2), far, func(j oJob) {
 		byUser[string(j.UserID)] = append(byUser[string(j.UserID)], j)
 	}); err != nil {

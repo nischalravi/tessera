@@ -62,7 +62,7 @@ func (p Params) Env() (func(string) string, error) {
 		m[pre+"CLIENT_SECRET"] = "env:" + secretVar
 	case SuccessFactors:
 		m[pre+"BASE_URL"], m[pre+"COMPANY_ID"], m[pre+"AUTH"] = p.BaseURL, set("company_id"), set("auth")
-		m[pre+"USER"], m[pre+"CLIENT_ID"], m[pre+"LEGAL_ENTITY"] = set("username"), set("client_id"), set("legal_entity")
+		m[pre+"USER"], m[pre+"USER_ID"], m[pre+"CLIENT_ID"], m[pre+"LEGAL_ENTITY"] = set("username"), set("user_id"), set("client_id"), set("legal_entity")
 		// the credential is the password (basic) or the key bundle (saml_bearer); the connector reads the one its mode needs
 		m[pre+"PASSWORD"], m[pre+"PRIVATE_KEY"] = "env:"+secretVar, "env:"+secretVar
 	case GitHubScan:
