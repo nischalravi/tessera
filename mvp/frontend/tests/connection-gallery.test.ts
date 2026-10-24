@@ -11,6 +11,7 @@ const T = [
   ["ldap", "OpenLDAP / 389-DS", "Generic LDAP", false], ["entra", "Microsoft Entra ID", "Microsoft Graph", false],
   ["okta", "Okta", "OAuth service app", false], ["google", "Google Workspace", "Domain-wide delegation", false],
   ["workday", "Workday", "Integration system user", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false],
+  ["rest_generic", "Generic REST API", "Any HTTP/JSON system, mapped by a declarative spec", false],
 ].map(([id, label, blurb, demo]) => ({ id, label, blurb, demo })) as { id: string; label: string; blurb: string; demo: boolean }[];
 const none = { q: "", category: "" as const, capability: "" as const };
 const ids = (f: Partial<typeof none>) => filterGallery(T, { ...none, ...f }).map((t) => t.id);
@@ -26,13 +27,14 @@ test("search matches name, description and publisher, ignoring case and padding"
   assert.deepEqual(ids({ q: "ldap" }), ["ldap"]);
   assert.deepEqual(ids({ q: "graph" }), ["entra"]); // description
   assert.deepEqual(ids({ q: "7644" }), ["scim_app"]); // publisher
+  assert.deepEqual(ids({ q: "json" }), ["rest_generic"]); // description and publisher
   assert.deepEqual(ids({ q: "nothing like this" }), []);
 });
 
 test("chips filter by category and capability, and combine with search", () => {
   assert.deepEqual(ids({ category: "Demo / simulated" }), ["demo-ad", "demo-okta", "demo-workday"]);
   assert.deepEqual(ids({ capability: "HR source" }), ["demo-workday", "workday"]);
-  assert.deepEqual(ids({ capability: "Provisioning target", category: "Cloud & SaaS" }), ["okta", "google", "scim_app"]);
+  assert.deepEqual(ids({ capability: "Provisioning target", category: "Cloud & SaaS" }), ["okta", "google", "scim_app", "rest_generic"]);
   assert.deepEqual(ids({ capability: "HR source", q: "demo" }), ["demo-workday"]);
 });
 

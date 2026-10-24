@@ -115,4 +115,5 @@ export const CONNECTOR_TYPES: { id: string; label: string; template: string; dem
   { id: "google", label: "Google Workspace", template: "google", demo: false, blurb: "Domain-wide delegation (DR-16)." },
   { id: "workday", label: "Workday", template: "workday", demo: false, blurb: "Integration system user (DR-17)." },
   { id: "scim_app", label: "SCIM 2.0 application", template: "scim_app", demo: false, blurb: "Any SCIM service (DR-18)." },
+  { id: "rest_generic", label: "Generic REST API", template: "rest_generic", demo: false, blurb: "Any HTTP/JSON system, mapped by a declarative spec, no code (issue #552)." },
 ];

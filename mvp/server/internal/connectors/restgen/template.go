@@ -139,3 +139,9 @@ func buildURL(base *url.URL, escapedPath string, q url.Values) (*url.URL, error)
 	}
 	return u, nil
 }
+
+// queryOf is the query of u as values (a malformed pair is dropped).
+func queryOf(u *url.URL) url.Values {
+	q, _ := url.ParseQuery(u.RawQuery)
+	return q
+}

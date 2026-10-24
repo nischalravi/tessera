@@ -454,7 +454,7 @@ func (c *Client) authorize(ctx context.Context, u *url.URL, hdr http.Header) (*u
 			hdr.Set(a.Name, a.Prefix+c.secrets.APIKey.Reveal())
 		} else {
 			cp := *u
-			q := cp.Query()
+			q := queryOf(&cp)
 			q.Set(a.Name, c.secrets.APIKey.Reveal())
 			cp.RawQuery = q.Encode()
 			return &cp, false, "", "", nil

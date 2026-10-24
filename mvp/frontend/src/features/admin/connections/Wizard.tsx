@@ -20,6 +20,17 @@ import {
 import { CAPABILITIES, CATEGORIES, Capability, Category, filterGallery, groupGallery, metaOf, nextIndex } from "./gallery";
 
 // ---------------------------------------------------------------- step 1
+/** The spec as editable text: JSON, since that is what the server stores. */
+const restText = (r: Record<string, unknown> | undefined) => (r ? JSON.stringify(r, null, 2) : "");
+
+const REST_EXAMPLE = `base_url: https://api.example.com/v2
+auth: { type: bearer }
+users:
+  path: /users
+  items_path: $.data
+  pagination: { style: cursor, cursor_param: after, next_path: $.meta.next }
+  fields: { id: $.id, username: $.login, email: $.email, status: $.state }`;
+
 export function NewConnection() {
   const nav = useNavigate();
   const toast = useToast();
@@ -203,6 +214,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       exp_groups: cfg.expected_counts ? String(cfg.expected_counts.groups) : "", privileged: privToText(cfg.privileged_expected),
       correlation_key: cfg.correlation_key ?? "", hr_id_attribute: cfg.hr_id_attribute ?? "", stale_days: String(cfg.stale_days ?? ""),
       sync_schedule: cfg.sync_schedule ?? "", write_mode: cfg.write_mode ?? "off",
+      rest: restText(cfg.rest),
     });
     // Reset only when the saved config itself changes (not on credential changes),
     // so unsaved edits survive saving the credential.
@@ -227,6 +239,8 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
     if (step === "connect") {
       (["host", "bind_dn", "ca_bundle", "org_url", "tenant_id", "cloud", "customer", "domain", "base_url", "tenant_host", "interface", "time_zone", "technical_owner", "business_owner"] as const).forEach(str);
       if (v.port && Number(v.port) !== cfg.port) next.port = Number(v.port);
+      // the spec is sent as the text the admin wrote (JSON or YAML); the server parses and validates it strictly
+      if (tid === "rest_generic" && v.rest !== restText(cfg.rest)) (next as Record<string, unknown>).rest = v.rest.trim() === "" ? null : v.rest;
     }
     if (step === "scope") {
       (["user_filter", "group_filter"] as const).forEach(str);
@@ -277,6 +291,12 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             {tid === "google" && <>{input("customer", "Customer", "my_customer or the customer id")}{input("domain", "Primary domain")}</>}
             {tid === "workday" && <>{input("tenant_host", "Tenant host", "*.workday.com or *.myworkday.com")}{input("interface", "Interface", "get_workers or raas")}{input("time_zone", "Tenant time zone")}</>}
             {tid === "scim_app" && input("base_url", "SCIM base URL", "HTTPS only.")}
+            {tid === "rest_generic" && (
+              <Field label="REST connector spec (JSON or YAML)"
+                hint="Base URL (https only), auth type, the resources to read with their pagination and JSONPath mapping, and optional write operations as request templates. No secret goes here: the credential below is sealed. Errors name the field.">
+                <textarea className="input mono" value={v.rest ?? ""} onChange={set("rest")} rows={14} spellCheck={false} placeholder={REST_EXAMPLE} />
+              </Field>
+            )}
             {input("technical_owner", "Technical owner", "Accountable for the connection and its findings (base.owner).")}
             {input("business_owner", "Business owner")}
           </div>

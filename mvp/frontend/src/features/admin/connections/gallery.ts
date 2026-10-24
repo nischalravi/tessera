@@ -20,6 +20,7 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   google: { vendor: "google", publisher: "Google", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
   workday: { vendor: "workday", publisher: "Workday", category: "Directories & HR", capabilities: ["HR source"] },
   scim_app: { vendor: "scim_app", publisher: "IETF RFC 7643 / 7644", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+  rest_generic: { vendor: "rest_generic", publisher: "Declarative JSON or YAML spec", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
 };
 
 export interface GalleryType { id: string; label: string; blurb: string; demo: boolean }

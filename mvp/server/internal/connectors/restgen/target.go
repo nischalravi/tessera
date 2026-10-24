@@ -462,7 +462,7 @@ func (t *Target) redact(u *url.URL) string {
 		return u.String()
 	}
 	cp := *u
-	q := cp.Query()
+	q := queryOf(&cp)
 	q.Set(a.Name, "***")
 	cp.RawQuery = q.Encode()
 	return cp.String()
