@@ -91,6 +91,11 @@ func (p Params) Env() (func(string) string, error) {
 		m[pre+"BASE_URL"], m[pre+"CLIENT_ID"] = p.BaseURL, set("client_id")
 		m[pre+"API_ROOT"], m[pre+"TOKEN_PATH"] = set("api_root"), set("token_path")
 		m[pre+"CLIENT_SECRET"] = "env:" + secretVar
+	case SuccessFactors:
+		m[pre+"BASE_URL"], m[pre+"COMPANY_ID"], m[pre+"AUTH"] = p.BaseURL, set("company_id"), set("auth")
+		m[pre+"USER"], m[pre+"USER_ID"], m[pre+"CLIENT_ID"], m[pre+"LEGAL_ENTITY"] = set("username"), set("user_id"), set("client_id"), set("legal_entity")
+		// the credential is the password (basic) or the key bundle (saml_bearer); the connector reads the one its mode needs
+		m[pre+"PASSWORD"], m[pre+"PRIVATE_KEY"] = "env:"+secretVar, "env:"+secretVar
 	case GitHubScan:
 		m["TESSERA_GITHUB_SCAN_ORG"], m["TESSERA_GITHUB_SCAN_API_URL"] = set("org"), p.BaseURL
 		m["TESSERA_GITHUB_SCAN_TOKEN"] = "env:" + secretVar

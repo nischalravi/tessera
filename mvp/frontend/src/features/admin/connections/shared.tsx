@@ -143,5 +143,6 @@ export const CONNECTOR_TYPES: { id: string; label: string; template: string; dem
   { id: "beeline", label: "Beeline", template: "vms", demo: false, blurb: "Contractor assignments with a sponsor and an end date." },
   { id: "csvfeed", label: "Contractor CSV feed", template: "vms", demo: false, blurb: "A contractor file fetched over HTTPS (uploads stay on the Contractors page)." },
   { id: "agentcore", label: "AWS Bedrock AgentCore", template: "agentcore", demo: false, blurb: "Agent runtimes from a recorded snapshot; no live client yet, refused in prod." },
+  { id: "successfactors", label: "SAP SuccessFactors", template: "successfactors", demo: false, blurb: "Employee Central as an HR source: people, employment dates, department and manager drive joiner, mover and leaver. Read-only." },
   { id: "rest_generic", label: "Generic REST API", template: "rest_generic", demo: false, blurb: "Any HTTP/JSON system, mapped by a declarative spec, no code (issue #552)." },
 ];

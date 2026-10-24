@@ -91,7 +91,7 @@ export function VendorLogo({ vendor, label, size = 56 }: { vendor: string; label
 }
 
 // Connector type and system names that share another system's mark.
-const ALIAS: Record<string, string> = { awsorg: "aws", azurerbac: "azure", gcpiam: "gcp", unixssh: "linux", unix: "linux", githubscan: "github", "github-scan": "github", "aws-agentcore": "agentcore", csv: "csvfeed" };
+const ALIAS: Record<string, string> = { awsorg: "aws", azurerbac: "azure", gcpiam: "gcp", unixssh: "linux", unix: "linux", githubscan: "github", "github-scan": "github", "aws-agentcore": "agentcore", csv: "csvfeed", successfactors: "sap" };
 
 /** The logo vendor for a connection: the first id that has a mark ("demo-okta" is Okta), else the generic protocol glyph. */
 export function vendorForType(...ids: string[]): string {

@@ -19,6 +19,7 @@ rest_generic 10 23 13 10 0 0
 salesforce 12 25 15  9 1 0
 scim_app  13 26 15 10 1 0
 sql        8 21 13  8 0 0
+successfactors 13 26 18  8 0 0
 unixssh    6 19 11  7 1 1
 vms        6 19 13  6 0 1
 workday   15 28 19  9 0 0

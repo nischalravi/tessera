@@ -1,6 +1,6 @@
 // Connect-step fields of the governed connector types (the connectors that already exist in the server:
 // AWS Organizations, GitHub scan, SAP, Oracle, the privileged-access vaults, the contractor feeds and
-// AgentCore). Pure, so `npm test` covers it. The setting keys mirror internal/connectors/governed
+// AgentCore, SuccessFactors). Pure, so `npm test` covers it. The setting keys mirror internal/connectors/governed
 // (SettingSpecs); a Go test compares them with SETTING_KEYS below, so the two cannot drift.
 
 export interface GovField { key: string; label: string; hint?: string; required?: boolean; area?: boolean }
@@ -26,6 +26,7 @@ export const SETTING_KEYS: Record<string, string[]> = {
   beeline: ["workers_path", "token_path", "page_size"],
   csvfeed: ["csv_path"],
   agentcore: ["snapshot"],
+  successfactors: ["auth", "company_id", "username", "user_id", "client_id", "legal_entity"],
   azurerbac: ["tenant_id", "client_id", "subscription_ids", "management_group_ids", "include_eligible"],
   gcpiam: ["organization_id", "folder_ids", "project_ids"],
   unixssh: ["host", "port", "username", "host_key", "use_sudo"],
@@ -87,6 +88,18 @@ export const GOVERNED: Record<string, GovType> = {
     baseUrl: { label: "Base URL", hint: "HTTPS host name, no path.", required: true },
     settings: [{ key: "csv_path", label: "CSV path under the base URL", required: true, hint: "The feed is fetched over HTTPS. Uploads stay on the Contractors page." }],
     credential: { label: "Bearer token", hint: "Sent as Authorization: Bearer." },
+  },
+  successfactors: {
+    baseUrl: { label: "API server", hint: "https://api4.successfactors.com (or your data center's *.successfactors.com, *.successfactors.eu, *.sapsf.com, *.sapsf.cn, *.sapsf.eu host); host name only, no path.", required: true },
+    settings: [
+      { key: "auth", label: "Authentication", hint: "basic (default) or saml_bearer. With saml_bearer the credential is the PEM private key and certificate registered on the OAuth client." },
+      { key: "company_id", label: "Company id", required: true, hint: "The SuccessFactors company id." },
+      { key: "username", label: "API user", required: true, hint: "A dedicated API user with read-only permissions. The login name for basic authentication." },
+      { key: "user_id", label: "SAML user id", hint: "With saml_bearer: the user id the assertion is issued for, when it differs from the login name. Default: the API user." },
+      { key: "client_id", label: "OAuth client id (API key)", hint: "Required with saml_bearer." },
+      { key: "legal_entity", label: "Legal entity", hint: "Optional: read only the jobs of this legal entity." },
+    ],
+    credential: { label: "Password or key bundle", hint: "basic: the API user's password. saml_bearer: a PEM bundle with the RSA private key and its certificate. Read-only: Tessera never writes to SuccessFactors.", area: true },
   },
   azurerbac: {
     settings: [

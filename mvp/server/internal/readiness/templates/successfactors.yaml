@@ -1,0 +1,175 @@
+# SAP SuccessFactors Employee Central as an authoritative HR source (issue #556): the people, their
+# employment and job dates, department and manager, over the OData v2 API (User, EmpEmployment,
+# EmpJob, PerPerson). Read-only: there is no write-back.
+template: successfactors
+version: 1.0.0
+extends: base@1
+display_name: SAP SuccessFactors (HR source)
+connector_types: [successfactors]
+role: authoritative
+default_correlation_key: person_id
+default_hr_id_attribute: person_id
+host_allowlist: ["*.successfactors.com", "*.successfactors.eu", "*.sapsf.com", "*.sapsf.cn", "*.sapsf.eu"]
+required_attributes:
+  user: [user_id, person_id, status, hire_date]
+recommended_attributes:
+  user: [work_email, department, title, manager, location, cost_center]
+items:
+  - id: sf.authoritative
+    title: Marked as the authoritative source for joiner, mover and leaver and person attributes
+    category: ownership
+    level: required
+    why: "Every other connection reconciles against it (D4 M1)."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set role to authoritative."
+    config_fields: [role]
+
+  - id: sf.endpoint
+    title: API server is a SuccessFactors data-center host, reached over HTTPS through safehttp
+    category: transport
+    level: required
+    why: "Pointing at the wrong data center, or a look-alike host, sends HR credentials to the wrong place. Only the documented successfactors.com, successfactors.eu, sapsf.com, sapsf.cn and sapsf.eu hosts are accepted."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the API server of the company's data center (SAP Help: SAP SuccessFactors API Server addresses), host name only."
+    config_fields: [base_url]
+
+  - id: sf.auth
+    title: Authentication accepted (basic, or an OAuth 2.0 SAML bearer assertion signed with the stored key)
+    category: access
+    level: required
+    why: "Proves the API user, company id and credential before any read."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Check the company id and API user, and store the password, or the key and certificate registered on the OAuth client, again."
+    depends_on: [sf.endpoint]
+    config_fields: [base_url, settings, credential]
+
+  - id: sf.api_user.dedicated
+    title: Dedicated API user (or OAuth client) for Tessera, not a person's account
+    category: access
+    level: required
+    why: "A shared or expiring user stops the HR feed; basic authentication is being retired by SAP, so prefer the OAuth client."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create an API user and, preferably, a registered OAuth client for Tessera."
+    config_fields: [settings, credential]
+
+  - id: sf.api_user.read_only
+    title: Role-based permissions grant read-only access to User, EmpEmployment, EmpJob and PerPerson; no Admin write
+    category: access
+    level: required
+    why: "Least privilege; HR data is the most sensitive data Tessera reads, and this connector never writes."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Review the permission role of the API user: view on the needed entities only, no import or edit."
+    depends_on: [sf.api_user.dedicated]
+    config_fields: [settings, credential]
+
+  - id: sf.minimal_fields
+    title: Only needed fields requested; no national ids, compensation, bank details or date of birth
+    category: data_quality
+    level: required
+    why: "Data minimisation (GDPR art. 5(1)(c)); Tessera should never hold these fields."
+    verify:
+      - kind: live
+        check: field_inventory
+        params: { forbidden: [national_id, nationalid, ssn, compensation, salary, bank_account, bankaccount, date_of_birth, dateofbirth] }
+    remediation:
+      hint: "Remove the fields from the permission role's field-level permissions."
+    depends_on: [sf.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: sf.read
+    title: Users are readable through the OData API
+    category: scope
+    level: required
+    why: "A connector that authenticates but reads nothing leaves the HR source empty without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Check the API user's target population and its permission to read User."
+    depends_on: [sf.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: sf.key.person_id
+    title: Person id (personIdExternal) as the identity key; a rehire reactivates the identity
+    category: identity_keys
+    level: required
+    why: "Duplicated identities on rehire break history and reviews."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: person_id }
+    remediation:
+      hint: "Automatic."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: sf.population
+    title: Active, future-dated and recently terminated people all in the API user's target population
+    category: scope
+    level: required
+    why: "Leavers and pre-hires are the population most often missing."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Include inactive employees and every legal entity in the permission role's target population."
+    depends_on: [sf.read]
+    config_fields: [settings, expected_counts]
+
+  - id: sf.effective_dating
+    title: Future-dated hires and terminations captured with their effective dates; open end 9999-12-31 read as no end
+    category: change_tracking
+    level: required
+    why: "Leavers are otherwise processed late or never."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Automatic: events keep their own effective date and are never applied early."
+    depends_on: [sf.population]
+
+  - id: sf.manager
+    title: Manager resolves for at least 98% of active people
+    category: data_quality
+    level: recommended
+    why: "Manager-based reviews and approvals depend on it."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: manager, min: 0.98 }
+    remediation:
+      hint: "Fix the manager of the job records (managerId)."
+
+  - id: sf.email
+    title: Work email filled for at least 95% of active people
+    category: data_quality
+    level: recommended
+    why: "Needed for notifications and tier-3 proposals."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: work_email, min: 0.95 }
+    remediation:
+      hint: "Fix the records in SuccessFactors."
+
+  - id: sf.leaver_sla
+    title: Sync frequency meets the leaver SLA (default every 4 hours)
+    category: change_tracking
+    level: recommended
+    why: "Leaver kill-switch timing (D4 M7). Every sync is a full read of the people."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set the schedule."
+    depends_on: [sf.read]
+    config_fields: [sync_schedule]

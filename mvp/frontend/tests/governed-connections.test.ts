@@ -10,7 +10,7 @@ test("every governed type lists the keys of its settings, in the same order", ()
 });
 
 test("which types take a base URL and a credential", () => {
-  for (const type of ["sap", "oracle", "cyberark", "beyondtrust", "delinea", "fieldglass", "beeline", "csvfeed"]) assert.equal(GOVERNED[type].baseUrl?.required, true, type);
+  for (const type of ["sap", "oracle", "cyberark", "beyondtrust", "delinea", "fieldglass", "beeline", "csvfeed", "successfactors"]) assert.equal(GOVERNED[type].baseUrl?.required, true, type);
   assert.equal(GOVERNED.githubscan.baseUrl?.required, false); // GitHub.com when empty
   assert.equal(GOVERNED.awsorg.baseUrl, undefined);
   assert.equal(GOVERNED.agentcore.baseUrl, undefined);
@@ -52,4 +52,11 @@ test("required fields are named until they are filled", () => {
   assert.deepEqual(missingRequired("gcpiam", "", {}), []); // one of organization, folders or projects: the server checks
   assert.deepEqual(missingRequired("unixssh", "", {}), ["Host", "SSH user", "Host key"]);
   assert.deepEqual(missingRequired("ldap", "", {}), []);
+});
+
+test("SuccessFactors: API server, company and API user are required; the credential holds a password or a key bundle", () => {
+  assert.deepEqual(missingRequired("successfactors", "", {}), ["API server", "Company id", "API user"]);
+  assert.deepEqual(missingRequired("successfactors", "https://api4.successfactors.com", { "settings.company_id": "acme", "settings.username": "svc" }), []);
+  assert.equal(GOVERNED.successfactors.credential?.area, true); // a PEM bundle is multi-line
+  assert.deepEqual(settingsPatch("successfactors", { "settings.company_id": "acme", "settings.username": "svc", "settings.password": "x" }, undefined), { company_id: "acme", username: "svc" });
 });
