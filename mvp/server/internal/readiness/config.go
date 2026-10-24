@@ -265,16 +265,16 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 			bad("attr_map", "at most %d attributes", MaxAttrMap)
 		}
 		seen := map[[2]string]bool{}
-		for _, m := range cfg.AttrMap {
+		for i, m := range cfg.AttrMap {
 			switch {
 			case !ldap.ValidAttrName(m.LDAP):
-				bad("attr_map", "%q is not an LDAP attribute name (letters, digits and hyphens, starting with a letter)", m.LDAP)
+				bad("attr_map", "attr_map[%d]: not an LDAP attribute name (letters, digits and hyphens, starting with a letter)", i)
 			case !ldap.ValidAttrName(m.Target):
-				bad("attr_map", "%q is not a valid Tessera attribute name", m.Target)
+				bad("attr_map", "attr_map[%d]: not a valid Tessera attribute name", i)
 			case m.Scope != "account" && m.Scope != "identity":
-				bad("attr_map", "scope of %q must be account or identity", m.LDAP)
+				bad("attr_map", "attr_map[%d]: scope must be account or identity", i)
 			case seen[[2]string{m.Scope, strings.ToLower(m.Target)}]:
-				bad("attr_map", "%q is mapped twice", m.Target)
+				bad("attr_map", "attr_map[%d]: target is mapped twice", i)
 			}
 			seen[[2]string{m.Scope, strings.ToLower(m.Target)}] = true
 		}

@@ -449,7 +449,8 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 	// database, user, TLS, mode, statements). Moving it drops the stored credential, so it has to be entered
 	// again: an edit can never point a credential that was given for one place at another.
 	credCleared := rev.SecretRef != nil && ((b.Template.ID == "rest_generic" && restDestination(b.Config.Rest) != restDestination(cfg.Rest)) ||
-		(b.Template.ID == "sql" && sqlConfigChanged(b.Config, cfg)))
+		(b.Template.ID == "sql" && sqlConfigChanged(b.Config, cfg)) ||
+		((b.Template.ID == "ldap" || b.Template.ID == "ad") && ldapDestinationChanged(b.Config, cfg)))
 	if credCleared {
 		rev.SecretRef, rev.SecretVersion = nil, nil
 	}
@@ -463,9 +464,12 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 		if err := c.ClearRevisionSecret(rev.ID, rev.ConfigHash, now); err != nil {
 			return nil, err
 		}
-		if b.Template.ID == "sql" {
+		switch b.Template.ID {
+		case "sql":
 			changed = append(changed, "credential (cleared: the database settings changed)")
-		} else {
+		case "ldap", "ad":
+			changed = append(changed, "credential (cleared: the directory destination changed)")
+		default:
 			changed = append(changed, "credential (cleared: the REST destination changed)")
 		}
 	}
@@ -490,6 +494,13 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 		}
 	}
 	return res, nil
+}
+
+// ldapDestinationChanged reports whether an edit moves where a directory bind
+// goes or whom it trusts: host, port, the effective TLS mode, bind DN or CA.
+// The stored password was entered for the old destination, so it is dropped.
+func ldapDestinationChanged(a, b ConnConfig) bool {
+	return a.Host != b.Host || a.Port != b.Port || TLSModeOf(a) != TLSModeOf(b) || a.BindDN != b.BindDN || a.CABundle != b.CABundle
 }
 
 func sqlConfigChanged(a, b ConnConfig) bool {

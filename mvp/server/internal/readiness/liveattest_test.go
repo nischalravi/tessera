@@ -287,10 +287,7 @@ func TestLiveAttest_StaleWhenConfigChanges(t *testing.T) {
 		t.Error("an unrelated config change made the attestation stale")
 	}
 
-	write(t, st, func(c *store.TenantTx) error {
-		_, err := s.PatchConfig(c, id, []byte(`{"host":"192.168.1.11"}`), "admin", t0)
-		return err
-	})
+	patchAndRecredential(t, st, s, id, `{"host":"192.168.1.11"}`, CredentialInput{Secret: bindPassword})
 	b, _ = current(st, s, id, t0)
 	ie := mustItem(t, b, itemReadonly)
 	if ok, why := liveAttestationFresh(b.Evidence.LiveAttestations[itemReadonly], ie.ItemHash, t0, DefaultLiveTTL); ok || !strings.Contains(why, "configuration changed") {

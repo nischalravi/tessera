@@ -110,3 +110,54 @@ func TestSetCredential_DNInReference(t *testing.T) {
 		t.Error("message echoes the input")
 	}
 }
+
+// TestPatchConfig_LDAPDestinationClearsCredential: moving where the bind goes
+// (host, port, effective TLS mode, bind DN, CA) drops the stored credential,
+// so a password given for one directory is never sent to another. Other edits
+// keep it.
+func TestPatchConfig_LDAPDestinationClearsCredential(t *testing.T) {
+	for name, tc := range map[string]struct {
+		patch   string
+		cleared bool
+	}{
+		"host":      {`{"host":"attacker.example"}`, true},
+		"port":      {`{"port":6360}`, true},
+		"tls mode":  {`{"tls_mode":"starttls"}`, true},
+		"bind dn":   {`{"bind_dn":"cn=other,dc=x"}`, true},
+		"ca bundle": {`{"ca_bundle":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"}`, true},
+		"filter":    {`{"user_filter":"(objectClass=person)"}`, false},
+		"page size": {`{"page_size":100}`, false},
+	} {
+		st, s, _, _ := agentSvc(t)
+		id := newLDAP(t, s, st)
+		write(t, st, func(c *store.TenantTx) error {
+			_, err := s.SetCredential(c, id, CredentialInput{Reference: "vault:kv/tessera/ldap"}, "admin", t0)
+			return err
+		})
+		var res *ConfigResult
+		write(t, st, func(c *store.TenantTx) error {
+			var err error
+			res, err = s.PatchConfig(c, id, []byte(tc.patch), "admin", t0)
+			return err
+		})
+		if got := res.Bundle.Rev.SecretRef == nil; got != tc.cleared {
+			t.Errorf("%s: credential cleared = %v, want %v", name, got, tc.cleared)
+		}
+	}
+}
+
+// patchAndRecredential applies a config edit and then enters the credential
+// again, as an admin must after moving the destination (the edit drops it).
+func patchAndRecredential(t *testing.T, st Scope, s *Service, id, patch string, in CredentialInput) {
+	t.Helper()
+	write(t, st, func(c *store.TenantTx) error {
+		if _, err := s.PatchConfig(c, id, []byte(patch), "admin", t0); err != nil {
+			return err
+		}
+		if _, err := s.SetCredential(c, id, in, "admin", t0); err != nil {
+			return err
+		}
+		_, err := s.Transition(c, id, store.StateReadyToValidate, "admin", t0)
+		return err
+	})
+}
