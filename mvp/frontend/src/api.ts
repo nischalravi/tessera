@@ -4314,6 +4314,15 @@ export const queue = {
     api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/pause`, { ...(reason ? { reason } : {}), ...(resumeAfterHours ? { resume_after_hours: resumeAfterHours } : {}) }),
   /** Lets a paused schedule fire again: once if it came due while paused, then on its cadence. */
   resumeSchedule: (name: string) => api<QueueSchedule>(`/queue/schedules/${encodeURIComponent(name)}/resume`, {}),
+  /** The job kinds an admin may schedule (issue #588). */
+  scheduleKinds: () => api<{ kinds: { kind: string; label: string; description: string; payload: string }[]; name_prefix: string; min_interval_seconds: number }>("/queue/schedule-kinds"),
+  /** Creates a custom schedule, named custom.<name> (step-up, audited). */
+  createSchedule: (name: string, kind: string, spec: string, payload?: Record<string, unknown>) =>
+    api<QueueSchedule>("/queue/schedules", { name, kind, spec, ...(payload ? { payload } : {}) }),
+  /** Deletes a custom schedule; a built-in one can only be paused. */
+  deleteSchedule: (name: string) => api<{ deleted: boolean }>(`/queue/schedules/${encodeURIComponent(name)}`, undefined, "DELETE"),
+  /** Queues a schedule's job now (once a minute at most). */
+  runSchedule: (name: string) => api<{ queued: boolean; kind: string }>(`/queue/schedules/${encodeURIComponent(name)}/run`, {}),
 };
 
 // ------------------------------------------------- config transport (#170)
