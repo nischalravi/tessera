@@ -13,11 +13,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 )
+
+var hostRE = regexp.MustCompile(`^[A-Za-z0-9.:\[\]-]{1,255}$`)
 
 // User is a Jira user.
 type User struct {
@@ -485,11 +488,15 @@ func (f *Fake) admin(w http.ResponseWriter, r *http.Request) {
 	}
 	links := map[string]string{}
 	if start+len(rows) < len(f.AdminUsers) {
-		host := "https://" + r.Host
+		// built from the fixed path and a checked host: request text is never echoed (CodeQL go/reflected-xss)
+		host := "https://invalid.example"
+		if hostRE.MatchString(r.Host) {
+			host = "https://" + r.Host
+		}
 		if f.faults.BadNext {
 			host = "https://evil.example.com"
 		}
-		links["next"] = host + r.URL.Path + "?cursor=" + strconv.Itoa(start+len(rows))
+		links["next"] = host + "/admin/v1/orgs/" + f.OrgID + "/users?cursor=" + strconv.Itoa(start+len(rows))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data, "links": links, "meta": map[string]int{"total": len(f.AdminUsers)}})
 }
