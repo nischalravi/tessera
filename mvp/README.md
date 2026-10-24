@@ -41,7 +41,7 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 * API: http://127.0.0.1:8000. OpenAPI docs are at http://127.0.0.1:8000/docs
 * Machine-client rate limits (issue #587): every OAuth client has a token bucket per tenant and client. The default is
   `TESSERA_API_CLIENT_RATE_BURST` (120) requests at once, refilled at `TESSERA_API_CLIENT_RATE_PER_MINUTE` (600; `0` turns the
-  limit off). A client's own limit is `PUT /api/admin/api-clients/{client_id}/rate-limit` `{burst, per_minute}` (admin
+  limit off, which production refuses unless `TESSERA_API_CLIENT_RATE_ALLOW_OFF=true`). A client's own limit is `PUT /api/admin/api-clients/{client_id}/rate-limit` `{burst, per_minute}` (admin
   change request, step-up; `GET` reads the limit in force, `DELETE` returns to the default; table `api_client_limits`;
   a change applies within 30 seconds). Answers carry `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` and
   `RateLimit-Policy`; a refused request is `429 rate_limited` with `Retry-After`, is audited (`http.request`, status 429,

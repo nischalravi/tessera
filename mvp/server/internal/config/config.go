@@ -469,6 +469,10 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.SoDWarnDays = integer("TESSERA_SOD_WARN_DAYS", 14, 1, 365)
 	c.ClientRateBurst = integer("TESSERA_API_CLIENT_RATE_BURST", 120, 1, 100000)
 	c.ClientRatePerMinute = integer("TESSERA_API_CLIENT_RATE_PER_MINUTE", 600, 0, 600000)
+	// no limit at all on machine clients is a dev and load-test setting; production needs an explicit override
+	if prod && c.ClientRatePerMinute == 0 && !boolean("TESSERA_API_CLIENT_RATE_ALLOW_OFF", false, false) {
+		bad("TESSERA_API_CLIENT_RATE_PER_MINUTE=0 turns machine-client rate limits off, which needs TESSERA_API_CLIENT_RATE_ALLOW_OFF=true with TESSERA_ENV=prod")
+	}
 	c.Mail = loadMail(getenv, prod, integer, bad)
 	c.ShutdownGrace = loadDuration(getenv, "TESSERA_SHUTDOWN_GRACE", 25*time.Second, time.Second, 10*time.Minute, bad)
 	c.ShutdownDrainDelay = loadDuration(getenv, "TESSERA_SHUTDOWN_DRAIN_DELAY", 0, 0, 2*time.Minute, bad)

@@ -1,4 +1,4 @@
--- Postgres dialect of schema/0910_api_client_limits.sql (issue #587). See 0001_tenancy.sql.
+-- Postgres dialect of schema/0913_api_client_limits.sql (issue #587). See 0001_tenancy.sql.
 
 -- +goose Up
 

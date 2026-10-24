@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Per-client API rate limit overrides (schema/0910_api_client_limits.sql, issue #587).
+// Per-client API rate limit overrides (schema/0913_api_client_limits.sql, issue #587).
 
 // APIClientLimit is a machine client's token bucket: Burst requests at once,
 // refilled at PerMinute requests a minute.
