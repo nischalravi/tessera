@@ -5,6 +5,7 @@
  * dry-run findings; a score breakdown explains every deducted point.
  */
 import { useState } from "react";
+import { VendorLogo, vendorForType } from "../../components/VendorLogo";
 import { Link, useNavigate } from "react-router-dom";
 import { Activity, Download, Plug, RefreshCw } from "lucide-react";
 import {
@@ -210,7 +211,7 @@ export function DeploymentHealthBody({ data, compact }: { data: Health; compact?
             activeKey={selected}
             onRowClick={(r) => setSelected(r.id)}
             columns={[
-              { id: "name", header: "Connection", sort: (r) => r.name, cell: (r) => <div><b className="name-link">{r.name}</b><div className="xs faint row tight">{r.connector_type}{r.simulated && <SimulatedBadge />}</div></div> },
+              { id: "name", header: "Connection", sort: (r) => r.name, cell: (r) => <div className="row tight" style={{ flexWrap: "nowrap" }}><VendorLogo vendor={vendorForType(r.connector_type)} size={32} /><div><b className="name-link">{r.name}</b><div className="xs faint row tight">{r.connector_type}{r.simulated && <SimulatedBadge />}</div></div></div> },
               { id: "state", header: "State", sort: (r) => r.state, csv: (r) => STATE_LABEL[r.state], cell: (r) => <StateBadge state={r.state} /> },
               { id: "score", header: "Score", sort: (r) => r.score, cell: (r) => <ScoreCell score={r.score} band={r.band} /> },
               { id: "blocking", header: "Blocking", num: true, sort: (r) => r.blocking, cell: (r) => r.blocking },

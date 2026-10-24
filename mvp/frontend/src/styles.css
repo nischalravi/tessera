@@ -816,11 +816,24 @@ pre.yaml { background: var(--surface-2); color: var(--text); padding: 12px; bord
 .st-stale, .st-skipped { color: var(--warning); }
 .st-pending, .st-blocked, .st-not_applicable { color: var(--text-3); }
 
-.type-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--s-2); }
-.type-card { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); cursor: pointer; background: var(--surface); }
-.type-card:hover { background: var(--row-hover); }
-.type-card.on { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line); }
-.type-card input { margin-top: 3px; }
+/* connection gallery (New connection, step 1) */
+.gallery-bar { display: flex; flex-direction: column; gap: var(--s-2); }
+.gallery-search { position: relative; display: block; max-width: 420px; }
+.gallery-search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
+.gallery-search .input { width: 100%; padding-left: 30px; min-height: 36px; }
+.gallery-h { margin: 0 0 var(--s-2); font-size: var(--fs-lg); }
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--s-2); }
+.gallery-tile { display: flex; flex-direction: column; gap: 10px; min-height: 44px; padding: 14px; cursor: pointer; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); }
+.gallery-tile:hover { background: var(--row-hover); }
+.gallery-tile.on { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line); background: var(--accent-soft); }
+.gallery-tile:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.gallery-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.gallery-caps { display: flex; gap: 6px; margin-top: 6px; color: var(--text-2); }
+.gallery-cap { display: inline-grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--border); border-radius: var(--r-sm); }
+.gallery-foot { padding-top: 8px; border-top: 1px solid var(--divider); }
+/* fixed light plate in both themes: brand colours stay legible on dark */
+.vendor-plate { flex: none; display: inline-grid; place-items: center; background: #ffffff; border: 1px solid #d1d1d1; border-radius: 12px; }
+@media (max-width: 640px) { .gallery-grid { grid-template-columns: minmax(0, 1fr); } }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); }
 @media (max-width: 720px) { .form-grid { grid-template-columns: minmax(0, 1fr); } }
 fieldset.card { margin: 0; }

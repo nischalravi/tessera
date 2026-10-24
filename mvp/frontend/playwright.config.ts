@@ -19,7 +19,7 @@ export default defineConfig({
   projects: [
     { name: "setup", testMatch: /auth\.setup\.ts/ },
     // route checks reuse the setup's session; the keyboard walkthrough signs in itself
-    { name: "a11y", testMatch: /(a11y|wcag22)\.spec\.ts/, dependencies: ["setup"] },
+    { name: "a11y", testMatch: /(a11y|wcag22|connection-gallery)\.spec\.ts/, dependencies: ["setup"] },
     { name: "keyboard", testMatch: /keyboard\.spec\.ts/ },
     // phone and tablet widths (issue #174)
     { name: "mobile", testMatch: /mobile\.spec\.ts/, dependencies: ["setup"] },

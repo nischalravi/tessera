@@ -3,34 +3,35 @@
  * mapping → validate → dry run → review and activate. Every step's gate is enforced by the
  * server; the UI shows the same blockers the server returns.
  */
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { CircleCheck, FlaskConical, Play, Power, ShieldCheck, Trash2, Wand2 } from "lucide-react";
+import { ArrowRightLeft, Briefcase, CircleCheck, FlaskConical, Search, Users, Play, Power, ShieldCheck, Trash2, Wand2 } from "lucide-react";
 import {
   Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, ScimPreset, readiness, useApi,
 } from "../../../api";
 import { SourceDeletionGuard } from "../SourceDeletionGuard";
+import { VendorLogo, vendorForType } from "../../../components/VendorLogo"; // not in the barrel: keeps the brand marks out of the main chunk
 import {
   Badge, Button, Callout, AttestInsteadDialog, ChecklistPanel, EmptyState, Kpi, Loading, Page, ReasonDialog, Step, Stepper, useConfirm, useToast,
 } from "../../../components";
 import {
   BlockerList, CONNECTOR_TYPES, GateCallout, STATE_LABEL, ScoreCell, SimulatedBadge, StateBadge, observedText, useAction,
 } from "./shared";
+import { CAPABILITIES, CATEGORIES, Capability, Category, filterGallery, groupGallery, metaOf, nextIndex } from "./gallery";
 
 // ---------------------------------------------------------------- step 1
 export function NewConnection() {
   const nav = useNavigate();
   const toast = useToast();
   const { data: existing } = useApi<{ connector_type?: string; legacy?: boolean }[]>("/connections");
-  const { data: presets } = useApi<ScimPreset[]>("/scim/presets");
   const [type, setType] = useState("demo-ad");
   const [name, setName] = useState("Active Directory (demo)");
   const [busy, setBusy] = useState(false);
   // A SCIM vendor tile has the id "scim:<preset>" and creates a scim_app connection pre-filled from the preset.
-  const presetOf = (id: string) => (id.startsWith("scim:") ? (presets ?? []).find((p) => `scim:${p.id}` === id) : undefined);
+  const presetOf = (id: string) => (id.startsWith("scim:") ? id.slice(5) : undefined);
   const pick = (id: string) => {
     setType(id);
-    setName(presetOf(id)?.name ?? CONNECTOR_TYPES.find((t) => t.id === id)?.label ?? "");
+    setName(CONNECTOR_TYPES.find((t) => t.id === id)?.label ?? "");
   };
   const create = async (e: FormEvent) => {
     e.preventDefault();
@@ -38,7 +39,7 @@ export function NewConnection() {
     try {
       const preset = presetOf(type);
       const c = await readiness.create(preset
-        ? { name: name.trim(), connector_type: "scim_app", config: { preset: preset.id, correlation_key: preset.mapping.username } }
+        ? { name: name.trim(), connector_type: "scim_app", config: { preset } }
         : { name: name.trim(), connector_type: type });
       toast(`${c.name} created as a draft`);
       nav(`/admin/connections/${c.id}?step=connect`);
@@ -55,37 +56,7 @@ export function NewConnection() {
         <Stepper current="type" onSelect={() => {}} steps={WIZARD_STEPS.map((s, i) => ({ ...s, disabled: i > 0, reason: "Create the connection first" }))} />
         <form className="card stack" onSubmit={create}>
           <h2>1. Choose type</h2>
-          <div className="type-grid" role="radiogroup" aria-label="Connector type">
-            {CONNECTOR_TYPES.map((t) => (
-              <label key={t.id} className={`type-card ${type === t.id ? "on" : ""}`}>
-                <input type="radio" name="type" value={t.id} checked={type === t.id} onChange={() => pick(t.id)} />
-                <span className="stack-sm">
-                  <span className="row tight"><b>{t.label}</b>{t.demo ? <Badge tone="info">Simulated</Badge> : <Badge tone="outline">Needs DR-10+</Badge>}{taken(t.id) && <Badge>Exists</Badge>}</span>
-                  <span className="small faint">{t.blurb}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          {(["Cloud & SaaS", "Identity providers"] as const).map((cat) => {
-            const tiles = (presets ?? []).filter((p) => p.category === cat);
-            return tiles.length === 0 ? null : (
-              <div key={cat} className="stack-sm">
-                <h3>{cat} (SCIM 2.0)</h3>
-                {/* Logos arrive with the app-gallery picker (PR #551, simple-icons); until then each tile shows a neutral glyph. */}
-                <div className="type-grid" role="radiogroup" aria-label={`${cat} SCIM presets`}>
-                  {tiles.map((p) => (
-                    <label key={p.id} className={`type-card ${type === `scim:${p.id}` ? "on" : ""}`}>
-                      <input type="radio" name="type" value={`scim:${p.id}`} checked={type === `scim:${p.id}`} onChange={() => pick(`scim:${p.id}`)} />
-                      <span className="stack-sm">
-                        <span className="row tight"><span aria-hidden="true">▣</span><b>{p.name}</b><Badge tone="outline">Needs DR-10+</Badge></span>
-                        <span className="small faint">{p.publisher}. {p.hint}</span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+          <TypeGallery type={type} onPick={pick} taken={taken} />
           {!CONNECTOR_TYPES.find((t) => t.id === type)?.demo && (
             <Callout tone="warn">Real connector types can be set up and validated against the simulated scenario, but simulated results never satisfy their gates, and they cannot be activated until tenancy, RBAC and step-up land (Phase 0, DR-10).</Callout>
           )}
@@ -97,6 +68,92 @@ export function NewConnection() {
         </form>
       </div>
     </Page>
+  );
+}
+
+const CAP_ICON = { "Identity source": Users, "Provisioning target": ArrowRightLeft, "HR source": Briefcase } as const;
+
+/** App-gallery picker for the connector type: search, category and capability chips, grouped tiles. */
+function TypeGallery({ type, onPick, taken }: { type: string; onPick: (id: string) => void; taken: (id: string) => boolean }) {
+  const [q, setQ] = useState("");
+  const [category, setCategory] = useState<Category | "">("");
+  const [capability, setCapability] = useState<Capability | "">("");
+  const refs = useRef<Record<string, HTMLDivElement | null>>({});
+  const shown = filterGallery(CONNECTOR_TYPES, { q, category, capability });
+  const groups = groupGallery(shown);
+  const ids = groups.flatMap((g) => g.items.map((t) => t.id));
+  const tabStop = ids.includes(type) ? type : ids[0]; // roving tabindex: the selected tile, else the first
+  const onKey = (e: KeyboardEvent, id: string) => {
+    if (e.key === " " || e.key === "Enter") { e.preventDefault(); onPick(id); return; }
+    if (!e.key.startsWith("Arrow") && e.key !== "Home" && e.key !== "End") return;
+    const to = nextIndex(e.key, ids.indexOf(id), ids.length);
+    e.preventDefault();
+    if (to < 0 || ids[to] === id) return;
+    onPick(ids[to]);
+    refs.current[ids[to]]?.focus();
+  };
+  const chip = (label: string, on: boolean, set: () => void) => (
+    <button key={label} type="button" className={`fchip ${on ? "on" : ""}`} aria-pressed={on} onClick={set}>{label}</button>
+  );
+  return (
+    <div className="gallery stack">
+      <div className="gallery-bar">
+        <label className="gallery-search">
+          <Search size={14} aria-hidden />
+          <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search systems" aria-label="Search connector types" />
+        </label>
+        <div className="chips" role="group" aria-label="Filter by category">
+          {chip("All", category === "", () => setCategory(""))}
+          {CATEGORIES.map((c) => chip(c, category === c, () => setCategory(category === c ? "" : c)))}
+        </div>
+        <div className="chips" role="group" aria-label="Filter by capability">
+          {chip("Any capability", capability === "", () => setCapability(""))}
+          {CAPABILITIES.map((c) => chip(c, capability === c, () => setCapability(capability === c ? "" : c)))}
+        </div>
+      </div>
+      <p className="sr-only" role="status">{shown.length} of {CONNECTOR_TYPES.length} systems shown</p>
+      <div role="radiogroup" aria-label="Connector type" className="stack">
+        {groups.map((g) => (
+          <section key={g.category} aria-labelledby={`gal-${g.category}`}>
+            <h3 id={`gal-${g.category}`} className="gallery-h">{g.category}</h3>
+            <div className="gallery-grid">
+              {g.items.map((t) => {
+                const m = metaOf(t.id);
+                return (
+                  <div key={t.id} ref={(el) => { refs.current[t.id] = el; }} role="radio" aria-checked={type === t.id}
+                    tabIndex={tabStop === t.id ? 0 : -1} className={`gallery-tile ${type === t.id ? "on" : ""}`}
+                    aria-labelledby={`gal-n-${t.id}`} aria-describedby={`gal-d-${t.id}`}
+                    onClick={() => onPick(t.id)} onKeyDown={(e) => onKey(e, t.id)}>
+                    <VendorLogo vendor={m.vendor} />
+                    <span className="gallery-body">
+                      <b id={`gal-n-${t.id}`}>{t.label}</b>
+                      <span className="small faint">{m.publisher}</span>
+                      <span id={`gal-d-${t.id}`} className="small faint">{t.blurb}</span>
+                      <span className="gallery-caps">
+                        {m.capabilities.map((c) => {
+                          const Icon = CAP_ICON[c];
+                          return <span key={c} className="gallery-cap" title={c}><Icon size={16} aria-hidden /><span className="sr-only">{c}</span></span>;
+                        })}
+                      </span>
+                    </span>
+                    <span className="gallery-foot row tight">
+                      {t.demo ? <Badge tone="info">Simulated</Badge> : <Badge tone="outline">Needs DR-10+</Badge>}
+                      {taken(t.id) && <Badge>Exists</Badge>}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ))}
+        {groups.length === 0 && (
+          <EmptyState icon={<Search size={20} />} title="No systems match"
+            action={<Button type="button" onClick={() => { setQ(""); setCategory(""); setCapability(""); }}>Clear search and filters</Button>}>
+            Try a different name, or clear the filters.
+          </EmptyState>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -459,7 +516,7 @@ export function ConnectionDetail() {
     <Page
       title={conn.name}
       crumbs={[["Settings"], ["Connections", "/admin/connections"], [conn.name]]}
-      badge={<span className="row tight"><StateBadge state={conn.state} />{conn.simulated && <SimulatedBadge />}</span>}
+      badge={<span className="row tight"><VendorLogo vendor={vendorForType(conn.system, conn.connector_type)} size={32} /><StateBadge state={conn.state} />{conn.simulated && <SimulatedBadge />}</span>}
       sub={<>Template <code>{conn.template.pin}</code> ({conn.template.display_name} {conn.template.version}{conn.template.overlay_version ? `, overlay v${conn.template.overlay_version}` : ""}) · system <code>{conn.system}</code> · role {conn.role.replace("_", " ")}{rev ? ` · revision ${rev.rev}` : ""}</>}
     >
       <div className="wizard">

@@ -5,6 +5,7 @@ import { Activity, CalendarClock, Plus, RefreshCw, Server } from "lucide-react";
 import { Connection, ConnectorSyncStatus, LegacyConnection, api, connectorSchedule, fmtDate, readiness, relTime, useApi } from "../../../api";
 import { useSession } from "../../../app/auth";
 import { Badge, Button, Callout, Chip, DataTable, Drawer, Page, useToast } from "../../../components";
+import { VendorLogo, vendorForType } from "../../../components/VendorLogo";
 import { STATE_LABEL, ScoreCell, SimulatedBadge, StateBadge } from "./shared";
 
 type Row = Connection | LegacyConnection;
@@ -68,11 +69,14 @@ export function ConnectionsList() {
           {
             id: "name", header: "Connection", sort: (r) => r.name,
             cell: (r) => (
-              <div>
-                <b className="name-link">{r.name}</b>
-                <div className="xs faint row tight">
-                  {r.legacy ? r.type : r.template.display_name}
-                  {!r.legacy && r.simulated && <SimulatedBadge />}
+              <div className="row tight" style={{ flexWrap: "nowrap" }}>
+                <VendorLogo vendor={vendorForType(r.system, r.legacy ? "" : r.connector_type)} size={36} />
+                <div>
+                  <b className="name-link">{r.name}</b>
+                  <div className="xs faint row tight">
+                    {r.legacy ? r.type : r.template.display_name}
+                    {!r.legacy && r.simulated && <SimulatedBadge />}
+                  </div>
                 </div>
               </div>
             ),
