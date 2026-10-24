@@ -39,6 +39,7 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
   Sign in to `larkspur` through the dev IdP (see [Signing in](#signing-in)), for example as Alice
   (tenant admin) or Pat (policy admin) with a passkey.
 * API: http://127.0.0.1:8000. OpenAPI docs are at http://127.0.0.1:8000/docs
+  Every `/api/...` route is also served under `/api/v1/...` (same auth, audit and limits); `Deprecation`/`Sunset` headers and the compatibility policy are in `docs/api/compatibility.md` (issue #587).
   The complete OpenAPI 3.1 document of every registered route (permission, token scopes, step-up, errors) is `GET /api/openapi.json`, built from the route table (issue #587); `/openapi.json` stays the original core-route document.
 * Machine-client rate limits (issue #587): every OAuth client has a token bucket per tenant and client. The default is
   `TESSERA_API_CLIENT_RATE_BURST` (120) requests at once, refilled at `TESSERA_API_CLIENT_RATE_PER_MINUTE` (600; `0` turns the
