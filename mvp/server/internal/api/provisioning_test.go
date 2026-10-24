@@ -825,13 +825,17 @@ func TestProvisioning_SalesforceTargetConfig(t *testing.T) {
 	pemKey := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 	cred, _ := json.Marshal(map[string]string{"client_id": "3MVG9-key", "username": "tessera@acme.example", "private_key": pemKey})
 	quoted, _ := json.Marshal(string(cred))
+	credLogin, _ := json.Marshal(map[string]string{"client_id": "3MVG9-key", "username": "tessera@acme.example", "private_key": pemKey, "login_url": "https://login.evil.example"})
+	quotedLogin, _ := json.Marshal(string(credLogin))
 	for name, body := range map[string]string{
-		"no credential": `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com"}`,
-		"bare token":    `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":"abc"}`,
-		"user:secret":   `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":"u:p"}`,
-		"not a key":     `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":"{\"client_id\":\"a\",\"username\":\"b\",\"private_key\":\"nope\"}"}`,
-		"dialect":       `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":` + string(quoted) + `,"dialect":"entra"}`,
-		"api root":      `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":` + string(quoted) + `,"api_root":"/x"}`,
+		"no credential":   `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com"}`,
+		"bare token":      `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":"abc"}`,
+		"user:secret":     `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":"u:p"}`,
+		"not a key":       `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":"{\"client_id\":\"a\",\"username\":\"b\",\"private_key\":\"nope\"}"}`,
+		"other host":      `{"kind":"salesforce","base_url":"https://acme.example.com","token":` + string(quoted) + `}`,
+		"login elsewhere": `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":` + string(quotedLogin) + `}`,
+		"dialect":         `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":` + string(quoted) + `,"dialect":"entra"}`,
+		"api root":        `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":` + string(quoted) + `,"api_root":"/x"}`,
 	} {
 		if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, body); rec.Code != http.StatusUnprocessableEntity {
 			t.Errorf("%s: status %d: %s", name, rec.Code, rec.Body)

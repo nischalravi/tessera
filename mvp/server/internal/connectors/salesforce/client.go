@@ -38,12 +38,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 )
 
@@ -51,7 +53,7 @@ import (
 const DefaultAPIVersion = "v61.0"
 
 const (
-	tokenPath    = "/services/oauth2/token"
+	tokenPath    = "/services/oauth2/token" // #nosec G101 -- URL path, not a credential
 	jwtGrant     = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 	assertionTTL = 3 * time.Minute
 	// tokenTTL is how long a token is reused. Salesforce does not return expires_in for this
@@ -111,13 +113,13 @@ func Open(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time
 	if cfg.ClientID == "" || len(cfg.ClientID) > 256 || !soqlText.MatchString(cfg.Username) || cfg.PrivateKey.Empty() {
 		return nil, errors.New("salesforce: a consumer key, an integration username and a private key are required")
 	}
-	base, err := connsync.ParseBaseURL(cfg.BaseURL, rt)
+	base, err := CheckURL(cfg.BaseURL, rt)
 	if err != nil {
 		return nil, fmt.Errorf("salesforce: base URL: %w", err)
 	}
 	login := base
 	if cfg.LoginURL != "" {
-		if login, err = connsync.ParseBaseURL(cfg.LoginURL, rt); err != nil {
+		if login, err = CheckURL(cfg.LoginURL, rt); err != nil {
 			return nil, fmt.Errorf("salesforce: login URL: %w", err)
 		}
 	}
@@ -142,6 +144,32 @@ func Open(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time
 	c.api.Authorize = c.authorize
 	c.api.OnUnauthorized = func() { c.mu.Lock(); c.access = ""; c.mu.Unlock() }
 	return c, nil
+}
+
+// hostSuffixes are the domains a Salesforce org, sandbox or login host lives under (my.salesforce.com,
+// sandbox.my.salesforce.com, login. and test.salesforce.com, Experience Cloud on force.com).
+var hostSuffixes = []string{".salesforce.com", ".force.com"}
+
+// CheckURL parses a base or login URL and refuses a host that is not Salesforce's. The only exception is the
+// dev loopback exception (connsync.Runtime.AllowLoopback, refused in prod by the configuration), which lets a
+// test point at a local fake. The bearer token and the signed assertion go only to these hosts.
+func CheckURL(raw string, rt connsync.Runtime) (*url.URL, error) {
+	u, err := connsync.ParseBaseURL(raw, rt)
+	if err != nil {
+		return nil, err
+	}
+	host := strings.ToLower(u.Hostname())
+	if rt.Env != config.Prod && rt.AllowLoopback {
+		if a, err := netip.ParseAddr(host); err == nil && a.IsLoopback() {
+			return u, nil
+		}
+	}
+	for _, suf := range hostSuffixes {
+		if strings.HasSuffix(host, suf) && len(host) > len(suf) {
+			return u, nil
+		}
+	}
+	return nil, errors.New("the host must be a Salesforce domain (*.my.salesforce.com, *.salesforce.com or *.force.com)")
 }
 
 func parseKey(pemText string) (*rsa.PrivateKey, error) {

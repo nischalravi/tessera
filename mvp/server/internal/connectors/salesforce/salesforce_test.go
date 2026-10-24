@@ -242,16 +242,21 @@ func TestOpenValidation(t *testing.T) {
 		t.Fatalf("good config: %v", err)
 	}
 	for name, mut := range map[string]func(*salesforce.Config){
-		"no key":        func(c *salesforce.Config) { c.PrivateKey = connsync.Secret{} },
-		"not pem":       func(c *salesforce.Config) { c.PrivateKey = connsync.NewSecret("hello") },
-		"no client":     func(c *salesforce.Config) { c.ClientID = "" },
-		"quote in user": func(c *salesforce.Config) { c.Username = "a'b" },
-		"http":          func(c *salesforce.Config) { c.BaseURL = "http://acme.my.salesforce.com" },
-		"path":          func(c *salesforce.Config) { c.BaseURL = "https://acme.my.salesforce.com/x" },
-		"credentials":   func(c *salesforce.Config) { c.BaseURL = "https://u:p@acme.my.salesforce.com" },
-		"bad login url": func(c *salesforce.Config) { c.LoginURL = "ftp://x" },
-		"bad api":       func(c *salesforce.Config) { c.APIVersion = "61" },
-		"api injection": func(c *salesforce.Config) { c.APIVersion = "v61.0/../../x" },
+		"no key":          func(c *salesforce.Config) { c.PrivateKey = connsync.Secret{} },
+		"not pem":         func(c *salesforce.Config) { c.PrivateKey = connsync.NewSecret("hello") },
+		"no client":       func(c *salesforce.Config) { c.ClientID = "" },
+		"quote in user":   func(c *salesforce.Config) { c.Username = "a'b" },
+		"http":            func(c *salesforce.Config) { c.BaseURL = "http://acme.my.salesforce.com" },
+		"path":            func(c *salesforce.Config) { c.BaseURL = "https://acme.my.salesforce.com/x" },
+		"credentials":     func(c *salesforce.Config) { c.BaseURL = "https://u:p@acme.my.salesforce.com" },
+		"bad login url":   func(c *salesforce.Config) { c.LoginURL = "ftp://x" },
+		"other host":      func(c *salesforce.Config) { c.BaseURL = "https://acme.example.com" },
+		"look-alike":      func(c *salesforce.Config) { c.BaseURL = "https://evilsalesforce.com" },
+		"suffix trick":    func(c *salesforce.Config) { c.BaseURL = "https://my.salesforce.com.evil.example" },
+		"bare domain":     func(c *salesforce.Config) { c.BaseURL = "https://salesforce.com" },
+		"login elsewhere": func(c *salesforce.Config) { c.LoginURL = "https://login.evil.example" },
+		"bad api":         func(c *salesforce.Config) { c.APIVersion = "61" },
+		"api injection":   func(c *salesforce.Config) { c.APIVersion = "v61.0/../../x" },
 	} {
 		c := good
 		mut(&c)
@@ -419,5 +424,75 @@ func TestTargetWriteFaults(t *testing.T) {
 	}
 	if v, err := tg.Verify(ctx, dis); err != nil || v.OK {
 		t.Errorf("dropped disable verified: %+v %v", v, err)
+	}
+}
+
+func TestCheckURL(t *testing.T) {
+	prod := connsync.Runtime{Env: "prod"}
+	for _, u := range []string{"https://acme.my.salesforce.com", "https://acme--uat.sandbox.my.salesforce.com", "https://login.salesforce.com",
+		"https://test.salesforce.com", "https://acme.force.com", "https://acme.lightning.force.com"} {
+		if _, err := salesforce.CheckURL(u, prod); err != nil {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+	for _, u := range []string{"https://127.0.0.1", "https://localhost", "https://acme.example.com", "http://acme.my.salesforce.com"} {
+		if _, err := salesforce.CheckURL(u, prod); err == nil {
+			t.Errorf("%s accepted in prod", u)
+		}
+	}
+	// the loopback exception is dev only
+	if _, err := salesforce.CheckURL("https://127.0.0.1:8443", connsynctest.Runtime); err != nil {
+		t.Errorf("dev loopback: %v", err)
+	}
+	if _, err := salesforce.CheckURL("https://127.0.0.1:8443", connsync.Runtime{Env: "prod", AllowLoopback: true}); err == nil {
+		t.Error("loopback accepted in prod even with the flag")
+	}
+	if _, err := salesforce.CheckURL("https://acme.example.com", connsynctest.Runtime); err == nil {
+		t.Error("a non-Salesforce host was accepted in dev")
+	}
+}
+
+func TestTargetRefusesInjectedAttributeKeys(t *testing.T) {
+	r := newRig(t)
+	tg := &salesforce.Target{C: r.c}
+	ctx := context.Background()
+	req := target.Request{Kind: target.UpdateAccount, Account: target.Account{Username: "ada@acme.example", Attrs: map[string]string{"Id FROM User WHERE Name != ''--": "x"}}}
+	if err := tg.Apply(ctx, req); err == nil || target.Retryable(err) {
+		t.Errorf("apply: %v", err)
+	}
+	if _, err := tg.Verify(ctx, req); err == nil {
+		t.Error("verify accepted the key")
+	}
+	for _, q := range r.srv.Requests() {
+		if strings.Contains(q.Query, "Name+%21") || strings.Contains(q.Query, "WHERE+Name") {
+			t.Errorf("the key reached a query: %s", q.Query)
+		}
+	}
+}
+
+func TestTargetRefusesInvalidReturnedIds(t *testing.T) {
+	r := newRig(t)
+	r.fake.Set("User", sffake.Row{"Id": "x' OR Id != '", "Username": "evil@acme.example", "IsActive": true})
+	r.fake.Set("UserLogin", sffake.Row{"Id": "bad id", "UserId": "x' OR Id != '"})
+	tg := &salesforce.Target{C: r.c}
+	for _, k := range []string{target.DisableAccount, target.AddEntitlement} {
+		req := target.Request{Kind: k, Account: target.Account{Username: "evil@acme.example"}, Group: target.Group{ExternalID: psApex}}
+		if err := tg.Apply(context.Background(), req); err == nil || target.Retryable(err) {
+			t.Errorf("%s: want a permanent error, got %v", k, err)
+		}
+	}
+	// a valid user whose login row has a bad Id
+	r.fake.Set("User", sffake.Row{"Id": uAda, "Username": "ada@acme.example", "IsActive": true})
+	r.fake.Set("UserLogin", sffake.Row{"Id": "bad id", "UserId": uAda})
+	if err := tg.Apply(context.Background(), target.Request{Kind: target.DisableAccount, Account: target.Account{Username: "ada@acme.example"}}); err == nil {
+		t.Error("a login row with an invalid Id was used")
+	}
+	if _, _, w := r.fake.Counts(); w != 0 {
+		t.Errorf("writes = %d", w)
+	}
+	for _, q := range r.srv.Requests() {
+		if strings.Contains(q.Query, "OR+Id") || strings.Contains(q.Path, "bad") {
+			t.Errorf("a returned Id reached a request: %s %s", q.Path, q.Query)
+		}
 	}
 }

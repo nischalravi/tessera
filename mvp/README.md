@@ -2582,6 +2582,8 @@ assignment back through provisioning.
   PEM RSA), and optionally `_LOGIN_URL` (`https://test.salesforce.com` for a sandbox) and `_API_VERSION` (`v61.0`).
   Auth is the OAuth JWT bearer flow: Tessera signs a 3-minute RS256 assertion and exchanges it for a token; no password
   or refresh token is kept, and the `instance_url` in a token response is never followed.
+- **Hosts.** The base URL and `login_url` must be under `salesforce.com` or `force.com` (a 422 at target validation,
+  an error at connector start); only the dev loopback exception, which prod refuses, admits a local fake.
 - **Graph.** Profiles, roles, permission sets and permission set groups are groups (`salesforce_profile`, `_role`,
   `_permission_set`, `_permission_set_group`); a group is `member_of` its component sets. System permissions
   (Modify All Data, View All Data, Manage Users, Author Apex and others) are permissions on the resource `org`, and a

@@ -74,7 +74,16 @@ func (t *Target) userID(ctx context.Context, a target.Account) (string, error) {
 	if len(rs) == 0 {
 		return "", nil
 	}
-	return rs[0].str("Id"), nil
+	return rowID(rs[0])
+}
+
+// rowID returns a record's Id, refusing one that is not a Salesforce id: it is reused in queries and URLs.
+func rowID(r record) (string, error) {
+	id := r.str("Id")
+	if !idRE.MatchString(id) {
+		return "", target.Permanent("the org returned an invalid record id")
+	}
+	return id, nil
 }
 
 func (t *Target) loginState(ctx context.Context, user string) (loginID string, frozen bool, err error) {
@@ -85,7 +94,8 @@ func (t *Target) loginState(ctx context.Context, user string) (loginID string, f
 	if len(rs) == 0 {
 		return "", false, nil
 	}
-	return rs[0].str("Id"), rs[0].flag("IsFrozen"), nil
+	id, err := rowID(rs[0])
+	return id, rs[0].flag("IsFrozen"), err
 }
 
 func (t *Target) active(ctx context.Context, user string) (bool, error) {
@@ -222,6 +232,15 @@ func (t *Target) update(ctx context.Context, a target.Account) error {
 }
 
 func (t *Target) sameAttrs(ctx context.Context, id string, want map[string]string) (bool, error) {
+	if err := checkAttrs(want); err != nil { // the keys go into the SELECT list
+		return false, err
+	}
+	if len(want) == 0 {
+		return false, target.Permanent("no attributes to compare")
+	}
+	if !idRE.MatchString(id) {
+		return false, target.Permanent("the org returned an invalid user id")
+	}
 	rs, err := t.C.rows(ctx, "SELECT "+strings.Join(attrNames(want), ", ")+" FROM User WHERE Id = '"+id+"'")
 	if err != nil {
 		return false, wrap("read user", err)
@@ -288,6 +307,9 @@ func (t *Target) entitlement(ctx context.Context, r target.Request) error {
 		return wrap("add assignment", err)
 	}
 	for _, row := range rows {
+		if _, err := rowID(row); err != nil {
+			return err
+		}
 		if field == "PermissionSetGroupId" {
 			// The group's own assignment is the row of its generated set; the component rows go with it.
 			gen, err := t.C.rows(ctx, "SELECT Id FROM PermissionSet WHERE PermissionSetGroupId = '"+r.Group.ExternalID+"' AND Type = 'Group'")

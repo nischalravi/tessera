@@ -14,6 +14,8 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
@@ -306,6 +308,11 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	default:
 		return st, badRequest("invalid_kind", "kind must be scim, okta, cyberark, delinea, beyondtrust, sap, oracle, salesforce or fake")
 	}
+	if in.Kind == provision.KindSalesforce {
+		if _, err := salesforce.CheckURL(in.BaseURL, s.sfRuntime()); err != nil {
+			return st, badRequest("invalid_base_url", "base_url: "+err.Error())
+		}
+	}
 	vault := slices.Contains(provision.PAMKinds, in.Kind) || slices.Contains(provision.ERPKinds, in.Kind) // a target with a path root and a user:secret credential
 	noDialect := vault || in.Kind == provision.KindSalesforce
 	switch {
@@ -414,8 +421,14 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		credential = "kept"
 	}
 	if in.Token != "" && in.Kind == provision.KindSalesforce {
-		if _, err := salesforce.ParseCredential(in.Token); err != nil {
+		cred, err := salesforce.ParseCredential(in.Token)
+		if err != nil {
 			return 0, nil, badRequest("invalid_credential", err.Error())
+		}
+		if cred.LoginURL != "" {
+			if _, err := salesforce.CheckURL(cred.LoginURL, s.sfRuntime()); err != nil {
+				return 0, nil, badRequest("invalid_credential", "login_url: "+err.Error())
+			}
 		}
 	}
 	switch {
@@ -467,6 +480,11 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, viewTarget(saved, conn.Name), nil
+}
+
+// sfRuntime is the outbound runtime of Salesforce targets: the dev loopback exception exists in dev only.
+func (s *Server) sfRuntime() connsync.Runtime {
+	return connsync.Runtime{Env: s.cfg.Env, AllowLoopback: s.cfg.Env == config.Dev}
 }
 
 // isUserSecretKind: the kinds whose credential is "user:secret" (vaults and ERPs).
