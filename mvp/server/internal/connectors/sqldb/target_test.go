@@ -55,7 +55,7 @@ func TestTarget_NativePostgres_Apply(t *testing.T) {
 		{"grant held is a no-op", withGroup(req(target.AddEntitlement, "alice"), "readers"), nil},
 		{"revoke", withGroup(req(target.RemoveEntitlement, "alice"), "readers"), []string{`REVOKE "readers" FROM "alice"`}},
 		{"revoke not held is a no-op", withGroup(req(target.RemoveEntitlement, "alice"), "admins"), nil},
-		{"hostile name is quoted", req(target.CreateAccount, `x" SUPERUSER; --`), []string{`CREATE ROLE "x"" SUPERUSER; --" LOGIN`}},
+		{"name with allowed punctuation", req(target.CreateAccount, "svc.a-b_c$1"), []string{`CREATE ROLE "svc.a-b_c$1" LOGIN`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -90,7 +90,7 @@ func TestTarget_Apply_Refusals(t *testing.T) {
 			r.Account.Attrs = map[string]string{"status": "banana"}
 			return r
 		}(), "active or locked"},
-		{"a name that cannot be quoted", req(target.CreateAccount, "a\x00b"), "not a usable name"},
+		{"a name with NUL", req(target.CreateAccount, "a\x00b"), "not allowed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

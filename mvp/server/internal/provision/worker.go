@@ -13,6 +13,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/certs"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
@@ -327,7 +328,13 @@ func (e *Engine) buildSQL(token string, s Settings) (target.Connector, error) {
 	if s.SQL == nil {
 		return nil, errors.New("the database settings are missing")
 	}
-	return sqldb.NewTarget(*s.SQL, connsync.NewSecret(token), e.Runtime)
+	// only a dev runtime is dev: any other environment name (the API's "test" included) gets the
+	// production rules, and the dialer refuses an environment it does not know
+	rt := connsync.Runtime{Env: config.Prod}
+	if e.Runtime.Env == config.Dev {
+		rt = e.Runtime
+	}
+	return sqldb.NewTarget(*s.SQL, connsync.NewSecret(token), rt)
 }
 
 func (e *Engine) workerCtx(ctx context.Context) context.Context {

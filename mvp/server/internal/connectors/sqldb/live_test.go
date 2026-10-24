@@ -215,19 +215,15 @@ func TestLive_PostgresHostileName(t *testing.T) {
 	tg, _ := NewTarget(cfg, pw, devRT)
 	ctx := liveCtx(t)
 	r := target.Request{Kind: target.CreateAccount, Account: target.Account{Username: name}}
-	if err := tg.Apply(ctx, r); err != nil {
-		t.Fatal(err)
+	// refused by the allow-list before any SQL is built, permanently
+	if err := tg.Apply(ctx, r); err == nil || target.Retryable(err) {
+		t.Fatalf("err = %v", err)
 	}
-	if v, err := tg.Verify(ctx, r); err != nil || !v.OK {
-		t.Fatalf("%+v %v", v, err)
-	}
-	r.Kind = target.DeleteAccount
-	if err := tg.Apply(ctx, r); err != nil {
-		t.Fatal(err)
-	}
-	if v, err := tg.Verify(ctx, r); err != nil || !v.OK {
-		t.Fatalf("%+v %v", v, err)
-	}
+	// quoting alone still holds if the allow-list were bypassed: the role is created under exactly that name
+	q := quoted(t, Postgres, name)
+	db := admin(t, cfg, pw)
+	exec(t, db, "CREATE ROLE "+q+" LOGIN")
+	exec(t, db, "DROP ROLE "+q)
 }
 
 // The read-only transaction really refuses a write (PostgreSQL, MySQL).

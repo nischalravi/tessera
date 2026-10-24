@@ -44,6 +44,32 @@ var selectBanned = map[string]bool{
 	"CALL": true, "INTO": true, "COPY": true, "REPLACE": true, "LOCK": true,
 }
 
+// neverAllowed are words no template may contain outside quotes, read or write: ways to run
+// dynamic SQL, procedures, files, programs or other servers. Prefixes cover whole families.
+var neverAllowed = map[string]bool{
+	"EXEC": true, "EXECUTE": true, "CALL": true, "IMMEDIATE": true, "SP_EXECUTESQL": true, "OPENROWSET": true,
+	"OPENQUERY": true, "OPENDATASOURCE": true, "PROGRAM": true, "LOAD_FILE": true, "OUTFILE": true, "DUMPFILE": true,
+	"COPY": true, "BULK": true, "DBLINK": true, "LO_IMPORT": true, "LO_EXPORT": true, "PG_READ_FILE": true,
+	"PG_LS_DIR": true, "SHUTDOWN": true, "DECLARE": true, "BEGIN": true, "DO": true, "PREPARE": true,
+}
+
+var neverAllowedPrefix = []string{"XP_", "SP_", "DBMS_", "UTL_", "PG_", "LO_"}
+
+// writeBanned are definition and privilege words a write template may not contain either.
+var writeBanned = map[string]bool{"DROP": true, "ALTER": true, "CREATE": true, "TRUNCATE": true, "GRANT": true, "REVOKE": true}
+
+func forbiddenWord(w string, class stmtClass) bool {
+	if neverAllowed[w] || (class == classWrite && writeBanned[w]) {
+		return true
+	}
+	for _, p := range neverAllowedPrefix {
+		if strings.HasPrefix(w, p) {
+			return true
+		}
+	}
+	return false
+}
+
 var errTemplate = errors.New("invalid statement")
 
 // ParseTemplate checks and parses a statement. Rules, applied outside quoted
@@ -67,7 +93,7 @@ func ParseTemplate(sqlText string, class stmtClass, engine string) (*Template, e
 	for i := 0; i < len(s); {
 		c := s[i]
 		switch {
-		case c == '\'' || c == '"' || c == '`':
+		case c == '\'' || c == '"' || (c == '`' && engine == MySQL):
 			j, err := skipQuoted(s, i)
 			if err != nil {
 				return nil, err
@@ -75,6 +101,20 @@ func ParseTemplate(sqlText string, class stmtClass, engine string) (*Template, e
 			cur.WriteString(s[i:j])
 			i = j
 			continue
+		case c == '[' && engine == SQLServer: // [identifier], "]]" is a literal "]"
+			j, err := skipBracket(s, i)
+			if err != nil {
+				return nil, err
+			}
+			cur.WriteString(s[i:j])
+			i = j
+			continue
+		case c == '[' || c == ']' || c == '`' || c == '{' || c == '}':
+			return nil, fmt.Errorf("%w: %q is not allowed outside quotes for %s", errTemplate, string(c), engine)
+		case c == '$':
+			return nil, fmt.Errorf("%w: \"$\" (dollar quoting, positional parameters) is not allowed; use :name placeholders", errTemplate)
+		case c >= 0x80:
+			return nil, fmt.Errorf("%w: non-ASCII characters are allowed only inside quotes", errTemplate)
 		case c == ';':
 			return nil, fmt.Errorf("%w: only one statement is allowed (no \";\")", errTemplate)
 		case c == '#' || (c == '-' && i+1 < len(s) && s[i+1] == '-') || (c == '/' && i+1 < len(s) && s[i+1] == '*'):
@@ -105,10 +145,16 @@ func ParseTemplate(sqlText string, class stmtClass, engine string) (*Template, e
 			continue
 		case isWordByte(c):
 			j := i
-			for j < len(s) && isWordByte(s[j]) {
+			for j < len(s) && (isWordByte(s[j]) || s[j] == '$') { // "$" continues an identifier (a$b)
 				j++
 			}
 			w := strings.ToUpper(s[i:j])
+			if (w == "Q" || w == "NQ") && j < len(s) && s[j] == '\'' {
+				return nil, fmt.Errorf("%w: Oracle alternative quoting (q'...') is not allowed", errTemplate)
+			}
+			if forbiddenWord(w, class) {
+				return nil, fmt.Errorf("%w: %s is not allowed in a template", errTemplate, w)
+			}
 			if !seenFirst {
 				first, seenFirst = w, true
 			}
@@ -164,6 +210,21 @@ func skipQuoted(s string, i int) (int, error) {
 	return 0, fmt.Errorf("%w: unterminated quote", errTemplate)
 }
 
+// skipBracket returns the index after the SQL Server [identifier] that starts at s[i]; "]]" is an
+// escaped "]".
+func skipBracket(s string, i int) (int, error) {
+	for j := i + 1; j < len(s); j++ {
+		if s[j] == ']' {
+			if j+1 < len(s) && s[j+1] == ']' {
+				j++
+				continue
+			}
+			return j + 1, nil
+		}
+	}
+	return 0, fmt.Errorf("%w: unterminated [identifier]", errTemplate)
+}
+
 func cleanTextAllowNL(s string) bool {
 	for _, r := range s {
 		if r == '\n' || r == '\t' || r == '\r' {
@@ -210,7 +271,7 @@ func (t *Template) Bind(engine string, vals map[string]string) (string, []any) {
 }
 
 // validate parses every statement of an App.
-func (a *App) validate() error {
+func (a *App) validate(engine string) error {
 	var errs []error
 	chk := func(name, text string, class stmtClass, required bool) {
 		if text == "" {
@@ -219,8 +280,7 @@ func (a *App) validate() error {
 			}
 			return
 		}
-		// the engine only changes the markers, not what is accepted
-		if _, err := ParseTemplate(text, class, Postgres); err != nil {
+		if _, err := ParseTemplate(text, class, engine); err != nil {
 			errs = append(errs, fmt.Errorf("app.%s: %w", name, err))
 		}
 	}

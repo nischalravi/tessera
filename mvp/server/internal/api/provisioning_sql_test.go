@@ -53,12 +53,25 @@ func TestProvisioning_SQLTargetConfig(t *testing.T) {
 	if strings.Contains(h.auditDetail(), "s3cr3t") {
 		t.Error("the audit event carries the password")
 	}
-	// an edit that keeps the host keeps the password; a move to another host needs a new one
-	if code, out := put(`{"kind":"sql","write_back":true,"sql":` + strings.Replace(good, `"app"`, `"other"`, 1) + `}`); code != http.StatusOK {
-		t.Errorf("an edit that keeps the host: %d %s", code, out)
+	// the same settings keep the password; ANY change to the settings needs a new one
+	if code, out := put(`{"kind":"sql","write_back":false,"sql":` + good + `}`); code != http.StatusOK {
+		t.Errorf("an edit that keeps the settings: %d %s", code, out)
 	}
-	moved := strings.Replace(good, "db.example.com", "evil.example.net", 1)
-	if code, out := put(`{"kind":"sql","write_back":true,"sql":` + moved + `}`); code != http.StatusUnprocessableEntity || !strings.Contains(out, "credential_required") {
-		t.Errorf("a moved host without a password: %d %s", code, out)
+	for name, edited := range map[string]string{
+		"database": strings.Replace(good, `"app"`, `"other"`, 1),
+		"host":     strings.Replace(good, "db.example.com", "evil.example.net", 1),
+		"port":     strings.Replace(good, `"engine"`, `"port":6543,"engine"`, 1),
+		"username": strings.Replace(good, `"tessera"`, `"admin"`, 1),
+		"engine":   strings.Replace(good, `"postgres"`, `"mysql"`, 1),
+		"mode":     strings.Replace(good, `"native"`, `"app","app":{"accounts_query":"SELECT id FROM u"}`, 1),
+		"tls":      strings.Replace(good, `"engine"`, `"tls":"verify-full","engine"`, 1),
+		"limits":   strings.Replace(good, `"engine"`, `"max_rows":5,"engine"`, 1),
+	} {
+		if code, out := put(`{"kind":"sql","write_back":true,"sql":` + edited + `}`); code != http.StatusUnprocessableEntity || !strings.Contains(out, "credential_required") {
+			t.Errorf("changing %s without a password: %d %s", name, code, out)
+		}
+	}
+	if code, out := put(`{"kind":"sql","token":"new-pw","write_back":true,"sql":` + strings.Replace(good, `"app"`, `"other"`, 1) + `}`); code != http.StatusOK {
+		t.Errorf("a changed database with a new password: %d %s", code, out)
 	}
 }

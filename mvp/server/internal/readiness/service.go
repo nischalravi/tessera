@@ -422,11 +422,23 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 	before := passing(b.Eval)
 	changed := changedFields(b.Config, cfg)
 	rev := *b.Rev
+	// The password of a database connection was entered for its settings: any change to them
+	// drops the credential, so a new one must be entered (it never follows a new host or statement).
+	clearSecret := b.Template.ID == "sql" && rev.SecretRef != nil && sqlConfigChanged(b.Config, cfg)
+	if clearSecret {
+		rev.SecretRef, rev.SecretVersion = nil, nil
+	}
 	if err := setRevisionConfig(&rev, b.Conn, cfg); err != nil {
 		return nil, err
 	}
 	if err := c.UpdateRevisionConfig(rev.ID, rev.Config, rev.ConfigHash, rev.WriteMode, rev.ExpectedCounts, now); err != nil {
 		return nil, err
+	}
+	if clearSecret {
+		if err := c.UpdateRevisionSecret(rev.ID, "", "", rev.ConfigHash, now); err != nil {
+			return nil, err
+		}
+		changed = append(changed, "credential_cleared")
 	}
 	if err := c.UpdateConnectionOwners(b.Conn.ID, optText(cfg.TechnicalOwner), optText(cfg.BusinessOwner), now); err != nil {
 		return nil, err
@@ -449,6 +461,12 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 		}
 	}
 	return res, nil
+}
+
+func sqlConfigChanged(a, b ConnConfig) bool {
+	x, _ := json.Marshal(a.SQL)
+	y, _ := json.Marshal(b.SQL)
+	return string(x) != string(y)
 }
 
 func passing(e *Evaluation) map[string]bool {

@@ -101,7 +101,7 @@ func TestStatements_Golden(t *testing.T) {
 		{name: "mssql unscoped role", engine: SQLServer, op: opGrant, who: "alice", role: "sysadmin", wantErrMatch: "server: or db:"},
 		{name: "mssql hostile", engine: SQLServer, op: opDrop, who: "x]; DROP LOGIN sa; --", want: []string{`DROP LOGIN [x]]; DROP LOGIN sa; --]`}},
 
-		{name: "oracle create", engine: Oracle, op: opCreate, who: "ALICE", wantPattern: `^CREATE USER "ALICE" IDENTIFIED BY "[A-Za-z0-9_-]{32}aA1_"$`},
+		{name: "oracle create", engine: Oracle, op: opCreate, who: "ALICE", wantPattern: `^CREATE USER "ALICE" IDENTIFIED BY "Tq1[0-9a-f]{24}"$`},
 		{name: "oracle lock", engine: Oracle, op: opLock, who: "ALICE", want: []string{`ALTER USER "ALICE" ACCOUNT LOCK`}},
 		{name: "oracle unlock", engine: Oracle, op: opUnlock, who: "ALICE", want: []string{`ALTER USER "ALICE" ACCOUNT UNLOCK`}},
 		{name: "oracle drop", engine: Oracle, op: opDrop, who: "ALICE", want: []string{`DROP USER "ALICE"`}},
@@ -131,6 +131,19 @@ func TestStatements_Golden(t *testing.T) {
 				t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
 			}
 		})
+	}
+}
+
+// Oracle's throw-away password: at most 30 bytes, starts with a letter, letters and digits only.
+func TestOracleSecretRules(t *testing.T) {
+	re := regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{7,29}$`)
+	seen := map[string]bool{}
+	for i := 0; i < 50; i++ {
+		s, err := oracleSecret()
+		if err != nil || !re.MatchString(s) || seen[s] {
+			t.Fatalf("secret %q err %v (repeat %v)", s, err, seen[s])
+		}
+		seen[s] = true
 	}
 }
 

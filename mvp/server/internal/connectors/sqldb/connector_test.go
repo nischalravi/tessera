@@ -110,6 +110,27 @@ func TestDiscover_NativePostgres(t *testing.T) {
 	}
 }
 
+// Membership in a predefined pg_* role is seen, and the roles that read files or run programs are privileged.
+func TestDiscover_PostgresPredefinedRoles(t *testing.T) {
+	f := newFake()
+	loadCatalog(f, Postgres, nativeData{accounts: [][]string{{"alice", "active"}, {"bob", "active"}}},
+		[][][]string{{{"pg_execute_server_program"}, {"pg_monitor"}, {"pg_read_all_settings"}}},
+		[][][]string{{{"alice", "pg_execute_server_program"}, {"bob", "pg_monitor"}, {"pg_monitor", "pg_read_all_settings"}}})
+	res, err := connectorFor(f, goodConfig(Postgres)).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEdge(res, "account", "alice", "member_of", "group", "pg_execute_server_program") || !hasEdge(res, "group", "pg_monitor", "member_of", "group", "pg_read_all_settings") {
+		t.Errorf("edges = %+v", res.Edges)
+	}
+	if g := group(res, "pg_execute_server_program"); g == nil || !g.Privileged {
+		t.Errorf("pg_execute_server_program = %+v", g)
+	}
+	if g := group(res, "pg_monitor"); g == nil || g.Privileged {
+		t.Errorf("pg_monitor = %+v", g)
+	}
+}
+
 func TestDiscover_NativeMySQL(t *testing.T) {
 	f := newFake()
 	loadCatalog(f, MySQL, nativeData{

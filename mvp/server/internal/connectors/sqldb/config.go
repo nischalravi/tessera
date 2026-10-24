@@ -232,7 +232,7 @@ func (c Config) Validate(rt connsync.Runtime) error {
 	case ModeApp:
 		if c.App == nil {
 			bad("mode %s needs app statements", ModeApp)
-		} else if err := c.App.validate(); err != nil {
+		} else if err := c.App.validate(c.Engine); err != nil {
 			errs = append(errs, err)
 		}
 	default:

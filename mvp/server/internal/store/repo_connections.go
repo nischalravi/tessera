@@ -132,7 +132,7 @@ var (
 			expected_counts = @expected_counts, evidence_seq = evidence_seq + 1, updated_at = @now
 		WHERE tenant_id = @tenant AND id = @id`)
 	revisionsSetSecret = tq("connection_revisions.set_secret", `
-		UPDATE connection_revisions SET secret_ref = @secret_ref, secret_version = @secret_version,
+		UPDATE connection_revisions SET secret_ref = NULLIF(@secret_ref, ''), secret_version = NULLIF(@secret_version, ''),
 			config_hash = @config_hash, evidence_seq = evidence_seq + 1, updated_at = @now
 		WHERE tenant_id = @tenant AND id = @id`)
 	revisionsBumpEvidence = tq("connection_revisions.bump_evidence", `
@@ -207,6 +207,7 @@ func (tx *TenantTx) UpdateRevisionConfig(id, config, configHash, writeMode strin
 }
 
 // UpdateRevisionSecret stores a credential reference (never the secret) and the new config hash.
+// An empty ref and version clear the credential.
 func (tx *TenantTx) UpdateRevisionSecret(id string, ref, version, configHash string, now time.Time) error {
 	_, err := tx.exec(revisionsSetSecret, sql.Named("secret_ref", ref), sql.Named("secret_version", version),
 		sql.Named("config_hash", configHash), sql.Named("now", RT(now)), sql.Named("id", id))

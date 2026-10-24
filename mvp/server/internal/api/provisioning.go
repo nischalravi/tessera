@@ -299,9 +299,9 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		if in.SQL == nil {
 			return st, badRequest("invalid_sql", "sql (the database settings) is required for a sql target")
 		}
-		rt := connsync.Runtime{Env: config.Dev}
-		if s.cfg.Env == "prod" {
-			rt.Env = config.Prod
+		rt := connsync.Runtime{Env: config.Prod} // only dev may disable TLS; "test" gets the production rules
+		if s.cfg.Env == config.Dev {
+			rt.Env = config.Dev
 		}
 		if err := in.SQL.Validate(rt); err != nil {
 			return st, badRequest("invalid_sql", err.Error())
@@ -411,7 +411,9 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	// The sealed credential is bound to the row, not to the destination, so a
 	// stored token must never follow the target to another origin or kind: an
 	// edit that moves it has to bring a new token (#315).
-	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL))
+	// A change to a database target's settings (engine, host, port, database, user, TLS, CA, mode
+	// or any statement) moves it too: the password was entered for those settings, not for new ones.
+	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL) || sqlSettingsChanged(old.Settings, st.SQL))
 	if existing && !moved {
 		// an edit that leaves the destination alone keeps what discovery found there
 		var os provision.Settings
@@ -475,6 +477,17 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, viewTarget(saved, conn.Name), nil
+}
+
+// sqlSettingsChanged reports whether a database target's saved settings differ from the new ones.
+func sqlSettingsChanged(oldSettings string, now *sqldb.Config) bool {
+	var os provision.Settings
+	if json.Unmarshal([]byte(oldSettings), &os) != nil {
+		return true
+	}
+	a, _ := json.Marshal(os.SQL)
+	b, _ := json.Marshal(now)
+	return string(a) != string(b)
 }
 
 // isUserSecretKind: the kinds whose credential is "user:secret" (vaults and ERPs).

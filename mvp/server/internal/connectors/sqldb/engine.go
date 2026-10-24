@@ -3,6 +3,7 @@ package sqldb
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strings"
 )
@@ -40,15 +41,14 @@ WHERE r.rolname NOT LIKE 'pg\_%' AND (r.rolcanlogin OR pg_catalog.shobj_descript
 ORDER BY r.rolname`,
 		Roles: []prefixed{{"", `SELECT r.rolname
 FROM pg_catalog.pg_roles r
-WHERE r.rolname NOT LIKE 'pg\_%'
-  AND ((NOT r.rolcanlogin AND COALESCE(pg_catalog.shobj_description(r.oid, 'pg_authid'), '') <> '` + pgLockedMark + `')
-       OR r.oid IN (SELECT roleid FROM pg_catalog.pg_auth_members))
+WHERE (r.rolname NOT LIKE 'pg\_%' AND NOT r.rolcanlogin
+       AND COALESCE(pg_catalog.shobj_description(r.oid, 'pg_authid'), '') <> '` + pgLockedMark + `')
+   OR r.oid IN (SELECT roleid FROM pg_catalog.pg_auth_members)
 ORDER BY r.rolname`}},
 		Members: []prefixed{{"", `SELECT m.rolname, r.rolname
 FROM pg_catalog.pg_auth_members am
 JOIN pg_catalog.pg_roles r ON r.oid = am.roleid
 JOIN pg_catalog.pg_roles m ON m.oid = am.member
-WHERE r.rolname NOT LIKE 'pg\_%'
 ORDER BY m.rolname, r.rolname`}},
 		Privs: `SELECT rolname, 'SUPERUSER' FROM pg_catalog.pg_roles WHERE rolsuper AND rolname NOT LIKE 'pg\_%'
 UNION ALL SELECT rolname, 'CREATEROLE' FROM pg_catalog.pg_roles WHERE rolcreaterole AND rolname NOT LIKE 'pg\_%'
@@ -138,6 +138,9 @@ var privilegedPrivs = map[string]bool{
 var privilegedRoles = map[string]bool{
 	"SERVER:SYSADMIN": true, "SERVER:SECURITYADMIN": true, "SERVER:SERVERADMIN": true,
 	"DB:DB_OWNER": true, "DB:DB_SECURITYADMIN": true, "DBA": true,
+	// PostgreSQL predefined roles that read or write files, run programs or read and write every table
+	"PG_EXECUTE_SERVER_PROGRAM": true, "PG_READ_SERVER_FILES": true, "PG_WRITE_SERVER_FILES": true,
+	"PG_READ_ALL_DATA": true, "PG_WRITE_ALL_DATA": true, "PG_SIGNAL_BACKEND": true,
 }
 
 func privilegedPriv(p string) bool {
@@ -165,6 +168,17 @@ func randomSecret() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b) + "aA1_", nil
+}
+
+// oracleSecret is randomSecret for Oracle: at most 30 bytes, starting with a letter, letters and
+// digits only (so it is also valid without quotes), with an upper-case letter, a lower-case
+// letter and a digit for a complexity policy.
+func oracleSecret() (string, error) {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "Tq1" + hex.EncodeToString(b), nil // 27 bytes
 }
 
 // statements returns the fixed statements of one native-mode operation. name
@@ -257,7 +271,7 @@ func accountStatements(engine string, op int, who string) ([]string, error) {
 	case Oracle:
 		switch op {
 		case opCreate:
-			pw, err := randomSecret()
+			pw, err := oracleSecret()
 			if err != nil {
 				return nil, err
 			}

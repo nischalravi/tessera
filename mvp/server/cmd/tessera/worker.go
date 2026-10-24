@@ -126,7 +126,7 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 		RatePerMin: o.targetRate, BreakerThreshold: o.breakerFailures, BreakerCooldown: o.breakerCooldown}}
 	deps := &worker.Deps{DB: st, Clock: clock, Log: logger.With("component", "worker"), SyncSchedule: cfg.ConnectorSyncSchedule, Guard: guard,
 		Connectors: func(now time.Time) ([]connectors.Connector, error) { return connectors.Load("", now) },
-		Provision: &provision.Engine{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Guard: guard,
+		Provision: &provision.Engine{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Guard: guard, Runtime: connsync.RuntimeFromConfig(cfg),
 			Log: logger.With("component", "provisioning")}}
 	q := &queue.Queue{DB: st, Clock: clock, Owner: o.id, Concurrency: o.concurrency, Poll: o.poll, Lease: o.lease,
 		ShutdownGrace: o.grace, Log: logger.With("component", "queue")}

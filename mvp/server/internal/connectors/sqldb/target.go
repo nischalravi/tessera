@@ -183,6 +183,14 @@ func (t *Target) Apply(ctx context.Context, r target.Request) error {
 	if !exists {
 		name = accountName(r.Account)
 	}
+	// Defense in depth before any DDL is built: names must match a strict allow-list, in addition
+	// to the engine's quoting (DDL cannot bind identifiers).
+	if !safeName.MatchString(name) {
+		return target.Permanent("the account name %q is not allowed: use letters, digits and _ . @ $ # %% : -, at most 128 characters, starting with a letter, digit or _", shorten(name))
+	}
+	if ent := entitlement(r.Group); (r.Kind == target.AddEntitlement || r.Kind == target.RemoveEntitlement) && !safeName.MatchString(ent) {
+		return target.Permanent("the role name %q is not allowed: use letters, digits and _ . @ $ # %% : -, at most 128 characters, starting with a letter, digit or _", shorten(ent))
+	}
 	var stmts []string
 	switch r.Kind {
 	case target.CreateAccount:
@@ -227,6 +235,20 @@ func (t *Target) Apply(ctx context.Context, r target.Request) error {
 		}
 	}
 	return nil
+}
+
+// safeName is the allow-list for an account or role name that reaches DDL: ASCII letters, digits and
+// _ . @ $ # % : - (MySQL user@host, SQL Server server:/db: ids). Quotes, semicolons, backslashes,
+// whitespace, control and non-ASCII characters are refused, so a Windows DOMAIN\user login or a
+// name with spaces cannot be provisioned here.
+var safeName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.@$#%:-]{0,127}$`)
+
+func shorten(s string) string {
+	s = strings.ToValidUTF8(s, "?")
+	if len(s) > 40 {
+		return s[:40] + "..."
+	}
+	return s
 }
 
 var attrKeyRE = regexp.MustCompile(`[^a-z0-9_]`)
