@@ -538,6 +538,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	rsvc.Runner.SCIM.Client = outbound
+	rsvc.Runner.REST.Client = outbound
 	all.Register(outbound, connsync.RuntimeFromConfig(cfg)) // okta and entra connectors use the shared client
 	obs.SetPoolStats(st.PoolStats)
 	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)

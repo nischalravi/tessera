@@ -30,6 +30,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
@@ -46,7 +47,10 @@ import (
 // ERPs (issue #304): "sap" and "oracle" read roles, t-codes and authorization objects as
 // fine-grained entitlements (TESSERA_SAP_*, TESSERA_ORACLE_*).
 //
-// Register adds the okta, entra, google, workday, github-scan and aws-agentcore factories. hc is the
+// Generic REST (issue #552): "rest" reads users, groups and entitlements from any HTTP/JSON system as
+// a declarative spec describes (TESSERA_REST_SPEC, TESSERA_REST_CREDENTIAL; see internal/connectors/restgen).
+//
+// Register adds the okta, entra, google, workday, rest, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -73,6 +77,9 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 		connectors.Factories[system] = func(now time.Time) (connectors.Connector, error) {
 			return erp.FromEnv(system, os.Getenv, rt, hc, func() time.Time { return now })
 		}
+	}
+	connectors.Factories["rest"] = func(time.Time) (connectors.Connector, error) {
+		return restgen.FromEnv(os.Getenv, rt, hc)
 	}
 	// Databases (issue #553): "sql" reads accounts, roles and grants of one PostgreSQL, MySQL,
 	// SQL Server or Oracle database (TESSERA_SQL_*). It dials through the safehttp address

@@ -3374,13 +3374,15 @@ export interface TemplateRef { id: string; version: string; pin: string; display
 
 export interface ConnConfig {
   host?: string; port?: number; bind_dn?: string; ca_bundle?: string; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
-  org_url?: string; tenant_id?: string; cloud?: string; customer?: string; domain?: string; base_url?: string;
+  org_url?: string; tenant_id?: string; cloud?: string; customer?: string; domain?: string; base_url?: string; preset?: string;
   tenant_host?: string; api_version?: string; interface?: string; time_zone?: string;
   correlation_key?: string; hr_id_attribute?: string; technical_owner?: string; business_owner?: string;
   expected_counts?: { users: number; groups: number }; stale_days?: number; sync_schedule?: string;
   write_mode?: "off" | "dry_run" | "scoped"; write_scope?: string[]; hybrid?: boolean; use_dirsync?: boolean;
   privileged_expected?: Record<string, string[]>; demo_fixed_checks?: string[];
   sql?: SQLConfig;
+  /** Generic REST connection: the declarative spec (base URL, auth type, mapping, write operations). Holds no secret. */
+  rest?: Record<string, unknown>;
 }
 
 /** The database connector's settings (template sql). The password is the sealed credential, never part of this. */
@@ -3388,6 +3390,18 @@ export interface SQLConfig {
   system?: string; engine: string; host: string; port?: number; database?: string; username: string;
   tls?: string; ca_bundle?: string; mode: string; query_timeout_seconds?: number; max_rows?: number;
   app?: Partial<Record<"accounts_query" | "entitlements_query" | "create_account" | "update_account" | "disable_account" | "delete_account" | "add_entitlement" | "remove_entitlement", string>>;
+}
+
+/** One vendor tile of the SCIM preset library (GET /api/scim/presets). "unknown" means the vendor's public docs did not confirm the fact. */
+export interface ScimPreset {
+  id: string; name: string; publisher: string; category: "Cloud & SaaS" | "Identity providers";
+  /** simple-icons slug; empty when the package has no icon. */
+  logo_key: string;
+  base_url_pattern?: string; base_url_example?: string;
+  auth: "bearer_token" | "oauth2_client_credentials" | "unknown";
+  mapping: Record<string, string>;
+  quirks: { op_case: string; bool_as_string: string; member_remove: string; value_filter_ok: string };
+  hint: string; source: string;
 }
 
 export interface RevisionView {

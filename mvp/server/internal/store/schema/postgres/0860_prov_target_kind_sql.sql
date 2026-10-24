@@ -6,4 +6,4 @@
 
 ALTER TABLE provisioning_targets DROP CONSTRAINT IF EXISTS provisioning_targets_kind_check;
 ALTER TABLE provisioning_targets ADD CONSTRAINT provisioning_targets_kind_check
-  CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','sql'));
+  CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql'));

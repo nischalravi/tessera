@@ -21,7 +21,9 @@ type DiscoveryRecord struct {
 	AgentAdvertised       bool     `json:"agent_advertised"`
 	ServiceProviderConfig bool     `json:"service_provider_config"`
 	ResourceTypes         []string `json:"resource_types"`
-	Error                 string   `json:"error,omitempty"`
+	// Capabilities are what the service advertised; later runs use them to pick PATCH or PUT, filters and ETags.
+	Capabilities *scim.Capabilities `json:"capabilities,omitempty"`
+	Error        string             `json:"error,omitempty"`
 }
 
 // Discover reads the target's discovery documents and records the result in
@@ -64,9 +66,10 @@ func (e *Engine) Discover(ctx context.Context, t tenancy.ID, connID string) (*Di
 	} else {
 		cctx, cancel := e.call(ctx)
 		defer cancel()
-		c := &scim.Client{HTTP: hc, BaseURL: pt.BaseURL, Token: token, Dialect: s.Dialect}
+		c := s.scimClient(hc, pt.BaseURL, token)
 		d, derr := c.Discover(cctx)
 		rec.AgentAdvertised, rec.ServiceProviderConfig, rec.ResourceTypes = d.AgentAdvertised, d.ServiceProviderConfig, d.ResourceTypes
+		rec.Capabilities = d.Capabilities
 		if derr != nil {
 			rec.Error = truncate(safehttp.ScrubError(derr, pt.BaseURL), 300)
 		}
