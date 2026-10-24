@@ -50,10 +50,10 @@ var neverAllowed = map[string]bool{
 	"EXEC": true, "EXECUTE": true, "CALL": true, "IMMEDIATE": true, "SP_EXECUTESQL": true, "OPENROWSET": true,
 	"OPENQUERY": true, "OPENDATASOURCE": true, "PROGRAM": true, "LOAD_FILE": true, "OUTFILE": true, "DUMPFILE": true,
 	"COPY": true, "BULK": true, "DBLINK": true, "LO_IMPORT": true, "LO_EXPORT": true, "PG_READ_FILE": true,
-	"PG_LS_DIR": true, "SHUTDOWN": true, "DECLARE": true, "BEGIN": true, "DO": true, "PREPARE": true,
+	"PG_LS_DIR": true, "PG_READ_BINARY_FILE": true, "PG_STAT_FILE": true, "PG_TERMINATE_BACKEND": true, "PG_CANCEL_BACKEND": true, "PG_RELOAD_CONF": true, "SET_CONFIG": true, "DBLINK_EXEC": true, "SYS_EXEC": true, "SHUTDOWN": true, "DECLARE": true, "BEGIN": true, "DO": true, "PREPARE": true,
 }
 
-var neverAllowedPrefix = []string{"XP_", "SP_", "DBMS_", "UTL_", "PG_", "LO_"}
+var neverAllowedPrefix = []string{"XP_", "SP_", "DBMS_", "UTL_", "PG_", "LO_", "DBLINK", "SYS_EXEC"}
 
 // writeBanned are definition and privilege words a write template may not contain either.
 var writeBanned = map[string]bool{"DROP": true, "ALTER": true, "CREATE": true, "TRUNCATE": true, "GRANT": true, "REVOKE": true}
@@ -64,6 +64,22 @@ func forbiddenWord(w string, class stmtClass) bool {
 	}
 	for _, p := range neverAllowedPrefix {
 		if strings.HasPrefix(w, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// identForbidden applies the banned-word check to the text of a quoted identifier ("x", `x`, [x]),
+// which would otherwise hide a function name: "pg_read_file"(...), `LOAD_FILE`(...). It checks the
+// whole text and each word in it, case-insensitively. String literals are not checked.
+func identForbidden(inner string) bool {
+	up := strings.ToUpper(inner)
+	if forbiddenWord(up, classSelect) {
+		return true
+	}
+	for _, w := range strings.FieldsFunc(up, func(r rune) bool { return !(r == '_' || r == '$' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z') }) {
+		if forbiddenWord(w, classSelect) {
 			return true
 		}
 	}
@@ -98,6 +114,9 @@ func ParseTemplate(sqlText string, class stmtClass, engine string) (*Template, e
 			if err != nil {
 				return nil, err
 			}
+			if c != '\'' && identForbidden(s[i+1:j-1]) {
+				return nil, fmt.Errorf("%w: %s is not allowed in a template", errTemplate, strings.ToUpper(s[i+1:j-1]))
+			}
 			cur.WriteString(s[i:j])
 			i = j
 			continue
@@ -105,6 +124,9 @@ func ParseTemplate(sqlText string, class stmtClass, engine string) (*Template, e
 			j, err := skipBracket(s, i)
 			if err != nil {
 				return nil, err
+			}
+			if identForbidden(s[i+1 : j-1]) {
+				return nil, fmt.Errorf("%w: %s is not allowed in a template", errTemplate, strings.ToUpper(s[i+1:j-1]))
 			}
 			cur.WriteString(s[i:j])
 			i = j
