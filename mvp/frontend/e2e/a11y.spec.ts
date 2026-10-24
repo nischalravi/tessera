@@ -47,12 +47,27 @@ test("detail pages have no serious or critical WCAG 2.2 AA violations", async ({
   const conns: any[] = await api("/api/connections");
   const conn = conns.find((c) => !c.legacy && c.id);
   const all: Finding[] = [];
-  for (const route of [ids[0] && `/directory/identities/${ids[0].id}`, conn && `/admin/connections/${conn.id}`].filter(Boolean) as string[]) {
+  for (const route of [ids[0] && `/directory/identities/${ids[0].id}`, conn && `/admin/connections/${conn.id}`, conn && `/admin/connections/${conn.id}?step=guard`].filter(Boolean) as string[]) {
     await page.goto(route);
     await settle(page);
     all.push(...(await seriousViolations(page, route)));
   }
   expect(all, report(all)).toEqual([]);
+});
+
+test("the deletion guard is step 8 of a connection, laid out beside the stepper", async ({ page }) => {
+  await page.goto("/");
+  const conns: any[] = await page.evaluate(async () => (await fetch("/api/connections")).json());
+  const conn = conns.find((c) => !c.legacy && c.id && !c.retired_at);
+  test.skip(!conn, "no connection seeded");
+  await page.goto(`/admin/connections/${conn.id}?step=guard`);
+  await settle(page);
+  const form = page.getByRole("form", { name: /Deletion guard for/ });
+  await expect(form.getByRole("heading", { name: "8. Deletion guard" })).toBeVisible();
+  // the guard takes the step column, not the stepper's 220px one
+  const box = await form.boundingBox();
+  expect(box!.width).toBeGreaterThan(400);
+  await page.screenshot({ path: "test-results/deletion-guard-step.png", fullPage: true });
 });
 
 // The dev stack serves stateful fakes of the four providers (issue #417): sync, then check the
