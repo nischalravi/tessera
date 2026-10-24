@@ -20,14 +20,14 @@ test("tiles are one radio group: arrows move and select, Space selects, one tab 
   await page.goto("/admin/connections/new");
   await settle(page);
   const group = page.getByRole("radiogroup", { name: "Connector type" });
-  await expect(group.getByRole("radio")).toHaveCount(10);
+  await expect(group.getByRole("radio")).toHaveCount(22);
   await expect(group.getByRole("radio", { name: "Active Directory (demo)" })).toBeChecked();
   await group.getByRole("radio", { name: "Active Directory (demo)" }).focus();
   await page.keyboard.press("ArrowRight");
   await expect(group.getByRole("radio", { name: "Okta (demo)" })).toBeChecked();
   await expect(group.getByRole("radio", { name: "Okta (demo)" })).toBeFocused();
   await page.keyboard.press("End");
-  await expect(group.getByRole("radio", { name: "SCIM 2.0 application" })).toBeChecked();
+  await expect(group.getByRole("radio", { name: "Auth0" })).toBeChecked();
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("Space");
   await expect(group.getByRole("radio", { checked: true })).toHaveCount(1);
@@ -51,5 +51,5 @@ test("search and chips narrow the tiles, and an empty result says so", async ({ 
   await page.getByRole("searchbox", { name: "Search connector types" }).fill("zzz");
   await expect(page.getByRole("heading", { name: "No systems match" })).toBeVisible();
   await page.getByRole("button", { name: "Clear search and filters" }).click();
-  await expect(radios).toHaveCount(10);
+  await expect(radios).toHaveCount(22);
 });

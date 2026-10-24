@@ -325,6 +325,31 @@ the LDAP bind password); without one the live checks report an error instead of 
 unauthenticated. The client is the shared outbound one, with the connection's configured port
 allowed (`safehttp.WithConfiguredPorts`). Tests use an in-process SCIM server
 with misbehaviour switches (`internal/connectors/scim/fakescim_test.go`).
+
+**SCIM vendor presets (issue #554).** `GET /api/scim/presets` (`connections.read`) returns the typed
+library in `internal/provision/scim/preset.go`: Slack, Zoom, Box, Dropbox, Zendesk, Databricks,
+Atlassian Cloud (Cloud & SaaS), PingOne, OneLogin, JumpCloud, Keycloak (SCIM extension), Auth0
+(Identity providers). Each entry has display name, publisher, simple-icons `logo_key`, base-URL
+pattern and example, auth method, default attribute mapping (RFC 7643 core), PATCH quirk flags, a
+plan or setup hint and the documentation URL it came from. **Only facts read from the vendor's
+public SCIM docs are encoded**; the rest is `unknown` (quirks) or empty (URL pattern, so only the
+generic https check applies), and the source of each fact is cited in the code. The New connection
+page shows a tile per preset (a neutral glyph until the app-gallery picker, PR #551, brings
+simple-icons logos); a tile creates a `scim_app` connection with `config.preset` set, and the
+readiness config check then also validates `base_url` against the vendor's URL shape. The checklist
+is the generic SCIM one, so the live checks are unchanged.
+
+**SCIM client hardening.** `Discover` records `/ServiceProviderConfig` capabilities (`patch`,
+`bulk`, `filter`, `etag`, advertised `maxResults`; absent means unknown, treated as supported).
+Runs then use them: without PATCH (or after a 501 to one) the client does GET, applies the
+operations and PUTs the resource; without filter support it lists the collection and matches
+client-side; with ETag support it sends `If-Match` (a 412 is a retryable failure); page size never
+exceeds the advertised `maxResults`. Bulk is surfaced but not used. A target's `preset` setting
+(`PUT /api/provisioning/targets/{id}`, SCIM only) applies the preset's quirk flags: `op_case`
+(`title` sends `Add`/`Replace`/`Remove`), `bool_as_string`, `member_remove` (`filter` or `value`)
+and `value_filter_ok`. All `unknown`: the standard form first with today's fallbacks. SCIM errors
+carry the RFC 7644 `scimType` with its meaning. Targets reached through a Directory Agent do not
+carry the preset or capabilities yet.
 **After activation** (design §7.4, §7.5). Activation stores a baseline of the live revision
 (`readiness_baselines`: score, item states, finding and object counts, config hash). A background
 scheduler (`readiness.Scheduler`, started by `tessera serve`, a pass every 15 minutes) re-runs the

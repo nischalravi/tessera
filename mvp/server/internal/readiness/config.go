@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 )
 
@@ -23,18 +24,21 @@ type ConnConfig struct {
 	// BindDN is the LDAP bind identity (not a secret; the password is the
 	// sealed credential). CABundle is the PEM of the CA that signed the
 	// directory's certificate (public); empty means the system roots.
-	BindDN             string              `json:"bind_dn,omitempty"`
-	CABundle           string              `json:"ca_bundle,omitempty"`
-	BaseDNs            []string            `json:"base_dns,omitempty"`
-	UserFilter         string              `json:"user_filter,omitempty"`
-	GroupFilter        string              `json:"group_filter,omitempty"`
-	ServiceAccountOUs  []string            `json:"service_account_ous,omitempty"`
-	OrgURL             string              `json:"org_url,omitempty"`
-	TenantID           string              `json:"tenant_id,omitempty"`
-	Cloud              string              `json:"cloud,omitempty"`
-	Customer           string              `json:"customer,omitempty"`
-	Domain             string              `json:"domain,omitempty"`
-	BaseURL            string              `json:"base_url,omitempty"`
+	BindDN            string   `json:"bind_dn,omitempty"`
+	CABundle          string   `json:"ca_bundle,omitempty"`
+	BaseDNs           []string `json:"base_dns,omitempty"`
+	UserFilter        string   `json:"user_filter,omitempty"`
+	GroupFilter       string   `json:"group_filter,omitempty"`
+	ServiceAccountOUs []string `json:"service_account_ous,omitempty"`
+	OrgURL            string   `json:"org_url,omitempty"`
+	TenantID          string   `json:"tenant_id,omitempty"`
+	Cloud             string   `json:"cloud,omitempty"`
+	Customer          string   `json:"customer,omitempty"`
+	Domain            string   `json:"domain,omitempty"`
+	BaseURL           string   `json:"base_url,omitempty"`
+	// Preset is the id of the SCIM vendor preset (provision/scim) a scim_app
+	// connection was created from; it selects the base URL check and quirks.
+	Preset             string              `json:"preset,omitempty"`
 	TenantHost         string              `json:"tenant_host,omitempty"`
 	APIVersion         string              `json:"api_version,omitempty"`
 	Interface          string              `json:"interface,omitempty"`
@@ -216,6 +220,17 @@ func Validate(cfg ConnConfig, t *template.Resolved) []FieldError {
 		text("time_zone", cfg.TimeZone, 64)
 	case "scim_app", "salesforce":
 		httpsURL("base_url", cfg.BaseURL, nil)
+		if p, ok := scimpreset.PresetByID(cfg.Preset); ok {
+			// Vendor-specific shape on top of the generic https check.
+			if err := p.ValidateBaseURL(cfg.BaseURL); err != nil && cfg.BaseURL != "" {
+				bad("base_url", "%s", err)
+			}
+		} else if cfg.Preset != "" {
+			bad("preset", "unknown SCIM preset %q", cfg.Preset)
+		}
+	}
+	if t.ID != "scim_app" && cfg.Preset != "" {
+		bad("preset", "only a SCIM application has a preset")
 	}
 	if cfg.CorrelationKey == "" || !attrRE.MatchString(cfg.CorrelationKey) {
 		bad("correlation_key", "required: an attribute name")

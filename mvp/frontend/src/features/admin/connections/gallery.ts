@@ -1,9 +1,9 @@
 // Filter model for the connection type gallery (New connection, step 1). Pure, so `npm test` covers it.
 
 export type Capability = "Identity source" | "Provisioning target" | "HR source";
-export type Category = "Directories & HR" | "Cloud & SaaS" | "Demo / simulated";
+export type Category = "Directories & HR" | "Cloud & SaaS" | "Identity providers" | "Demo / simulated";
 
-export const CATEGORIES: Category[] = ["Demo / simulated", "Directories & HR", "Cloud & SaaS"]; // the default selection is a demo type, so it comes first
+export const CATEGORIES: Category[] = ["Demo / simulated", "Directories & HR", "Cloud & SaaS", "Identity providers"]; // the default selection is a demo type, so it comes first
 export const CAPABILITIES: Capability[] = ["Identity source", "Provisioning target", "HR source"];
 
 export interface GalleryMeta { vendor: string; publisher: string; category: Category; capabilities: Capability[] }
@@ -21,6 +21,18 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   workday: { vendor: "workday", publisher: "Workday", category: "Directories & HR", capabilities: ["HR source"] },
   salesforce: { vendor: "salesforce", publisher: "Salesforce", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
   scim_app: { vendor: "scim_app", publisher: "IETF RFC 7643 / 7644", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+  "scim:slack": { vendor: "slack", publisher: "Slack", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+  "scim:zoom": { vendor: "zoom", publisher: "Zoom", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+  "scim:box": { vendor: "box", publisher: "Box", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+  "scim:dropbox": { vendor: "dropbox", publisher: "Dropbox", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+  "scim:zendesk": { vendor: "zendesk", publisher: "Zendesk", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+  "scim:databricks": { vendor: "databricks", publisher: "Databricks", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+  "scim:atlassian": { vendor: "atlassian", publisher: "Atlassian", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+  "scim:pingone": { vendor: "ping", publisher: "Ping Identity", category: "Identity providers", capabilities: ["Provisioning target"] },
+  "scim:onelogin": { vendor: "onelogin", publisher: "OneLogin", category: "Identity providers", capabilities: ["Provisioning target"] },
+  "scim:jumpcloud": { vendor: "jumpcloud", publisher: "JumpCloud", category: "Identity providers", capabilities: ["Provisioning target"] },
+  "scim:keycloak": { vendor: "keycloak", publisher: "Keycloak", category: "Identity providers", capabilities: ["Provisioning target"] },
+  "scim:auth0": { vendor: "auth0", publisher: "Auth0", category: "Identity providers", capabilities: ["Provisioning target"] },
 };
 
 export interface GalleryType { id: string; label: string; blurb: string; demo: boolean }
