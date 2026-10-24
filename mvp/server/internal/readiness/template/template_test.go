@@ -26,7 +26,7 @@ func TestTemplates_Lint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(reg.IDs(), ","); got != "ad,agentcore,awsorg,azurerbac,entra,erp,gcpiam,githubscan,google,ldap,okta,pam,rest_generic,scim_app,sql,vms,workday" {
+	if got := strings.Join(reg.IDs(), ","); got != "ad,agentcore,awsorg,azurerbac,entra,erp,gcpiam,githubscan,google,ldap,okta,pam,rest_generic,salesforce,scim_app,sql,vms,workday" {
 		t.Errorf("templates = %s", got)
 	}
 	for _, id := range reg.IDs() {
@@ -317,7 +317,7 @@ func TestVersionPinning(t *testing.T) {
 
 func TestForConnectorType(t *testing.T) {
 	reg := MustDefault()
-	for ct, want := range map[string]string{"demo-ad": "ad", "ad": "ad", "demo-okta": "okta", "demo-workday": "workday", "scim_app": "scim_app"} {
+	for ct, want := range map[string]string{"demo-ad": "ad", "ad": "ad", "demo-okta": "okta", "demo-workday": "workday", "scim_app": "scim_app", "salesforce": "salesforce"} {
 		r, ok := reg.ForConnectorType(ct)
 		if !ok || r.ID != want {
 			t.Errorf("%s -> %v", ct, r)

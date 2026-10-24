@@ -18,6 +18,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -46,6 +47,8 @@ const (
 	// ERP targets: role assignment in SAP and Oracle (internal/connectors/erp).
 	KindSAP    = "sap"
 	KindOracle = "oracle"
+	// KindSalesforce: user lifecycle and permission-set assignment in a Salesforce org (issue #555).
+	KindSalesforce = "salesforce"
 	// KindSQL is a database (PostgreSQL, MySQL, SQL Server, Oracle): native accounts and roles,
 	// or an application's own tables (issue #553, internal/connectors/sqldb). The target's
 	// Settings.SQL holds the connection; the credential is the database password.
@@ -311,6 +314,12 @@ func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) 
 		return e.buildVault(hc, pt, token, s)
 	case KindSAP, KindOracle:
 		return e.buildERP(hc, pt, token, s)
+	case KindSalesforce:
+		cred, err := salesforce.ParseCredential(token)
+		if err != nil {
+			return nil, err
+		}
+		return salesforce.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
 	case KindSQL:
 		return e.buildSQL(token, s)
 	}

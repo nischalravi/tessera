@@ -114,6 +114,7 @@ export const CONNECTOR_TYPES: { id: string; label: string; template: string; dem
   { id: "okta", label: "Okta", template: "okta", demo: false, blurb: "OAuth service app (DR-15)." },
   { id: "google", label: "Google Workspace", template: "google", demo: false, blurb: "Domain-wide delegation (DR-16)." },
   { id: "workday", label: "Workday", template: "workday", demo: false, blurb: "Integration system user (DR-17)." },
+  { id: "salesforce", label: "Salesforce", template: "salesforce", demo: false, blurb: "Users, profiles, permission sets and groups; OAuth JWT bearer." },
   { id: "scim_app", label: "SCIM 2.0 application", template: "scim_app", demo: false, blurb: "Any SCIM service (DR-18)." },
   { id: "sql", label: "Database (SQL)", template: "sql", demo: false, blurb: "PostgreSQL, MySQL, SQL Server or Oracle: database accounts and roles, or an application's own tables." },
   { id: "scim:slack", label: "Slack", template: "scim_app", demo: false, blurb: "SCIM needs a Business+ or Enterprise plan." },

@@ -4,7 +4,7 @@ import "slices"
 
 // TemplateIDs are the connector templates that ship (base is extended, not used directly).
 var TemplateIDs = []string{"ad", "ldap", "entra", "okta", "google", "workday", "scim_app", "rest_generic",
-	"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "sql", "azurerbac", "gcpiam"}
+	"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "sql", "azurerbac", "gcpiam", "salesforce"}
 
 // Categories group checklist items in the UI (§10.2).
 var Categories = []string{"access", "ownership", "transport", "scope", "identity_keys", "account_status",
@@ -67,7 +67,7 @@ var Checks = map[string]CheckSpec{
 	"tls_chain":                 live(OpConnect, "ad", "ldap"),
 	"bind":                      live(OpAuthenticate, "ad", "ldap"),
 	"token_acquire":             live(OpAuthenticate, "entra", "okta", "google"),
-	"auth_ok":                   live(OpAuthenticate, "scim_app", "workday", "rest_generic", "awsorg", "githubscan", "erp", "pam", "vms", "azurerbac", "gcpiam"),
+	"auth_ok":                   live(OpAuthenticate, "scim_app", "workday", "rest_generic", "awsorg", "githubscan", "erp", "pam", "vms", "azurerbac", "gcpiam", "salesforce"),
 	"bind_identity":             live(OpAuthenticate, "ldap"),
 	"ad_svc_groups":             live(OpEffectiveRight, "ad"),
 	"ad_effective_rights":       live(OpEffectiveRight, "ad"),
@@ -78,7 +78,7 @@ var Checks = map[string]CheckSpec{
 	"sample_search":             live(OpSample, "ad", "ldap"),
 	"read_per_class":            live(OpSample, "ad", "ldap"),
 	"attr_returned":             live(OpSample, "ad", "ldap"),
-	"paging":                    live(OpSample, "ad", "ldap", "scim_app"),
+	"paging":                    live(OpSample, "ad", "ldap", "scim_app", "salesforce"),
 	"range_retrieval":           live(OpSample, "ad"),
 	"dc_count":                  live(OpRootInfo, "ad"),
 	"incremental_capable":       live(OpChangeFeed, "ad", "ldap", "workday"),
@@ -100,16 +100,16 @@ var Checks = map[string]CheckSpec{
 	"subject_roles":             live(OpEffectiveRight, "google"),
 	"domains_list":              live(OpRootInfo, "google"),
 	"ou_list":                   live(OpRootInfo, "google"),
-	"roles_readable":            live(OpSample, "entra", "okta", "google"),
+	"roles_readable":            live(OpSample, "entra", "okta", "google", "salesforce"),
 	"group_rules_readable":      live(OpSample, "okta"),
 	"signin_activity_available": live(OpSample, "entra"),
 	"deprovisioned_visible":     live(OpSample, "okta"),
-	"rate_headroom":             live(OpRateLimits, "entra", "okta", "google", "scim_app", "rest_generic"),
+	"rate_headroom":             live(OpRateLimits, "entra", "okta", "google", "scim_app", "rest_generic", "salesforce"),
 	"scim_discovery":            live(OpRootInfo, "scim_app"),
 	"members_complete":          live(OpSample, "scim_app"),
 	"mapping_applied":           live(OpSample, "rest_generic"),
 	"field_inventory":           live(OpSample, "workday"),
-	"endpoint_reachable":        live(OpConnect, "workday", "scim_app", "rest_generic", "githubscan", "erp", "pam", "vms"),
+	"endpoint_reachable":        live(OpConnect, "workday", "scim_app", "rest_generic", "githubscan", "erp", "pam", "vms", "salesforce"),
 	"read_probe":                live(OpSample, "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam"),
 
 	// data checks over the staged snapshot

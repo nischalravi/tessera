@@ -2,7 +2,11 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
@@ -803,5 +807,45 @@ func TestProvisioning_DryRunShowsTheWritesAndSendsNone(t *testing.T) {
 	// a target reached through a Directory Agent cannot be called by the server
 	if rec := h.c.do("POST", "/api/provisioning/targets/not-a-uuid/dry-run", `{"kind":"disable_account","username":"a"}`); rec.Code != 400 && rec.Code != 422 && rec.Code != 404 {
 		t.Errorf("a bad connection id: %d", rec.Code)
+	}
+}
+
+// A Salesforce target (issue #555) takes a JSON credential (consumer key, integration user, private key), checked
+// before it is sealed, never echoed, and write-back stays off unless the request turns it on.
+func TestProvisioning_SalesforceTargetConfig(t *testing.T) {
+	h := newProvHarness(t, fake.Options{})
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemKey := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	cred, _ := json.Marshal(map[string]string{"client_id": "3MVG9-key", "username": "tessera@acme.example", "private_key": pemKey})
+	quoted, _ := json.Marshal(string(cred))
+	credLogin, _ := json.Marshal(map[string]string{"client_id": "3MVG9-key", "username": "tessera@acme.example", "private_key": pemKey, "login_url": "https://login.evil.example"})
+	quotedLogin, _ := json.Marshal(string(credLogin))
+	for name, body := range map[string]string{
+		"no credential":   `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com"}`,
+		"bare token":      `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":"abc"}`,
+		"user:secret":     `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":"u:p"}`,
+		"not a key":       `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":"{\"client_id\":\"a\",\"username\":\"b\",\"private_key\":\"nope\"}"}`,
+		"other host":      `{"kind":"salesforce","base_url":"https://acme.example.com","token":` + string(quoted) + `}`,
+		"login elsewhere": `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":` + string(quotedLogin) + `}`,
+		"dialect":         `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":` + string(quoted) + `,"dialect":"entra"}`,
+		"api root":        `{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":` + string(quoted) + `,"api_root":"/x"}`,
+	} {
+		if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, body); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status %d: %s", name, rec.Code, rec.Body)
+		}
+	}
+	v := h.target(`{"kind":"salesforce","base_url":"https://acme.my.salesforce.com","token":`+string(quoted)+`}`, 200)
+	if v["kind"] != "salesforce" || v["has_credential"] != true || v["write_back"] != false {
+		t.Errorf("target = %v", v)
+	}
+	if body, _ := json.Marshal(v); strings.Contains(string(body), "PRIVATE") || strings.Contains(string(body), "3MVG9") {
+		t.Error("the response carries the credential")
 	}
 }

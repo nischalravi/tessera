@@ -20,6 +20,7 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   okta: { vendor: "okta", publisher: "Okta", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
   google: { vendor: "google", publisher: "Google", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
   workday: { vendor: "workday", publisher: "Workday", category: "Directories & HR", capabilities: ["HR source"] },
+  salesforce: { vendor: "salesforce", publisher: "Salesforce", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
   scim_app: { vendor: "scim_app", publisher: "IETF RFC 7643 / 7644", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
   sql: { vendor: "sql", publisher: "PostgreSQL, MySQL, SQL Server, Oracle", category: "Databases", capabilities: ["Identity source", "Provisioning target"] },
   "scim:slack": { vendor: "slack", publisher: "Slack", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },

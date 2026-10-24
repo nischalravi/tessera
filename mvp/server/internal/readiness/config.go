@@ -238,7 +238,7 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 			bad("interface", "must be one of %s", strings.Join(interfaces, ", "))
 		}
 		text("time_zone", cfg.TimeZone, 64)
-	case "scim_app":
+	case "scim_app", "salesforce":
 		httpsURL("base_url", cfg.BaseURL, nil)
 		if p, ok := scimpreset.PresetByID(cfg.Preset); ok {
 			// Vendor-specific shape on top of the generic https check.

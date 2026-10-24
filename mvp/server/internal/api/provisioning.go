@@ -17,6 +17,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
@@ -291,7 +292,7 @@ type targetInput struct {
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	var st provision.Settings
 	switch in.Kind {
-	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle, provision.KindREST:
+	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle, provision.KindREST, provision.KindSalesforce:
 		if s.cfg.Env == "prod" && !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://") {
 			return st, badRequest("invalid_base_url", "base_url must be https")
 		}
@@ -335,7 +336,13 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle, sql or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle, sql, salesforce or fake")
+	}
+	if in.Kind == provision.KindSalesforce {
+		if _, err := salesforce.CheckURL(in.BaseURL, s.sfRuntime()); err != nil {
+			// a fixed message: the error text can carry the submitted URL, which is not echoed back
+			return st, badRequest("invalid_base_url", sfURLRule("base_url"))
+		}
 	}
 	if in.Kind == provision.KindREST {
 		if err := s.validateRest(in, &st); err != nil {
@@ -345,10 +352,11 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		return st, badRequest("invalid_rest", "rest applies to REST targets only")
 	}
 	vault := slices.Contains(provision.PAMKinds, in.Kind) || slices.Contains(provision.ERPKinds, in.Kind) // a target with a path root and a user:secret credential
+	noDialect := vault || in.Kind == provision.KindSalesforce
 	switch {
-	case (in.Kind == provision.KindOkta || vault || in.Kind == provision.KindREST) && in.Dialect != "":
+	case (in.Kind == provision.KindOkta || noDialect || in.Kind == provision.KindREST) && in.Dialect != "":
 		return st, badRequest("invalid_dialect", "dialect applies to SCIM targets only")
-	case in.Kind != provision.KindOkta && !vault && in.Kind != provision.KindREST && !slices.Contains([]string{"", "standard", "entra"}, in.Dialect):
+	case in.Kind != provision.KindOkta && !noDialect && in.Kind != provision.KindREST && !slices.Contains([]string{"", "standard", "entra"}, in.Dialect):
 		return st, badRequest("invalid_dialect", "dialect must be standard or entra")
 	case in.APIRoot != "" && !vault:
 		return st, badRequest("invalid_api_root", "api_root applies to vault and ERP targets only")
@@ -362,7 +370,7 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		}
 		st.Preset = in.Preset
 	}
-	if in.Kind == provision.KindOkta || vault || in.Kind == provision.KindREST {
+	if in.Kind == provision.KindOkta || noDialect || in.Kind == provision.KindREST {
 		st.Dialect = ""
 	}
 	if in.AgentID != "" {
@@ -497,6 +505,17 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	if len(t.CredentialEnc) > 0 {
 		credential = "kept"
 	}
+	if in.Token != "" && in.Kind == provision.KindSalesforce {
+		cred, err := salesforce.ParseCredential(in.Token)
+		if err != nil {
+			return 0, nil, badRequest("invalid_credential", err.Error())
+		}
+		if cred.LoginURL != "" {
+			if _, err := salesforce.CheckURL(cred.LoginURL, s.sfRuntime()); err != nil {
+				return 0, nil, badRequest("invalid_credential", sfURLRule("login_url"))
+			}
+		}
+	}
 	switch {
 	case in.Token != "" && isUserSecretKind(in.Kind) && !strings.Contains(strings.Trim(in.Token, ":"), ":"):
 		return 0, nil, badRequest("invalid_credential", "the credential is user:secret")
@@ -522,6 +541,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, badRequest("invalid_credential", "a sql target needs the database password as token")
 	case in.Kind == provision.KindOkta && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
+	case in.Kind == provision.KindSalesforce && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "a Salesforce target needs its credential (JSON with client_id, username and private_key)")
 	case in.Kind == provision.KindREST && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "a REST target needs its credential (the secret its auth type uses)")
 	case isUserSecretKind(in.Kind) && len(t.CredentialEnc) == 0:
@@ -548,6 +569,16 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, viewTarget(saved, conn.Name), nil
+}
+
+// sfURLRule is the fixed error text for a Salesforce URL that fails salesforce.CheckURL.
+func sfURLRule(field string) string {
+	return field + " must be an https URL on a Salesforce domain (*.my.salesforce.com, *.salesforce.com or *.force.com), with no path"
+}
+
+// sfRuntime is the outbound runtime of Salesforce targets: the dev loopback exception exists in dev only.
+func (s *Server) sfRuntime() connsync.Runtime {
+	return connsync.Runtime{Env: s.cfg.Env, AllowLoopback: s.cfg.Env == config.Dev}
 }
 
 // sqlSettingsChanged reports whether a database target's saved settings differ from the new ones.
