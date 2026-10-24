@@ -13,10 +13,13 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/certs"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/okta"
@@ -33,6 +36,9 @@ const (
 	KindSCIM = "scim"
 	KindOkta = "okta"
 	KindFake = "fake"
+	// KindREST is the generic REST target (issue #552): any HTTP/JSON system, described by a
+	// declarative spec kept in Settings.REST (internal/connectors/restgen).
+	KindREST = "rest"
 
 	// Vault targets (issue #304): safe membership in a privileged-access vault.
 	KindCyberArk    = "cyberark"
@@ -43,6 +49,10 @@ const (
 	KindOracle = "oracle"
 	// KindSalesforce: user lifecycle and permission-set assignment in a Salesforce org (issue #555).
 	KindSalesforce = "salesforce"
+	// KindSQL is a database (PostgreSQL, MySQL, SQL Server, Oracle): native accounts and roles,
+	// or an application's own tables (issue #553, internal/connectors/sqldb). The target's
+	// Settings.SQL holds the connection; the credential is the database password.
+	KindSQL = "sql"
 )
 
 // ERPKinds are the ERP target kinds; the kind is the system's name in internal/connectors/erp.
@@ -74,6 +84,11 @@ type Settings struct {
 	// instead of calling the target itself, and the agent's report finishes
 	// the operation (issue #302). SCIM and Okta targets only.
 	AgentID string `json:"agent_id,omitempty"`
+	// SQL is the database connection of a KindSQL target (no secret in it).
+	SQL *sqldb.Config `json:"sql,omitempty"`
+	// REST is the spec of a generic REST target (restgen.Spec as JSON). It holds no secret; the
+	// credential is the sealed token. REST targets only.
+	REST json.RawMessage `json:"rest,omitempty"`
 	// Discovery is the last read of the target's ServiceProviderConfig and
 	// ResourceTypes (issue #542). It is informational and never gates provisioning.
 	Discovery *DiscoveryRecord `json:"discovery,omitempty"`
@@ -293,6 +308,8 @@ func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) 
 		return c, nil
 	case KindOkta:
 		return &okta.Client{HTTP: hc, BaseURL: pt.BaseURL, Token: token}, nil
+	case KindREST:
+		return buildREST(hc, pt, token, s, e.Runtime)
 	case KindCyberArk, KindDelinea, KindBeyondTrust:
 		return e.buildVault(hc, pt, token, s)
 	case KindSAP, KindOracle:
@@ -303,8 +320,25 @@ func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) 
 			return nil, err
 		}
 		return salesforce.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
+	case KindSQL:
+		return e.buildSQL(token, s)
 	}
 	return nil, fmt.Errorf("unknown target kind %q", pt.Kind)
+}
+
+// buildREST builds the generic REST target. The credential is the secret the spec's auth type uses
+// (or a JSON object of secrets); the spec's base URL is the target's base URL.
+func buildREST(hc *http.Client, pt *store.ProvTarget, token string, s Settings, rt connsync.Runtime) (target.Connector, error) {
+	spec, err := restgen.ParseSpec(s.REST)
+	if err != nil {
+		return nil, err
+	}
+	spec.BaseURL = pt.BaseURL
+	sec, err := restgen.ParseSecrets(spec.Auth.Type, token)
+	if err != nil {
+		return nil, err
+	}
+	return restgen.NewTarget(spec, sec, rt, hc)
 }
 
 // buildVault builds the target of a vault. The credential is "user:secret"
@@ -334,6 +368,21 @@ func (e *Engine) buildERP(hc *http.Client, pt *store.ProvTarget, token string, s
 		return nil, err
 	}
 	return &erp.Target{S: sys}, nil
+}
+
+// buildSQL builds the target of a database. The credential is the database password; the
+// connection dials through the safehttp address policy, not through the HTTP client.
+func (e *Engine) buildSQL(token string, s Settings) (target.Connector, error) {
+	if s.SQL == nil {
+		return nil, errors.New("the database settings are missing")
+	}
+	// only a dev runtime is dev: any other environment name (the API's "test" included) gets the
+	// production rules, and the dialer refuses an environment it does not know
+	rt := connsync.Runtime{Env: config.Prod}
+	if e.Runtime.Env == config.Dev {
+		rt = e.Runtime
+	}
+	return sqldb.NewTarget(*s.SQL, connsync.NewSecret(token), rt)
 }
 
 func (e *Engine) workerCtx(ctx context.Context) context.Context {

@@ -115,6 +115,8 @@ server/
     keys/               per-tenant ES256 signing keys and the platform Ed25519 key: rotation, JWKS
     safehttp/           SSRF-guarded outbound HTTP client (https only, address checks after DNS)
     connectors/scim/    read-only live prober for generic SCIM 2.0 applications (readiness DR-18)
+    connectors/governed/  governed connection types of the existing connectors: registry, settings
+                        validation; governed/wire opens the connector and the read-only prober
     ratelimit/          keyed token-bucket limiter with a bounded key set
     oauth/              the OAuth authorization server (per-tenant issuer): device grant, refresh
                         rotation with reuse detection, client credentials for machine clients
@@ -350,6 +352,67 @@ exceeds the advertised `maxResults`. Bulk is surfaced but not used. A target's `
 and `value_filter_ok`. All `unknown`: the standard form first with today's fallbacks. SCIM errors
 carry the RFC 7644 `scimType` with its meaning. Targets reached through a Directory Agent do not
 carry the preset or capabilities yet.
+
+**Governed connector types (issue #564).** The connectors that were only reachable through
+`TESSERA_CONNECTORS` and their own pages are now creatable from Settings, Connections, New
+connection, with a readiness template, a checklist and the same two-person activation as every
+other type. Nothing about what a connector reads or writes changed: a governed connection builds
+the connector through the connector's own `FromEnv` mapping (`pam.ConfigFromEnv`,
+`erp.ConfigFromEnv`, `githubscan.RESTConfigFromEnv`), with the connection's settings standing in
+for the `TESSERA_*` variables and the sealed credential behind an `env:` reference that only the
+builder can resolve (never the process environment).
+
+| Gallery category | Connector types | Template | Credential (sealed) | Read by |
+|---|---|---|---|---|
+| Cloud & IaaS | `awsorg` | `awsorg` | access keys as JSON; the keys may only assume the reader role | hand-over to the AWS connectors |
+| Source code | `githubscan` | `githubscan` | read-only token | the connector sync |
+| ERP | `sap`, `oracle` | `erp` | OAuth client secret | the connector sync |
+| Privileged access | `cyberark`, `beyondtrust`, `delinea` | `pam` | password (BeyondTrust: API key) | the connector sync |
+| Contractor & VMS | `fieldglass`, `beeline`, `csvfeed` | `vms` | `client_id:client_secret` (feed: bearer token) | hand-over to the contractor feeds |
+| AI agents | `agentcore` | `agentcore` | none (recorded snapshot) | the connector sync |
+
+Connection config gains one field, `settings` (string to string), whose keys are closed per type
+and validated at the API boundary (`internal/connectors/governed`: `username`, `client_id`, `org`,
+`snapshot`, `regions`, `external_id`, `api_root`, `token_path`, `workers_path`, `csv_path`,
+`page_size`, `role_name`, `account_ids`, `management_account_id`, `identity_center_region`).
+`base_url` is an https host without a path (GitHub Enterprise Server's API URL ends in
+`/api/v3`; AWS and AgentCore take none). The system name is the one the connector writes
+(`cyberark`, `sap`, `github-scan`, `aws-agentcore`, ...), so counts and call limits line up with the
+env-configured connector of the same system, which keeps working unchanged.
+
+*Checklist.* Each template extends `base` and adds: `endpoint_reachable` (verified TLS through
+safehttp), `auth_ok` (the connector's own login: vault logon, OAuth token, API token, AssumeRole),
+and the new `read_probe` (the connector's own reader returns objects, counts only; an empty read
+fails rather than looking clean). The probers (`governed/wire`) call the connector's client and read
+only; their tests run against the existing fakes (`pamfake`, `erpfake`, `vmsfake`, the AWS replay
+fixtures, a GitHub stub). Write-back is the existing gate: a vault or ERP connection with
+`write_mode` other than `off` needs a second approver, the base `write_scope` check applies, and for
+a vault it is a real read (`effective_rights` lists the safes where the service user holds
+Manage Safe Members; read-only connections must hold none). An ERP cannot report the integration's
+rights, so that check is *unsupported* and a named person attests instead (`on_unsupported`).
+Inventory templates (`githubscan`, `vms`, `awsorg`: findings, contractor records and AWS snapshots,
+not an account population) mark their account data checks (key, fill and correlation rates) not
+applicable instead of failing on zero accounts.
+
+*Wiring.* The dry run discovers through the real connector (staged, reconciled, live graph
+untouched; the connector result is given the class counts the data checks read). Activation then:
+for `githubscan`, `sap`, `oracle`, the vaults and `agentcore` queues a `connector_sync` job (a
+remote read must not hold the activation transaction), and from then on the worker
+(`tessera worker` and the in-process pool) and `POST /api/connectors/sync` open the connectors of
+the tenant's live governed connections (`readiness.Service.GovernedConnectors`: settings from the
+live revision, the credential opened with the KEK inside the read transaction) next to the
+configured ones; a connection that cannot be opened is named in `governed_not_opened`, the others
+are still read. For `awsorg`, `fieldglass`, `beeline` and `csvfeed` activation hands the connection
+over to the feature that already owns those sources: it creates the AWS connector
+(`awsorg.Service.CreateConnector`, keeping the external id the probe used) or the contractor feed
+(same sealing and audit as the Contractors page), idempotently by name, and audits
+`connection.handover`. Changes to the settings after activation are then made on that feature's page.
+
+*AgentCore* is fixture-only (no live client): the snapshot is a file in the tenant's own directory
+under `TESSERA_LOADER_DATA_DIR` (a plain file name, symbolic links that leave the directory are
+refused) and the connection is refused in prod. *Flat-file apps* stay a separate feature on
+purpose (`/api/flatfile`): they are disconnected applications fed by uploaded files, with no
+endpoint, credential or live read for a connection to govern.
 **After activation** (design §7.4, §7.5). Activation stores a baseline of the live revision
 (`readiness_baselines`: score, item states, finding and object counts, config hash). A background
 scheduler (`readiness.Scheduler`, started by `tessera serve`, a pass every 15 minutes) re-runs the
@@ -2599,6 +2662,159 @@ assignment back through provisioning.
 - **Readiness.** Template `salesforce` (connection type `salesforce` in New connection).
 - **Tests.** `internal/connectors/salesforce` against `sffake`, an in-process org that verifies the JWT signature,
   audience and expiry, serves SOQL with paging and injects faults.
+
+### Database connector (PostgreSQL, MySQL, SQL Server, Oracle; issue #553)
+
+`internal/connectors/sqldb` reads accounts, roles and grants from a database and provisions them back. Pure-Go
+drivers (pgx, `go-sql-driver/mysql` v1.10.1, `microsoft/go-mssqldb` v1.11.2, `sijms/go-ora/v2` v2.9.0). The New
+connection gallery has a **Database (SQL)** tile (category Databases; template `sql`).
+
+- **Architecture exception.** Tessera's own data goes only through `internal/store`; `internal/archtest` bans
+  `database/sql`, drivers and `Query`/`Exec` calls elsewhere. This package talks to a customer database, so archtest
+  exempts exactly `internal/connectors/sqldb` (not its subpackages) for those three rules and nothing else (`unsafe`,
+  `reflect` tricks, `go:linkname` and the SQLite driver stay banned there). `TestSQLDBExemptionIsNarrow` fails if the
+  package ever imports `internal/store`, and the MySQL, SQL Server and Oracle drivers are banned everywhere else.
+- **Read, native mode** (`mode: native`). Fixed catalogue statements per engine: `pg_roles` and `pg_auth_members`;
+  `mysql.user` and `mysql.role_edges` (MySQL 8.0+); `sys.server_principals`, `sys.server_role_members`,
+  `sys.database_principals`, `sys.database_role_members`, `sys.server_permissions`; `DBA_USERS`, `DBA_ROLES`,
+  `DBA_ROLE_PRIVS`, `DBA_SYS_PRIVS` (Oracle 12c+). A login is an account (`locked` reads as `disabled`), a role is a
+  requestable group, nested roles are `member_of`, system privileges are permissions (`SUPERUSER`, `CONTROL SERVER`,
+  `SELECT ANY TABLE`, ...) and a role is privileged when it holds one of the dangerous ones or is a privileged role
+  by name (`sysadmin`, `DBA`, `db_owner`) directly or through nesting. SQL Server entitlement ids are `server:<role>`
+  and `db:<role>` (database roles come from the database in the connection; a database user is assumed to carry its
+  login's name). The reading user needs `SELECT` on those catalogues (SQL Server: `VIEW ANY DEFINITION`).
+- **Read, app mode** (`mode: app`). Two administrator-written SELECTs: accounts (columns `id`, and optionally
+  `username`, `email`, `display_name`, `status`) and entitlements (`account`, `entitlement`, optional `description`).
+  A statement must be a single SELECT/WITH with no comments, no `;`, no writing keyword and no placeholder.
+- **Write.** Target kind `sql` (the connection is `sql`, the credential is the database password, sealed as every
+  target token; the base URL is derived, `sql://host:port/engine`). Native: `create_account`, `disable_account`,
+  `update_account` with `attrs.status` `active` or `locked`, `delete_account`, `add_entitlement` and
+  `remove_entitlement`, each a fixed per-engine statement (see `engine.go`, golden-tested) with identifiers quoted by
+  the engine's quoting function (`quote.go`: pgx `Identifier.Sanitize`, backticks, `[]`, `""`) and nothing spliced.
+  A created login gets a random credential nobody learns: it signs in through the database's external
+  authentication or an administrator sets a password. App mode: INSERT, UPDATE and DELETE templates for the six
+  operations with named placeholders only (`:username`, `:external_id`, `:email`, `:display_name`, `:entitlement`,
+  `:entitlement_name`, `:attr_<name>`), rendered to the engine's bind markers (`$1`, `?`, `@p1`, `:1`), so a value is
+  always an argument. Both modes read first and change nothing already as asked, then the engine re-reads to verify.
+- **Safety.** Reads run in a read-only transaction (PostgreSQL, MySQL; Oracle `SET TRANSACTION READ ONLY`; SQL
+  Server's driver has no such option, so its reads are fixed statements or validated SELECTs on an
+  `ApplicationIntent=ReadOnly` connection: give the user read-only rights) with a query timeout (default 30 s, max
+  5 min) and a row cap (default 100000, max 1000000); a capped read is `Partial`, so the deletion guard holds
+  removals. The connection is dialled through `safehttp`'s address policy (loopback, private, link-local, metadata
+  and the other blocked ranges refused in prod; only the configured port). TLS is verify-full (chain and host name,
+  TLS 1.2+, the connection's CA bundle or the system roots); `tls: disable` is accepted in dev only. The password is a
+  `connsync.Secret` and is scrubbed from every error.
+- **Run it.** Source: `TESSERA_CONNECTORS=sql` with `TESSERA_SQL_ENGINE`, `_HOST`, `_PORT`, `_DATABASE`, `_USERNAME`,
+  `_PASSWORD` (`file:`/`env:` reference), `_MODE`, `_TLS`, `_CA_FILE`, `_APP` (JSON file of statements), `_SYSTEM`.
+  Target: `PUT /api/provisioning/targets/{connection}` with `{"kind":"sql","token":"<password>","sql":{...}}`.
+  Migration 0860 (Postgres) and the SQLite rebuild widen the `provisioning_targets.kind` check; no new table.
+- **Tests.** Statement generation, quoting, templates and the readers run against a recording fake
+  `database/sql` driver (no server, no sqlmock). Live tests (`live_test.go`) skip engines without a server:
+  PostgreSQL with `TESSERA_TEST_PG_URL` (as the rest of the suite), the others with
+  `TESSERA_TEST_SQL_MYSQL`, `_SQLSERVER` or `_ORACLE` set to `user:password@host:port/database` (a user that can create
+  logins and roles; the tests drop what they make). The MySQL, SQL Server and Oracle statements are verified by
+  golden text only; run the live tests against a real server before relying on them.
+### Generic REST connector (issue #552)
+
+`internal/connectors/restgen` makes any HTTP/JSON system an identity source and a provisioning target from a
+declarative **spec** (JSON or YAML), with no code. It is the long-tail escape hatch for systems with no dedicated
+connector. In the New connection gallery it is the **Generic REST API** tile (connector type `rest_generic`,
+template `rest_generic`).
+
+```yaml
+base_url: https://api.acme.example/v2          # https only (plain http to loopback only in dev)
+auth:                                          # oauth2_client_credentials | api_key | basic | bearer
+  type: oauth2_client_credentials
+  token_url: https://auth.acme.example/oauth/token
+  client_id: tessera
+  scopes: [users.read, groups.read]            # the client secret is NOT here: it is the sealed credential
+limits: { requests_per_second: 5, burst: 5, max_attempts: 4, timeout_seconds: 15, max_response_bytes: 2097152 }
+users:
+  path: /users
+  items_path: $.data                           # where the records are; empty = the whole body
+  pagination: { style: cursor, cursor_param: after, next_path: $.meta.next, size_param: limit, page_size: 100 }
+  fields:                                      # Tessera field -> JSONPath in one record
+    id: $.id                                   # required: the stable id
+    username: $.login
+    email: $.email
+    display_name: $.name
+    status: $.state                            # active when it is one of active_values (default active, enabled, true, 1, yes)
+    department: $.dept
+    last_login_at: $.last_seen                 # RFC 3339, a date, or Unix seconds/milliseconds
+    attr.employeeNumber: $.hr.number           # kept as an account attribute
+groups:
+  path: /groups
+  items_path: $.groups
+  fields: { id: $.id, name: $.name }
+  members: { ids_path: "$.member_ids[*]" }     # ids inside the record, or { path: /groups/{id}/members, items_path: $.data, id_path: $.user.id }
+entitlements:                                  # roles and entitlements: groups of kind role
+  path: /roles
+  items_path: $.roles
+  fields: { id: $.id, name: $.name, privileged: $.admin }
+  privileged_values: ["true"]
+  members: { path: "/roles/{id}/users", items_path: $.users, id_path: $.id }
+writes:                                        # request templates; see below
+  lookup:  { method: GET, path: "/users/{username}", record_path: $.user }
+  create:  { method: POST, path: /users, expect: [201],
+             body: { login: "${username}", email: "${email}", name: "${display_name}" } }
+  update:  { method: PATCH, path: "/users/{external_id}", body: { email: "${attr.email}", dept: "${attr.department}" } }
+  disable: { method: PATCH, path: "/users/{external_id}", body: { state: suspended } }
+  delete:  { method: DELETE, path: "/users/{external_id}" }
+  add_member:    { method: PUT,    path: "/groups/{group_id}/members/{external_id}" }
+  remove_member: { method: DELETE, path: "/groups/{group_id}/members/{external_id}" }
+  is_member:     { method: GET,    path: "/groups/{group_id}/members/{external_id}" }
+```
+
+- **Secrets.** The spec holds none, and decoding is strict (an unknown key, a `password`, or a static `Authorization`,
+  `*-Key` or `*-Token` header is refused). The credential is the connection's sealed credential: the bare secret for
+  the auth type, or a JSON object of `client_secret`, `api_key`, `password` or `token`. OAuth tokens are cached and
+  refetched after a 401. API keys go in a header (`auth.name`, optional `auth.prefix`) or a query parameter.
+- **Pagination.** `none`, `page` (`page_param`, `size_param`, `page_size`), `offset`, `cursor` (`cursor_param`,
+  `next_path`), `link_header` (the `rel="next"` Link) and `next_url` (`next_path` to the next URL). A short or empty
+  page ends page and offset walks. A next link must stay on the base URL's origin, so the credential never follows a
+  response to another host; a repeated page address or cursor is an error, never an endless loop.
+- **JSONPath.** `$`, `.name`, `['name']`, `[n]`, `[*]`, `.*`. Filters, slices and `..` are refused when the spec is
+  saved. Large integer ids stay exact.
+- **Membership expansion.** `ids_path` reads user ids from the group record; `members.path` lists them per group
+  (`{id}` is the group's id). Ids are the users' `id` field. A group is `group:<id>`, an entitlement
+  `entitlement:<id>` (kind `role`), and each member an account `member_of` edge.
+- **Writes** (`create`, `update`, `disable`, `delete`, `add_member`, `remove_member`) are request templates over the
+  provisioning target kind **`rest`**. Path placeholders `{username}`, `{external_id}`, `{email}`, `{display_name}`,
+  `{group_id}`, `{group_name}` (and `{attr.<name>}` in update bodies) are **escaped as one path segment** (a `/` is
+  `%2F`; `.` and `..` are refused), query values are encoded, and the body is a JSON value with `"${name}"`
+  substitution, so a user name can never change the endpoint or break out of the JSON. An unset lone `"${x}"`
+  leaves its member out. Every change reads first (`lookup`, `is_member`) so a repeated request converges, and
+  `Verify` re-reads. `lookup` and `is_member` are required with the writes they check.
+- **Dry run.** `POST /api/provisioning/targets/{id}/dry-run` (the existing preview) shows the exact requests of a
+  change: reads are sent, every write is listed with its rendered body and not sent, and the OAuth token request is
+  the one POST that really happens so the reads can authenticate. `restgen.Target.Plan` renders the same requests
+  with no network at all.
+- **Limits.** A token bucket (`requests_per_second`, `burst`), `429` and `503` retried within `max_attempts`
+  honouring `Retry-After` up to `max_retry_wait_seconds` (a longer wait is returned as an error, not slept),
+  `502`/`504` and transport failures retried for idempotent methods only, `timeout_seconds` per request,
+  `max_response_bytes` per response (also bounded by the server's outbound client), `max_pages` and `max_records`
+  per listing (a listing cut short marks the result `Partial`, so the deletion guard holds every removal).
+  All calls go through `internal/safehttp`.
+- **Validation on save** names every bad field (`rest.users.fields.id`, `writes.lookup`, ...). A connection's
+  `PATCH /api/connections/{id}/config` takes `"rest"` as an object or as a string of YAML/JSON text, and the server
+  applies the environment's URL policy (https only in prod). `PUT /api/provisioning/targets/{id}` with
+  `"kind": "rest"` takes `"rest"` (without `base_url`, which is the target's own) and a `token`; it answers
+  `422 invalid_rest` with `fields`.
+- **Readiness checklist** (`rest_generic` template): the endpoint is reachable over verified TLS, the credential is
+  accepted, **listing users returns records with the mapping applied** (`mapping_applied`: more than zero users, every
+  mapped field filled, no repeated ids), key uniqueness, status mapping, rate headroom, and the base write-back items.
+  What gates writes: a REST target's `write_back` is off by default and is switched on only through
+  `PUT /api/provisioning/targets/{id}`, which needs the connections-manage permission and a fresh step-up
+  authentication; the dry run above shows the exact requests first. Writes are **not** behind the two-administrator
+  activation of DR-10, which gates a connection revision's activation, not a provisioning target's write-back.
+  Changing where a credential is sent (a REST target's base URL, token URL origin, auth type or key field) needs
+  the secret entered again; on a connection config the stored credential is cleared by such an edit.
+- **As a connector.** `TESSERA_CONNECTORS=rest` with `TESSERA_REST_SPEC=/abs/path/spec.yaml` and
+  `TESSERA_REST_CREDENTIAL=env:NAME|file:/path` (a literal secret is refused) discovers users, groups and
+  entitlements like the other production connectors. Tests run against `restgen/fakerest` (every pagination style
+  and auth mode, throttling, failures, oversize and looping responses, a hostile next link). Staged dry-run
+  reconciliation for `rest_generic` connections arrives with the live-connector work for the other non-demo types
+  (`readiness.connectorFor`).
 
 ### Identity containment (kill switch)
 

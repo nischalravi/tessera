@@ -30,7 +30,9 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
@@ -49,7 +51,10 @@ import (
 // Salesforce (issue #555): "salesforce" reads users, profiles, roles, permission sets and permission set groups
 // (TESSERA_SALESFORCE_*, OAuth JWT bearer flow).
 //
-// Register adds the okta, entra, google, workday, github-scan and aws-agentcore factories. hc is the
+// Generic REST (issue #552): "rest" reads users, groups and entitlements from any HTTP/JSON system as
+// a declarative spec describes (TESSERA_REST_SPEC, TESSERA_REST_CREDENTIAL; see internal/connectors/restgen).
+//
+// Register adds the okta, entra, google, workday, rest, sql, salesforce, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -79,6 +84,15 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	}
 	connectors.Factories["salesforce"] = func(now time.Time) (connectors.Connector, error) {
 		return salesforce.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["rest"] = func(time.Time) (connectors.Connector, error) {
+		return restgen.FromEnv(os.Getenv, rt, hc)
+	}
+	// Databases (issue #553): "sql" reads accounts, roles and grants of one PostgreSQL, MySQL,
+	// SQL Server or Oracle database (TESSERA_SQL_*). It dials through the safehttp address
+	// policy and ignores hc.
+	connectors.Factories["sql"] = func(time.Time) (connectors.Connector, error) {
+		return sqldb.FromEnv(os.Getenv, os.ReadFile, rt)
 	}
 	connectors.Factories["aws-agentcore"] = func(now time.Time) (connectors.Connector, error) {
 		return agentcore.FromEnv(os.Getenv, now)

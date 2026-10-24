@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { GALLERY_META } from "../src/features/admin/connections/gallery";
 import { ALICE, report, seriousViolations, settle } from "./helpers";
 
+// one tile per connector type: counted from the gallery's own metadata, so a new type does not break the spec
 const TILES = Object.keys(GALLERY_META).length;
 
 // New connection, step 1: the app-gallery picker. A radiogroup of tiles (roving tabindex), filter chips, search.
@@ -30,6 +31,7 @@ test("tiles are one radio group: arrows move and select, Space selects, one tab 
   await expect(group.getByRole("radio", { name: "Okta (demo)" })).toBeChecked();
   await expect(group.getByRole("radio", { name: "Okta (demo)" })).toBeFocused();
   await page.keyboard.press("End");
+  // End and ArrowLeft by position, so adding a tile does not break the spec
   await expect(group.getByRole("radio").last()).toBeChecked();
   await page.keyboard.press("ArrowLeft");
   await expect(group.getByRole("radio").nth(TILES - 2)).toBeChecked();

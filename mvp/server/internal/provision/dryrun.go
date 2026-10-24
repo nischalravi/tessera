@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -62,7 +63,7 @@ const (
 // dryRunKinds are the target kinds a dry run can show. A vault or ERP target
 // signs in with a POST that must really happen, and an agent-reached target is
 // not called by the server at all.
-var dryRunKinds = map[string]bool{KindSCIM: true, KindFake: true, KindOkta: true}
+var dryRunKinds = map[string]bool{KindSCIM: true, KindFake: true, KindOkta: true, KindREST: true}
 
 type recorder struct {
 	inner http.RoundTripper
@@ -71,7 +72,8 @@ type recorder struct {
 }
 
 func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Method == http.MethodGet || req.Method == http.MethodHead {
+	// the OAuth token request of a REST target must really happen, or no later step could show
+	if req.Method == http.MethodGet || req.Method == http.MethodHead || restgen.IsAuthExchange(req) {
 		resp, err := r.inner.RoundTrip(req)
 		st := DryRunStep{Method: req.Method, URL: safehttp.RedactURL(req.URL.String()), Sent: true}
 		if resp != nil {
@@ -93,7 +95,7 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	// An empty answer that every connector reads as "done": SCIM and Okta writes
 	// answer 200/204 with an optional body.
 	return &http.Response{StatusCode: http.StatusNoContent, Status: "204 No Content", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
-		Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(nil)), ContentLength: 0, Request: req}, nil
+		Header: http.Header{restgen.DryRunHeader: {"1"}}, Body: io.NopCloser(bytes.NewReader(nil)), ContentLength: 0, Request: req}, nil
 }
 
 func (r *recorder) add(s DryRunStep) {
@@ -131,7 +133,7 @@ func (e *Engine) DryRun(ctx context.Context, t tenancy.ID, connID string, req ta
 		return nil, &Error{422, "dry_run_unavailable", "this target is reached through a Directory Agent; the server cannot call it, so it cannot show a dry run"}
 	}
 	if !dryRunKinds[pt.Kind] {
-		return nil, &Error{422, "dry_run_unavailable", "a dry run is available for SCIM and Okta targets"}
+		return nil, &Error{422, "dry_run_unavailable", "a dry run is available for SCIM, Okta and REST targets"}
 	}
 	token, err := e.openToken(t, pt)
 	if err != nil {

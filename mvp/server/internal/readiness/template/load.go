@@ -230,7 +230,7 @@ func majorMinor(v string) string {
 func resolve(base, t *Template) *Resolved {
 	r := &Resolved{
 		ID: t.ID, Version: t.Version, DisplayName: t.DisplayName, ConnectorTypes: slices.Clone(t.ConnectorTypes),
-		Role: t.Role, DefaultCorrelationKey: t.DefaultCorrelationKey, DefaultHRIDAttribute: t.DefaultHRIDAttribute,
+		Role: t.Role, Inventory: t.Inventory, DefaultCorrelationKey: t.DefaultCorrelationKey, DefaultHRIDAttribute: t.DefaultHRIDAttribute,
 		HostAllowlist: slices.Clone(t.HostAllowlist), RequiredAttributes: map[string][]string{},
 		RecommendedAttributes: map[string][]string{}, Thresholds: map[string]float64{},
 	}
@@ -250,6 +250,13 @@ func resolve(base, t *Template) *Resolved {
 			c := cloneItem(it)
 			c.TemplateLevel = c.Level
 			c.Source = src.ID
+			if src == base && slices.Contains(t.AttestWhenUnsupported, c.ID) {
+				for i := range c.Verify {
+					if c.Verify[i].Kind == Live {
+						c.Verify[i].OnUnsupported = Attestation
+					}
+				}
+			}
 			r.Items = append(r.Items, c)
 		}
 	}

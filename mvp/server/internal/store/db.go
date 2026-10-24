@@ -556,15 +556,20 @@ func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
 }
 
 // upgradeProvTargetKinds lets a SQLite database created before the vault and ERP target
-// kinds (issue #304) take them. CREATE TABLE IF NOT EXISTS cannot change a CHECK, and the
-// table holds sealed credentials that must survive, so it is rebuilt: the new table is
-// made from the old definition with the wider list, the rows are copied, the old table
-// (with its index and triggers, which the schema run recreates) is dropped, and the new
-// one takes its name. Postgres does this in migration 0601.
+// kinds (issue #304), the generic REST kind (issue #552) or the database kind (issue #553) take
+// them. CREATE TABLE IF NOT EXISTS cannot change a CHECK, and the table holds sealed credentials
+// that must survive, so it is rebuilt: the new table is made from the old definition with the
+// wider list, the rows are copied, the old table (with its index and triggers, which the schema
+// run recreates) is dropped, and the new one takes its name. Postgres does this in migrations
+// 0601, 0850 and 0860.
 func (d *DB) upgradeProvTargetKinds(ctx context.Context) error {
-	// Two earlier lists are upgraded: the first three kinds, and the list before Salesforce (issue #555).
-	const wider = "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','salesforce'))"
-	olds := []string{"CHECK (kind IN ('scim','okta','fake'))", "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle'))"}
+	const wider = "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql','salesforce'))"
+	// every earlier list a database may still hold
+	olds := []string{"CHECK (kind IN ('scim','okta','fake'))",
+		"CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle'))",
+		"CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest'))",
+		"CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','sql'))",
+		"CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql'))"}
 	var ddl string
 	err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'provisioning_targets'`).Scan(&ddl)
 	if errors.Is(err, sql.ErrNoRows) {

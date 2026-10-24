@@ -11,6 +11,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 )
@@ -36,6 +41,8 @@ type ConnConfig struct {
 	Customer          string   `json:"customer,omitempty"`
 	Domain            string   `json:"domain,omitempty"`
 	BaseURL           string   `json:"base_url,omitempty"`
+	// Rest is a generic REST connection's spec (internal/connectors/restgen). It holds no secret.
+	Rest *restgen.Spec `json:"rest,omitempty"`
 	// Preset is the id of the SCIM vendor preset (provision/scim) a scim_app
 	// connection was created from; it selects the base URL check and quirks.
 	Preset             string              `json:"preset,omitempty"`
@@ -55,9 +62,16 @@ type ConnConfig struct {
 	Hybrid             bool                `json:"hybrid,omitempty"`
 	UseDirSync         bool                `json:"use_dirsync,omitempty"`
 	PrivilegedExpected map[string][]string `json:"privileged_expected,omitempty"`
+	// SQL is the database connector's settings (template sql, issue #553). It holds no
+	// secret: the password is the sealed credential.
+	SQL *sqldb.Config `json:"sql,omitempty"`
 	// DemoFixedChecks is the demo scenario toggle: simulated checks listed
 	// here pass (for example after "fixing" ranged retrieval). Demo types only.
 	DemoFixedChecks []string `json:"demo_fixed_checks,omitempty"`
+	// Settings are the non-secret options of a governed connector type
+	// (internal/connectors/governed: a vault user, an organization, paths).
+	// The keys each type takes are closed; the secret is the sealed credential.
+	Settings map[string]string `json:"settings,omitempty"`
 }
 
 // ExpectedCounts are the object counts the owner reads from the directory's own console.
@@ -126,11 +140,17 @@ var (
 	printable  = regexp.MustCompile(`^[^\x00-\x1f\x7f]*$`)
 	cloudNames = []string{"global", "usgov", "china"}
 	interfaces = []string{"get_workers", "raas"}
+	// governedTemplates are the templates of the connector types in internal/connectors/governed.
+	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore"}
 )
 
 // Validate checks a config for a template. It returns every problem rather
 // than the first, so the UI can mark each field.
-func Validate(cfg ConnConfig, t *template.Resolved) []FieldError {
+func Validate(cfg ConnConfig, t *template.Resolved) []FieldError { return ValidateConn(cfg, t, "") }
+
+// ValidateConn is Validate for a connector type: templates that cover several
+// types (erp, pam, vms) check the settings of the type the connection has.
+func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []FieldError {
 	var errs []FieldError
 	bad := func(field, format string, args ...any) {
 		errs = append(errs, FieldError{field, fmt.Sprintf(format, args...)})
@@ -228,9 +248,47 @@ func Validate(cfg ConnConfig, t *template.Resolved) []FieldError {
 		} else if cfg.Preset != "" {
 			bad("preset", "unknown SCIM preset %q", cfg.Preset)
 		}
+	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore":
+		typ := connectorType
+		if typ == "" && len(t.ConnectorTypes) > 0 {
+			typ = t.ConnectorTypes[0]
+		}
+		required, takes := governed.BaseURLUse(typ)
+		switch {
+		case takes && (required || cfg.BaseURL != ""):
+			httpsURL("base_url", cfg.BaseURL, nil)
+			// The vault, ERP and feed readers take a host (paths are settings); GitHub
+			// Enterprise Server's API URL ends in /api/v3.
+			if u, err := url.Parse(cfg.BaseURL); err == nil && typ != governed.GitHubScan && u.Path != "" && u.Path != "/" {
+				bad("base_url", "must be a host without a path (the paths are settings)")
+			}
+		case !takes && cfg.BaseURL != "":
+			bad("base_url", "this connector type takes no base URL")
+		}
+		for _, se := range governed.ValidateSettings(typ, cfg.Settings) {
+			bad("settings."+se.Key, "%s", se.Msg)
+		}
+	case "rest_generic":
+		if cfg.Rest == nil {
+			bad("rest", "required: the connector spec (base URL, auth, resources and mapping)")
+			break
+		}
+		for _, e := range cfg.Rest.ValidateShape() {
+			bad("rest."+e.Field, "%s", e.Msg)
+		}
+	case "sql":
+		if cfg.SQL == nil {
+			bad("sql", "required: the database settings")
+		} else if err := cfg.SQL.Validate(connsync.Runtime{Env: config.Prod}); err != nil {
+			// a stored connection follows the production rules (no tls disable)
+			bad("sql", "%v", err)
+		}
 	}
 	if t.ID != "scim_app" && cfg.Preset != "" {
 		bad("preset", "only a SCIM application has a preset")
+	}
+	if len(cfg.Settings) > 0 && !slices.Contains(governedTemplates, t.ID) {
+		bad("settings", "this connector type takes no settings")
 	}
 	if cfg.CorrelationKey == "" || !attrRE.MatchString(cfg.CorrelationKey) {
 		bad("correlation_key", "required: an attribute name")

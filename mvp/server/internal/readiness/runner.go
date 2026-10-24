@@ -33,6 +33,11 @@ type RunnerOptions struct {
 	ProberFor func(b *Bundle, now time.Time) (connectors.Prober, error)
 	// SCIM configures the real prober for non-demo scim_app revisions (DR-18).
 	SCIM SCIMLiveOptions
+	// Gov configures the real probers and connectors of the governed connector
+	// types (AWS Organizations, GitHub, ERP, vaults, contractor feeds, AgentCore).
+	Gov GovOptions
+	// REST configures the real prober for non-demo rest_generic revisions (issue #552).
+	REST RESTLiveOptions
 	// Live configures the real probers (credential opening, network policy).
 	Live LiveOptions
 }
@@ -58,12 +63,18 @@ func (o *RunnerOptions) withDefaults() RunnerOptions {
 		r.ReconEvery = 7 * 24 * time.Hour
 	}
 	if r.ProberFor == nil {
-		scenario, live, scimOpts := r.Scenario, r.Live, r.SCIM
+		scenario, live, scimOpts, restOpts, govOpts := r.Scenario, r.Live, r.SCIM, r.REST, r.Gov
 		r.ProberFor = func(b *Bundle, now time.Time) (connectors.Prober, error) {
 			if p, ok, err := live.liveProber(b, now); ok {
 				return p, err
 			}
 			if p, ok, err := scimOpts.prober(b, now); ok {
+				return p, err
+			}
+			if p, ok, err := govOpts.prober(b, now); ok {
+				return p, err
+			}
+			if p, ok, err := restOpts.prober(b, now); ok {
 				return p, err
 			}
 			var fixed []string
@@ -172,7 +183,7 @@ func (s *Service) Validate(ctx context.Context, st Scope, connID, actor string, 
 		if n >= opts.MaxRunsPerHour {
 			return newErr(http.StatusTooManyRequests, "rate_limited", "at most %d validation runs per connection per hour", opts.MaxRunsPerHour)
 		}
-		run = &store.CheckRun{ID: store.NewID(), RevisionID: rev.ID, Kind: kind, Simulated: !(liveCapable(b) || scimLive(b)), Status: "running",
+		run = &store.CheckRun{ID: store.NewID(), RevisionID: rev.ID, Kind: kind, Simulated: !(liveCapable(b) || scimLive(b) || restLive(b) || govLive(b)), Status: "running",
 			ActorID: actor, ConfigHash: b.ConfigHash, StartedAt: start}
 		if err := c.InsertCheckRun(run); err != nil {
 			return err

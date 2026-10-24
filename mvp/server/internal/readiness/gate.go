@@ -78,10 +78,10 @@ func blockerFor(it *ItemEval, status, reason string) Blocker {
 // every applicable Required attestation-only item attested for the current
 // config (items still waiting on a dependency are checked at activation).
 func (b *Bundle) gateReady(add func(Blocker)) {
-	for _, fe := range Validate(b.Config, b.Template) {
+	for _, fe := range ValidateConn(b.Config, b.Template, b.Conn.ConnectorType) {
 		add(Blocker{Item: "config." + fe.Field, Status: "invalid", Reason: fe.Msg})
 	}
-	if b.Rev.SecretRef == nil {
+	if b.Rev.SecretRef == nil && (!govLive(b) || needsSecret(b.Conn.ConnectorType)) {
 		add(Blocker{Item: "credential", Status: "missing", Reason: "set a credential or a vault reference"})
 	}
 	for _, it := range b.Eval.Items {

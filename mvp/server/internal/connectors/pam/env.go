@@ -21,15 +21,25 @@ import (
 // Users and List Accounts on each safe; Delinea: a role with view on folders
 // and folder permissions; BeyondTrust: a key with read on smart rules and user groups).
 func FromEnv(vendor string, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
-	p := "TESSERA_" + strings.ToUpper(vendor) + "_"
-	secret, err := connsync.ResolveSecret(getenv(p+"SECRET"), getenv)
+	cfg, err := ConfigFromEnv(vendor, getenv)
 	if err != nil {
-		return nil, errors.New(p + "SECRET: " + err.Error())
+		return nil, err
 	}
-	v, err := Open(Config{Vendor: vendor, BaseURL: getenv(p + "BASE_URL"), Username: getenv(p + "USER"), Secret: secret,
-		APIRoot: getenv(p + "API_ROOT")}, rt, hc, now)
+	v, err := Open(cfg, rt, hc, now)
 	if err != nil {
 		return nil, err
 	}
 	return NewConnector(v), nil
+}
+
+// ConfigFromEnv is the environment mapping of FromEnv on its own, so a governed
+// connection (internal/connectors/governed) reads its settings the same way.
+func ConfigFromEnv(vendor string, getenv func(string) string) (Config, error) {
+	p := "TESSERA_" + strings.ToUpper(vendor) + "_"
+	secret, err := connsync.ResolveSecret(getenv(p+"SECRET"), getenv)
+	if err != nil {
+		return Config{}, errors.New(p + "SECRET: " + err.Error())
+	}
+	return Config{Vendor: vendor, BaseURL: getenv(p + "BASE_URL"), Username: getenv(p + "USER"), Secret: secret,
+		APIRoot: getenv(p + "API_ROOT")}, nil
 }

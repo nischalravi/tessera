@@ -1,0 +1,73 @@
+# GitHub organization scan (issue #116): reads MCP configuration and agent credentials from the
+# repositories of one organization, read-only. It reports findings, not accounts, so the staged
+# account data checks do not apply (inventory).
+template: githubscan
+version: 1.0.0
+extends: base@1
+display_name: GitHub (code scan)
+connector_types: [githubscan]
+role: account_source
+inventory: true
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id]
+items:
+  - id: github.endpoint
+    title: API URL is HTTPS with a verified certificate and reachable through safehttp
+    category: transport
+    level: required
+    why: "Prevents SSRF and clear-text transport; GitHub Enterprise Server needs its own https://host/api/v3 URL."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Leave the base URL empty for GitHub.com, or use the Enterprise Server API URL."
+    config_fields: [base_url]
+
+  - id: github.auth
+    title: Token accepted for the organization
+    category: access
+    level: required
+    why: "Proves the stored token reaches the organization before any scan."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Store a fine-grained token (or GitHub App installation token) for the organization."
+    depends_on: [github.endpoint]
+    config_fields: [base_url, settings, credential]
+
+  - id: github.token.readonly
+    title: "Token limited to Contents: read and Metadata: read, with an expiry"
+    category: access
+    level: required
+    why: "The scan only reads files; any write scope turns a leaked token into a code-change path."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Use a fine-grained personal access token or a GitHub App with read-only repository permissions."
+    config_fields: [settings, credential]
+
+  - id: github.read
+    title: Repositories of the organization are listed
+    category: scope
+    level: required
+    why: "A scan that lists nothing reports no findings and looks clean."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Check the organization name and that the token's resource owner is that organization with access to its repositories."
+    depends_on: [github.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: github.scope.repos
+    title: Repository scope confirmed (archived, disabled and forked repositories are skipped)
+    category: scope
+    level: recommended
+    why: "Knowing what is not scanned keeps a clean result honest."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Confirm that the repositories that hold agent configuration are not archived or forks."

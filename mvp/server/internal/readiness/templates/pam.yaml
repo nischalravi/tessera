@@ -1,0 +1,114 @@
+# Privileged-access vaults: CyberArk Privileged Access Manager, Delinea Secret Server and
+# BeyondTrust Password Safe, read as safes, members and vaulted accounts (issue #304).
+# Write-back (safe membership through provisioning) is gated by write_mode and the second approver.
+template: pam
+version: 1.0.0
+extends: base@1
+display_name: Privileged access vault
+connector_types: [cyberark, beyondtrust, delinea]
+role: account_source
+default_correlation_key: id
+default_hr_id_attribute: employeeNumber
+required_attributes:
+  user: [id, username, status]
+recommended_attributes:
+  user: [employeeNumber]
+items:
+  - id: pam.endpoint
+    title: Base URL is HTTPS with a verified certificate and reachable through safehttp
+    category: transport
+    level: required
+    why: "A vault URL over clear text or an unverified certificate exposes every vaulted secret's metadata and the service credential."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the vault's HTTPS host name (no path); fix the certificate chain if it is not trusted."
+    config_fields: [base_url]
+
+  - id: pam.auth
+    title: Service user signs in (CyberArk and Delinea user and password, BeyondTrust run-as user and API key)
+    category: access
+    level: required
+    why: "Proves the stored credential and the user name are right before any read."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Check the user name in Settings and store the password (BeyondTrust: the API key) again."
+    depends_on: [pam.endpoint]
+    config_fields: [base_url, settings, credential]
+
+  - id: pam.dedicated
+    title: Service user is dedicated to Tessera and holds no standing access to vaulted secrets
+    category: access
+    level: required
+    why: "A shared or personal account blurs accountability and gives a connector more than it reads."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a service user used only by Tessera; grant list and view-members rights and nothing that reveals a secret."
+    config_fields: [settings, credential]
+
+  - id: pam.read
+    title: Safes, their members and vaulted accounts are readable
+    category: scope
+    level: required
+    why: "A connector that authenticates but reads nothing leaves safes unreviewed without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Grant the service user list accounts and view safe members on each safe in scope (CyberArk: Audit Users and List Accounts)."
+    depends_on: [pam.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: pam.rights.readonly
+    title: Service user cannot manage safe members while the connection is read-only
+    category: access
+    level: required
+    why: "Manage safe members is the right a write-back uses; holding it without write-back enabled is unused standing privilege."
+    verify:
+      - kind: live
+        check: effective_rights
+    remediation:
+      hint: "Remove Manage Safe Members from the service user, or enable write-back with a write scope."
+    depends_on: [pam.read]
+    applies_when: { write_mode: [off] }
+    config_fields: [base_url, settings, credential, write_mode]
+
+  - id: pam.status
+    title: Member and vaulted-account status mapped to the account status vocabulary
+    category: account_status
+    level: required
+    why: "A disabled or expired member must not read as active access."
+    verify:
+      - kind: data
+        check: status_mapped
+    remediation:
+      hint: "Automatic: the reader maps the vendor's status; report an unmapped value."
+    depends_on: [pam.read]
+
+  - id: pam.key.id
+    title: Vendor id is the correlation key (not the display name)
+    category: identity_keys
+    level: required
+    why: "Safe and account names are renamed; the vendor id is not."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: id }
+    remediation:
+      hint: "Keep id as the correlation key."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: pam.privileged
+    title: Safe permissions that reveal or change secrets are mapped as privileged
+    category: groups
+    level: recommended
+    why: "Retrieve, add, update, delete and manage rights are the access a review must see first."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Confirm the profile mapping (list, use, read, manage) with the vault owner."
