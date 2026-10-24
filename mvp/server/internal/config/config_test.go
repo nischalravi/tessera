@@ -93,6 +93,7 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"frozen clock", []string{"TESSERA_NOW", "2026-01-01T00:00:00Z"}, "TESSERA_NOW must not be set"},
 		{"auth burst over the prod cap", []string{"TESSERA_AUTH_RATE_BURST", "5000"}, "TESSERA_AUTH_RATE_BURST must be at most 300"},
 		{"anonymous burst over the prod cap", []string{"TESSERA_ANON_RATE_BURST", "5000"}, "TESSERA_ANON_RATE_BURST must be at most 2000"},
+		{"client rate limit off", []string{"TESSERA_API_CLIENT_RATE_PER_MINUTE", "0"}, "TESSERA_API_CLIENT_RATE_ALLOW_OFF"},
 		{"trusted proxies 0.0.0.0/0", []string{"TESSERA_TRUSTED_PROXIES", "0.0.0.0/0"}, "trusts every address"},
 		{"trusted proxies ::/0", []string{"TESSERA_TRUSTED_PROXIES", "10.0.0.0/8,::/0"}, "trusts every address"},
 		{"trusted proxies broader than /8", []string{"TESSERA_TRUSTED_PROXIES", "10.0.0.0/7"}, "broader than /8"},
@@ -1072,5 +1073,37 @@ func TestLoad_ShutdownAndLogFormat(t *testing.T) {
 		if tc.ok && got.ShutdownGrace != tc.grace {
 			t.Errorf("%s=%s: grace %s", tc.k, tc.v, got.ShutdownGrace)
 		}
+	}
+}
+
+// TestClientRate: the default token bucket of machine clients (issue #587).
+func TestClientRate(t *testing.T) {
+	dev := map[string]string{"TESSERA_ENV": "dev"}
+	c, err := config.Load(env(dev))
+	if err != nil || c.ClientRateBurst != 120 || c.ClientRatePerMinute != 600 {
+		t.Fatalf("default = %d/%d, %v; want 120/600", c.ClientRateBurst, c.ClientRatePerMinute, err)
+	}
+	c, err = config.Load(env(with(dev, "TESSERA_API_CLIENT_RATE_BURST", "10", "TESSERA_API_CLIENT_RATE_PER_MINUTE", "0")))
+	if err != nil || c.ClientRateBurst != 10 || c.ClientRatePerMinute != 0 {
+		t.Errorf("set = %d/%d, %v; want 10/0 (off)", c.ClientRateBurst, c.ClientRatePerMinute, err)
+	}
+	for k, bad := range map[string][]string{"TESSERA_API_CLIENT_RATE_BURST": {"0", "-1", "many", "100001"},
+		"TESSERA_API_CLIENT_RATE_PER_MINUTE": {"-1", "fast", "600001"}} {
+		for _, v := range bad {
+			if _, err := config.Load(env(with(dev, k, v))); err == nil {
+				t.Errorf("%s=%q was accepted", k, v)
+			}
+		}
+	}
+}
+
+// TestClientRateOffInProd: turning the limit off in production is allowed only with the explicit override.
+func TestClientRateOffInProd(t *testing.T) {
+	c, err := config.Load(env(with(safeProd(), "TESSERA_API_CLIENT_RATE_PER_MINUTE", "0", "TESSERA_API_CLIENT_RATE_ALLOW_OFF", "true")))
+	if err != nil || c.ClientRatePerMinute != 0 {
+		t.Errorf("with the override: %v, %v", c.ClientRatePerMinute, err)
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_API_CLIENT_RATE_ALLOW_OFF", "true"))); err != nil {
+		t.Errorf("override alone: %v", err)
 	}
 }

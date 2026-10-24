@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -150,13 +151,13 @@ func TestCondEval(t *testing.T) {
 		attrs map[string]string
 		want  bool
 	}{
-		{Cond{"risk", OpEq, []string{"high"}}, map[string]string{"risk": "high"}, true},
-		{Cond{"risk", OpEq, []string{"high"}}, map[string]string{"risk": "low"}, false},
-		{Cond{"risk", OpNe, []string{"high"}}, map[string]string{"risk": "low"}, true},
-		{Cond{"risk", OpIn, []string{"medium", "high"}}, map[string]string{"risk": "medium"}, true},
-		{Cond{"risk", OpNotIn, []string{"medium", "high"}}, map[string]string{"risk": "low"}, true},
-		{Cond{"requester_org", OpNe, []string{"Finance"}}, map[string]string{}, false}, // missing: never matches
-		{Cond{"requester_org", OpNotIn, []string{"Finance"}}, map[string]string{"requester_org": ""}, false},
+		{Cond{Attribute: "risk", Op: OpEq, Values: []string{"high"}}, map[string]string{"risk": "high"}, true},
+		{Cond{Attribute: "risk", Op: OpEq, Values: []string{"high"}}, map[string]string{"risk": "low"}, false},
+		{Cond{Attribute: "risk", Op: OpNe, Values: []string{"high"}}, map[string]string{"risk": "low"}, true},
+		{Cond{Attribute: "risk", Op: OpIn, Values: []string{"medium", "high"}}, map[string]string{"risk": "medium"}, true},
+		{Cond{Attribute: "risk", Op: OpNotIn, Values: []string{"medium", "high"}}, map[string]string{"risk": "low"}, true},
+		{Cond{Attribute: "requester_org", Op: OpNe, Values: []string{"Finance"}}, map[string]string{}, false}, // missing: never matches
+		{Cond{Attribute: "requester_org", Op: OpNotIn, Values: []string{"Finance"}}, map[string]string{"requester_org": ""}, false},
 	}
 	for _, c := range cases {
 		if got := c.c.Eval(c.attrs); got != c.want {
@@ -174,5 +175,48 @@ func TestMinOnEveryPath(t *testing.T) {
 	any := func(s Step) bool { return s.Type == TypeApproval }
 	if n := d.MinOnEveryPath(any); n != 1 {
 		t.Errorf("min approvals = %d, want 1", n)
+	}
+}
+
+// A condition may test membership in a dataset (issue #588) instead of listing values.
+func TestDatasetCondition(t *testing.T) {
+	dc := func(op string, values ...string) Step {
+		return Step{ID: "c", Type: TypeCondition, When: &Cond{Attribute: "system", Op: op, Values: values, Dataset: "Restricted"}, Then: "g", Else: "m"}
+	}
+	steps := func(c Step) []Step {
+		return []Step{c, {ID: "m", Type: TypeApproval, Approver: ApproverManager, Next: "end"}, {ID: "g", Type: TypeApproval, Approver: ApproverDecider}}
+	}
+	if is := (Definition{Steps: steps(dc(OpIn))}).Validate(store.WorkflowScopeAccess); len(is) != 0 {
+		t.Fatalf("a dataset test is valid: %v", is)
+	}
+	for name, c := range map[string]Step{"op eq": dc(OpEq), "own values": dc(OpIn, "x"), "long name": func() Step {
+		s := dc(OpIn)
+		s.When.Dataset = strings.Repeat("a", MaxName+1)
+		return s
+	}()} {
+		if is := (Definition{Steps: steps(c)}).Validate(store.WorkflowScopeAccess); len(is) == 0 {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	d := Definition{Steps: steps(dc(OpIn))}
+	sets := Sets{"Restricted": {"okta": true}}
+	for _, tc := range []struct {
+		attrs map[string]string
+		sets  Sets
+		want  string // the approver of the one stage
+	}{
+		{map[string]string{"system": "okta"}, sets, ApproverDecider},
+		{map[string]string{"system": "aws"}, sets, ApproverManager},
+		{map[string]string{}, sets, ApproverManager},
+		{map[string]string{"system": "okta"}, nil, ApproverManager}, // a dataset that is gone holds nothing
+	} {
+		p, err := d.compile("w", 1, tc.attrs, tc.sets)
+		if err != nil || len(p.Stages) != 1 || p.Stages[0].Approver != tc.want {
+			t.Errorf("%v: %+v %v, want %s", tc.attrs, p, err, tc.want)
+		}
+	}
+	notIn := Definition{Steps: steps(dc(OpNotIn))}
+	if p, _ := notIn.compile("w", 1, map[string]string{"system": "aws"}, sets); p.Stages[0].Approver != ApproverDecider {
+		t.Errorf("not_in: %+v", p)
 	}
 }

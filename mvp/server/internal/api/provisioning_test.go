@@ -849,3 +849,38 @@ func TestProvisioning_SalesforceTargetConfig(t *testing.T) {
 		t.Error("the response carries the credential")
 	}
 }
+
+// An ldap target (issue #586) needs its directory settings and the bind password, refuses a plain-LDAP
+// port, an agent and a scope-less config with fixed messages, and never echoes the password.
+func TestProvisioning_LDAPTargetConfig(t *testing.T) {
+	h := newProvHarness(t, fake.Options{})
+	ldapCfg := func(mut string) string {
+		return `{"host":"ldap.acme.example","bind_dn":"cn=svc,dc=acme,dc=example","write_scope":["ou=People,dc=acme,dc=example"],` +
+			`"user_base":"ou=People,dc=acme,dc=example","user_dn_template":"uid=${account},ou=People,dc=acme,dc=example",` +
+			`"user_attrs":{"uid":"${account}","employeeNumber":"${user.external_id}"},"match_attr":"employeeNumber"` + mut + `}`
+	}
+	for name, body := range map[string]string{
+		"no ldap settings": `{"kind":"ldap","base_url":"x","token":"pw"}`,
+		"no credential":    `{"kind":"ldap","ldap":` + ldapCfg("") + `}`,
+		"clear text port":  `{"kind":"ldap","token":"pw","ldap":` + ldapCfg(`,"port":3389`) + `}`,
+		"no scope":         `{"kind":"ldap","token":"pw","ldap":` + strings.Replace(ldapCfg(""), `"write_scope":["ou=People,dc=acme,dc=example"],`, "", 1) + `}`,
+		"agent":            `{"kind":"ad","token":"pw","agent_id":"` + store.NewID() + `","ldap":` + ldapCfg("") + `}`,
+		"bad template":     `{"kind":"ldap","token":"pw","ldap":` + strings.Replace(ldapCfg(""), "${account}", "${env.HOME}", 1) + `}`,
+	} {
+		if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, body); rec.Code != http.StatusUnprocessableEntity && rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d: %s", name, rec.Code, rec.Body)
+		}
+	}
+	v := h.target(`{"kind":"ldap","token":"bind-pw-Q9","ldap":`+ldapCfg("")+`}`, 200)
+	if v["kind"] != "ldap" || v["has_credential"] != true || v["write_back"] != false || v["base_url"] != "ldaps://ldap.acme.example:636" {
+		t.Errorf("target = %v", v)
+	}
+	if body, _ := json.Marshal(v); strings.Contains(string(body), "bind-pw-Q9") {
+		t.Error("the response carries the password")
+	}
+	// the bind DN is where the password goes: changing it needs a new token
+	body := strings.Replace(ldapCfg(""), "cn=svc,dc=acme", "cn=other,dc=acme", 1)
+	if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, `{"kind":"ldap","ldap":`+body+`}`); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("a moved bind DN kept the credential: %d %s", rec.Code, rec.Body)
+	}
+}

@@ -128,6 +128,8 @@ type Config struct {
 	// Env is TESSERA_ENV: "dev" allows activating non-demo connector types,
 	// and is otherwise informational.
 	Env string
+	// ClientRate is the default rate limit of every machine client (clientlimit.go).
+	ClientRate ClientRate
 	// Deprecations announce the removal of /api/v1 routes (Deprecation and Sunset
 	// headers; at least 6 months' notice, enforced at startup).
 	Deprecations []Deprecation
@@ -291,12 +293,13 @@ type Server struct {
 	stepUps     stepup.Catalog
 	stepUpsOnce sync.Once
 	// spec is the complete OpenAPI document (openapi_full.go), built on first use.
-	spec     []byte
-	specErr  error
-	specOnce sync.Once
-	authn    *auth.Authenticator
-	limits   *limiters
-	guests   *sponsorship.Service
+	spec         []byte
+	specErr      error
+	specOnce     sync.Once
+	authn        *auth.Authenticator
+	limits       *limiters
+	clientLimits *clientLimiter
+	guests       *sponsorship.Service
 	// guestLife runs the guest lifecycle: reminders, transfer tasks, conversion, deprovisioning (issue #74)
 	guestLife *guestlife.Service
 
@@ -439,7 +442,7 @@ func New(cfg Config) *Server {
 		cfg.Helpdesk = &helpdesk.Service{HTTP: hc, Containment: cfg.Containment, Clock: cfg.Clock, Simulated: cfg.Env != "prod"}
 	}
 	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal, archive: cfg.Archive,
+		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), clientLimits: newClientLimiter(cfg.ClientRate), provSeal: provSeal, archive: cfg.Archive,
 		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.oauthapps = &oauthapps.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
 	s.ghtokens = &ghtokens.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
@@ -547,6 +550,7 @@ func New(cfg Config) *Server {
 	s.registerRequestDraftRoutes()
 	s.registerQuestionnaireRoutes()
 	s.registerWorkflowRoutes()
+	s.registerDatasetRoutes()
 	s.registerServiceAccountRoutes()
 	s.registerOrgRoutes()
 	s.registerOrgSettingsRoutes()
@@ -615,6 +619,7 @@ func New(cfg Config) *Server {
 	s.registerAdminRoutes()
 	s.registerBreakGlassRoutes()
 	s.registerAdminClientRoutes()
+	s.registerClientLimitRoutes()
 	s.registerOpsRoutes()
 	s.checkPublicRoutes()
 	s.checkDeprecations()
@@ -984,6 +989,9 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	r, ok := s.authorize(w, r, rt)
 	if !ok {
+		return
+	}
+	if v1QueryRefusal(w, r) {
 		return
 	}
 	if d, ok := r.Context().Value(streamDeadlineKey{}).(time.Time); ok && rt.stream {

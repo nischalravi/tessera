@@ -122,11 +122,19 @@ func Approvers(scope string) []string {
 
 // Cond is a condition's test. Missing attributes never match, whatever the operator, so a
 // request that lacks the attribute takes the "else" branch.
+//
+// With Dataset set (the name of a tenant dataset, issue #588) the test is membership of the
+// attribute's value in that dataset instead of in Values: the op is in or not_in and Values is empty.
+// A dataset that no longer exists holds nothing.
 type Cond struct {
 	Attribute string   `json:"attribute"`
 	Op        string   `json:"op"`
 	Values    []string `json:"values"`
+	Dataset   string   `json:"dataset,omitempty"`
 }
+
+// Sets are dataset contents by name, loaded when a definition is resolved for a request.
+type Sets map[string]map[string]bool
 
 // Step is one step of a definition. Fields that do not belong to its type must be empty.
 type Step struct {
@@ -384,6 +392,17 @@ func (s Step) checkCondition(scope string) []Issue {
 	case !slices.Contains(Ops, c.Op):
 		add("invalid_op", "operator is one of %s", strings.Join(Ops, ", "))
 		return out
+	case c.Dataset != "":
+		if c.Op != OpIn && c.Op != OpNotIn {
+			add("invalid_op", "a dataset test uses %s or %s", OpIn, OpNotIn)
+		}
+		if len(c.Values) != 0 {
+			add("invalid_values", "a dataset test has no values of its own")
+		}
+		if len(c.Dataset) > MaxName {
+			add("invalid_dataset", "the dataset name is at most %d characters", MaxName)
+		}
+		return out
 	case (c.Op == OpEq || c.Op == OpNe) && len(c.Values) != 1:
 		add("invalid_values", "%s tests exactly one value", c.Op)
 	case len(c.Values) == 0 || len(c.Values) > MaxValues:
@@ -410,12 +429,17 @@ func (s Step) checkCondition(scope string) []Issue {
 }
 
 // Eval reports whether the condition holds for the attributes.
-func (c Cond) Eval(attrs map[string]string) bool {
+func (c Cond) Eval(attrs map[string]string) bool { return c.eval(attrs, nil) }
+
+func (c Cond) eval(attrs map[string]string, sets Sets) bool {
 	v, ok := attrs[c.Attribute]
 	if !ok || v == "" {
 		return false
 	}
 	in := slices.Contains(c.Values, v)
+	if c.Dataset != "" {
+		in = sets[c.Dataset][v]
+	}
 	switch c.Op {
 	case OpEq, OpIn:
 		return in
