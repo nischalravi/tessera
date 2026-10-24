@@ -22,7 +22,7 @@ these names are made up.
 Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24), npm.
 
 ```bash
-./run.sh             # first run: builds the Go server, installs UI deps, seeds the DB, starts API + UI
+./run.sh             # builds the Go server, installs UI deps (again after a pull changes package-lock.json), seeds the DB, starts API + UI
 ./run.sh --reseed    # reset the demo data
 ./run.sh test        # go vet + Go test suite (unit tests and the API parity replay)
 ./run.sh build       # build the Go server, then tsc + vite production build
