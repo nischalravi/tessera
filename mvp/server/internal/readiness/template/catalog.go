@@ -12,7 +12,7 @@ var Categories = []string{"access", "ownership", "transport", "scope", "identity
 
 // ConfigFields are the typed connection-config fields an item may declare in
 // config_fields. "credential" stands for the secret reference and version.
-var ConfigFields = []string{"host", "port", "bind_dn", "ca_bundle", "base_dns", "user_filter", "group_filter", "service_account_ous",
+var ConfigFields = []string{"host", "port", "tls_mode", "bind_dn", "ca_bundle", "base_dns", "user_filter", "group_filter", "service_account_ous",
 	"org_url", "tenant_id", "cloud", "customer", "domain", "base_url", "tenant_host", "api_version", "interface",
 	"time_zone", "role", "correlation_key", "hr_id_attribute", "technical_owner", "business_owner",
 	"expected_counts", "stale_days", "sync_schedule", "write_mode", "write_scope", "hybrid", "use_dirsync",

@@ -471,8 +471,13 @@ like live results, and is audited as `readiness.item.attested_instead` in the sa
 result never passes for a real connector type. In the checklist, an item whose live check is
 unsupported shows an "Attest instead" form.
 
-Network path: `server/internal/safedial` shares safehttp's address policy for raw TCP. Only ports
-**636 (LDAPS)** and **389 (StartTLS required)** are dialled, private, loopback, link-local,
+Network path: `server/internal/safedial` shares safehttp's address policy for raw TCP. Ports are
+**389, 636 and 1024 and up** (LLDAP's 3890, LDAPS on 6360), never a database or admin port such as 3306 or 6379.
+Set the connection's **Transport security** (`tls_mode`): `ldaps`, `starttls`, or `none`, which is for development only
+(refused in production, never sends the bind password, and the Required `ldap.tls.ldaps` check still fails, so it can
+never be activated). Unset is LDAPS on 636 and StartTLS otherwise. The host must be a host name or IP (no spaces, scheme or
+port). Optional `page_size` (1 to 10000, default 500) and `attr_map` (extra LDAP attributes mapped to account or identity
+attributes, Mapping step; carried on the sync as staged attributes, not yet stored on the account). Private, loopback, link-local,
 CGNAT and metadata addresses are refused after DNS resolution, and TLS 1.2 or later is required.
 **The production path for a directory on a private network is the Directory Agent** (design
 `deployment-readiness.md` §5.3, DR-11, not built yet; `safedial.Transport` is the seam it will
@@ -490,7 +495,7 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
 3. Start the dev server with the lab host allowlisted (dev only; `TESSERA_ENV=prod` refuses this variable):
 
    ```bash
-   TESSERA_SAFEDIAL_ALLOW=192.168.1.20:636 ./run.sh     # host:port, CIDR:port or name:port; 389 or 636 only
+   TESSERA_SAFEDIAL_ALLOW=192.168.1.20:636 ./run.sh     # host:port, CIDR:port or name:port; 389, 636 or 1024 and up
    ```
 
 4. In Admin → Connections → New connection → **OpenLDAP / 389-DS** set the host, port 636, the

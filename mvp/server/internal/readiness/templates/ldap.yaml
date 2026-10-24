@@ -25,7 +25,7 @@ items:
     remediation:
       hint: "Create a service entry with read ACIs (389-DS) or olcAccess rules (OpenLDAP)."
     depends_on: [ldap.bind]
-    config_fields: [host, port, bind_dn, ca_bundle, credential]
+    config_fields: [host, port, tls_mode, bind_dn, ca_bundle, credential]
 
   - id: ldap.svc.no_write
     title: No write access on in-scope entries
@@ -39,7 +39,7 @@ items:
     remediation:
       hint: "Restrict ACIs to read, search and compare. On OpenLDAP and LLDAP (no Get Effective Rights control), attest instead."
     depends_on: [ldap.svc.readonly]
-    config_fields: [host, port, bind_dn, ca_bundle, credential, base_dns, write_mode, write_scope]
+    config_fields: [host, port, tls_mode, bind_dn, ca_bundle, credential, base_dns, write_mode, write_scope]
 
   - id: ldap.svc.ppolicy
     title: Bind DN exempt from password expiry and lockout, or rotation scheduled
@@ -62,7 +62,7 @@ items:
         check: tls_handshake
     remediation:
       hint: "Enable TLS on the server."
-    config_fields: [host, port, ca_bundle]
+    config_fields: [host, port, tls_mode, ca_bundle]
 
   - id: ldap.tls.chain
     title: Certificate validates, hostname matches, valid more than 30 days
@@ -76,7 +76,7 @@ items:
     remediation:
       hint: "Upload the issuing CA."
     depends_on: [ldap.tls.ldaps]
-    config_fields: [host, port, ca_bundle]
+    config_fields: [host, port, tls_mode, ca_bundle]
 
   - id: ldap.tls.version
     title: TLS 1.2 or later
@@ -90,7 +90,7 @@ items:
     remediation:
       hint: "Set the minimum protocol on the server."
     depends_on: [ldap.tls.ldaps]
-    config_fields: [host, port, ca_bundle]
+    config_fields: [host, port, tls_mode, ca_bundle]
 
   - id: ldap.bind
     title: Bind succeeds
@@ -103,7 +103,7 @@ items:
     remediation:
       hint: "Check the bind DN and password."
     depends_on: [ldap.tls.chain]
-    config_fields: [host, port, bind_dn, ca_bundle, credential]
+    config_fields: [host, port, tls_mode, bind_dn, ca_bundle, credential]
 
   - id: ldap.replica
     title: Reads go to a consumer replica, not the provider
@@ -127,7 +127,7 @@ items:
     remediation:
       hint: "Use the DN browser."
     depends_on: [ldap.bind]
-    config_fields: [host, port, bind_dn, ca_bundle, credential, base_dns]
+    config_fields: [host, port, tls_mode, bind_dn, ca_bundle, credential, base_dns]
 
   - id: ldap.scope.filter
     title: Filters parse and select people, not service or host entries, unless intended
@@ -142,7 +142,7 @@ items:
     remediation:
       hint: "Use the template filter for the schema."
     depends_on: [ldap.scope.base_dns]
-    config_fields: [host, port, bind_dn, ca_bundle, credential, base_dns, user_filter, group_filter]
+    config_fields: [host, port, tls_mode, bind_dn, ca_bundle, credential, base_dns, user_filter, group_filter]
 
   - id: ldap.scope.read_perms
     title: Read permission per object class and the required attributes returned
@@ -156,7 +156,7 @@ items:
     remediation:
       hint: "Extend the ACIs."
     depends_on: [ldap.scope.base_dns]
-    config_fields: [host, port, bind_dn, ca_bundle, credential, base_dns]
+    config_fields: [host, port, tls_mode, bind_dn, ca_bundle, credential, base_dns]
 
   - id: ldap.scope.limits
     title: Paged results supported and the bind DN's limits exceed a page
@@ -170,7 +170,7 @@ items:
     remediation:
       hint: "Raise limits for the bind DN only (olcLimits or per-entry nsSizeLimit)."
     depends_on: [ldap.scope.base_dns]
-    config_fields: [host, port, bind_dn, ca_bundle, credential, base_dns]
+    config_fields: [host, port, tls_mode, bind_dn, ca_bundle, credential, base_dns]
 
   - id: ldap.key.entryuuid
     title: entryUUID (RFC 4530) or 389-DS nsUniqueId as key; not DN, uid or mail
@@ -187,7 +187,7 @@ items:
     remediation:
       hint: "Select the key in the Mapping step; entryUUID is operational and requested explicitly."
     depends_on: [base.correlation.key]
-    config_fields: [host, port, bind_dn, ca_bundle, credential, base_dns, correlation_key]
+    config_fields: [host, port, tls_mode, bind_dn, ca_bundle, credential, base_dns, correlation_key]
 
   - id: ldap.key.hr_id
     title: employeeNumber (or the site's HR id attribute) mapped
@@ -288,7 +288,7 @@ items:
     remediation:
       hint: "Enable syncprov or the retro changelog for the bind DN."
     depends_on: [ldap.bind]
-    config_fields: [host, port, bind_dn, ca_bundle, credential]
+    config_fields: [host, port, tls_mode, bind_dn, ca_bundle, credential]
 
   - id: ldap.sync.deletes
     title: Deletes detected (syncrepl delete phase or full-sync diff with failsafe)

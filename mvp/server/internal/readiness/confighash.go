@@ -76,6 +76,8 @@ func (in HashInput) digest(fields []string) (string, error) {
 		for _, f := range fields {
 			if v, ok := m[f]; ok {
 				sel[f] = v
+			} else if f == "tls_mode" {
+				continue // unset (inferred from the port): the hash of a connection saved before tls_mode existed
 			} else {
 				sel[f] = json.RawMessage("null")
 			}
