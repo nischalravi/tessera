@@ -44,6 +44,9 @@ type Op struct {
 type Server struct {
 	// AD makes unicodePwd behave as in Active Directory.
 	AD bool
+	// PasswordModify advertises and accepts the RFC 3062 operation; the password is then kept as
+	// the "hashed" value and never appears as a userPassword attribute.
+	PasswordModify bool
 	// DenyWrites answers every add, modify, delete and modify DN with insufficient access.
 	DenyWrites bool
 
@@ -304,6 +307,10 @@ func (s *Server) serve(raw net.Conn, secure bool) {
 			s.record("unbind", "", encrypted)
 			return
 		case 23: // extended: StartTLS only
+			if str(op.Children[0]) == "1.3.6.1.4.1.4203.1.11.1" && s.PasswordModify {
+				s.passwdModify(op, encrypted, bound != "", send)
+				continue
+			}
 			if str(op.Children[0]) != "1.3.6.1.4.1.1466.20037" {
 				send(result(24, 2, "unsupported extended operation"))
 				continue
@@ -341,6 +348,41 @@ func (s *Server) serve(raw net.Conn, secure bool) {
 		default:
 			send(result(op.Tag+1, 2, "unsupported"))
 		}
+	}
+}
+
+// passwdModify handles the Password Modify extended operation: the value is a sequence with the
+// user identity in [0] and the new password in [2].
+func (s *Server) passwdModify(op *ber.Packet, encrypted, bound bool, send func(...*ber.Packet) bool) {
+	var dn, pw string
+	if len(op.Children) > 1 {
+		if seq := ber.DecodePacket([]byte(str(op.Children[1]))); seq != nil {
+			for _, c := range seq.Children {
+				switch c.Tag {
+				case 0:
+					dn = str(c)
+				case 2:
+					pw = str(c)
+				}
+			}
+		}
+	}
+	s.record("passwdmodify", dn, encrypted)
+	s.mu.Lock()
+	_, ok := s.entries[norm(dn)]
+	if ok && encrypted && bound && !s.DenyWrites {
+		s.pwds[norm(dn)] = pw
+	}
+	s.mu.Unlock()
+	switch {
+	case !encrypted:
+		send(result(24, 53, "unwilling to perform"))
+	case !bound || s.DenyWrites:
+		send(result(24, 50, "insufficient access"))
+	case !ok:
+		send(result(24, 32, "no such object"))
+	default:
+		send(result(24, 0, ""))
 	}
 }
 
@@ -556,6 +598,21 @@ func (s *Server) search(op *ber.Packet) ([]*ber.Packet, int) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if base == "" && scope == 0 { // the root DSE
+		entry := ber.Encode(ber.ClassApplication, ber.TypeConstructed, 4, nil, "")
+		entry.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", ""))
+		list := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "")
+		if s.PasswordModify {
+			a := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "")
+			a.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "supportedExtension", ""))
+			set := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSet, nil, "")
+			set.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "1.3.6.1.4.1.4203.1.11.1", ""))
+			a.AppendChild(set)
+			list.AppendChild(a)
+		}
+		entry.AppendChild(list)
+		return []*ber.Packet{entry}, 0
+	}
 	if _, ok := s.entries[norm(base)]; !ok && scope == 0 {
 		return nil, 32
 	}

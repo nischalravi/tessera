@@ -6272,5 +6272,16 @@ See [the contract, examples and phase limits](../docs/migration-assessment.md).
   clear connection. Every written DN must be below a `write_scope` OU. Templates escape values (RFC 4514 for DNs, RFC 4515
   for filters). Each change reads first and is re-read to verify. Generated passwords are never stored, logged or returned
   (AD accounts must change them at next sign-in). Errors are fixed text.
+- **Privilege.** `write_scope` cannot be a naming-context root, `CN=Users`, `CN=Builtin`, `CN=System`,
+  `CN=Configuration`, `OU=Domain Controllers`, or anything under them. Templates and update maps cannot set privilege-bearing
+  attributes (per flavor, compared without case): AD `nTSecurityDescriptor`, `msDS-KeyCredentialLink`, delegation and
+  `servicePrincipalName`, `altSecurityIdentities`, `sIDHistory`, `adminCount`, `scriptPath`, `userCertificate`,
+  `primaryGroupID`, and `userPrincipalName` (create only); POSIX `uidNumber`, `gidNumber`, `authPassword`, Samba hashes,
+  `sshPublicKey`, `homeDirectory`, `loginShell`. The target refuses to change an account or group with `adminCount=1` or an
+  `objectSid` ending in RID 500, 512, 516, 518, 519, 544, 548, 549 or 551, unless `allow_tier0` is set (dev only; refused
+  in production).
+- **LDAP passwords.** The Password Modify operation (RFC 3062) is used when the server advertises it, so the server hashes the
+  value. Otherwise `userPassword` is written, and the server must hash cleartext on write (OpenLDAP `ppolicy_hash_cleartext`,
+  389-DS `passwordStorageScheme`); without that the value is stored as sent.
 - **Not yet.** Reaching a private directory through the Directory Agent (the agent push job handles SCIM and Okta only), group
   create/update, and showing a reset password to the user. Tests use an in-process fake (`ldapwrite/ldapfake`).

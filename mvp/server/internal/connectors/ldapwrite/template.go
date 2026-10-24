@@ -44,11 +44,37 @@ var (
 	pathRE     = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
 )
 
-// protectedAttrs are set by the target itself and never by a template or an update map.
+// protectedAttrs are set by the target itself and never by a template or an update map, in any flavor.
 var protectedAttrs = map[string]bool{"objectclass": true, "userpassword": true, "unicodepwd": true, "useraccountcontrol": true,
 	"nsaccountlock": true, "pwdaccountlockedtime": true, "member": true, "uniquemember": true, "memberuid": true,
 	"dn": true, "entrydn": true, "distinguishedname": true, "objectsid": true, "objectguid": true, "pwdlastset": true,
 	"grouptype": true, "primarygroupid": true, "memberof": true}
+
+// adProtected are the Active Directory attributes that grant privilege or control: security
+// descriptors, delegation, shadow credentials, SID history and the like. userPrincipalName is
+// separate: a create may set it (the configured template), an update never may.
+var adProtected = map[string]bool{"ntsecuritydescriptor": true, "msds-keycredentiallink": true,
+	"msds-allowedtoactonbehalfofotheridentity": true, "msds-allowedtodelegateto": true, "serviceprincipalname": true,
+	"altsecurityidentities": true, "sidhistory": true, "admincount": true, "scriptpath": true, "usercertificate": true}
+
+// posixProtected are the POSIX and Samba account attributes that grant identity or access on a host.
+var posixProtected = map[string]bool{"uidnumber": true, "gidnumber": true, "authpassword": true, "sambantpassword": true,
+	"sambalmpassword": true, "sshpublickey": true, "homedirectory": true, "loginshell": true}
+
+// isProtected reports whether a template or update map may not set attr (compared without case).
+// create is true for the attribute templates of a new account, which may set userPrincipalName.
+func isProtected(flavor, attr string, create bool) bool {
+	a := strings.ToLower(attr)
+	switch {
+	case protectedAttrs[a]:
+		return true
+	case flavor == FlavorAD:
+		return adProtected[a] || (a == "userprincipalname" && !create)
+	case flavor == FlavorLDAP:
+		return posixProtected[a]
+	}
+	return false
+}
 
 type part struct {
 	lit string

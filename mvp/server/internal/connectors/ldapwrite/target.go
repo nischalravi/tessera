@@ -3,6 +3,7 @@ package ldapwrite
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"io"
 	"slices"
 	"sort"
@@ -56,7 +57,7 @@ func NewTarget(cfg Config, pw connsync.Secret, d *safedial.Dialer) (*Target, err
 // SetRand replaces the random source of generated passwords (tests).
 func (t *Target) SetRand(r io.Reader) { t.rand = r }
 
-var accountAttrs = []string{"*", "userAccountControl", "pwdLastSet", "nsAccountLock", "pwdAccountLockedTime"}
+var accountAttrs = []string{"*", "userAccountControl", "pwdLastSet", "nsAccountLock", "pwdAccountLockedTime", "adminCount", "objectSid"}
 
 func (t *Target) attrsToRead() []string {
 	out := append([]string(nil), accountAttrs...)
@@ -148,6 +149,9 @@ func (t *Target) stateChanges(e *goldap.Entry, disable bool) []change {
 
 // setState disables or enables the entry and moves it to the disabled or enabled OU when one is set.
 func (t *Target) setState(c *conn, e *goldap.Entry, disable bool) error {
+	if err := t.guardTier0(e); err != nil {
+		return err
+	}
 	if t.disabled(e) != disable {
 		if !t.cfg.InScope(e.DN) {
 			return target.Permanent("the account is outside the write scope")
@@ -204,13 +208,24 @@ func (t *Target) password() (connsync.Secret, error) {
 	return pw, nil
 }
 
-// passwordChanges sets pw. AD takes unicodePwd (UTF-16, over the encrypted connection) and the
-// account must change it at next sign-in; an LDAP directory takes userPassword.
+// passwordChanges sets pw on AD: unicodePwd (UTF-16, over the encrypted connection), and the
+// account must change it at next sign-in.
 func (t *Target) passwordChanges(pw connsync.Secret) []change {
-	if t.cfg.Flavor == FlavorAD {
-		return []change{{"replace", "unicodePwd", []string{string(UnicodePwd(pw.Reveal()))}}, {"replace", "pwdLastSet", []string{"0"}}}
+	return []change{{"replace", "unicodePwd", []string{string(UnicodePwd(pw.Reveal()))}}, {"replace", "pwdLastSet", []string{"0"}}}
+}
+
+// setPassword sets pw on the entry. AD takes unicodePwd. An LDAP directory gets the Password Modify
+// operation (RFC 3062) when it advertises it, so the server hashes the value; otherwise the password
+// is written to userPassword, which a server stores as sent unless it hashes cleartext on write
+// (OpenLDAP ppolicy_hash_cleartext, 389-DS passwordStorageScheme): see the README.
+func (t *Target) setPassword(c *conn, dn string, pw connsync.Secret) error {
+	switch {
+	case t.cfg.Flavor == FlavorAD:
+		return c.modify(dn, t.passwordChanges(pw))
+	case c.supportsPasswordModify():
+		return c.passwordModify(dn, pw.Reveal())
 	}
-	return []change{{"replace", "userPassword", []string{pw.Reveal()}}}
+	return c.modify(dn, []change{{"replace", "userPassword", []string{pw.Reveal()}}})
 }
 
 func (t *Target) create(c *conn, a target.Account) error {
@@ -297,15 +312,12 @@ func (t *Target) createEntry(c *conn, dn string, attrs map[string][]string, orde
 		// is added disabled (NORMAL_ACCOUNT | ACCOUNTDISABLE) and enabled last.
 		attrs["userAccountControl"] = []string{"514"}
 		order = append(order, "userAccountControl")
-	case !pw.Empty():
-		attrs["userPassword"] = []string{pw.Reveal()}
-		order = append(order, "userPassword")
 	}
 	if err := c.add(dn, attrs, order); err != nil {
 		return err
 	}
-	if ad && !pw.Empty() {
-		if err := c.modify(dn, t.passwordChanges(pw)); err != nil {
+	if !pw.Empty() {
+		if err := t.setPassword(c, dn, pw); err != nil {
 			return err
 		}
 	}
@@ -341,6 +353,9 @@ func (t *Target) update(c *conn, a target.Account) error {
 	if !t.cfg.InScope(e.DN) {
 		return target.Permanent("the account is outside the write scope")
 	}
+	if err := t.guardTier0(e); err != nil {
+		return err
+	}
 	keys := make([]string, 0, len(a.Attrs))
 	for k := range a.Attrs {
 		keys = append(keys, k)
@@ -363,7 +378,7 @@ func (t *Target) update(c *conn, a target.Account) error {
 			}
 			reset = true
 		default:
-			if !slices.ContainsFunc(t.cfg.UpdateAttrs, func(x string) bool { return strings.EqualFold(x, k) }) || protectedAttrs[strings.ToLower(k)] {
+			if !slices.ContainsFunc(t.cfg.UpdateAttrs, func(x string) bool { return strings.EqualFold(x, k) }) || isProtected(t.cfg.Flavor, k, false) {
 				return target.Permanent("an attribute is not in the target's update allow-list")
 			}
 			if !cleanValue(v) {
@@ -388,7 +403,7 @@ func (t *Target) update(c *conn, a target.Account) error {
 		if err != nil {
 			return err
 		}
-		if err := c.modify(e.DN, t.passwordChanges(pw)); err != nil {
+		if err := t.setPassword(c, e.DN, pw); err != nil {
 			return err
 		}
 	}
@@ -422,6 +437,9 @@ func (t *Target) remove(c *conn, a target.Account) error {
 	if !t.cfg.InScope(e.DN) {
 		return target.Permanent("the account is outside the write scope")
 	}
+	if err := t.guardTier0(e); err != nil {
+		return err
+	}
 	return c.del(e.DN)
 }
 
@@ -445,7 +463,7 @@ func (t *Target) group(c *conn, g target.Group) (*goldap.Entry, error) {
 		if err != nil {
 			return nil, err
 		}
-		es, err := c.search(t.cfg.GroupBase, goldap.ScopeWholeSubtree, f, []string{t.cfg.GroupMemberAttr}, 2)
+		es, err := c.search(t.cfg.GroupBase, goldap.ScopeWholeSubtree, f, []string{t.cfg.GroupMemberAttr, "adminCount", "objectSid"}, 2)
 		if err != nil {
 			return nil, err
 		}
@@ -470,7 +488,7 @@ func (t *Target) group(c *conn, g target.Group) (*goldap.Entry, error) {
 }
 
 func (t *Target) readGroup(c *conn, dn string) (*goldap.Entry, error) {
-	es, err := c.search(dn, goldap.ScopeBaseObject, "(objectClass=*)", []string{t.cfg.GroupMemberAttr}, 1)
+	es, err := c.search(dn, goldap.ScopeBaseObject, "(objectClass=*)", []string{t.cfg.GroupMemberAttr, "adminCount", "objectSid"}, 1)
 	if err != nil || len(es) == 0 {
 		return nil, err
 	}
@@ -507,6 +525,12 @@ func (t *Target) membership(c *conn, a target.Account, g target.Group, add bool)
 	}
 	grp, err := t.group(c, g)
 	if err != nil {
+		return err
+	}
+	if err := t.guardTier0(e); err != nil {
+		return err
+	}
+	if err := t.guardTier0(grp); err != nil {
 		return err
 	}
 	val := t.memberValue(e)
@@ -662,4 +686,27 @@ func val(e *goldap.Entry, name string) string {
 		return v[0]
 	}
 	return ""
+}
+
+// privilegedRIDs are the well-known relative ids of privileged AD objects: Administrator, Domain
+// Admins, Domain Controllers, Schema Admins, Enterprise Admins, Administrators, Account Operators,
+// Server Operators and Print Operators.
+var privilegedRIDs = map[uint32]bool{500: true, 512: true, 516: true, 518: true, 519: true, 544: true, 548: true, 549: true, 551: true}
+
+// tier0 reports whether the entry is privileged: adminCount=1, or an objectSid that ends in a
+// privileged RID (the last four bytes, little endian).
+func tier0(e *goldap.Entry) bool {
+	if val(e, "adminCount") == "1" {
+		return true
+	}
+	sid := e.GetEqualFoldRawAttributeValue("objectSid")
+	return len(sid) >= 8 && privilegedRIDs[binary.LittleEndian.Uint32(sid[len(sid)-4:])]
+}
+
+// guardTier0 refuses to change a privileged entry unless the target opted in (allow_tier0).
+func (t *Target) guardTier0(e *goldap.Entry) error {
+	if e != nil && !t.cfg.AllowTier0 && tier0(e) {
+		return target.Permanent("the entry is privileged (adminCount or a well-known privileged group or account); this target is not allowed to change it")
+	}
+	return nil
 }

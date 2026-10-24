@@ -40,6 +40,9 @@ type Config struct {
 	// WriteScope names the OUs the target may change entries under (each DN written must be
 	// strictly below one). It is required: there is no default scope.
 	WriteScope []string `json:"write_scope"`
+	// AllowTier0 lets the target change accounts and groups that are privileged (adminCount=1 or a
+	// well-known privileged RID such as Domain Admins). Off by default and refused in production.
+	AllowTier0 bool `json:"allow_tier0,omitempty"`
 	// UserBase is where accounts are searched for.
 	UserBase string `json:"user_base"`
 	// UserDNTemplate is the DN of a new account, e.g. uid=${account},ou=People,dc=acme,dc=com.
@@ -112,6 +115,9 @@ func (c *Config) Validate() error {
 		if !validDN(ou) {
 			return bad("write_scope holds a name that is not a distinguished name")
 		}
+		if reservedScope(ou) {
+			return bad("write_scope cannot be a naming-context root or a built-in container (Users, Builtin, System, Configuration, Domain Controllers) or anything under one")
+		}
 	}
 	if !validDN(c.UserBase) {
 		return bad("user_base is not a distinguished name")
@@ -140,7 +146,7 @@ func (c *Config) Validate() error {
 	}
 	for a, tpl := range c.UserAttrs {
 		t, err := ParseTemplate(tpl)
-		if !attrNameRE.MatchString(a) || protectedAttrs[strings.ToLower(a)] || err != nil {
+		if !attrNameRE.MatchString(a) || isProtected(c.Flavor, a, true) || err != nil {
 			return bad("user_attrs holds an attribute that is protected or has an invalid template")
 		}
 		if strings.EqualFold(a, c.MatchAttr) && slices.Contains(t.Refs(), "account") {
@@ -171,7 +177,7 @@ func (c *Config) Validate() error {
 		}
 	}
 	for _, a := range c.UpdateAttrs {
-		if !attrNameRE.MatchString(a) || protectedAttrs[strings.ToLower(a)] {
+		if !attrNameRE.MatchString(a) || isProtected(c.Flavor, a, false) {
 			return bad("update_attrs holds an attribute that is protected or not a name")
 		}
 	}
@@ -198,7 +204,7 @@ func (c *Config) validateDisable() error {
 		}
 	case DisableNSAccountLck, DisablePPolicy:
 	case DisableAttribute:
-		if !attrNameRE.MatchString(c.DisableAttr) || protectedAttrs[strings.ToLower(c.DisableAttr)] {
+		if !attrNameRE.MatchString(c.DisableAttr) || isProtected(c.Flavor, c.DisableAttr, false) {
 			return errors.New("disable_attr must be an attribute name that is not protected")
 		}
 		if c.DisableValue == "" {
@@ -303,4 +309,31 @@ func CAPool(pem string) (*x509.CertPool, error) {
 		return nil, errors.New("the CA bundle holds no PEM certificate")
 	}
 	return p, nil
+}
+
+// reservedContainers are the first RDN below a naming context whose subtree holds the directory's own
+// privileged objects: they are never a write scope.
+var reservedContainers = map[string]bool{"cn=users": true, "cn=builtin": true, "cn=system": true,
+	"cn=configuration": true, "ou=domain controllers": true}
+
+// reservedScope reports whether dn is a naming-context root (every RDN is dc=) or is, or is under,
+// one of the reserved containers of a naming context.
+func reservedScope(dn string) bool {
+	d, err := goldap.ParseDN(dn)
+	if err != nil || len(d.RDNs) == 0 {
+		return true
+	}
+	n := len(d.RDNs)
+	for n > 0 && isDC(d.RDNs[n-1]) {
+		n--
+	}
+	if n == 0 {
+		return true // the naming-context root
+	}
+	// the RDN just below the naming context decides: everything under it is under the container
+	return reservedContainers[normRDN(d.RDNs[n-1])]
+}
+
+func isDC(r *goldap.RelativeDN) bool {
+	return len(r.Attributes) == 1 && strings.EqualFold(r.Attributes[0].Type, "dc")
 }

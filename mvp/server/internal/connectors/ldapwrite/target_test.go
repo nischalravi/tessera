@@ -2,6 +2,7 @@ package ldapwrite_test
 
 import (
 	"context"
+	"encoding/binary"
 	"strings"
 	"testing"
 
@@ -378,5 +379,108 @@ func TestOtherModes(t *testing.T) {
 				t.Errorf("entry: %v", e)
 			}
 		})
+	}
+}
+
+func sid(rid uint32) string {
+	b := []byte{1, 5, 0, 0, 0, 0, 0, 5}
+	for _, v := range []uint32{21, 111, 222, 333, rid} {
+		b = binary.LittleEndian.AppendUint32(b, v)
+	}
+	return string(b)
+}
+
+func TestTier0Guard(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		cfg := adConfig()
+		cfg.AllowTier0 = allow
+		cfg.AllowPasswordReset = true
+		r := newRig(t, cfg, true)
+		// privileged accounts, by adminCount and by RID, and privileged groups
+		r.fake.Put("cn=Admin One,"+people, map[string][]string{"objectClass": {"user"}, "employeeID": {"E300"}, "adminCount": {"1"}, "mail": {"a1@acme.example"}})
+		r.fake.Put("cn=Admin Two,"+people, map[string][]string{"objectClass": {"user"}, "employeeID": {"E301"}, "objectSid": {sid(500)}, "mail": {"a2@acme.example"}})
+		r.fake.Put("cn=Regular,"+people, map[string][]string{"objectClass": {"user"}, "employeeID": {"E302"}, "objectSid": {sid(1105)}, "mail": {"r@acme.example"}})
+		r.fake.Put("cn=Domain Admins,"+groups, map[string][]string{"objectClass": {"group"}, "cn": {"Domain Admins"}, "objectSid": {sid(512)}, "member": {"cn=x"}})
+		r.fake.Put("cn=Ops,"+groups, map[string][]string{"objectClass": {"group"}, "cn": {"Ops"}, "adminCount": {"1"}, "member": {"cn=x"}})
+		acc := func(id string) target.Account {
+			return target.Account{Username: "u" + id, ExternalID: id, DisplayName: "n"}
+		}
+		w := r.fake.Writes()
+		type try struct {
+			name string
+			kind string
+			a    target.Account
+			g    target.Group
+		}
+		blocked := []try{
+			{"disable adminCount", target.DisableAccount, acc("E300"), target.Group{}},
+			{"disable RID 500", target.DisableAccount, acc("E301"), target.Group{}},
+			{"update RID 500", target.UpdateAccount, withAttrs(acc("E301"), ldapwrite.AttrPassword, "reset"), target.Group{}},
+			{"add to Domain Admins", target.AddEntitlement, acc("E302"), target.Group{Name: "Domain Admins"}},
+			{"add to adminCount group", target.AddEntitlement, acc("E302"), target.Group{Name: "Ops"}},
+			{"add tier0 account to group", target.AddEntitlement, acc("E300"), target.Group{Name: "staff"}},
+			{"delete adminCount", target.DeleteAccount, acc("E300"), target.Group{}},
+		}
+		for _, b := range blocked {
+			err := r.tg.Apply(context.Background(), target.Request{Kind: b.kind, Account: b.a, Group: b.g})
+			if allow && err != nil {
+				t.Errorf("allow_tier0: %s: %v", b.name, err)
+			}
+			if !allow && (err == nil || target.Retryable(err) || !strings.Contains(err.Error(), "privileged")) {
+				t.Errorf("%s: %v", b.name, err)
+			}
+			if !allow && r.fake.Writes() != w {
+				t.Fatalf("%s: a write was sent", b.name)
+			}
+		}
+		// a regular account is unaffected either way
+		if err := r.do(t, target.DisableAccount, acc("E302"), target.Group{}); err != nil {
+			t.Errorf("regular account: %v", err)
+		}
+	}
+}
+
+func withAttrs(a target.Account, kv ...string) target.Account {
+	a.Attrs = map[string]string{}
+	for i := 0; i < len(kv); i += 2 {
+		a.Attrs[kv[i]] = kv[i+1]
+	}
+	return a
+}
+
+func TestLDAP_PasswordModifyExtendedOp(t *testing.T) {
+	cfg := ldapConfig(636)
+	cfg.AllowPasswordReset = true
+	r := newRig(t, cfg, false)
+	r.fake.PasswordModify = true
+	dn := "uid=bob," + people
+	if err := r.do(t, target.CreateAccount, acct(), target.Group{}); err != nil {
+		t.Fatal(err)
+	}
+	e, _ := r.fake.Get(dn)
+	if len(e["userpassword"]) != 0 {
+		t.Error("the password was written as an attribute value")
+	}
+	first := r.fake.Password(dn)
+	if len(first) < 16 {
+		t.Fatalf("no password set through the extended operation (len %d)", len(first))
+	}
+	if err := r.do(t, target.UpdateAccount, withAttrs(acct(), ldapwrite.AttrPassword, "reset"), target.Group{}); err != nil {
+		t.Fatal(err)
+	}
+	if second := r.fake.Password(dn); second == first {
+		t.Error("the password was not replaced")
+	}
+	n := 0
+	for _, op := range r.fake.Ops() {
+		if op.Kind == "passwdmodify" {
+			n++
+			if !op.Secure {
+				t.Error("the extended operation was sent on a clear connection")
+			}
+		}
+	}
+	if n != 2 {
+		t.Errorf("%d extended operations", n)
 	}
 }

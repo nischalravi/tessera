@@ -409,6 +409,9 @@ func (e *Engine) buildLDAP(pt *store.ProvTarget, token string, s Settings) (targ
 	}
 	cfg := *s.LDAP
 	cfg.Flavor = pt.Kind
+	if cfg.AllowTier0 && e.Runtime.Env != config.Dev {
+		return nil, errors.New("allow_tier0 is refused outside a dev environment")
+	}
 	var roots *x509.CertPool
 	if cfg.CACertPEM != "" {
 		var err error

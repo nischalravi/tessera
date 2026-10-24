@@ -164,3 +164,27 @@ func (c *conn) del(dn string) error {
 func (c *conn) move(dn, rdn, newSuperior string) error {
 	return fail("move entry", c.l.ModifyDN(goldap.NewModifyDNRequest(dn, rdn, true, newSuperior)))
 }
+
+// oidPasswordModify is the Password Modify extended operation (RFC 3062).
+const oidPasswordModify = "1.3.6.1.4.1.4203.1.11.1"
+
+// supportsPasswordModify reads the root DSE for the RFC 3062 operation.
+func (c *conn) supportsPasswordModify() bool {
+	es, err := c.search("", goldap.ScopeBaseObject, "(objectClass=*)", []string{"supportedExtension"}, 1)
+	if err != nil || len(es) == 0 {
+		return false
+	}
+	for _, v := range es[0].GetEqualFoldAttributeValues("supportedExtension") {
+		if v == oidPasswordModify {
+			return true
+		}
+	}
+	return false
+}
+
+// passwordModify sets the password through the extended operation, so the directory hashes it
+// under its own password policy instead of storing what was sent as an attribute value.
+func (c *conn) passwordModify(dn, pw string) error {
+	_, err := c.l.PasswordModify(&goldap.PasswordModifyRequest{UserIdentity: dn, NewPassword: pw})
+	return fail("set password", err)
+}

@@ -339,6 +339,9 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		}
 		cfg := *in.LDAP
 		cfg.Flavor = in.Kind
+		if cfg.AllowTier0 && s.cfg.Env != config.Dev {
+			return st, badRequest("invalid_ldap", "allow_tier0 is a dev-only setting; production targets never change privileged accounts or groups")
+		}
 		if err := cfg.Validate(); err != nil {
 			return st, badRequest("invalid_ldap", err.Error()) // fixed text, never the submitted value
 		}

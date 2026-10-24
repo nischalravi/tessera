@@ -154,3 +154,75 @@ func TestUnicodePwd(t *testing.T) {
 var _ = target.CreateAccount
 
 func randReader() io.Reader { return rand.Reader }
+
+func TestProtectedAttrsPerFlavor(t *testing.T) {
+	for _, tc := range []struct {
+		flavor, attr string
+		create       bool
+		want         bool
+	}{
+		{"ad", "nTSecurityDescriptor", true, true}, {"ad", "MSDS-KEYCREDENTIALLINK", true, true},
+		{"ad", "msDS-AllowedToActOnBehalfOfOtherIdentity", false, true}, {"ad", "msDS-AllowedToDelegateTo", true, true},
+		{"ad", "servicePrincipalName", true, true}, {"ad", "altSecurityIdentities", false, true}, {"ad", "sIDHistory", true, true},
+		{"ad", "adminCount", true, true}, {"ad", "scriptPath", false, true}, {"ad", "userCertificate", true, true},
+		{"ad", "primaryGroupID", true, true}, {"ad", "userPrincipalName", true, false}, {"ad", "USERPRINCIPALNAME", false, true},
+		{"ad", "uidNumber", true, false}, {"ad", "mail", false, false},
+		{"ldap", "uidNumber", true, true}, {"ldap", "GIDNUMBER", false, true}, {"ldap", "authPassword", true, true},
+		{"ldap", "sambaNTPassword", true, true}, {"ldap", "sambaLMPassword", true, true}, {"ldap", "sshPublicKey", false, true},
+		{"ldap", "homeDirectory", true, true}, {"ldap", "loginShell", true, true},
+		{"ldap", "servicePrincipalName", true, false}, {"ldap", "userPrincipalName", false, false}, {"ldap", "mail", true, false},
+		{"ldap", "userPassword", true, true}, {"ad", "unicodePwd", true, true},
+	} {
+		if got := isProtected(tc.flavor, tc.attr, tc.create); got != tc.want {
+			t.Errorf("isProtected(%s, %s, create=%t) = %t", tc.flavor, tc.attr, tc.create, got)
+		}
+	}
+	// the config refuses them in templates, the update allow-list and the disable attribute
+	c := validConfig()
+	c.Flavor = "ad"
+	c.DisableMode = "attribute"
+	c.UserAttrs["userPrincipalName"] = "${user.email}"
+	c.DisableAttr = "carLicense"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a UPN template on create: %v", err)
+	}
+	for name, mut := range map[string]func(*Config){
+		"update upn":  func(c *Config) { c.UpdateAttrs = []string{"UserPrincipalName"} },
+		"update spn":  func(c *Config) { c.UpdateAttrs = []string{"servicePrincipalName"} },
+		"create sd":   func(c *Config) { c.UserAttrs["nTSecurityDescriptor"] = "x" },
+		"disable sid": func(c *Config) { c.DisableAttr = "sIDHistory" },
+	} {
+		cc := validConfig()
+		cc.Flavor, cc.DisableMode, cc.DisableAttr = "ad", "attribute", "carLicense"
+		mut(&cc)
+		if cc.Validate() == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	l := validConfig()
+	l.UserAttrs["loginShell"] = "/bin/sh"
+	if l.Validate() == nil {
+		t.Error("loginShell accepted on an LDAP target")
+	}
+}
+
+func TestReservedWriteScope(t *testing.T) {
+	for scope, reserved := range map[string]bool{
+		"dc=acme,dc=example": true, "DC=acme": true,
+		"cn=Users,dc=acme,dc=example": true, "CN=Builtin,DC=acme,DC=example": true, "cn=System,dc=acme,dc=example": true,
+		"cn=Configuration,dc=acme,dc=example": true, "OU=Domain Controllers,DC=acme,DC=example": true,
+		"ou=Sub,cn=Users,dc=acme,dc=example": true, "cn=Policies,cn=System,dc=acme,dc=example": true,
+		"ou=People,dc=acme,dc=example": false, "ou=Users,dc=acme,dc=example": false, "ou=Staff,ou=Domain Controllers2,dc=acme,dc=example": false,
+	} {
+		if got := reservedScope(scope); got != reserved {
+			t.Errorf("reservedScope(%q) = %t", scope, got)
+		}
+		c := validConfig()
+		c.WriteScope = []string{scope}
+		c.UserDNTemplate = "uid=${account}," + scope
+		c.UserBase = scope
+		if err := c.Validate(); reserved && (err == nil || !strings.Contains(err.Error(), "write_scope")) {
+			t.Errorf("scope %q accepted: %v", scope, err)
+		}
+	}
+}
