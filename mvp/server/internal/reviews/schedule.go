@@ -278,6 +278,9 @@ func progress(tx *store.TenantTx, l *store.ReviewLaunch, now time.Time, res *Tic
 	}
 	// a locked campaign waits; one closed by hand ends its launch, revoking nothing
 	if cmp, err := tx.Campaign(l.CampaignID); err == nil {
+		if _, err := ExpireLock(tx, now, cmp); err != nil { // a lock that ran out lifts, and the deadline logic resumes
+			return err
+		}
 		switch cmp.Status {
 		case store.CampaignLocked:
 			return nil

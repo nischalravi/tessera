@@ -3,6 +3,7 @@ package store_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
@@ -42,6 +43,12 @@ func TestIsolation_ReviewActions(t *testing.T) {
 		if ok, err := c.TransitionCampaign(campA, store.CampaignOpen, store.CampaignOpen, store.CampaignLocked); err != nil || !ok {
 			t.Errorf("A locks: %v %v", ok, err)
 		}
+		if err := c.PutCampaignLock(&store.CampaignLock{CampaignID: campA, LockedBy: "a", Reason: "r", LockedAt: storetest.Now, ExpiresAt: storetest.Now.Add(time.Hour)}); err != nil {
+			t.Errorf("A's lock record: %v", err)
+		}
+		if l, err := c.CampaignLock(campA); err != nil || l.Reason != "r" {
+			t.Errorf("A's lock: %+v %v", l, err)
+		}
 		return nil
 	})
 	inB(t, f, func(c *store.TenantTx) error {
@@ -55,6 +62,15 @@ func TestIsolation_ReviewActions(t *testing.T) {
 		}
 		if _, err := c.ReviewItemEvent(1); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("B reads A's event by id: %v", err)
+		}
+		if _, err := c.CampaignLock(campA); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("B reads A's lock: %v", err)
+		}
+		if err := c.PutCampaignLock(&store.CampaignLock{CampaignID: campA, LockedBy: "b", Reason: "x", LockedAt: storetest.Now, ExpiresAt: storetest.Now}); err == nil {
+			t.Error("B locked A's campaign record")
+		}
+		if err := c.DeleteCampaignLock(campA); err != nil {
+			t.Errorf("B's delete: %v", err)
 		}
 		if open, err := c.OpenReviewConsultations(f.A.IDs["bob"]); err != nil || len(open) != 0 {
 			t.Errorf("B lists A's open consultations: %v %v", open, err)
@@ -79,6 +95,9 @@ func TestIsolation_ReviewActions(t *testing.T) {
 		return nil
 	})
 	inA(t, f, func(c *store.TenantTx) error {
+		if _, err := c.CampaignLock(campA); err != nil {
+			t.Errorf("A's lock after B's attempts: %v", err)
+		}
 		if cmp, err := c.Campaign(campA); err != nil || cmp.Status != store.CampaignLocked {
 			t.Errorf("A's campaign after B's attempt: %+v %v", cmp, err)
 		}
@@ -89,5 +108,5 @@ func TestIsolation_ReviewActions(t *testing.T) {
 // reviewActionsCovered lists the methods TestIsolation_ReviewActions exercises.
 func reviewActionsCovered() map[string]bool {
 	return map[string]bool{"InsertReviewItemEvent": true, "ReviewItemEvents": true, "ReviewItemEvent": true,
-		"OpenReviewConsultations": true, "TransitionCampaign": true}
+		"OpenReviewConsultations": true, "TransitionCampaign": true, "PutCampaignLock": true, "CampaignLock": true, "DeleteCampaignLock": true}
 }

@@ -29,3 +29,14 @@ CREATE TRIGGER review_item_events_no_delete BEFORE DELETE ON review_item_events
 
 CREATE TRIGGER tg_review_item_events_item_xtenant BEFORE INSERT OR UPDATE OF tenant_id, item_id ON review_item_events
 	FOR EACH ROW EXECUTE FUNCTION tessera_guard_soft_ref('review_items', 'item_id', 'bigint');
+
+CREATE TABLE review_campaign_locks (
+  tenant_id TEXT NOT NULL REFERENCES tenants (id),
+  campaign_id BIGINT NOT NULL,
+  locked_by TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  locked_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, campaign_id),
+  FOREIGN KEY (tenant_id, campaign_id) REFERENCES review_campaigns (tenant_id, id)
+);

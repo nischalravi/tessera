@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -44,6 +45,9 @@ func TestActions_ConsultReassignLockClose(t *testing.T) {
 			}
 			u := &store.PlatformUser{DisplayName: n, IdentityID: &id, CreatedAt: s.now}
 			if err := c.InsertPlatformUser(u); err != nil {
+				return err
+			}
+			if err := c.InsertRoleAssignment(&store.RoleAssignment{UserID: u.ID, Role: string(auth.RoleOperator), Source: store.RoleSourceManual, CreatedAt: s.now}); err != nil {
 				return err
 			}
 			actors[n] = reviews.Actor{User: store.UserRef{ID: u.ID, Display: n}, IdentityID: &id}
@@ -142,6 +146,15 @@ func TestActions_ConsultReassignLockClose(t *testing.T) {
 	if err := reassign(reviewer, *reviewer.IdentityID, "x"); acode(err) != "same_reviewer" {
 		t.Errorf("same reviewer: %v", err)
 	}
+	var viewerID int64
+	s.tx(func(c *store.TenantTx) error {
+		id, err := newViewerPerson(c, s.now)
+		viewerID = id
+		return err
+	})
+	if err := reassign(reviewer, viewerID, "x"); acode(err) != reviews.ErrCodeBadPerson {
+		t.Errorf("to someone who cannot decide reviews: %v", err)
+	}
 	if err := reassign(reviewer, item.IdentityID, "x"); acode(err) != reviews.ErrCodeBadPerson {
 		t.Errorf("to the subject: %v", err)
 	}
@@ -197,7 +210,7 @@ func TestActions_ConsultReassignLockClose(t *testing.T) {
 	if err := consult(manager, *other.IdentityID, "q"); acode(err) != reviews.ErrCodeLocked {
 		t.Errorf("consult while locked: %v", err)
 	}
-	if r := s.tick(l.DueAt.Add(time.Hour)); r.Closed != 0 || r.Revoked != 0 {
+	if r := s.tick(l.DueAt.Add(-time.Hour)); r.Closed != 0 || r.Revoked != 0 {
 		t.Errorf("a locked review's deadline ran: %+v", r)
 	}
 	if err := change("unlock", ""); err != nil {
@@ -207,45 +220,89 @@ func TestActions_ConsultReassignLockClose(t *testing.T) {
 		t.Errorf("decide after unlock: %v", err)
 	}
 
-	// close: final; nothing is revoked, even at the deadline
-	if err := change("close", "scope changed"); err != nil {
-		t.Fatalf("close: %v", err)
+	// a scheduled review that revokes what nobody decided cannot be closed by hand while items are open
+	if err := change("close", "scope changed"); acode(err) != "open_items_need_decision" {
+		t.Errorf("close with open items under a revoke policy: %v", err)
 	}
-	if err := change("unlock", ""); acode(err) != "invalid_state" {
-		t.Errorf("unlock a closed review: %v", err)
+
+	// a lock is not indefinite: past MaxLock the next pass lifts it and the deadline logic resumes
+	if err := change("lock", "legal hold"); err != nil {
+		t.Fatalf("lock again: %v", err)
 	}
-	var next *store.ReviewItem
 	s.tx(func(c *store.TenantTx) error {
-		items, _ := c.CampaignItems(l.CampaignID)
-		for _, it := range items {
-			if it.Decision == nil {
-				next = it
-				break
-			}
+		lk, err := c.CampaignLock(l.CampaignID)
+		if err != nil || !lk.ExpiresAt.Equal(s.now.Add(reviews.MaxLock)) {
+			t.Errorf("lock record: %+v %v", lk, err)
 		}
 		return nil
 	})
-	if next != nil {
-		if err := run(func(c *store.TenantTx) error {
-			_, _, err := reviews.DecideItem(c, s.now, next.ID, "revoke", store.UserRef{Display: "rev"}, nil, "")
-			return err
-		}); acode(err) != reviews.ErrCodeClosed {
-			t.Errorf("decide on a closed review: %v", err)
-		}
-	}
-	if r := s.tick(l.DueAt.Add(2 * time.Hour)); r.Revoked != 0 {
-		t.Errorf("a closed review revoked at its deadline: %+v", r)
+	late := s.now.Add(reviews.MaxLock + time.Hour)
+	if r := s.tick(late); r.Closed != 1 || r.Revoked == 0 {
+		t.Errorf("after the lock ran out: %+v", r)
 	}
 	s.tx(func(c *store.TenantTx) error {
 		cmp, _ := c.Campaign(l.CampaignID)
-		if cmp.Status != store.CampaignClosed {
-			t.Errorf("status %s", cmp.Status)
+		if cmp.Status == store.CampaignLocked {
+			t.Error("still locked after it ran out")
 		}
-		if next != nil {
-			if it, _ := c.Item(next.ID); it.Decision != nil {
-				t.Errorf("an undecided item was decided: %v", *it.Decision)
-			}
+		if _, err := c.CampaignLock(l.CampaignID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("lock record kept: %v", err)
 		}
 		return nil
 	})
+
+	// an ad-hoc campaign has no close-out policy: closing it is final and revokes nothing
+	var adhoc int64
+	s.tx(func(c *store.TenantTx) (err error) {
+		adhoc, err = reviews.GenerateCampaign(c, s.now, "ad hoc", 60, s.ps)
+		return
+	})
+	var first *store.ReviewItem
+	s.tx(func(c *store.TenantTx) error {
+		items, _ := c.CampaignItems(adhoc)
+		if len(items) > 0 {
+			first = items[0]
+		}
+		return nil
+	})
+	if first == nil {
+		t.Skip("no ad-hoc items")
+	}
+	if err := run(func(c *store.TenantTx) error {
+		_, err := reviews.ChangeCampaign(c, s.now, adhoc, "close", store.UserRef{Display: "mgr"}, "scope changed")
+		return err
+	}); err != nil {
+		t.Fatalf("close an ad-hoc review: %v", err)
+	}
+	if err := run(func(c *store.TenantTx) error {
+		_, err := reviews.ChangeCampaign(c, s.now, adhoc, "unlock", store.UserRef{Display: "mgr"}, "")
+		return err
+	}); acode(err) != "invalid_state" {
+		t.Errorf("unlock a closed review: %v", err)
+	}
+	if err := run(func(c *store.TenantTx) error {
+		_, _, err := reviews.DecideItem(c, s.now, first.ID, "revoke", store.UserRef{Display: "rev"}, nil, "")
+		return err
+	}); acode(err) != reviews.ErrCodeClosed {
+		t.Errorf("decide on a closed review: %v", err)
+	}
+	s.tx(func(c *store.TenantTx) error {
+		if it, _ := c.Item(first.ID); it.Decision != nil {
+			t.Errorf("an undecided item was decided: %v", *it.Decision)
+		}
+		return nil
+	})
+}
+
+// newViewerPerson makes an active person who can sign in but holds only the viewer role.
+func newViewerPerson(c *store.TenantTx, now time.Time) (int64, error) {
+	id, err := c.InsertIdentity(&store.Identity{TenantID: c.Tenant(), ExternalID: "viewer-x", Name: "Viewer X", Type: "human", Status: "active", CreatedAt: now})
+	if err != nil {
+		return 0, err
+	}
+	u := &store.PlatformUser{DisplayName: "Viewer X", IdentityID: &id, CreatedAt: now}
+	if err := c.InsertPlatformUser(u); err != nil {
+		return 0, err
+	}
+	return id, c.InsertRoleAssignment(&store.RoleAssignment{UserID: u.ID, Role: string(auth.RoleViewer), Source: store.RoleSourceManual, CreatedAt: now})
 }

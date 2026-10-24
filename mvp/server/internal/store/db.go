@@ -297,7 +297,7 @@ var tables = []string{
 	// group event sinks (schema/0379_group_event_sinks.sql)
 	"grp_event_sinks", "grp_sink_dead_letters",
 	// certification actions on review items (schema/0912_review_item_events.sql)
-	"review_item_events",
+	"review_item_events", "review_campaign_locks",
 	// questionnaires, their versions, attachments and answers (schema/0450_questionnaires.sql)
 	"questionnaires", "questionnaire_versions", "questionnaire_attachments", "questionnaire_answers",
 	// workflow definitions, versions, assignments, runs and service-account stages and requests

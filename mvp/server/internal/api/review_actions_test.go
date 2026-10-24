@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
@@ -45,12 +46,16 @@ func TestReviewActionsAPI(t *testing.T) {
 		return 0
 	}
 	consultant := pick()
-	newReviewer := pick(current)
-	bystander := pick(consultant)
+	newReviewer := *ensureIdentity(t, f.DB, f.B.ID, "new-reviewer", "New Reviewer", now)
+	bystander := *ensureIdentity(t, f.DB, f.B.ID, "bystander", "By Stander", now)
+	_ = current
 	admin := reqLogin(t, f, "pa@b.example", []auth.Role{auth.RolePolicyAdmin}, "")
 	answerer := signIn(t, f.DB, f.B.ID, authtest.User{Email: "c@b.example", Roles: []auth.Role{auth.RoleViewer}, IdentityID: &consultant}, authtest.Phr, now)
 	stranger := signIn(t, f.DB, f.B.ID, authtest.User{Email: "s@b.example", Roles: []auth.Role{auth.RoleViewer}, IdentityID: &bystander}, authtest.Phr, now)
 	// both people need a sign-in account linked to them to be asked
+	_ = signIn(t, f.DB, f.B.ID, authtest.User{Email: "r@b.example", Roles: []auth.Role{auth.RoleOperator}, IdentityID: &newReviewer}, authtest.Phr, now)
+	stale := signIn(t, f.DB, f.B.ID, authtest.User{Email: "stale@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}, IdentityID: &newReviewer},
+		authtest.Ctx{AAL: 2, Phr: true, AuthTime: now.Add(-20 * time.Minute)}, now)
 	itemPath := fmt.Sprintf("/api/reviews/items/%d", item)
 
 	if rec := reqDo(h, stranger, "POST", itemPath+"/consult", fmt.Sprintf(`{"identity_id":%d,"question":"x"}`, consultant)); rec.Code != 403 {
@@ -76,6 +81,18 @@ func TestReviewActionsAPI(t *testing.T) {
 	}
 	if rec := reqDo(h, admin, "GET", itemPath+"/events", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), "keep it") {
 		t.Errorf("events: %d %s", rec.Code, rec.Body)
+	}
+	if rec := reqDo(h, stranger, "GET", itemPath+"/events", ""); rec.Code != 404 {
+		t.Errorf("an unrelated person reads the events: %d", rec.Code)
+	}
+	if rec := reqDo(h, answerer, "GET", itemPath+"/events", ""); rec.Code != 200 {
+		t.Errorf("the person asked reads the events: %d", rec.Code)
+	}
+	if rec := reqDo(h, stale, "POST", itemPath+"/reassign", fmt.Sprintf(`{"identity_id":%d,"reason":"x"}`, newReviewer)); rec.Code != 401 {
+		t.Errorf("reassign without a fresh sign-in: %d", rec.Code)
+	}
+	if rec := reqDo(h, admin, "POST", itemPath+"/reassign", fmt.Sprintf(`{"identity_id":%d,"reason":"x"}`, bystander)); rec.Code != 422 {
+		t.Errorf("reassign to someone who cannot decide reviews: %d %s", rec.Code, rec.Body)
 	}
 	if rec := reqDo(h, admin, "POST", itemPath+"/reassign", fmt.Sprintf(`{"identity_id":%d,"reason":"owns it"}`, newReviewer)); rec.Code != 200 ||
 		!strings.Contains(rec.Body.String(), fmt.Sprintf(`"reviewer_id":%d`, newReviewer)) {

@@ -54,7 +54,7 @@ POST   /api/reviews/campaigns                        reviews.manage  -
 GET    /api/reviews/campaigns/{campaign_id}          graph.read      -
 POST   /api/reviews/items/{item_id}/decision         reviews.decide  STEP_UP_POLICY
 POST   /api/reviews/items/{item_id}/consult          reviews.decide  -  # issue #588
-POST   /api/reviews/items/{item_id}/reassign         reviews.decide  -  # issue #588
+POST   /api/reviews/items/{item_id}/reassign         reviews.decide  STEP_UP_POLICY  # issue #588
 GET    /api/reviews/items/{item_id}/events           graph.read      -  # issue #588
 GET    /api/reviews/consultations                    graph.read      -  # issue #588
 POST   /api/reviews/consultations/{consultation_id}/answer graph.read -  # issue #588

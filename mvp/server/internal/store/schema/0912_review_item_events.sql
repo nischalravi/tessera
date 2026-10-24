@@ -7,6 +7,10 @@
 -- target person's reply, ref_id the consult event it answers. kind 'reassign': target_identity_id is
 -- the new reviewer, note the reason. A consult is open until an answer event names it.
 --
+-- review_campaign_locks: when and by whom a campaign was locked, and when the lock ends by itself. A lock
+-- is never indefinite: after expires_at the next decision or schedule pass unlocks the campaign and the
+-- deadline logic resumes. One row per locked campaign; unlocking removes it.
+--
 -- Tenant-owned like 0001_tenancy.sql.
 CREATE TABLE IF NOT EXISTS review_item_events (
   id INTEGER PRIMARY KEY,
@@ -41,3 +45,21 @@ WHEN EXISTS (SELECT 1 FROM review_items p WHERE p.id = NEW.item_id AND p.tenant_
 	OR EXISTS (SELECT 1 FROM platform_users p WHERE p.id = NEW.actor_user_id AND p.tenant_id <> NEW.tenant_id)
 	OR (NEW.target_identity_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.target_identity_id AND p.tenant_id <> NEW.tenant_id))
 BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: review_item_events'); END;
+
+CREATE TABLE IF NOT EXISTS review_campaign_locks (
+  tenant_id TEXT NOT NULL REFERENCES tenants (id),
+  campaign_id INTEGER NOT NULL REFERENCES review_campaigns (id),
+  locked_by TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  locked_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, campaign_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS tg_review_campaign_locks_xtenant_ins BEFORE INSERT ON review_campaign_locks
+WHEN EXISTS (SELECT 1 FROM review_campaigns p WHERE p.id = NEW.campaign_id AND p.tenant_id <> NEW.tenant_id)
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: review_campaign_locks'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_review_campaign_locks_xtenant_upd BEFORE UPDATE OF tenant_id, campaign_id ON review_campaign_locks
+WHEN EXISTS (SELECT 1 FROM review_campaigns p WHERE p.id = NEW.campaign_id AND p.tenant_id <> NEW.tenant_id)
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: review_campaign_locks'); END;

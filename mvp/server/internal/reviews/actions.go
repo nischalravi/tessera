@@ -3,11 +3,13 @@ package reviews
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -61,12 +63,44 @@ type Actor struct {
 	Manager    bool
 }
 
-// refuseHeld refuses a decision on an item of a locked or closed campaign.
-func refuseHeld(c *store.TenantTx, item *store.ReviewItem) error {
+// MaxLock is how long a lock holds: after it the campaign unlocks by itself and its deadline logic resumes.
+const MaxLock = 14 * 24 * time.Hour
+
+// ExpireLock unlocks a locked campaign whose lock ran out (a lock with no record counts as run out), in the
+// caller's transaction, and reports whether it did.
+func ExpireLock(c *store.TenantTx, now time.Time, cmp *store.ReviewCampaign) (bool, error) {
+	if cmp.Status != store.CampaignLocked {
+		return false, nil
+	}
+	l, err := c.CampaignLock(cmp.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return false, err
+	}
+	if l != nil && now.Before(l.ExpiresAt) {
+		return false, nil
+	}
+	if ok, err := c.TransitionCampaign(cmp.ID, store.CampaignLocked, store.CampaignLocked, store.CampaignOpen); err != nil || !ok {
+		return false, err
+	}
+	if err := c.DeleteCampaignLock(cmp.ID); err != nil {
+		return false, err
+	}
+	cmp.Status = store.CampaignOpen
+	_, err = c.RecordAudit(store.AuditRecord{At: now, Action: "review.unlock", LegacyActor: Scheduler, TargetType: "review_campaign",
+		TargetID: strconv.FormatInt(cmp.ID, 10), Detail: ojson.Object{{Key: "campaign_id", Value: cmp.ID}, {Key: "from", Value: store.CampaignLocked},
+			{Key: "to", Value: store.CampaignOpen}, {Key: "reason", Value: "the lock ran out"}}})
+	return true, err
+}
+
+// refuseHeld refuses a decision on an item of a locked or closed campaign. A lock that ran out is lifted first.
+func refuseHeld(c *store.TenantTx, now time.Time, item *store.ReviewItem) error {
 	cmp, err := c.Campaign(item.CampaignID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	} else if err != nil {
+		return err
+	}
+	if _, err := ExpireLock(c, now, cmp); err != nil {
 		return err
 	}
 	switch cmp.Status {
@@ -80,11 +114,11 @@ func refuseHeld(c *store.TenantTx, item *store.ReviewItem) error {
 
 // refuseHeldUndecided is refuseHeld for a decision: an item already decided is answered by the
 // idempotence rules, not by the lock.
-func refuseHeldUndecided(c *store.TenantTx, item *store.ReviewItem) error {
+func refuseHeldUndecided(c *store.TenantTx, now time.Time, item *store.ReviewItem) error {
 	if item.Decision != nil && *item.Decision != "" {
 		return nil
 	}
-	return refuseHeld(c, item)
+	return refuseHeld(c, now, item)
 }
 
 func note(s string, max int, code string) (string, error) {
@@ -96,7 +130,7 @@ func note(s string, max int, code string) (string, error) {
 }
 
 // openItem loads an undecided item of an open campaign.
-func openItem(c *store.TenantTx, id int64) (*store.ReviewItem, error) {
+func openItem(c *store.TenantTx, now time.Time, id int64) (*store.ReviewItem, error) {
 	item, err := c.Item(id)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, refuse(404, ErrCodeNotFound, "review item not found")
@@ -106,7 +140,7 @@ func openItem(c *store.TenantTx, id int64) (*store.ReviewItem, error) {
 	if item.Decision != nil && *item.Decision != "" {
 		return nil, refuse(409, ErrCodeDecided, "this item is already decided")
 	}
-	if err := refuseHeld(c, item); err != nil {
+	if err := refuseHeld(c, now, item); err != nil {
 		return nil, err
 	}
 	return item, nil
@@ -134,6 +168,20 @@ func person(c *store.TenantTx, item *store.ReviewItem, id int64) (*store.Identit
 	if p.ID == item.IdentityID {
 		return nil, refuse(422, ErrCodeBadPerson, "the person the access belongs to cannot review it")
 	}
+	// two accounts of one person are one person (SameActor): none of the new person's accounts is the subject's
+	subjectUsers, err := c.PlatformUserIDsForIdentity(item.IdentityID)
+	if err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		for _, su := range subjectUsers {
+			if same, err := c.SameActor(u, su.String()); err != nil {
+				return nil, err
+			} else if same {
+				return nil, refuse(422, ErrCodeBadPerson, "the person the access belongs to cannot review it")
+			}
+		}
+	}
 	return p, nil
 }
 
@@ -143,7 +191,7 @@ func (a Actor) event(item int64, kind, text string, now time.Time) *store.Review
 
 // Consult asks another person for advice on an open item.
 func Consult(c *store.TenantTx, now time.Time, itemID int64, by Actor, target int64, question string) (*store.ReviewItemEvent, error) {
-	item, err := openItem(c, itemID)
+	item, err := openItem(c, now, itemID)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +255,7 @@ func Answer(c *store.TenantTx, now time.Time, consultID int64, by Actor, text st
 	if err != nil {
 		return nil, err
 	}
-	item, err := openItem(c, ask.ItemID)
+	item, err := openItem(c, now, ask.ItemID)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +279,7 @@ func Answer(c *store.TenantTx, now time.Time, consultID int64, by Actor, text st
 
 // Reassign moves an open item to another reviewer.
 func Reassign(c *store.TenantTx, now time.Time, itemID int64, by Actor, to int64, reason string) (*store.ReviewItem, error) {
-	item, err := openItem(c, itemID)
+	item, err := openItem(c, now, itemID)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +293,11 @@ func Reassign(c *store.TenantTx, now time.Time, itemID int64, by Actor, to int64
 	p, err := person(c, item, to)
 	if err != nil {
 		return nil, err
+	}
+	if ok, err := canDecide(c, now, p.ID); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, refuse(422, ErrCodeBadPerson, "a reviewer must be able to decide reviews")
 	}
 	if item.ReviewerID != nil && *item.ReviewerID == p.ID {
 		return nil, refuse(409, "same_reviewer", "that person already reviews this item")
@@ -303,6 +356,11 @@ func ChangeCampaign(c *store.TenantTx, now time.Time, campaignID int64, action s
 	} else if utf8.RuneCountInString(why) > MaxReason {
 		return nil, refuse(422, "invalid_reason", "the reason is at most %d characters", MaxReason)
 	}
+	if action == ActionClose {
+		if err := refuseCloseUnderPolicy(c, campaignID); err != nil {
+			return nil, err
+		}
+	}
 	ok, err := c.TransitionCampaign(campaignID, from1, from2, to)
 	if err != nil {
 		return nil, err
@@ -314,10 +372,22 @@ func ChangeCampaign(c *store.TenantTx, now time.Time, campaignID int64, action s
 	if err != nil {
 		return nil, err
 	}
+	var expires time.Time
+	if action == ActionLock {
+		expires = now.Add(MaxLock)
+		if err := c.PutCampaignLock(&store.CampaignLock{CampaignID: campaignID, LockedBy: by.Display, Reason: why, LockedAt: now, ExpiresAt: expires}); err != nil {
+			return nil, err
+		}
+	} else if err := c.DeleteCampaignLock(campaignID); err != nil {
+		return nil, err
+	}
 	detail := ojson.Object{{Key: "campaign_id", Value: campaignID}, {Key: "from", Value: cmp.Status}, {Key: "to", Value: to},
 		{Key: "open_items", Value: open}}
 	if why != "" {
 		detail = append(detail, ojson.KV{Key: "reason", Value: why})
+	}
+	if !expires.IsZero() {
+		detail = append(detail, ojson.KV{Key: "lock_expires_at", Value: expires.UTC().Format(time.RFC3339)})
 	}
 	if _, err := c.RecordAudit(store.AuditRecord{At: now, Action: "review." + action, LegacyActor: by.Display, Detail: detail,
 		TargetType: "review_campaign", TargetID: strconv.FormatInt(campaignID, 10)}); err != nil {
@@ -325,4 +395,56 @@ func ChangeCampaign(c *store.TenantTx, now time.Time, campaignID int64, action s
 	}
 	cmp.Status = to
 	return cmp, nil
+}
+
+// canDecide reports whether one of the person's accounts holds reviews.decide through an active role.
+func canDecide(c *store.TenantTx, now time.Time, identity int64) (bool, error) {
+	users, err := c.UsersLinkedTo(identity)
+	if err != nil {
+		return false, err
+	}
+	roles, err := c.ActiveUserRoles(now)
+	if err != nil {
+		return false, err
+	}
+	for _, ur := range roles {
+		if !slices.Contains(users, ur.UserID) {
+			continue
+		}
+		if slices.Contains(auth.RolePermissions(auth.Role(ur.Role)), auth.PermReviewsDecide) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// refuseCloseUnderPolicy refuses to close a scheduled campaign that still has undecided items while its
+// review type's close-out is revoke or escalate: those items owe a revocation (or an escalation first), which
+// a hand-closed campaign would skip. Decide them, or let the deadline close the campaign by its policy.
+func refuseCloseUnderPolicy(c *store.TenantTx, campaignID int64) error {
+	open, err := c.CountOpenItems(campaignID)
+	if err != nil || open == 0 {
+		return err
+	}
+	ls, err := c.ReviewLaunches("")
+	if err != nil {
+		return err
+	}
+	for _, l := range ls {
+		if l.CampaignID != campaignID || l.ClosedAt != nil {
+			continue
+		}
+		t, err := c.ReviewTemplate(l.TemplateID)
+		if err != nil {
+			return err
+		}
+		co, err := closeOutOf(c, t)
+		if err != nil {
+			return err
+		}
+		if co.How != IncompleteKeep {
+			return refuse(409, "open_items_need_decision", "%d items are undecided and this review revokes what is not reviewed: decide them or let the deadline close it", open)
+		}
+	}
+	return nil
 }

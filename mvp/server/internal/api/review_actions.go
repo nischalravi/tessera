@@ -14,8 +14,8 @@ import (
 // Certification actions (issue #588):
 //
 //	POST /api/reviews/items/{item_id}/consult         {identity_id, question}: ask another person for advice (the item's reviewer)
-//	POST /api/reviews/items/{item_id}/reassign        {identity_id, reason}: move the item to another reviewer (the item's reviewer)
-//	GET  /api/reviews/items/{item_id}/events          the consult, answer and reassign trail
+//	POST /api/reviews/items/{item_id}/reassign        {identity_id, reason}: move the item to a person who can decide reviews (the item's reviewer; step-up)
+//	GET  /api/reviews/items/{item_id}/events          the consult, answer and reassign trail (reviews.manage, the reviewer, or anyone asked or who acted on the item)
 //	GET  /api/reviews/consultations                   the questions asked of the signed-in person and not yet answered
 //	POST /api/reviews/consultations/{consultation_id}/answer   {answer}: only the person asked
 //	POST /api/reviews/campaigns/{campaign_id}/lock    {reason}: pauses decisions (reviews.manage + step-up)
@@ -30,7 +30,7 @@ func (s *Server) registerReviewActionRoutes() {
 	const G, P = http.MethodGet, http.MethodPost
 	manage := needStepUp(auth.PermReviewsManage, auth.StepUpPolicy)
 	s.handle(P, "/api/reviews/items/{item_id}/consult", write, need(auth.PermReviewsDecide), s.reviewConsult)
-	s.handle(P, "/api/reviews/items/{item_id}/reassign", write, need(auth.PermReviewsDecide), s.reviewReassign)
+	s.handle(P, "/api/reviews/items/{item_id}/reassign", write, needStepUp(auth.PermReviewsDecide, auth.StepUpPolicy), s.reviewReassign)
 	s.handle(G, "/api/reviews/items/{item_id}/events", read, need(auth.PermGraphRead), s.reviewItemEvents)
 	s.handle(G, "/api/reviews/consultations", read, need(auth.PermGraphRead), s.myConsultations)
 	s.handle(P, "/api/reviews/consultations/{consultation_id}/answer", write, need(auth.PermGraphRead), s.answerConsultation)
@@ -143,8 +143,13 @@ func (s *Server) reviewItemEvents(_ http.ResponseWriter, r *http.Request, p *par
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
+	by, err := s.reviewActor(r)
+	if err != nil {
+		return nil, err
+	}
 	tx := store.TxFrom(r.Context())
-	if _, err := tx.Item(id); errors.Is(err, store.ErrNotFound) {
+	it, err := tx.Item(id)
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, errStatus(http.StatusNotFound, "unknown review item")
 	} else if err != nil {
 		return nil, err
@@ -152,6 +157,14 @@ func (s *Server) reviewItemEvents(_ http.ResponseWriter, r *http.Request, p *par
 	evs, err := tx.ReviewItemEvents(id)
 	if err != nil {
 		return nil, err
+	}
+	// the questions and answers on an item are for its reviewer, the people asked or who acted, and managers
+	involved := by.Manager || (by.IdentityID != nil && it.ReviewerID != nil && *it.ReviewerID == *by.IdentityID)
+	for _, e := range evs {
+		involved = involved || e.ActorUserID == by.User.ID.String() || (by.IdentityID != nil && e.TargetIdentityID != nil && *e.TargetIdentityID == *by.IdentityID)
+	}
+	if !involved {
+		return nil, errStatus(http.StatusNotFound, "unknown review item")
 	}
 	out := make([]reviewEventView, 0, len(evs))
 	for _, e := range evs {

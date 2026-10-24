@@ -463,7 +463,7 @@ func Decide(c *store.TenantTx, now time.Time, itemID int64, decision string, by 
 	if err := refuseSelf(c, item, by); err != nil {
 		return nil, err
 	}
-	if err := refuseHeldUndecided(c, item); err != nil {
+	if err := refuseHeldUndecided(c, now, item); err != nil {
 		return nil, err
 	}
 	// A decided item is final. The same decision again is idempotent (nothing

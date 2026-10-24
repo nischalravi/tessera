@@ -2326,3 +2326,10 @@ DROP POLICY IF EXISTS tenant_isolation ON review_item_events;
 CREATE POLICY tenant_isolation ON review_item_events
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE review_campaign_locks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_campaign_locks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON review_campaign_locks;
+CREATE POLICY tenant_isolation ON review_campaign_locks
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
