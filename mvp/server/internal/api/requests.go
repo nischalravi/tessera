@@ -50,6 +50,7 @@ func (s *Server) registerRequestRoutes() {
 	s.handle(P, "/api/requests/{request_id}/deny", write, create, s.denyRequestLine)
 	s.handle(P, "/api/requests/{request_id}/cancel", write, create, s.cancelRequestLine)
 	s.handle(P, "/api/requests/{request_id}/remove", write, create, s.removeRequestLine)
+	s.registerAmendRoutes(create)
 	s.handle(G, "/api/approvals/inbox", read, create, s.approvalInbox)
 	s.handle(G, "/api/approvals/delegates", read, create, s.approvalDelegates)
 	s.handle(G, "/api/approvals/delegations", read, create, s.listDelegations)
@@ -166,6 +167,8 @@ type lineView struct {
 	CanApprove bool `json:"can_approve"`
 	CanCancel  bool `json:"can_cancel"`
 	CanRemove  bool `json:"can_remove"`
+	// CanAmend: the signed-in user may comment, attach and (as an approver) add an approver (issue #588).
+	CanAmend bool `json:"can_amend"`
 }
 
 type stageView struct {
@@ -347,6 +350,11 @@ func (s *Server) lineView(r *http.Request, v *viewer, l *store.RequestLine, me r
 	}
 	out.CanCancel = l.Status == store.RequestPending && l.RequestedBy == me.UserID.String()
 	out.CanRemove = l.Status == store.RequestApproved && (decider || mine)
+	if l.Status == store.RequestPending {
+		if out.CanAmend, err = requests.Involved(v.tx, l, me, s.clock().UTC()); err != nil {
+			return out, err
+		}
+	}
 	if withEvents {
 		// what the requester answered, for the approvers (issue #298)
 		if out.Questionnaires, err = questionnaires.AnswersFor(v.tx, store.QSubjectRequestLine, l.ID); err != nil {

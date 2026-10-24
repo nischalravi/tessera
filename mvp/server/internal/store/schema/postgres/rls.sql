@@ -2334,6 +2334,20 @@ CREATE POLICY tenant_isolation ON dataset_values
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE access_request_comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE access_request_comments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON access_request_comments;
+CREATE POLICY tenant_isolation ON access_request_comments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE access_request_attachments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE access_request_attachments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON access_request_attachments;
+CREATE POLICY tenant_isolation ON access_request_attachments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE api_client_limits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_client_limits FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON api_client_limits;

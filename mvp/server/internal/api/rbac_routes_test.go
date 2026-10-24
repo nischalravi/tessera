@@ -268,6 +268,11 @@ POST   /api/requests/{request_id}/approve            requests.create STEP_UP_POL
 POST   /api/requests/{request_id}/deny               requests.create -  # issue #164 (#165: the line's routing decides who)
 POST   /api/requests/{request_id}/cancel             requests.create -  # issue #164 (the requester)
 POST   /api/requests/{request_id}/remove             requests.create -  # issue #164 (requests.decide, or the beneficiary)
+GET    /api/requests/{request_id}/comments           requests.create  -  # issue #588
+POST   /api/requests/{request_id}/comments           requests.create  -  # issue #588
+GET    /api/requests/{request_id}/attachments        requests.create  -  # issue #588
+POST   /api/requests/{request_id}/attachments        requests.create  -  # issue #588
+POST   /api/requests/{request_id}/approvers          requests.create  -  # issue #588
 GET    /api/role-mining/runs                         graph.read      -  # issue #298
 POST   /api/role-mining/runs                         roles.manage    -  # issue #298 (analysis only; changes nothing)
 GET    /api/role-mining/runs/{run_id}                graph.read      -  # issue #298
