@@ -34,6 +34,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed/wire"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/ghtokens"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
@@ -367,6 +368,12 @@ func New(cfg Config) *Server {
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 		cfg.Readiness.Runner.SCIM.Client = cfg.OutboundHTTP
+		gc := cfg.Outbound // the connectors' and provisioning's client; the IdP client is the fallback
+		if gc == nil {
+			gc = cfg.OutboundHTTP
+		}
+		cfg.Readiness.Runner.Gov = wire.Options(gc, connsync.Runtime{Env: cfg.Env, AllowLoopback: cfg.Env == config.Dev},
+			cfg.LoaderDataDir, cfg.Env == config.Prod)
 	}
 	if cfg.Agents == nil {
 		cfg.Agents = &agent.Service{DB: cfg.Store, Hub: agent.NewHub(nil), Clock: cfg.Clock}

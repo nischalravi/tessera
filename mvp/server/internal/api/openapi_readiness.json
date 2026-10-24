@@ -1297,6 +1297,13 @@
        "type": "string"
       },
       "description": "Demo connectors only: simulated checks that pass"
+     },
+     "settings": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Non-secret options of the governed connector types (awsorg, githubscan, sap, oracle, cyberark, beyondtrust, delinea, fieldglass, beeline, csvfeed, agentcore); the keys each type takes are closed (username, client_id, org, snapshot, regions, external_id, api_root, token_path, workers_path, csv_path, page_size, role_name, account_ids, management_account_id, identity_center_region). The secret is the sealed credential."
      }
     },
     "description": "Typed, secret-free connection configuration. Unknown fields are rejected."
@@ -1367,7 +1374,18 @@
        "okta",
        "google",
        "workday",
-       "scim_app"
+       "scim_app",
+       "awsorg",
+       "githubscan",
+       "sap",
+       "oracle",
+       "cyberark",
+       "beyondtrust",
+       "delinea",
+       "fieldglass",
+       "beeline",
+       "csvfeed",
+       "agentcore"
       ]
      },
      "system": {

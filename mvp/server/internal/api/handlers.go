@@ -381,7 +381,20 @@ func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, p *param
 	if err != nil {
 		return nil, err
 	}
-	return worker.RunSync(r.Context(), c, now, conns, mode != nil && *mode == "full", "system")
+	gov, failed, err := s.readiness.GovernedConnectorsTx(c, now)
+	if err != nil {
+		return nil, err
+	}
+	out, err := worker.RunSync(r.Context(), c, now, worker.MergeGoverned(conns, gov), mode != nil && *mode == "full", "system")
+	if err != nil || len(failed) == 0 {
+		return out, err
+	}
+	names := make([]string, 0, len(failed))
+	for n := range failed {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return append(out, ojson.KV{Key: "governed_not_opened", Value: names}), nil
 }
 
 // ---------------------------------------------------------------- summary

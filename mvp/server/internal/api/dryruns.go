@@ -6,6 +6,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -117,6 +118,20 @@ func (s *Server) acceptFinding(r *http.Request, p *params) (int, any, error) {
 // inside the activation transaction (§6.1): only an ActiveConnection, which
 // only package readiness can construct, reaches the live graph.
 func (s *Server) firstSync(_ *http.Request, c *store.TenantTx, ac readiness.ActiveConnection, now time.Time) error {
+	if t, ok := governed.Lookup(ac.ConnectorType()); ok {
+		if t.Feature {
+			return s.handover(c, ac, t, now)
+		}
+		// A governed connector reads a remote system: its first sync is queued for a worker
+		// (which opens the connector from the connection), not run inside this transaction,
+		// where a slow source would hold the database's write lock.
+		id := store.NewID()
+		if _, err := s.queue.EnqueueTx(c, jobs.ConnectorSync, "", id, now, maxSweepAttempts); err != nil {
+			return err
+		}
+		return c.Audit(now, "system", "connection.first_sync_queued", ojson.Object{{Key: "connection_id", Value: ac.ConnectionID()},
+			{Key: "revision_id", Value: ac.RevisionID()}, {Key: "key", Value: id}})
+	}
 	if _, ok := connectors.DemoConnectorFor(ac.ConnectorType(), now); !ok {
 		return c.Audit(now, "system", "connection.first_sync_skipped", ojson.Object{{Key: "connection_id", Value: ac.ConnectionID()},
 			{Key: "reason", Value: "no live connector for " + ac.ConnectorType() + " yet (DR-12 to DR-18)"}})

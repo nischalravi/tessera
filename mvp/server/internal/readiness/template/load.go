@@ -230,7 +230,7 @@ func majorMinor(v string) string {
 func resolve(base, t *Template) *Resolved {
 	r := &Resolved{
 		ID: t.ID, Version: t.Version, DisplayName: t.DisplayName, ConnectorTypes: slices.Clone(t.ConnectorTypes),
-		Role: t.Role, DefaultCorrelationKey: t.DefaultCorrelationKey, DefaultHRIDAttribute: t.DefaultHRIDAttribute,
+		Role: t.Role, Inventory: t.Inventory, DefaultCorrelationKey: t.DefaultCorrelationKey, DefaultHRIDAttribute: t.DefaultHRIDAttribute,
 		HostAllowlist: slices.Clone(t.HostAllowlist), RequiredAttributes: map[string][]string{},
 		RecommendedAttributes: map[string][]string{}, Thresholds: map[string]float64{},
 	}

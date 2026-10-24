@@ -1,0 +1,46 @@
+# AWS Bedrock AgentCore agent runtimes (issue #116). FIXTURE-ONLY: there is no live AgentCore
+# client in this build, so the connection reads a recorded snapshot kept in the tenant's directory
+# and is refused in production. Agents, their credential providers and what their execution roles
+# reach are mapped; no credential is held.
+template: agentcore
+version: 1.0.0
+extends: base@1
+display_name: AWS Bedrock AgentCore
+connector_types: [agentcore]
+role: account_source
+default_correlation_key: id
+required_attributes:
+  user: [id, username, status]
+items:
+  - id: agentcore.snapshot
+    title: Recorded snapshot is present in the tenant's directory and parses
+    category: scope
+    level: required
+    why: "The only source this build has; a missing or malformed file reads as no agents."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Put the snapshot (JSON with a runtimes list) in this tenant's directory under TESSERA_LOADER_DATA_DIR and name the file in Settings. Not available in prod."
+    config_fields: [settings]
+
+  - id: agentcore.fresh
+    title: Snapshot export is recent enough to review against
+    category: change_tracking
+    level: required
+    why: "A stale export hides agents created since and credentials rotated since."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Re-export the agent runtimes and replace the file; record the export date in the attestation."
+    config_fields: [settings]
+
+  - id: agentcore.sponsor
+    title: Each agent runtime carries a sponsor tag
+    category: ownership
+    level: recommended
+    why: "An agent without a sponsor has no accountable human (the nhi-ownership policy reports it)."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Tag every runtime with sponsor=<e-mail address>."

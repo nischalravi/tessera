@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { siGithub, siGoogle, siOkta, siSnowflake } from "simple-icons";
+import { siGithub, siGoogle, siOkta, siSap, siSnowflake } from "simple-icons";
 
 /**
  * A recognizable mark per system on a fixed light "logo plate" (white, subtle border, both themes) so brand colours
@@ -12,6 +12,7 @@ const BRAND: Record<string, { path: string; hex: string }> = {
   google: { path: siGoogle.path, hex: siGoogle.hex },
   github: { path: siGithub.path, hex: siGithub.hex },
   snowflake: { path: siSnowflake.path, hex: siSnowflake.hex },
+  sap: { path: siSap.path, hex: siSap.hex },
 };
 
 const stroke = { fill: "none", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" } as const;
@@ -30,6 +31,22 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   aws: { color: "#b45309", glyph: <g {...stroke} stroke="#b45309"><path d="M7 18a4 4 0 01-.6-7.95A5.5 5.5 0 0117 9.5a4.2 4.2 0 01.5 8.5z" /><path d="M9 21h6" /></g> },
   // cloud with a person (SaaS CRM)
   salesforce: { color: "#0b6fa8", glyph: <g {...stroke} stroke="#0b6fa8"><path d="M7 19a4 4 0 01-.6-7.95A5.5 5.5 0 0117 10.5a4.2 4.2 0 01.5 8.5z" /></g> },
+  // database cylinder (no simple-icons mark for Oracle)
+  oracle: { color: "#b3261e", glyph: <g {...stroke} stroke="#b3261e"><ellipse cx="12" cy="6" rx="7" ry="3" /><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3" /></g> },
+  // vault door with a dial
+  cyberark: { color: "#0b5cad", glyph: <g {...stroke} stroke="#0b5cad"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="12" cy="12" r="3.5" /><path d="M12 8.5V6M12 18v-2.5M8.5 12H6M18 12h-2.5" /></g> },
+  // shield with a key
+  beyondtrust: { color: "#b83c0c", glyph: <g {...stroke} stroke="#b83c0c"><path d="M12 2.5l8 3v6c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10v-6z" /><circle cx="10" cy="11" r="2" /><path d="M12 11h4.5M15 11v2.5" /></g> },
+  // padlock
+  delinea: { color: "#0a6e78", glyph: <g {...stroke} stroke="#0a6e78"><rect x="5" y="10.5" width="14" height="10" rx="2" /><path d="M8 10.5V8a4 4 0 018 0v2.5" /><circle cx="12" cy="15.5" r="1.3" /></g> },
+  // contractor ID badge
+  fieldglass: { color: "#1d6a3a", glyph: <g {...stroke} stroke="#1d6a3a"><rect x="4" y="3.5" width="16" height="17" rx="2" /><circle cx="12" cy="10" r="2.5" /><path d="M7.5 17c.8-2.2 2.6-3 4.5-3s3.7.8 4.5 3" /></g> },
+  // hexagon with assignment lines
+  beeline: { color: "#8a5a00", glyph: <g {...stroke} stroke="#8a5a00"><path d="M12 2.5l8 4.5v10l-8 4.5-8-4.5V7z" /><path d="M8 11.5h8M8 15h5" /></g> },
+  // table grid: a CSV feed
+  csvfeed: { color: "#3f4a5a", glyph: <g {...stroke} stroke="#3f4a5a"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M3.5 9.5h17M3.5 14.5h17M9.5 4.5v15" /></g> },
+  // agent: a robot head
+  agentcore: { color: "#6d28d9", glyph: <g {...stroke} stroke="#6d28d9"><rect x="5" y="8" width="14" height="10" rx="2.5" /><circle cx="9.5" cy="13" r="1.2" /><circle cx="14.5" cy="13" r="1.2" /><path d="M12 8V5M10 5h4M3 12v2M21 12v2" /></g> },
   // protocol glyph: two-way arrows
   scim_app: { color: "#475569", glyph: <g {...stroke} stroke="#475569"><path d="M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4" /></g> },
 };
@@ -48,10 +65,14 @@ export function VendorLogo({ vendor, label, size = 56 }: { vendor: string; label
   );
 }
 
+// Connector type and system names that share another system's mark.
+const ALIAS: Record<string, string> = { awsorg: "aws", githubscan: "github", "github-scan": "github", "aws-agentcore": "agentcore", csv: "csvfeed" };
+
 /** The logo vendor for a connection: the first id that has a mark ("demo-okta" is Okta), else the generic protocol glyph. */
 export function vendorForType(...ids: string[]): string {
   for (const id of ids) {
-    const t = id.replace(/^demo-/, "");
+    const t0 = id.replace(/^demo-/, "");
+    const t = ALIAS[t0] ?? t0;
     if (t !== "scim_app" && (t in BRAND || t in GENERIC)) return t;
   }
   return "scim_app";

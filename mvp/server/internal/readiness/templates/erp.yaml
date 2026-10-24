@@ -1,0 +1,111 @@
+# ERP authorization data: SAP and Oracle Fusion Applications, read as roles, transaction codes and
+# authorization objects (issue #304). Write-back (role assignment through provisioning) is gated by
+# write_mode and the second approver; the integration's own rights cannot be read from the ERP, so
+# the base write-scope check is attested instead.
+template: erp
+version: 1.0.0
+extends: base@1
+display_name: ERP (SAP, Oracle)
+connector_types: [sap, oracle]
+role: account_source
+default_correlation_key: id
+default_hr_id_attribute: employeeNumber
+required_attributes:
+  user: [id, username, status]
+recommended_attributes:
+  user: [employeeNumber]
+items:
+  - id: erp.endpoint
+    title: Base URL is HTTPS with a verified certificate and reachable through safehttp
+    category: transport
+    level: required
+    why: "Clear text or an unverified certificate exposes the integration's token and the authorization data."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the system's HTTPS host name (no path); fix the certificate chain if it is not trusted."
+    config_fields: [base_url]
+
+  - id: erp.auth
+    title: OAuth client credentials accepted (client id in Settings, secret stored sealed)
+    category: access
+    level: required
+    why: "Proves the client id and secret before any read."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Check the client id and store the client secret again."
+    depends_on: [erp.endpoint]
+    config_fields: [base_url, settings, credential]
+
+  - id: erp.integration.dedicated
+    title: Integration client is dedicated to Tessera with display-only authorizations
+    category: access
+    level: required
+    why: "A shared or dialog user blurs accountability; role and user display needs no change authorization."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a technical user and OAuth client for Tessera; grant display authorizations on roles and users only."
+    config_fields: [settings, credential]
+
+  - id: erp.read
+    title: Roles and users are readable
+    category: scope
+    level: required
+    why: "A connector that authenticates but reads nothing leaves critical roles unreviewed without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Grant the integration display access to roles (with their transactions and authorization objects) and users."
+    depends_on: [erp.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: erp.status
+    title: User lock and validity mapped to the account status vocabulary
+    category: account_status
+    level: required
+    why: "A locked or expired user must not read as active access."
+    verify:
+      - kind: data
+        check: status_mapped
+    remediation:
+      hint: "Automatic: the reader maps lock and valid-to; report an unmapped value."
+    depends_on: [erp.read]
+
+  - id: erp.key.id
+    title: ERP user id is the correlation key (not the e-mail address)
+    category: identity_keys
+    level: required
+    why: "E-mail addresses change and repeat across ERP systems; the user id does not."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: id }
+    remediation:
+      hint: "Keep id as the correlation key."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: erp.privileged
+    title: Critical transaction codes and authorization objects are tagged privileged
+    category: groups
+    level: recommended
+    why: "SAP_ALL, user and role administration, debug and table access are the access a segregation-of-duties review reads first."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Confirm with the ERP security owner that the built-in critical list covers the landscape."
+
+  - id: erp.assignments.dated
+    title: Role assignment validity dates are read and respected
+    category: groups
+    level: recommended
+    why: "An expired assignment is not access; a future one is not yet."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Confirm a sample role assignment with a valid-to date in the console shows as expired in Tessera."

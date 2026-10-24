@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/agent"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
@@ -304,6 +305,11 @@ func (s *Service) Create(c *store.TenantTx, in CreateInput, actor string, now ti
 	}
 	if in.System == "" {
 		in.System = demoSystems[in.ConnectorType]
+	}
+	if gt, ok := governed.Lookup(in.ConnectorType); ok && in.System == "" {
+		// the system its connector writes into the graph, so counts, the call guard and the
+		// legacy env connector of the same system line up
+		in.System = gt.System
 	}
 	if in.System == "" {
 		in.System = strings.Trim(regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(strings.ToLower(in.Name), "-"), "-")

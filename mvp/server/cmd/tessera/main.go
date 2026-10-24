@@ -100,6 +100,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/all"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed/wire"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/attest"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/deprov"
@@ -538,6 +539,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	rsvc.Runner.SCIM.Client = outbound
+	rsvc.Runner.Gov = wire.Options(outbound, connsync.RuntimeFromConfig(cfg), cfg.LoaderDataDir, cfg.Env == config.Prod)
 	all.Register(outbound, connsync.RuntimeFromConfig(cfg)) // okta and entra connectors use the shared client
 	obs.SetPoolStats(st.PoolStats)
 	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)

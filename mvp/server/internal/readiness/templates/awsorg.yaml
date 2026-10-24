@@ -1,0 +1,83 @@
+# AWS Organizations and IAM (issue #304 and the AWS effective-permission work): read-only snapshots
+# of IAM, organization policies and resource policies through sts:AssumeRole into a reader role per
+# account. The snapshot feeds the effective-permission evaluator, not the account graph, so the
+# staged account data checks do not apply (inventory).
+template: awsorg
+version: 1.0.0
+extends: base@1
+display_name: AWS Organizations and IAM
+connector_types: [awsorg]
+role: account_source
+inventory: true
+default_correlation_key: arn
+required_attributes:
+  user: [arn]
+items:
+  - id: aws.assume
+    title: Access keys can assume the reader role in the management account (or the first account)
+    category: access
+    level: required
+    why: "Proves the keys, the role name and the external id before any read."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Check the role name and external id against the reader role's trust policy; store the access keys again as JSON."
+    config_fields: [settings, credential]
+
+  - id: aws.keys.assume_only
+    title: The access keys' only permission is sts:AssumeRole on the reader role
+    category: access
+    level: required
+    why: "Everything the connector reads it reads as the role; the keys themselves must not read or change anything."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Attach a policy to the key's user allowing only sts:AssumeRole on arn:aws:iam::*:role/<reader role>."
+    config_fields: [settings, credential]
+
+  - id: aws.role.readonly
+    title: Reader role is read-only and trusts Tessera only with the external id
+    category: access
+    level: required
+    why: "A write permission on the reader role turns a leaked key into a change path; an external id prevents the confused-deputy problem."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Use the reader policy listed in the AWS connector page, require sts:ExternalId in the trust policy."
+    config_fields: [settings]
+
+  - id: aws.read
+    title: The organization (or the configured accounts) is readable through the role
+    category: scope
+    level: required
+    why: "A connector that assumes the role but reads no accounts leaves AWS access unanalysed."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "For an organization set the management account id and allow organizations:Describe* and List* for the role there."
+    depends_on: [aws.assume]
+    config_fields: [settings, credential]
+
+  - id: aws.scope.regions
+    title: Regions cover where the accounts run resources with resource policies
+    category: scope
+    level: recommended
+    why: "Regional services (KMS, SQS, SNS, Secrets Manager, Lambda, ECR, VPC endpoints) are read only in the listed regions."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "List every region in use; the first is where STS is called."
+    config_fields: [settings]
+
+  - id: aws.scope.accounts
+    title: Account scope confirmed against the organization's account list
+    category: scope
+    level: recommended
+    why: "An account left out is an account whose access is not evaluated."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Compare the account count in the read probe with the organization's account list."
+    config_fields: [settings]

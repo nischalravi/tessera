@@ -115,6 +115,8 @@ server/
     keys/               per-tenant ES256 signing keys and the platform Ed25519 key: rotation, JWKS
     safehttp/           SSRF-guarded outbound HTTP client (https only, address checks after DNS)
     connectors/scim/    read-only live prober for generic SCIM 2.0 applications (readiness DR-18)
+    connectors/governed/  governed connection types of the existing connectors: registry, settings
+                        validation; governed/wire opens the connector and the read-only prober
     ratelimit/          keyed token-bucket limiter with a bounded key set
     oauth/              the OAuth authorization server (per-tenant issuer): device grant, refresh
                         rotation with reuse detection, client credentials for machine clients
@@ -325,6 +327,67 @@ the LDAP bind password); without one the live checks report an error instead of 
 unauthenticated. The client is the shared outbound one, with the connection's configured port
 allowed (`safehttp.WithConfiguredPorts`). Tests use an in-process SCIM server
 with misbehaviour switches (`internal/connectors/scim/fakescim_test.go`).
+
+**Governed connector types (issue #564).** The connectors that were only reachable through
+`TESSERA_CONNECTORS` and their own pages are now creatable from Settings, Connections, New
+connection, with a readiness template, a checklist and the same two-person activation as every
+other type. Nothing about what a connector reads or writes changed: a governed connection builds
+the connector through the connector's own `FromEnv` mapping (`pam.ConfigFromEnv`,
+`erp.ConfigFromEnv`, `githubscan.RESTConfigFromEnv`), with the connection's settings standing in
+for the `TESSERA_*` variables and the sealed credential behind an `env:` reference that only the
+builder can resolve (never the process environment).
+
+| Gallery category | Connector types | Template | Credential (sealed) | Read by |
+|---|---|---|---|---|
+| Cloud & IaaS | `awsorg` | `awsorg` | access keys as JSON; the keys may only assume the reader role | hand-over to the AWS connectors |
+| Source code | `githubscan` | `githubscan` | read-only token | the connector sync |
+| ERP | `sap`, `oracle` | `erp` | OAuth client secret | the connector sync |
+| Privileged access | `cyberark`, `beyondtrust`, `delinea` | `pam` | password (BeyondTrust: API key) | the connector sync |
+| Contractor & VMS | `fieldglass`, `beeline`, `csvfeed` | `vms` | `client_id:client_secret` (feed: bearer token) | hand-over to the contractor feeds |
+| AI agents | `agentcore` | `agentcore` | none (recorded snapshot) | the connector sync |
+
+Connection config gains one field, `settings` (string to string), whose keys are closed per type
+and validated at the API boundary (`internal/connectors/governed`: `username`, `client_id`, `org`,
+`snapshot`, `regions`, `external_id`, `api_root`, `token_path`, `workers_path`, `csv_path`,
+`page_size`, `role_name`, `account_ids`, `management_account_id`, `identity_center_region`).
+`base_url` is an https host without a path (GitHub Enterprise Server's API URL ends in
+`/api/v3`; AWS and AgentCore take none). The system name is the one the connector writes
+(`cyberark`, `sap`, `github-scan`, `aws-agentcore`, ...), so counts and call limits line up with the
+env-configured connector of the same system, which keeps working unchanged.
+
+*Checklist.* Each template extends `base` and adds: `endpoint_reachable` (verified TLS through
+safehttp), `auth_ok` (the connector's own login: vault logon, OAuth token, API token, AssumeRole),
+and the new `read_probe` (the connector's own reader returns objects, counts only; an empty read
+fails rather than looking clean). The probers (`governed/wire`) call the connector's client and read
+only; their tests run against the existing fakes (`pamfake`, `erpfake`, `vmsfake`, the AWS replay
+fixtures, a GitHub stub). Write-back is the existing gate: a vault or ERP connection with
+`write_mode` other than `off` needs a second approver, the base `write_scope` check applies, and for
+a vault it is a real read (`effective_rights` lists the safes where the service user holds
+Manage Safe Members; read-only connections must hold none). An ERP cannot report the integration's
+rights, so that check is *unsupported* and a named person attests instead (`on_unsupported`).
+Inventory templates (`githubscan`, `vms`, `awsorg`: findings, contractor records and AWS snapshots,
+not an account population) mark their account data checks (key, fill and correlation rates) not
+applicable instead of failing on zero accounts.
+
+*Wiring.* The dry run discovers through the real connector (staged, reconciled, live graph
+untouched; the connector result is given the class counts the data checks read). Activation then:
+for `githubscan`, `sap`, `oracle`, the vaults and `agentcore` queues a `connector_sync` job (a
+remote read must not hold the activation transaction), and from then on the worker
+(`tessera worker` and the in-process pool) and `POST /api/connectors/sync` open the connectors of
+the tenant's live governed connections (`readiness.Service.GovernedConnectors`: settings from the
+live revision, the credential opened with the KEK inside the read transaction) next to the
+configured ones; a connection that cannot be opened is named in `governed_not_opened`, the others
+are still read. For `awsorg`, `fieldglass`, `beeline` and `csvfeed` activation hands the connection
+over to the feature that already owns those sources: it creates the AWS connector
+(`awsorg.Service.CreateConnector`, keeping the external id the probe used) or the contractor feed
+(same sealing and audit as the Contractors page), idempotently by name, and audits
+`connection.handover`. Changes to the settings after activation are then made on that feature's page.
+
+*AgentCore* is fixture-only (no live client): the snapshot is a file in the tenant's own directory
+under `TESSERA_LOADER_DATA_DIR` (a plain file name, symbolic links that leave the directory are
+refused) and the connection is refused in prod. *Flat-file apps* stay a separate feature on
+purpose (`/api/flatfile`): they are disconnected applications fed by uploaded files, with no
+endpoint, credential or live read for a connection to govern.
 **After activation** (design §7.4, §7.5). Activation stores a baseline of the live revision
 (`readiness_baselines`: score, item states, finding and object counts, config hash). A background
 scheduler (`readiness.Scheduler`, started by `tessera serve`, a pass every 15 minutes) re-runs the

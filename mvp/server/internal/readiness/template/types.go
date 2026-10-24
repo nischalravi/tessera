@@ -111,12 +111,16 @@ func (it *Item) OnlyAttestation() bool {
 
 // Template is one parsed template file.
 type Template struct {
-	ID                    string              `yaml:"template"`
-	Version               string              `yaml:"version"`
-	Extends               string              `yaml:"extends,omitempty"`
-	DisplayName           string              `yaml:"display_name"`
-	ConnectorTypes        []string            `yaml:"connector_types"`
-	Role                  string              `yaml:"role,omitempty"`
+	ID             string   `yaml:"template"`
+	Version        string   `yaml:"version"`
+	Extends        string   `yaml:"extends,omitempty"`
+	DisplayName    string   `yaml:"display_name"`
+	ConnectorTypes []string `yaml:"connector_types"`
+	Role           string   `yaml:"role,omitempty"`
+	// Inventory marks a source that reports findings, snapshots or contractor
+	// records rather than an account population: the staged account data checks
+	// (key, fill and correlation rates) do not apply to it.
+	Inventory             bool                `yaml:"inventory,omitempty"`
 	DefaultCorrelationKey string              `yaml:"default_correlation_key,omitempty"`
 	DefaultHRIDAttribute  string              `yaml:"default_hr_id_attribute,omitempty"`
 	HostAllowlist         []string            `yaml:"host_allowlist,omitempty"`
@@ -134,6 +138,7 @@ type Resolved struct {
 	DisplayName           string              `json:"display_name"`
 	ConnectorTypes        []string            `json:"connector_types"`
 	Role                  string              `json:"role"`
+	Inventory             bool                `json:"inventory,omitempty"`
 	DefaultCorrelationKey string              `json:"default_correlation_key"`
 	DefaultHRIDAttribute  string              `json:"default_hr_id_attribute"`
 	HostAllowlist         []string            `json:"host_allowlist,omitempty"`

@@ -3380,6 +3380,8 @@ export interface ConnConfig {
   expected_counts?: { users: number; groups: number }; stale_days?: number; sync_schedule?: string;
   write_mode?: "off" | "dry_run" | "scoped"; write_scope?: string[]; hybrid?: boolean; use_dirsync?: boolean;
   privileged_expected?: Record<string, string[]>; demo_fixed_checks?: string[];
+  /** Non-secret options of the governed connector types (awsorg, githubscan, sap, oracle, vaults, contractor feeds, agentcore). */
+  settings?: Record<string, string>;
 }
 
 export interface RevisionView {

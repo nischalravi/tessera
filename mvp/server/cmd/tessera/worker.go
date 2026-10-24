@@ -20,10 +20,14 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/all"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed/wire"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/queue"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/worker"
 )
 
@@ -122,9 +126,21 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	all.Register(outbound, connsync.RuntimeFromConfig(cfg))
+	// Governed connections (Settings, Connections): the worker opens their connectors with
+	// the same readiness service the API validates them with.
+	templates, err := template.Default()
+	if err != nil {
+		return err
+	}
+	rsvc := readiness.NewService(templates, cfg.Env)
+	rsvc.Runner.Live.Sealer = sealer
+	rsvc.Runner.Gov = wire.Options(outbound, connsync.RuntimeFromConfig(cfg), cfg.LoaderDataDir, cfg.Env == config.Prod)
 	guard := &worker.Guard{DB: st, Clock: clock, Defaults: &worker.Limits{MaxConcurrency: o.targetConcurrency,
 		RatePerMin: o.targetRate, BreakerThreshold: o.breakerFailures, BreakerCooldown: o.breakerCooldown}}
 	deps := &worker.Deps{DB: st, Clock: clock, Log: logger.With("component", "worker"), SyncSchedule: cfg.ConnectorSyncSchedule, Guard: guard,
+		Governed: func(ctx context.Context, t tenancy.ID, now time.Time) ([]connectors.Connector, map[string]error, error) {
+			return rsvc.GovernedConnectors(ctx, st, t, now)
+		},
 		Connectors: func(now time.Time) ([]connectors.Connector, error) { return connectors.Load("", now) },
 		Provision: &provision.Engine{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Guard: guard,
 			Log: logger.With("component", "provisioning")}}
