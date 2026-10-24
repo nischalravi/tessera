@@ -23,9 +23,11 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/entra"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
@@ -49,6 +51,10 @@ import (
 //
 // Generic REST (issue #552): "rest" reads users, groups and entitlements from any HTTP/JSON system as
 // a declarative spec describes (TESSERA_REST_SPEC, TESSERA_REST_CREDENTIAL; see internal/connectors/restgen).
+//
+// Cloud entitlements (issue #557): "azure" reads Azure RBAC role assignments, role definitions and PIM
+// eligible assignments (TESSERA_AZURE_*); "gcp" reads Google Cloud IAM policies, roles and service
+// accounts (TESSERA_GCP_*). Both reach the public cloud only: an endpoint override is refused in prod.
 //
 // Register adds the okta, entra, google, workday, rest, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
@@ -86,6 +92,12 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	// policy and ignores hc.
 	connectors.Factories["sql"] = func(time.Time) (connectors.Connector, error) {
 		return sqldb.FromEnv(os.Getenv, os.ReadFile, rt)
+	}
+	connectors.Factories["azure"] = func(now time.Time) (connectors.Connector, error) {
+		return azurerbac.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["gcp"] = func(now time.Time) (connectors.Connector, error) {
+		return gcpiam.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
 	}
 	connectors.Factories["aws-agentcore"] = func(now time.Time) (connectors.Connector, error) {
 		return agentcore.FromEnv(os.Getenv, now)

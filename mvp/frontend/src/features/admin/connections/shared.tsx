@@ -129,6 +129,8 @@ export const CONNECTOR_TYPES: { id: string; label: string; template: string; dem
   { id: "scim:keycloak", label: "Keycloak (SCIM extension)", template: "scim_app", demo: false, blurb: "Needs a SCIM extension installed." },
   { id: "scim:auth0", label: "Auth0", template: "scim_app", demo: false, blurb: "Needs a plan with Enterprise Connections." },
   { id: "awsorg", label: "AWS Organizations and IAM", template: "awsorg", demo: false, blurb: "Reader role in each account through sts:AssumeRole; feeds the effective-permission analysis." },
+  { id: "azurerbac", label: "Azure RBAC", template: "azurerbac", demo: false, blurb: "Role assignments, role definitions and PIM eligible assignments of subscriptions and management groups, read-only." },
+  { id: "gcpiam", label: "Google Cloud IAM", template: "gcpiam", demo: false, blurb: "IAM policies of an organization, folders and projects, their roles and service accounts, read-only." },
   { id: "githubscan", label: "GitHub (code scan)", template: "githubscan", demo: false, blurb: "Reads MCP configuration and agent credentials from an organization's repositories, read-only." },
   { id: "sap", label: "SAP", template: "erp", demo: false, blurb: "Roles, transaction codes and authorization objects as fine-grained access." },
   { id: "oracle", label: "Oracle Fusion Applications", template: "erp", demo: false, blurb: "Roles and privileges of Oracle Fusion as fine-grained access." },

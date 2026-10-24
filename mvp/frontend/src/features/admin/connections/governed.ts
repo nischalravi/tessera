@@ -26,6 +26,8 @@ export const SETTING_KEYS: Record<string, string[]> = {
   beeline: ["workers_path", "token_path", "page_size"],
   csvfeed: ["csv_path"],
   agentcore: ["snapshot"],
+  azurerbac: ["tenant_id", "client_id", "subscription_ids", "management_group_ids", "include_eligible"],
+  gcpiam: ["organization_id", "folder_ids", "project_ids"],
 };
 
 const VAULT_URL = { label: "Vault URL", hint: "The vault's HTTPS host name, no path.", required: true };
@@ -84,6 +86,24 @@ export const GOVERNED: Record<string, GovType> = {
     baseUrl: { label: "Base URL", hint: "HTTPS host name, no path.", required: true },
     settings: [{ key: "csv_path", label: "CSV path under the base URL", required: true, hint: "The feed is fetched over HTTPS. Uploads stay on the Contractors page." }],
     credential: { label: "Bearer token", hint: "Sent as Authorization: Bearer." },
+  },
+  azurerbac: {
+    settings: [
+      { key: "tenant_id", label: "Directory (tenant) id", required: true, hint: "The Entra tenant GUID." },
+      { key: "client_id", label: "Application (client) id", required: true, hint: "A service principal with Reader at the scopes to read." },
+      { key: "subscription_ids", label: "Subscription ids", hint: "Comma separated GUIDs. Empty with no management groups: every subscription the application can list." },
+      { key: "management_group_ids", label: "Management group ids", hint: "Comma separated. Empty with no subscriptions: every management group it can list." },
+      { key: "include_eligible", label: "Read PIM eligible assignments", hint: "true or false (default false). Needs Entra ID P2." },
+    ],
+    credential: { label: "Client secret or certificate", hint: "The client secret, or a PEM holding the certificate and its RSA private key (certificate sign-in).", area: true },
+  },
+  gcpiam: {
+    settings: [
+      { key: "organization_id", label: "Organization id", hint: "The numeric organization id; its folders and projects are walked." },
+      { key: "folder_ids", label: "Folder ids", hint: "Comma separated numeric ids; each is walked. Optional." },
+      { key: "project_ids", label: "Project ids", hint: "Comma separated. Set at least one of organization, folders or projects." },
+    ],
+    credential: { label: "Service account key (JSON)", hint: "The whole key file of a service account with viewer roles (Security Reviewer).", area: true },
   },
   agentcore: {
     settings: [{ key: "snapshot", label: "Snapshot file", required: true, hint: "A recorded AgentCore snapshot (JSON) in this tenant's directory. There is no live AgentCore client; refused in prod." }],

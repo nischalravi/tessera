@@ -1,0 +1,83 @@
+# Azure RBAC (issue #557): read-only role assignments, role definitions and PIM eligible assignments
+# of the subscriptions and management groups of one Entra tenant, over Azure Resource Manager
+# (Microsoft.Authorization). The snapshot feeds the effective-permission analysis, not the account
+# directory, so the staged account data checks do not apply (inventory). There is no write-back.
+template: azurerbac
+version: 1.0.0
+extends: base@1
+display_name: Azure RBAC
+connector_types: [azurerbac]
+role: account_source
+inventory: true
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id]
+items:
+  - id: azure.auth
+    title: Client credentials accepted for Azure Resource Manager (tenant and client id in Settings, secret or certificate stored sealed)
+    category: access
+    level: required
+    why: "Proves the tenant, the application and its credential before any read."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Check the tenant and client GUIDs and store the client secret (or a PEM with the certificate and its RSA private key) again."
+    config_fields: [settings, credential]
+
+  - id: azure.sp.reader
+    title: The application holds Reader (and no write role) at the scopes it reads
+    category: access
+    level: required
+    why: "Role assignments are read with Microsoft.Authorization read rights only; a write or Owner role turns a leaked credential into a change path."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Assign Reader to the application at the tenant root management group (or at each subscription); do not assign Contributor or Owner."
+    config_fields: [settings, credential]
+
+  - id: azure.read
+    title: Subscriptions or management groups are listed and their role assignments are readable
+    category: scope
+    level: required
+    why: "A connector that authenticates but reads no assignments leaves Azure access unanalysed without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Grant Reader where the probe reports nothing; list the subscription or management group ids in Settings to narrow the read."
+    depends_on: [azure.auth]
+    config_fields: [settings, credential]
+
+  - id: azure.scope.coverage
+    title: Scope covers every subscription that holds resources (the tenant root management group, or each subscription listed)
+    category: scope
+    level: recommended
+    why: "A subscription left out is a subscription whose access is not evaluated."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Compare the scope count in the read probe with the subscriptions in the Azure portal."
+    config_fields: [settings]
+
+  - id: azure.pim
+    title: PIM eligible assignments are read when Privileged Identity Management is in use
+    category: scope
+    level: recommended
+    why: "An eligible assignment is access one activation away; leaving it out understates standing and reachable privilege."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set Read PIM eligible assignments to true (Entra ID P2) and confirm the application can read roleEligibilityScheduleInstances."
+    config_fields: [settings]
+
+  - id: azure.principals
+    title: Principals are object ids; names and group members come from the Entra connection
+    category: identity_keys
+    level: optional
+    why: "Role assignments name principals by object id only; correlating them to people needs the Entra connector of the same tenant."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add an Entra connection for the tenant so object ids resolve to users, groups and applications."
