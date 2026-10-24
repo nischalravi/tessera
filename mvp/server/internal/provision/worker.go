@@ -55,6 +55,8 @@ const WorkerActor = "provisioning.worker"
 type Settings struct {
 	// Dialect is the SCIM dialect: "standard" or "entra".
 	Dialect string `json:"dialect,omitempty"`
+	// Preset is the SCIM vendor preset (provision/scim) whose PATCH quirks the client applies.
+	Preset string `json:"preset,omitempty"`
 	// Fault is the fake target's fault mode (dev only).
 	Fault string `json:"fault,omitempty"`
 	// OnDeprovision says what happens to a person's account here once the grace
@@ -72,6 +74,19 @@ type Settings struct {
 	// Discovery is the last read of the target's ServiceProviderConfig and
 	// ResourceTypes (issue #542). It is informational and never gates provisioning.
 	Discovery *DiscoveryRecord `json:"discovery,omitempty"`
+}
+
+// scimClient builds the SCIM client of a target: its dialect, the quirks of its
+// vendor preset, and the capabilities its last discovery recorded.
+func (s Settings) scimClient(hc *http.Client, baseURL, token string) *scim.Client {
+	c := &scim.Client{HTTP: hc, BaseURL: baseURL, Token: token, Dialect: s.Dialect}
+	if p, ok := scim.PresetByID(s.Preset); ok {
+		c.Quirks = p.ClientQuirks()
+	}
+	if s.Discovery != nil {
+		c.SetCapabilities(s.Discovery.Capabilities)
+	}
+	return c
 }
 
 // Engine sends queued operations to their targets and verifies them.
@@ -268,7 +283,7 @@ func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) 
 	}
 	switch pt.Kind {
 	case KindSCIM, KindFake:
-		c := &scim.Client{HTTP: hc, BaseURL: pt.BaseURL, Token: token, Dialect: s.Dialect}
+		c := s.scimClient(hc, pt.BaseURL, token)
 		if pt.Kind == KindFake && s.Fault != "" {
 			c.Header = http.Header{"X-Fake-Fault": {s.Fault}}
 		}

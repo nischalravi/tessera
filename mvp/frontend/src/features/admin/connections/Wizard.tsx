@@ -7,7 +7,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { CircleCheck, FlaskConical, Play, Power, ShieldCheck, Trash2, Wand2 } from "lucide-react";
 import {
-  Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, readiness, useApi,
+  Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, ScimPreset, readiness, useApi,
 } from "../../../api";
 import { SourceDeletionGuard } from "../SourceDeletionGuard";
 import {
@@ -22,18 +22,24 @@ export function NewConnection() {
   const nav = useNavigate();
   const toast = useToast();
   const { data: existing } = useApi<{ connector_type?: string; legacy?: boolean }[]>("/connections");
+  const { data: presets } = useApi<ScimPreset[]>("/scim/presets");
   const [type, setType] = useState("demo-ad");
   const [name, setName] = useState("Active Directory (demo)");
   const [busy, setBusy] = useState(false);
+  // A SCIM vendor tile has the id "scim:<preset>" and creates a scim_app connection pre-filled from the preset.
+  const presetOf = (id: string) => (id.startsWith("scim:") ? (presets ?? []).find((p) => `scim:${p.id}` === id) : undefined);
   const pick = (id: string) => {
     setType(id);
-    setName(CONNECTOR_TYPES.find((t) => t.id === id)!.label);
+    setName(presetOf(id)?.name ?? CONNECTOR_TYPES.find((t) => t.id === id)?.label ?? "");
   };
   const create = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     try {
-      const c = await readiness.create({ name: name.trim(), connector_type: type });
+      const preset = presetOf(type);
+      const c = await readiness.create(preset
+        ? { name: name.trim(), connector_type: "scim_app", config: { preset: preset.id, correlation_key: preset.mapping.username } }
+        : { name: name.trim(), connector_type: type });
       toast(`${c.name} created as a draft`);
       nav(`/admin/connections/${c.id}?step=connect`);
     } catch (x) {
@@ -60,6 +66,26 @@ export function NewConnection() {
               </label>
             ))}
           </div>
+          {(["Cloud & SaaS", "Identity providers"] as const).map((cat) => {
+            const tiles = (presets ?? []).filter((p) => p.category === cat);
+            return tiles.length === 0 ? null : (
+              <div key={cat} className="stack-sm">
+                <h3>{cat} (SCIM 2.0)</h3>
+                {/* Logos arrive with the app-gallery picker (PR #551, simple-icons); until then each tile shows a neutral glyph. */}
+                <div className="type-grid" role="radiogroup" aria-label={`${cat} SCIM presets`}>
+                  {tiles.map((p) => (
+                    <label key={p.id} className={`type-card ${type === `scim:${p.id}` ? "on" : ""}`}>
+                      <input type="radio" name="type" value={`scim:${p.id}`} checked={type === `scim:${p.id}`} onChange={() => pick(`scim:${p.id}`)} />
+                      <span className="stack-sm">
+                        <span className="row tight"><span aria-hidden="true">▣</span><b>{p.name}</b><Badge tone="outline">Needs DR-10+</Badge></span>
+                        <span className="small faint">{p.publisher}. {p.hint}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
           {!CONNECTOR_TYPES.find((t) => t.id === type)?.demo && (
             <Callout tone="warn">Real connector types can be set up and validated against the simulated scenario, but simulated results never satisfy their gates, and they cannot be activated until tenancy, RBAC and step-up land (Phase 0, DR-10).</Callout>
           )}
@@ -108,11 +134,19 @@ function Field({ label, hint, children }: { label: string; hint?: ReactNode; chi
   return <label className="field">{label}{children}{hint && <span className="hint">{hint}</span>}</label>;
 }
 
+/** Hint under the SCIM base URL: the vendor's documented URL shape and plan note when the connection came from a preset. */
+function scimUrlHint(preset: string | undefined, presets: ScimPreset[] | null | undefined): ReactNode {
+  const p = preset ? presets?.find((x) => x.id === preset) : undefined;
+  if (!p) return "HTTPS only.";
+  return <>HTTPS only.{p.base_url_example ? <> {p.name} URLs look like <code>{p.base_url_example}</code>.</> : <> {p.name}'s URL shape is not confirmed; any HTTPS URL is accepted.</>} {p.hint}</>;
+}
+
 /** The config form of one step; saves only the fields that changed. */
 function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect" | "scope" | "mapping"; onSaved: () => void }) {
   const rev = conn.pending_revision ?? conn.active_revision!;
   const cfg = rev.config;
   const tid = conn.template.id;
+  const { data: presets } = useApi<ScimPreset[]>(cfg.preset ? "/scim/presets" : null);
   const toast = useToast();
   const [v, setV] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -198,7 +232,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             {tid === "entra" && <>{input("tenant_id", "Tenant id", "The directory GUID from the Overview page, not a domain.")}{input("cloud", "Cloud", "global, usgov or china")}</>}
             {tid === "google" && <>{input("customer", "Customer", "my_customer or the customer id")}{input("domain", "Primary domain")}</>}
             {tid === "workday" && <>{input("tenant_host", "Tenant host", "*.workday.com or *.myworkday.com")}{input("interface", "Interface", "get_workers or raas")}{input("time_zone", "Tenant time zone")}</>}
-            {tid === "scim_app" && input("base_url", "SCIM base URL", "HTTPS only.")}
+            {tid === "scim_app" && input("base_url", "SCIM base URL", scimUrlHint(cfg.preset, presets))}
             {input("technical_owner", "Technical owner", "Accountable for the connection and its findings (base.owner).")}
             {input("business_owner", "Business owner")}
           </div>
