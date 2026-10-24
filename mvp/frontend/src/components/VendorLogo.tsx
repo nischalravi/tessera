@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { siGithub, siGoogle, siOkta, siSnowflake } from "simple-icons";
+import { siAtlassian, siAuth0, siBox, siDatabricks, siDropbox, siGithub, siGoogle, siKeycloak, siOkta, siSnowflake, siZendesk, siZoom } from "simple-icons";
 
 /**
  * A recognizable mark per system on a fixed light "logo plate" (white, subtle border, both themes) so brand colours
@@ -12,6 +12,14 @@ const BRAND: Record<string, { path: string; hex: string }> = {
   google: { path: siGoogle.path, hex: siGoogle.hex },
   github: { path: siGithub.path, hex: siGithub.hex },
   snowflake: { path: siSnowflake.path, hex: siSnowflake.hex },
+  zoom: { path: siZoom.path, hex: siZoom.hex },
+  box: { path: siBox.path, hex: siBox.hex },
+  dropbox: { path: siDropbox.path, hex: siDropbox.hex },
+  zendesk: { path: siZendesk.path, hex: siZendesk.hex },
+  databricks: { path: siDatabricks.path, hex: siDatabricks.hex },
+  atlassian: { path: siAtlassian.path, hex: siAtlassian.hex },
+  auth0: { path: siAuth0.path, hex: siAuth0.hex },
+  keycloak: { path: siKeycloak.path, hex: siKeycloak.hex },
 };
 
 const stroke = { fill: "none", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" } as const;
@@ -30,6 +38,15 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   aws: { color: "#b45309", glyph: <g {...stroke} stroke="#b45309"><path d="M7 18a4 4 0 01-.6-7.95A5.5 5.5 0 0117 9.5a4.2 4.2 0 01.5 8.5z" /><path d="M9 21h6" /></g> },
   // cloud with a person (SaaS CRM)
   salesforce: { color: "#0b6fa8", glyph: <g {...stroke} stroke="#0b6fa8"><path d="M7 19a4 4 0 01-.6-7.95A5.5 5.5 0 0117 10.5a4.2 4.2 0 01.5 8.5z" /></g> },
+  // no simple-icons mark in 16.30.0 for these four: original glyphs, not vendor artwork
+  // speech bubble (chat workspace)
+  slack: { color: "#611f69", glyph: <g {...stroke} stroke="#611f69"><path d="M4 5.5h16v10H11l-4.5 4v-4H4z" /><path d="M8 9.5h8M8 12.5h5" /></g> },
+  // key (identity provider with a login)
+  ping: { color: "#b3282d", glyph: <g {...stroke} stroke="#b3282d"><circle cx="8" cy="12" r="4" /><path d="M12 12h9M18 12v3.5M21 12v2.5" /></g> },
+  // person in a circle (single sign-on portal)
+  onelogin: { color: "#1d4ed8", glyph: <g {...stroke} stroke="#1d4ed8"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="10" r="2.5" /><path d="M7.5 17c.8-2.4 2.6-3.5 4.5-3.5s3.7 1.1 4.5 3.5" /></g> },
+  // cloud with a lock (cloud directory)
+  jumpcloud: { color: "#0f766e", glyph: <g {...stroke} stroke="#0f766e"><path d="M7 18a4 4 0 01-.6-7.95A5.5 5.5 0 0117 9.5a4.2 4.2 0 01.5 8.5z" /><rect x="9.5" y="12" width="5" height="4" rx=".8" /></g> },
   // protocol glyph: two-way arrows
   scim_app: { color: "#475569", glyph: <g {...stroke} stroke="#475569"><path d="M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4" /></g> },
 };
