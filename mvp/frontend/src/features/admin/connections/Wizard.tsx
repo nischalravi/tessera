@@ -19,6 +19,7 @@ import {
 } from "./shared";
 import { CAPABILITIES, CATEGORIES, Capability, Category, filterGallery, groupGallery, metaOf, nextIndex } from "./gallery";
 import { GOVERNED, settingValues, settingsPatch } from "./governed";
+import { BASE_URL_FIELDS } from "./baseUrl";
 
 // ---------------------------------------------------------------- step 1
 /** The spec as editable text: JSON, since that is what the server stores. */
@@ -331,7 +332,8 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             {tid === "entra" && <>{input("tenant_id", "Tenant id", "The directory GUID from the Overview page, not a domain.")}{input("cloud", "Cloud", "global, usgov or china")}</>}
             {tid === "google" && <>{input("customer", "Customer", "my_customer or the customer id")}{input("domain", "Primary domain")}</>}
             {tid === "workday" && <>{input("tenant_host", "Tenant host", "*.workday.com or *.myworkday.com")}{input("interface", "Interface", "get_workers or raas")}{input("time_zone", "Tenant time zone")}</>}
-            {tid === "scim_app" && input("base_url", "SCIM base URL", scimUrlHint(cfg.preset, presets))}
+            {tid === "scim_app" && input("base_url", BASE_URL_FIELDS.scim_app.label, scimUrlHint(cfg.preset, presets))}
+            {!gov && tid !== "scim_app" && BASE_URL_FIELDS[tid] && input("base_url", BASE_URL_FIELDS[tid].label, BASE_URL_FIELDS[tid].hint, { "aria-required": true })}
             {gov?.baseUrl && input("base_url", gov.baseUrl.label, gov.baseUrl.hint, { "aria-required": gov.baseUrl.required })}
             {gov?.settings.map((f) => <Fragment key={f.key}>{input(`settings.${f.key}`, f.label, f.hint, { "aria-required": !!f.required })}</Fragment>)}
             {tid === "rest_generic" && (
