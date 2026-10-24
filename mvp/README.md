@@ -40,6 +40,7 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
   (tenant admin) or Pat (policy admin) with a passkey.
 * API: http://127.0.0.1:8000. OpenAPI docs are at http://127.0.0.1:8000/docs
   Every `/api/...` route is also served under `/api/v1/...` (same auth, audit and limits); `Deprecation`/`Sunset` headers and the compatibility policy are in `docs/api/compatibility.md` (issue #587).
+  On `/api/v1` errors are one envelope `{"error":{"code","message","field?"}}` and lists are `{"items","next_cursor"}` with `limit` and `cursor` (`internal/api/v1_contract.go`); the unversioned paths and their parity fixtures are unchanged.
   The complete OpenAPI 3.1 document of every registered route (permission, token scopes, step-up, errors) is `GET /api/openapi.json`, built from the route table (issue #587); `/openapi.json` stays the original core-route document.
 * Dev IdP: http://127.0.0.1:8001 (see [Signing in](#signing-in))
 
