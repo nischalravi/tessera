@@ -254,9 +254,9 @@ func (f *Fake) read(w http.ResponseWriter, r *http.Request, table string) {
 	out := make([]Row, 0, len(page))
 	for _, row := range page {
 		o := Row{}
-		for k, v := range row { // keys come from the stored row, never from the request
+		for k, v := range row { // stored keys came from request bodies: escaped like the values
 			if len(want) == 0 || want[k] {
-				o[k] = esc(v)
+				o[html.EscapeString(k)] = esc(v)
 			}
 		}
 		out = append(out, o)
