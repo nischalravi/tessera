@@ -11,6 +11,7 @@ const T = [
   ["ldap", "OpenLDAP / 389-DS", "Generic LDAP", false], ["entra", "Microsoft Entra ID", "Microsoft Graph", false],
   ["okta", "Okta", "OAuth service app", false], ["google", "Google Workspace", "Domain-wide delegation", false],
   ["workday", "Workday", "Integration system user", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false],
+  ["sql", "Database (SQL)", "PostgreSQL, MySQL, SQL Server or Oracle", false],
 ].map(([id, label, blurb, demo]) => ({ id, label, blurb, demo })) as { id: string; label: string; blurb: string; demo: boolean }[];
 const none = { q: "", category: "" as const, capability: "" as const };
 const ids = (f: Partial<typeof none>) => filterGallery(T, { ...none, ...f }).map((t) => t.id);
@@ -26,6 +27,8 @@ test("search matches name, description and publisher, ignoring case and padding"
   assert.deepEqual(ids({ q: "ldap" }), ["ldap"]);
   assert.deepEqual(ids({ q: "graph" }), ["entra"]); // description
   assert.deepEqual(ids({ q: "7644" }), ["scim_app"]); // publisher
+  assert.deepEqual(ids({ q: "oracle" }), ["sql"]);
+  assert.deepEqual(ids({ category: "Databases", capability: "Provisioning target" }), ["sql"]);
   assert.deepEqual(ids({ q: "nothing like this" }), []);
 });
 

@@ -1,9 +1,9 @@
 // Filter model for the connection type gallery (New connection, step 1). Pure, so `npm test` covers it.
 
 export type Capability = "Identity source" | "Provisioning target" | "HR source";
-export type Category = "Directories & HR" | "Cloud & SaaS" | "Demo / simulated";
+export type Category = "Directories & HR" | "Cloud & SaaS" | "Databases" | "Demo / simulated";
 
-export const CATEGORIES: Category[] = ["Demo / simulated", "Directories & HR", "Cloud & SaaS"]; // the default selection is a demo type, so it comes first
+export const CATEGORIES: Category[] = ["Demo / simulated", "Directories & HR", "Cloud & SaaS", "Databases"]; // the default selection is a demo type, so it comes first
 export const CAPABILITIES: Capability[] = ["Identity source", "Provisioning target", "HR source"];
 
 export interface GalleryMeta { vendor: string; publisher: string; category: Category; capabilities: Capability[] }
@@ -20,6 +20,7 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   google: { vendor: "google", publisher: "Google", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
   workday: { vendor: "workday", publisher: "Workday", category: "Directories & HR", capabilities: ["HR source"] },
   scim_app: { vendor: "scim_app", publisher: "IETF RFC 7643 / 7644", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+  sql: { vendor: "sql", publisher: "PostgreSQL, MySQL, SQL Server, Oracle", category: "Databases", capabilities: ["Identity source", "Provisioning target"] },
 };
 
 export interface GalleryType { id: string; label: string; blurb: string; demo: boolean }

@@ -3380,6 +3380,14 @@ export interface ConnConfig {
   expected_counts?: { users: number; groups: number }; stale_days?: number; sync_schedule?: string;
   write_mode?: "off" | "dry_run" | "scoped"; write_scope?: string[]; hybrid?: boolean; use_dirsync?: boolean;
   privileged_expected?: Record<string, string[]>; demo_fixed_checks?: string[];
+  sql?: SQLConfig;
+}
+
+/** The database connector's settings (template sql). The password is the sealed credential, never part of this. */
+export interface SQLConfig {
+  system?: string; engine: string; host: string; port?: number; database?: string; username: string;
+  tls?: string; ca_bundle?: string; mode: string; query_timeout_seconds?: number; max_rows?: number;
+  app?: Partial<Record<"accounts_query" | "entitlements_query" | "create_account" | "update_account" | "disable_account" | "delete_account" | "add_entitlement" | "remove_entitlement", string>>;
 }
 
 export interface RevisionView {
