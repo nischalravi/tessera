@@ -141,7 +141,7 @@ var (
 	cloudNames = []string{"global", "usgov", "china"}
 	interfaces = []string{"get_workers", "raas"}
 	// governedTemplates are the templates of the connector types in internal/connectors/governed.
-	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam"}
+	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam"}
 )
 
 // Validate checks a config for a template. It returns every problem rather
@@ -248,7 +248,7 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 		} else if cfg.Preset != "" {
 			bad("preset", "unknown SCIM preset %q", cfg.Preset)
 		}
-	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam":
+	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam":
 		typ := connectorType
 		if typ == "" && len(t.ConnectorTypes) > 0 {
 			typ = t.ConnectorTypes[0]
@@ -256,7 +256,11 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 		required, takes := governed.BaseURLUse(typ)
 		switch {
 		case takes && (required || cfg.BaseURL != ""):
-			httpsURL("base_url", cfg.BaseURL, nil)
+			var allow []string
+			if typ == governed.SuccessFactors {
+				allow = t.HostAllowlist // the documented data-center domains; a look-alike host is refused
+			}
+			httpsURL("base_url", cfg.BaseURL, allow)
 			// The vault, ERP and feed readers take a host (paths are settings); GitHub
 			// Enterprise Server's API URL ends in /api/v3.
 			if u, err := url.Parse(cfg.BaseURL); err == nil && typ != governed.GitHubScan && u.Path != "" && u.Path != "/" {
@@ -267,6 +271,9 @@ func ValidateConn(cfg ConnConfig, t *template.Resolved, connectorType string) []
 		}
 		for _, se := range governed.ValidateSettings(typ, cfg.Settings) {
 			bad("settings."+se.Key, "%s", se.Msg)
+		}
+		if typ == governed.SuccessFactors && cfg.WriteMode != "" && cfg.WriteMode != "off" {
+			bad("write_mode", "SuccessFactors is a read-only HR source: write-back is not available")
 		}
 	case "rest_generic":
 		if cfg.Rest == nil {

@@ -22,6 +22,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vms"
 )
 
@@ -84,6 +85,24 @@ func Prober(p governed.Params, n governed.Net) (connectors.Prober, error) {
 			base = githubscan.DefaultAPIURL
 		}
 		return &githubProber{src: src, org: cfg.Org, base: base, hc: n.HC}, nil
+	case governed.SuccessFactors:
+		getenv, err := p.Env()
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := successfactors.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := successfactors.New(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		mode := "basic_auth"
+		if cfg.Auth == successfactors.AuthSAML {
+			mode = successfactors.AuthSAML
+		}
+		return &sfProber{c: c, user: cfg.Username, mode: mode, base: p.BaseURL, hc: n.HC}, nil
 	case governed.AgentCore:
 		getenv, err := p.Env()
 		if err != nil {
@@ -523,6 +542,45 @@ func (p *githubProber) Sample(ctx context.Context, _ connectors.SampleQuery) (co
 	}
 	return connectors.SampleStats{Objects: min(len(p.repos), connectors.MaxSample), Available: true,
 		PerClass: map[string]int{"repository": len(p.repos)}}, nil
+}
+
+// ---------------------------------------------------------------- SuccessFactors
+
+type sfProber struct {
+	noop
+	c    *successfactors.Connector
+	user string
+	mode string
+	base string
+	hc   *http.Client
+}
+
+func (p *sfProber) Connect(ctx context.Context) (connectors.ConnInfo, error) {
+	return httpConnect(ctx, p.hc, p.base)
+}
+
+// Authenticate is one bounded read of User: the credential is accepted when it
+// is answered (an empty tenant still proves the credential; the read check
+// reports it). A 400 from the token endpoint is a refused assertion.
+func (p *sfProber) Authenticate(ctx context.Context) (connectors.AuthInfo, error) {
+	if _, err := p.c.Probe(ctx, 1); err != nil && !successfactors.ErrNoRows(err) {
+		if denied(err) || connsync.Status(err) == http.StatusBadRequest {
+			return connectors.AuthInfo{OK: false, Mode: p.mode}, nil
+		}
+		return connectors.AuthInfo{}, err
+	}
+	return connectors.AuthInfo{OK: true, Identity: p.user, Mode: p.mode}, nil
+}
+
+// Sample reads one page of User with the connector's own field selection and
+// reports counts and field names only, never values.
+func (p *sfProber) Sample(ctx context.Context, q connectors.SampleQuery) (connectors.SampleStats, error) {
+	pr, err := p.c.Probe(ctx, min(q.Limit, connectors.MaxSample))
+	if err != nil && !successfactors.ErrNoRows(err) {
+		return connectors.SampleStats{}, err
+	}
+	return connectors.SampleStats{Objects: pr.Users, Available: true, Fields: pr.Fields,
+		PerClass: map[string]int{"user": pr.Users}}, nil
 }
 
 // ---------------------------------------------------------------- governed.AgentCore
