@@ -982,6 +982,9 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if v1QueryRefusal(w, r) {
+		return
+	}
 	if d, ok := r.Context().Value(streamDeadlineKey{}).(time.Time); ok && rt.stream {
 		ctx, cancel := context.WithDeadline(r.Context(), d)
 		defer cancel()

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -78,7 +79,22 @@ func (s *Server) versioned(next http.Handler) http.Handler {
 				s.deprecationHeaders(w, rt)
 			}
 		}
-		next.ServeHTTP(w, r2)
+		// the uniform contract (v1_contract.go): one error envelope, cursor pages
+		vw := &v1Writer{ResponseWriter: w, method: r2.Method}
+		if r2.Method == http.MethodGet {
+			rt, _, _ := s.find(r2.Method, r2.URL.Path)
+			if rt == nil {
+				rt = &route{} // no route: dispatch answers 404, the query is left alone
+			}
+			pg, ok, code, field := v1Query(r2, rt.pattern)
+			if !ok {
+				// answered by dispatch once the caller is authenticated, so the refusal is audited like any request
+				r2 = r2.WithContext(context.WithValue(r2.Context(), v1QueryErrKey{}, v1QueryErr{code, field}))
+			}
+			vw.page, vw.hasPage = pg, true
+		}
+		next.ServeHTTP(vw, r2)
+		vw.finish()
 	})
 }
 
@@ -96,4 +112,24 @@ func (s *Server) deprecationHeaders(w http.ResponseWriter, rt *route) {
 		}
 		return
 	}
+}
+
+// v1QueryMessages are the fixed texts of the paging parameter errors.
+var v1QueryMessages = map[string]string{
+	"invalid_limit":  "limit must be an integer from 1 to 500",
+	"invalid_cursor": "cursor is not valid for this request",
+}
+
+type v1QueryErrKey struct{}
+
+type v1QueryErr struct{ code, field string }
+
+// v1QueryRefusal is the 400 of a bad limit or cursor, answered by dispatch.
+func v1QueryRefusal(w http.ResponseWriter, r *http.Request) bool {
+	e, ok := r.Context().Value(v1QueryErrKey{}).(v1QueryErr)
+	if !ok {
+		return false
+	}
+	writeJSON(w, http.StatusBadRequest, map[string]string{"error": e.code, "detail": v1QueryMessages[e.code], "field": e.field})
+	return true
 }
