@@ -2,6 +2,8 @@ package requests
 
 import (
 	"errors"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -116,6 +118,9 @@ func AddAttachment(tx *store.TenantTx, id string, by Actor, in AttachmentSpec, n
 		return nil, err
 	}
 	in.ContentType, in.Reference = strings.TrimSpace(in.ContentType), strings.TrimSpace(in.Reference)
+	if err := checkReference(in.Reference); err != nil {
+		return nil, err
+	}
 	switch {
 	case in.SizeBytes < 0 || in.SizeBytes > MaxAttachmentBytes:
 		return nil, refuse(422, "attachment_too_large", "an attachment is at most %d bytes", MaxAttachmentBytes)
@@ -177,7 +182,8 @@ func AddApprover(tx *store.TenantTx, id string, by Actor, approverID int64, reas
 	next := 0
 	for _, s := range stages {
 		next = max(next, s.Idx+1)
-		if s.Status != store.StageApproved && s.Status != store.StageClosed && s.AssigneeID != nil && *s.AssigneeID == approverID {
+		// anyone who holds a stage, open or decided, is already an approver
+		if s.AssigneeID != nil && *s.AssigneeID == approverID {
 			return nil, refuse(409, "already_an_approver", "that person already approves this request")
 		}
 	}
@@ -204,6 +210,19 @@ func AddApprover(tx *store.TenantTx, id string, by Actor, approverID int64, reas
 		} else if same {
 			return nil, refuse(422, "invalid_approver", "the requester cannot approve their own request")
 		}
+		// someone who already decided a stage (for themselves or as a delegate) is an approver too
+		for _, s := range stages {
+			for _, prev := range []*string{s.DecidedBy, s.OnBehalfOf} {
+				if prev == nil {
+					continue
+				}
+				if same, err := tx.SameActor(*prev, u); err != nil {
+					return nil, err
+				} else if same {
+					return nil, refuse(409, "already_an_approver", "that person already approves this request")
+				}
+			}
+		}
 	}
 	st := &store.RequestStage{LineID: l.ID, Idx: next, Kind: store.StageOwner, AssigneeID: &ap.ID, Status: store.StageQueued}
 	if err := tx.InsertRequestStage(st); err != nil {
@@ -211,4 +230,18 @@ func AddApprover(tx *store.TenantTx, id string, by Actor, approverID int64, reas
 	}
 	return l, tx.Audit(now, by.Display, "request.approver.added", ojson.Object{{Key: "line_id", Value: l.ID},
 		{Key: "stage", Value: next}, {Key: "approver_identity_id", Value: ap.ID}, {Key: "reason", Value: *why}})
+}
+
+var opaqueRefRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/#-]{0,299}$`)
+
+// checkReference accepts an https link or an opaque id (a ticket number): never another scheme, so a stored
+// reference cannot be a javascript: or data: link when a page renders it.
+func checkReference(ref string) error {
+	if ref == "" || opaqueRefRE.MatchString(ref) {
+		return nil
+	}
+	if u, err := url.Parse(ref); err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && !strings.ContainsAny(ref, " \t\r\n") {
+		return nil
+	}
+	return refuse(422, "invalid_attachment", "a reference is an https link or an id such as a ticket number")
 }

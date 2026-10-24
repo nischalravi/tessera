@@ -68,6 +68,24 @@ func TestAmend_CommentsAttachmentsApprovers(t *testing.T) {
 	}); err != nil {
 		t.Errorf("attach: %v", err)
 	}
+	for _, ref := range []string{"javascript:alert(1)", "http://tickets.example/1", "data:text/html,x", "ftp://x/y", "https://", "https://u:p@h/", "has space"} {
+		bad := spec
+		bad.Reference = ref
+		if err := run(func(c *store.TenantTx) error {
+			_, err := requests.AddAttachment(c, id, r.alice, bad, r.now)
+			return err
+		}); code(err) != "invalid_attachment" {
+			t.Errorf("reference %q: %v", ref, err)
+		}
+	}
+	opaque := spec
+	opaque.Reference = "TKT-42"
+	if err := run(func(c *store.TenantTx) error {
+		_, err := requests.AddAttachment(c, id, r.alice, opaque, r.now)
+		return err
+	}); err != nil {
+		t.Errorf("an opaque id: %v", err)
+	}
 	big := spec
 	big.SizeBytes = requests.MaxAttachmentBytes + 1
 	if err := run(func(c *store.TenantTx) error {
@@ -92,7 +110,7 @@ func TestAmend_CommentsAttachmentsApprovers(t *testing.T) {
 	}); code(err) != "invalid_attachment" {
 		t.Errorf("no name: %v", err)
 	}
-	for i := 1; i < requests.MaxLineAttachments; i++ {
+	for i := 2; i < requests.MaxLineAttachments; i++ {
 		if err := run(func(c *store.TenantTx) error {
 			_, err := requests.AddAttachment(c, id, r.alice, spec, r.now)
 			return err
@@ -154,6 +172,10 @@ func TestAmend_CommentsAttachmentsApprovers(t *testing.T) {
 	}
 	if got := r.inbox(r.zed, r.now); len(got) != 1 || got[0] != id {
 		t.Fatalf("zed's inbox = %v", got)
+	}
+	// someone who already decided a stage cannot be added as an approver
+	if err := add(r.zed, *r.pat.IdentityID); code(err) != "already_an_approver" {
+		t.Errorf("a decider who already decided: %v", err)
 	}
 	if l, err := r.approve(r.zed, id, r.now); err != nil || l.Status != store.RequestApproved {
 		t.Fatalf("zed approves: %v %v", l, err)
