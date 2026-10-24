@@ -288,8 +288,26 @@ func validateTarget(t Target, c ProbeConfig) error {
 	if t.Host == "" || len(t.Host) > 253 || strings.ContainsAny(t.Host, "/@ \t\r\n\x00") {
 		return errors.New("target host is not valid")
 	}
+<<<<<<< Updated upstream
 	if t.Port != safedial.PortLDAPS && t.Port != safedial.PortStartTLS {
 		return fmt.Errorf("target port must be %d or %d", safedial.PortStartTLS, safedial.PortLDAPS)
+=======
+	if !safedial.PortAllowed(t.Port) {
+		return errors.New("target port is not an allowed directory port")
+	}
+	switch t.TLSMode {
+	case "", safedial.ModeLDAPS, safedial.ModeStartTLS, safedial.ModeNone:
+	default:
+		return errors.New("target tls_mode must be ldaps, starttls or none")
+	}
+	if c.PageSize < 0 || c.PageSize > 10000 || len(c.AttrMap) > maxList {
+		return errors.New("config is not valid")
+	}
+	for _, m := range c.AttrMap {
+		if !validAttrName(m.LDAP) || !validAttrName(m.Target) || (m.Scope != "account" && m.Scope != "identity") {
+			return errors.New("config is not valid")
+		}
+>>>>>>> Stashed changes
 	}
 	if len(c.BindDN) > maxItem || !validCredName(c.CredName) || len(c.UserFilter) > maxFilter || len(c.CABundle) > maxCA ||
 		len(c.BaseDNs) > maxList {

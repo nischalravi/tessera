@@ -117,6 +117,12 @@ func RecordAgentSync(tx *store.TenantTx, now time.Time, job *store.AgentJob, _ a
 		if a.Email != "" {
 			rec.Identity = &connectors.IdentityRef{Email: a.Email}
 		}
+		for _, x := range a.Extra {
+			if rec.Attributes == nil {
+				rec.Attributes = map[string]string{}
+			}
+			rec.Attributes[x.Scope+"."+x.Target] = x.Value
+		}
 		dr.Accounts = append(dr.Accounts, rec)
 	}
 	for _, g := range res.Groups {
@@ -142,4 +148,13 @@ func RecordAgentSync(tx *store.TenantTx, now time.Time, job *store.AgentJob, _ a
 		return nil, err
 	}
 	return stats.Object(), nil
+}
+
+// attrMap converts the connection's attribute map to the job's form.
+func attrMap(in []readiness.AttrMapping) []agent.AttrMap {
+	out := make([]agent.AttrMap, 0, len(in))
+	for _, m := range in {
+		out = append(out, agent.AttrMap{LDAP: m.LDAP, Target: m.Target, Scope: m.Scope})
+	}
+	return out
 }

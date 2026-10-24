@@ -208,7 +208,8 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
   const [v, setV] = useState<Record<string, string>>({});
   useEffect(() => {
     setV({
-      host: cfg.host ?? "", port: String(cfg.port ?? ""), bind_dn: cfg.bind_dn ?? "", ca_bundle: cfg.ca_bundle ?? "", org_url: cfg.org_url ?? "", tenant_id: cfg.tenant_id ?? "", cloud: cfg.cloud ?? "",
+      host: cfg.host ?? "", port: String(cfg.port ?? ""), tls_mode: cfg.tls_mode ?? "", page_size: String(cfg.page_size ?? ""),
+      attr_map: (cfg.attr_map ?? []).map((m) => `${m.ldap}=${m.scope}.${m.target}`).join("\n"), bind_dn: cfg.bind_dn ?? "", ca_bundle: cfg.ca_bundle ?? "", org_url: cfg.org_url ?? "", tenant_id: cfg.tenant_id ?? "", cloud: cfg.cloud ?? "",
       customer: cfg.customer ?? "", domain: cfg.domain ?? "", base_url: cfg.base_url ?? "", tenant_host: cfg.tenant_host ?? "",
       interface: cfg.interface ?? "", time_zone: cfg.time_zone ?? "", technical_owner: cfg.technical_owner ?? "", business_owner: cfg.business_owner ?? "",
       base_dns: (cfg.base_dns ?? []).join("\n"), service_account_ous: (cfg.service_account_ous ?? []).join("\n"), user_filter: cfg.user_filter ?? "",
@@ -240,6 +241,19 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
     if (step === "connect") {
       (["host", "bind_dn", "ca_bundle", "org_url", "tenant_id", "cloud", "customer", "domain", "base_url", "tenant_host", "interface", "time_zone", "technical_owner", "business_owner"] as const).forEach(str);
       if (v.port && Number(v.port) !== cfg.port) next.port = Number(v.port);
+<<<<<<< Updated upstream
+=======
+      if (tid === "ad" || tid === "ldap") {
+        str("tls_mode");
+        if (v.page_size !== String(cfg.page_size ?? "")) (next as Record<string, unknown>).page_size = v.page_size ? Number(v.page_size) : null;
+      }
+      if (gov) {
+        const sp = settingsPatch(conn.connector_type, v, cfg.settings);
+        if (sp) next.settings = sp;
+      }
+      // the spec is sent as the text the admin wrote (JSON or YAML); the server parses and validates it strictly
+      if (tid === "rest_generic" && v.rest !== restText(cfg.rest)) (next as Record<string, unknown>).rest = v.rest.trim() === "" ? null : v.rest;
+>>>>>>> Stashed changes
     }
     if (step === "scope") {
       (["user_filter", "group_filter"] as const).forEach(str);
@@ -250,6 +264,15 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       if (v.privileged !== privToText(cfg.privileged_expected)) next.privileged_expected = textToPriv(v.privileged);
     }
     if (step === "mapping") {
+      if ((tid === "ad" || tid === "ldap") && v.attr_map !== (cfg.attr_map ?? []).map((m) => `${m.ldap}=${m.scope}.${m.target}`).join("\n")) {
+        // one mapping per line: ldapAttribute=account.target or ldapAttribute=identity.target; the server validates
+        const rows = lines(v.attr_map).map((l) => {
+          const [ldap = "", rest = ""] = l.split("=", 2);
+          const dot = rest.indexOf(".");
+          return { ldap: ldap.trim(), scope: (dot < 0 ? "" : rest.slice(0, dot).trim()) as "account" | "identity", target: (dot < 0 ? rest : rest.slice(dot + 1)).trim() };
+        });
+        (next as Record<string, unknown>).attr_map = rows.length ? rows : null;
+      }
       (["correlation_key", "hr_id_attribute", "sync_schedule"] as const).forEach(str);
       if (Number(v.stale_days || 0) !== (cfg.stale_days ?? 0)) next.stale_days = Number(v.stale_days || 0);
       if (v.write_mode !== (cfg.write_mode ?? "off")) next.write_mode = v.write_mode as ConnConfig["write_mode"];
@@ -280,9 +303,21 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       {step === "connect" && (
         <>
           <div className="form-grid">
-            {(tid === "ad" || tid === "ldap") && <>{input("host", "Domain controller or server", "Host name only; LDAPS on 636 or StartTLS on 389.")}{input("port", "Port", undefined, { inputMode: "numeric" })}</>}
+            {(tid === "ad" || tid === "ldap") && <>
+              {input("host", "Domain controller or server", "A host name or IP address such as ldap.example.com. Not the connection's name, and no ldaps:// or port.")}
+              {input("port", "Port", "389 or 636, or a port from 1024 up such as 3890 (LLDAP) or 6360. Database and admin ports are refused.", { inputMode: "numeric" })}
+              <Field label="Transport security" hint="Empty: LDAPS on port 636, StartTLS on any other port. Plain LDAP (none) is for development only and can never be activated.">
+                <select className="input" value={v.tls_mode ?? ""} onChange={set("tls_mode")}>
+                  <option value="">Automatic (from the port)</option>
+                  <option value="ldaps">LDAPS (TLS from the first byte)</option>
+                  <option value="starttls">StartTLS</option>
+                  <option value="none">None (development only)</option>
+                </select>
+              </Field>
+              {input("page_size", "Page size", "Entries per search page, 1 to 10000. Empty uses 500.", { inputMode: "numeric" })}
+            </>}
             {tid === "ldap" && <>
-              {input("bind_dn", "Bind DN", "A dedicated read-only account (LLDAP: a member of lldap_strict_readonly), never the root DN. Its password is the credential below.")}
+              {input("bind_dn", "Bind DN (the account's distinguished name)", "For example uid=svc-tessera,ou=people,dc=example,dc=com. A dedicated read-only account (LLDAP: a member of lldap_strict_readonly), never the root DN. Its password goes in the credential below, in Or the secret.")}
               {area("ca_bundle", "CA certificate (PEM)", "Public certificates only: the CA that signed the server certificate. Empty uses the system roots.")}
             </>}
             {tid === "okta" && input("org_url", "Org URL", "An Okta domain (*.okta.com) or a verified custom domain.")}
@@ -299,12 +334,32 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
               <Field label="Vault or agent reference" hint="vault:<path> or agent:<id>/<name>. Preferred: the secret never reaches Tessera.">
                 <input className="input" value={ref} onChange={(e) => setRef(e.target.value)} placeholder="vault:kv/tessera/ad-corp" />
               </Field>
+<<<<<<< Updated upstream
               <Field label="Or the secret" hint="Write-only. Never returned, logged or exported.">
                 <input className="input" type="password" autoComplete="new-password" value={secret} onChange={(e) => setSecret(e.target.value)} disabled={!!ref.trim()} />
               </Field>
             </div>
             <div><Button size="sm" onClick={saveCredential} disabled={busy === "cred" || (!ref.trim() && !secret)}>Save credential</Button></div>
           </fieldset>
+=======
+              <div><Button size="sm" onClick={saveCredential} disabled={busy === "cred" || !secret}>Save credential</Button></div>
+            </fieldset>
+          )}
+          {!gov && (
+            <fieldset className="card stack-sm" style={{ background: "var(--surface-2)" }}>
+              <legend className="small"><b>Credential</b> {rev.credential.present ? <Badge tone="ok">{rev.credential.kind} reference set</Badge> : <Badge tone="warning">Missing</Badge>}</legend>
+              <div className="form-grid">
+                <Field label="Vault or agent reference (not the bind DN)" hint="Only vault:<path> or agent:<id>/<name>; the bind DN goes in Bind DN. Preferred: the secret never reaches Tessera.">
+                  <input className="input" value={ref} onChange={(e) => setRef(e.target.value)} placeholder="vault:kv/tessera/ad-corp" />
+                </Field>
+                <Field label="Or the secret (the bind password)" hint="Write-only. Never returned, logged or exported.">
+                  <input className="input" type="password" autoComplete="new-password" value={secret} onChange={(e) => setSecret(e.target.value)} disabled={!!ref.trim()} />
+                </Field>
+              </div>
+              <div><Button size="sm" onClick={saveCredential} disabled={busy === "cred" || (!ref.trim() && !secret)}>Save credential</Button></div>
+            </fieldset>
+          )}
+>>>>>>> Stashed changes
         </>
       )}
       {step === "scope" && (
@@ -328,11 +383,23 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
           {input("hr_id_attribute", "HR id attribute", "Tier-1 correlation to the HR worker id (for AD usually employeeID).")}
           {input("stale_days", "Dormancy threshold (days)", "Default 90 (PCI DSS v4 8.2.6).", { inputMode: "numeric" })}
           {input("sync_schedule", "Sync schedule", "Full sync at least weekly plus incremental.")}
+<<<<<<< Updated upstream
           <Field label="Write-back" hint="Write-enabled connections need a second approver (DR-10).">
             <select className="input" value={v.write_mode ?? "off"} onChange={set("write_mode")}>
               <option value="off">Off (read only)</option><option value="dry_run">Dry run</option><option value="scoped">Scoped</option>
             </select>
           </Field>
+=======
+          {(tid === "ad" || tid === "ldap") && area("attr_map", "Extra attributes", "One per line: ldapAttribute=account.name or ldapAttribute=identity.name, for example department=identity.department. At most 32.")}
+          {writes && (
+            <Field label="Write-back" hint="Write-enabled connections need a second approver (DR-10).">
+              <select className="input" value={v.write_mode ?? "off"} onChange={set("write_mode")}>
+                <option value="off">Off (read only)</option><option value="dry_run">Dry run</option><option value="scoped">Scoped</option>
+              </select>
+            </Field>
+          )}
+          {writes && (v.write_mode ?? "off") !== "off" && area("write_scope", "Write scope", gov ? "One per line: the safe ids or roles write-back may change. A vault's write scope is checked against the service user's own rights." : "One per line: the containers or groups write-back may change.")}
+>>>>>>> Stashed changes
         </div>
       )}
       <div className="row"><Button type="submit" variant="primary" disabled={busy === "save"}>{busy === "save" ? "Saving…" : "Save"}</Button><span className="small faint">Editing evidence-bearing fields makes that evidence stale.</span></div>

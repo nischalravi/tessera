@@ -166,9 +166,46 @@ func Validate(cfg ConnConfig, t *template.Resolved) []FieldError {
 	}
 	switch t.ID {
 	case "ad", "ldap":
+<<<<<<< Updated upstream
 		host("host", cfg.Host)
 		if cfg.Port != 389 && cfg.Port != 636 {
 			bad("port", "must be 389 (StartTLS) or 636 (LDAPS)")
+=======
+		if m := ldapHost(cfg.Host); m != "" {
+			bad("host", "%s", m)
+		}
+		if !safedial.PortAllowed(cfg.Port) {
+			bad("port", "must be 389, 636, or a port from 1024 up (for example 3890 or 6360), and not a database or admin port such as 3306 or 6379")
+		}
+		switch cfg.TLSMode {
+		case "", safedial.ModeLDAPS, safedial.ModeStartTLS:
+		case safedial.ModeNone:
+			if env != config.Dev {
+				bad("tls_mode", "none (plain LDAP) is not allowed in production; use ldaps or starttls")
+			}
+		default:
+			bad("tls_mode", "must be ldaps, starttls or none")
+		}
+		if cfg.PageSize < 0 || cfg.PageSize > MaxPageSize {
+			bad("page_size", "must be from 1 to %d", MaxPageSize)
+		}
+		if len(cfg.AttrMap) > MaxAttrMap {
+			bad("attr_map", "at most %d attributes", MaxAttrMap)
+		}
+		seen := map[[2]string]bool{}
+		for _, m := range cfg.AttrMap {
+			switch {
+			case !ldap.ValidAttrName(m.LDAP):
+				bad("attr_map", "%q is not an LDAP attribute name (letters, digits and hyphens, starting with a letter)", m.LDAP)
+			case !ldap.ValidAttrName(m.Target):
+				bad("attr_map", "%q is not a valid Tessera attribute name", m.Target)
+			case m.Scope != "account" && m.Scope != "identity":
+				bad("attr_map", "scope of %q must be account or identity", m.LDAP)
+			case seen[[2]string{m.Scope, strings.ToLower(m.Target)}]:
+				bad("attr_map", "%q is mapped twice", m.Target)
+			}
+			seen[[2]string{m.Scope, strings.ToLower(m.Target)}] = true
+>>>>>>> Stashed changes
 		}
 		if len(cfg.BaseDNs) == 0 {
 			bad("base_dns", "at least one base DN is required")
