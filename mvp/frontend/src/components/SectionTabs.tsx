@@ -26,6 +26,7 @@ export const GovernanceTabs = () => (
       { to: "/governance/terms", label: "Guest terms" },
       { to: "/governance/questionnaires", label: "Questionnaires" },
       { to: "/governance/workflows", label: "Workflows" },
+      { to: "/governance/datasets", label: "Datasets" },
     ]}
   />
 );

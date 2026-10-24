@@ -81,6 +81,7 @@ const GuestLifecycle = named(() => import("../features/governance/GuestLifecycle
 const Terms = named(() => import("../features/governance/Terms"), "Terms");
 const Questionnaires = named(() => import("../features/governance/Questionnaires"), "Questionnaires");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
+const Datasets = named(() => import("../features/governance/Datasets"), "Datasets");
 const EvidencePacks = named(() => import("../features/governance/EvidencePacks"), "EvidencePacks");
 const Admin = named(admin, "Admin");
 const FlatFiles = named(() => import("../features/admin/FlatFiles"), "FlatFiles");
@@ -263,6 +264,7 @@ export default function App() {
                     <Route path="/governance/terms" element={<Terms />} />
                     <Route path="/governance/questionnaires" element={<Questionnaires />} />
                     <Route path="/governance/workflows" element={<Workflows />} />
+                    <Route path="/governance/datasets" element={<Datasets />} />
                     <Route path="/governance/evidence" element={<EvidencePacks />} />
 
                     <Route path="/admin" element={<Admin />} />
