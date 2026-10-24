@@ -42,5 +42,7 @@ known. `details` carries extra fields of the error, such as the step-up challeng
 (the `next_cursor` of the previous page; absent or null on the last page). A cursor is bound to its route and its other
 query parameters; used with different ones it is `400 invalid_cursor`. `filter`, `sort` and other parameters are the route's
 own, where it has them. Routes that already page natively with `limit` and `offset` (the groups lists) keep their body and gain
-`next_cursor`. Limits of the first release: for most routes the server cuts the full answer, so a page costs as much as the
-list; `GET /api/v1/audit` is cut at the source and pages up to the audit limit.
+`next_cursor`. `GET /api/v1/audit` pages by keyset (`before_seq`), so it reaches every event; a `null` cursor always means
+the end. A short list of small routes (policies, connectors, identities, accounts, groups, resources, violations) is cut by the
+server from the full answer; if that answer is larger than 1 MiB it is sent whole, unpaged, with `Tessera-Paging: skipped`,
+never truncated. Every other route is not paged by cursor: its own parameters apply, and a `cursor` is `400 paging_unsupported`.

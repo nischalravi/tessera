@@ -93,7 +93,7 @@ func (s *Server) versioned(next http.Handler) http.Handler {
 				// answered by dispatch once the caller is authenticated, so the refusal is audited like any request
 				r2 = r2.WithContext(context.WithValue(r2.Context(), v1QueryErrKey{}, v1QueryErr{code, field}))
 			}
-			vw.page, vw.hasPage = pg, true
+			vw.page, vw.hasPage = pg, pg.kind != v1None
 		}
 		next.ServeHTTP(vw, r2)
 		vw.finish()
@@ -118,8 +118,9 @@ func (s *Server) deprecationHeaders(w http.ResponseWriter, rt *route) {
 
 // v1QueryMessages are the fixed texts of the paging parameter errors.
 var v1QueryMessages = map[string]string{
-	"invalid_limit":  "limit must be an integer from 1 to 500",
-	"invalid_cursor": "cursor is not valid for this request",
+	"invalid_limit":      "limit must be an integer from 1 to 500",
+	"invalid_cursor":     "cursor is not valid for this request",
+	"paging_unsupported": "this route is not paged with a cursor",
 }
 
 type v1QueryErrKey struct{}

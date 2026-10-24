@@ -1,8 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -274,4 +278,115 @@ func TestV1_Pagination(t *testing.T) {
 		t.Errorf("unversioned identities changed: %.100s", rec.Body)
 	}
 	_ = fmt.Sprint
+}
+
+// TestV1_AuditKeysetReachesEveryEvent: the audit log pages by keyset, so a
+// reader gets every event even past the route's own cap of 1000 rows, and a
+// null cursor only ever means the end.
+func TestV1_AuditKeysetReachesEveryEvent(t *testing.T) {
+	f, srv := v1Fixture(t)
+	h := srv.Handler()
+	const extra = 1150
+	err := f.DB.InTenant(context.Background(), f.B.ID, func(tx *store.TenantTx) error {
+		for i := 0; i < extra; i++ {
+			if err := tx.Audit(storetest.Now, "", "synthetic.event", ojson.Object{{Key: "i", Value: i}}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []map[string]any
+	if err := json.Unmarshal(serveOnce(h, "GET", "/api/audit?limit=1000", "").Body.Bytes(), &want); err != nil || len(want) != 1000 {
+		t.Fatalf("the unversioned route's cap: %d rows, %v", len(want), err)
+	}
+	type page struct {
+		Items []struct {
+			Seq int `json:"seq"`
+		} `json:"items"`
+		Next *string `json:"next_cursor"`
+	}
+	seen, last, cursor, pages := 0, 1<<62, "", 0
+	for {
+		p := "/api/v1/audit?limit=500"
+		if cursor != "" {
+			p += "&cursor=" + url.QueryEscape(cursor)
+		}
+		rec := serveOnce(h, "GET", p, "")
+		var pg page
+		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &pg) != nil {
+			t.Fatalf("%s: %d %.200s", p, rec.Code, rec.Body)
+		}
+		if len(pg.Items) == 0 && pg.Next != nil {
+			t.Fatal("an empty page with a cursor")
+		}
+		for _, it := range pg.Items {
+			if it.Seq >= last {
+				t.Fatalf("row %d after %d: pages overlap or are out of order", it.Seq, last)
+			}
+			last = it.Seq
+			seen++
+		}
+		pages++
+		if pg.Next == nil {
+			if len(pg.Items) > 500 {
+				t.Fatal("too many rows on the last page")
+			}
+			break
+		}
+		if len(pg.Items) != 500 {
+			t.Fatalf("a page of %d rows with a cursor, want 500", len(pg.Items))
+		}
+		cursor = *pg.Next
+		if pages > 50 {
+			t.Fatal("no end")
+		}
+	}
+	if seen < extra || last != 1 && seen < extra {
+		t.Errorf("read %d rows in %d pages, want at least %d", seen, pages, extra)
+	}
+	if last != 1 {
+		t.Errorf("the last row read has seq %d, want 1: the walk stopped early", last)
+	}
+}
+
+// TestV1_PagingNeverTruncates: a route that is not paged keeps its own
+// parameters and answer, a cursor on it is refused, and an array too big to
+// cut is passed on whole.
+func TestV1_PagingNeverTruncates(t *testing.T) {
+	t.Parallel()
+	_, srv := v1Fixture(t)
+	h := srv.Handler()
+	// not listed for paging: untouched, whatever limit says
+	old := serveOnce(h, "GET", "/api/jit/requests?limit=1", "")
+	v1 := serveOnce(h, "GET", "/api/v1/jit/requests?limit=1", "")
+	if v1.Code != old.Code || v1.Body.String() != old.Body.String() || strings.Contains(v1.Body.String(), "next_cursor") {
+		t.Errorf("an unpaged route changed: %d vs %d", v1.Code, old.Code)
+	}
+	rec := serveOnce(h, "GET", "/api/v1/jit/requests?cursor=abc", "")
+	var e v1Err
+	if json.Unmarshal(rec.Body.Bytes(), &e) != nil || rec.Code != 400 || e.Error.Code != "paging_unsupported" {
+		t.Errorf("a cursor on an unpaged route: %d %s", rec.Code, rec.Body)
+	}
+	// the byte cap: the body passes whole, as the route made it
+	big := &v1Writer{ResponseWriter: httptest.NewRecorder(), method: "GET", hasPage: true, page: v1Page{kind: v1Cut, limit: 2}}
+	rr := big.ResponseWriter.(*httptest.ResponseRecorder)
+	big.Header().Set("Content-Type", "application/json")
+	big.WriteHeader(200)
+	row := `"` + strings.Repeat("x", 1000) + `",`
+	var sent strings.Builder
+	sent.WriteString("[")
+	for sent.Len() < v1MaxBufferedBytes+5000 {
+		sent.WriteString(row)
+	}
+	sent.WriteString(`"end"]`)
+	for i := 0; i < sent.Len(); i += 4000 {
+		_, _ = big.Write([]byte(sent.String()[i:min(i+4000, sent.Len())]))
+	}
+	big.finish()
+	if rr.Body.String() != sent.String() || rr.Header().Get("Tessera-Paging") != "skipped" || rr.Code != 200 {
+		t.Errorf("an over-size array was changed: %d bytes of %d, header %q", rr.Body.Len(), sent.Len(), rr.Header().Get("Tessera-Paging"))
+	}
 }

@@ -37,32 +37,53 @@ import (
 // filter, sort and the other query parameters are the route's own and pass
 // through. A cursor is bound to the route and its other parameters: used with
 // different ones it is 400 invalid_cursor.
+//
+// How a route pages depends on what it can do (v1PagingOf): native routes use
+// limit and offset; GET /api/audit pages by keyset (before_seq), so it reaches
+// every event; a short allow-list of routes that answer a full array is cut by
+// the middleware, and a body over v1MaxBufferedBytes is passed on unchanged
+// (header Tessera-Paging: skipped), never truncated. Every other route is not
+// paged: its own parameters apply, and a cursor is 400 paging_unsupported.
 
 const (
 	v1DefaultLimit = 100
 	v1MaxLimit     = 500
 )
 
-// v1Page is what a request asks of a list.
+// v1MaxBufferedBytes caps what the middleware buffers to cut an array.
+const v1MaxBufferedBytes = 1 << 20
+
+// The audit keyset page asks the route for one row more than the page, so the
+// route's own cap (MaxAuditLimit) must not bind it.
+const _ = uint(MaxAuditLimit - (v1MaxLimit + 1))
+
+// v1Page is what a request asks of a list. For a keyset page offset is the
+// sequence number the page continues after.
 type v1Page struct {
+	kind   int
 	offset int
 	limit  int
 	fp     string // fingerprint of the route and its non-paging query
 }
 
-// v1PagingOf says how a route takes paging parameters. The native routes (the
-// listed groups routes) page with limit and offset themselves; the windowed ones cut
-// an array with limit, and are asked for the rows up to the end of the page;
-// every other route takes no paging parameters (some refuse unknown ones), so
-// they are removed and the middleware cuts the route's answer.
+// Kinds of paging (v1PagingOf).
+const (
+	v1None   = iota // not paged
+	v1Cut           // the middleware cuts a full array
+	v1Native        // the route pages with limit and offset
+	v1Keyset        // GET /api/audit: before_seq
+)
+
 func v1PagingOf(pattern string) int {
-	if v1NativeRoutes[pattern] {
+	switch {
+	case v1NativeRoutes[pattern]:
 		return v1Native
+	case pattern == "/api/audit":
+		return v1Keyset
+	case v1CutRoutes[pattern]:
+		return v1Cut
 	}
-	if pattern == "/api/audit" {
-		return v1Windowed
-	}
-	return v1Cut
+	return v1None
 }
 
 // v1NativeRoutes answer {"items", "limit", "offset", ...} and read limit and offset.
@@ -73,18 +94,26 @@ var v1NativeRoutes = map[string]bool{
 	"/api/groups/loader-tasks": true,
 }
 
-const (
-	v1Cut = iota
-	v1Native
-	v1Windowed
-)
+// v1CutRoutes answer a full array, take no paging parameters, and are small
+// (a tenant's policies, connectors and inventories). Only these are cut by the
+// middleware; the byte cap catches one that grows.
+var v1CutRoutes = map[string]bool{
+	"/api/policies": true, "/api/connectors": true, "/api/identities": true, "/api/accounts": true,
+	"/api/groups": true, "/api/resources": true, "/api/violations": true,
+}
 
 // v1Query validates limit and cursor of a v1 GET and rewrites the request's
 // query for the route's kind of paging (see v1PagingOf). On a refusal it
 // returns the error code and field.
 func v1Query(r *http.Request, pattern string) (pg v1Page, ok bool, code, field string) {
-	pg = v1Page{limit: v1DefaultLimit}
+	pg = v1Page{limit: v1DefaultLimit, kind: v1PagingOf(pattern)}
 	q := r.URL.Query()
+	if pg.kind == v1None {
+		if q.Has("cursor") {
+			return pg, false, "paging_unsupported", "cursor"
+		}
+		return pg, true, "", "" // the route's own parameters apply
+	}
 	limitSet := false
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -102,7 +131,7 @@ func v1Query(r *http.Request, pattern string) (pg v1Page, ok bool, code, field s
 		pg.offset = off
 	}
 	q.Del("cursor")
-	switch v1PagingOf(pattern) {
+	switch pg.kind {
 	case v1Native:
 		if limitSet {
 			q.Set("limit", strconv.Itoa(pg.limit))
@@ -110,10 +139,12 @@ func v1Query(r *http.Request, pattern string) (pg v1Page, ok bool, code, field s
 		if pg.offset > 0 {
 			q.Set("offset", strconv.Itoa(pg.offset))
 		}
-	case v1Windowed:
-		q.Del("offset")
-		q.Set("limit", strconv.Itoa(pg.offset+pg.limit+1))
-	default:
+	case v1Keyset:
+		q.Set("limit", strconv.Itoa(pg.limit+1))
+		if pg.offset > 0 {
+			q.Set("before_seq", strconv.Itoa(pg.offset))
+		}
+	default: // cut: these routes take no paging parameters
 		q.Del("offset")
 		q.Del("limit")
 	}
@@ -126,7 +157,7 @@ func v1Query(r *http.Request, pattern string) (pg v1Page, ok bool, code, field s
 func v1Fingerprint(path string, q url.Values) string {
 	keys := make([]string, 0, len(q))
 	for k := range q {
-		if k != "cursor" && k != "limit" && k != "offset" {
+		if k != "cursor" && k != "limit" && k != "offset" && k != "before_seq" {
 			keys = append(keys, k)
 		}
 	}
@@ -154,7 +185,7 @@ func v1DecodeCursor(c, fp string) (int, bool) {
 	}
 	off, got, ok := strings.Cut(string(raw), ".")
 	n, err := strconv.Atoi(off)
-	if !ok || err != nil || n < 0 || n > 1<<31 || got != fp {
+	if !ok || err != nil || n < 0 || n > 1<<62 || got != fp {
 		return 0, false
 	}
 	return n, true
@@ -200,6 +231,17 @@ func (w *v1Writer) Write(b []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	if w.mode == v1Pass {
+		return w.ResponseWriter.Write(b)
+	}
+	if w.mode == v1List && w.buf.Len()+len(b) > v1MaxBufferedBytes {
+		// too big to cut: send it as the route made it, never truncated
+		w.mode = v1Pass
+		w.Header().Set("Tessera-Paging", "skipped")
+		w.ResponseWriter.WriteHeader(w.status)
+		if _, err := w.ResponseWriter.Write(w.buf.Bytes()); err != nil {
+			return 0, err
+		}
+		w.buf.Reset()
 		return w.ResponseWriter.Write(b)
 	}
 	return w.buf.Write(b)
@@ -339,6 +381,9 @@ func v1ListBody(body []byte, pg v1Page) []byte {
 		if json.Unmarshal(trim, &items) != nil {
 			return body
 		}
+		if pg.kind == v1Keyset {
+			return v1KeysetBody(items, pg, body)
+		}
 		if pg.offset > len(items) {
 			items = nil
 		} else {
@@ -380,4 +425,29 @@ func v1ListBody(body []byte, pg v1Page) []byte {
 		return append(trim[:len(trim)-1:len(trim)-1], []byte(`,"next_cursor":`+next+`}`)...)
 	}
 	return body
+}
+
+// v1KeysetBody pages the audit log: the route was asked for limit+1 rows after
+// the cursor's sequence number, so a row beyond the limit means there is a next
+// page, which starts after the last row kept.
+func v1KeysetBody(items []json.RawMessage, pg v1Page, orig []byte) []byte {
+	var next any
+	if len(items) > pg.limit {
+		items = items[:pg.limit]
+		var last struct {
+			Seq int `json:"seq"`
+		}
+		if json.Unmarshal(items[len(items)-1], &last) != nil || last.Seq < 1 {
+			return orig // not an audit row: do not guess a cursor
+		}
+		next = v1EncodeCursor(last.Seq, pg.fp)
+	}
+	if items == nil {
+		items = []json.RawMessage{}
+	}
+	out, err := json.Marshal(map[string]any{"items": items, "next_cursor": next})
+	if err != nil {
+		return orig
+	}
+	return out
 }
