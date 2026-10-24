@@ -141,6 +141,10 @@ var (
 		ON CONFLICT (tenant_id, name) DO UPDATE SET kind = excluded.kind, payload = excluded.payload,
 			spec = excluded.spec, enabled = excluded.enabled, max_attempts = excluded.max_attempts,
 			next_run_at = excluded.next_run_at, paused_until = '', updated_at = @now`)
+	queueScheduleDetachJobs = tq("queue_schedules.detach_jobs", `
+		UPDATE queue_jobs SET schedule_id = NULL
+		WHERE queue_jobs.tenant_id = @tenant AND schedule_id = (SELECT s.id FROM queue_schedules s WHERE s.tenant_id = @tenant AND s.name = @name)`)
+	queueScheduleDelete     = tq("queue_schedules.delete", `DELETE FROM queue_schedules WHERE tenant_id = @tenant AND name = @name`)
 	queueScheduleSetEnabled = tq("queue_schedules.set_enabled", `
 		UPDATE queue_schedules SET enabled = @enabled, paused_until = '', updated_at = @now WHERE tenant_id = @tenant AND name = @name`)
 	// a pause with an end: the schedule resumes by itself when paused_until passes (QueueSchedulesToResume)
@@ -393,6 +397,16 @@ func (tx *TenantTx) SetQueueSchedule(s *QueueSchedule, now time.Time) error {
 		sql.Named("payload", s.Payload), sql.Named("spec", s.Spec), sql.Named("enabled", B(s.Enabled)),
 		sql.Named("max_attempts", s.MaxAttempts), sql.Named("next_run_at", RT(s.NextRunAt)), sql.Named("now", RT(now)))
 	return err
+}
+
+// DeleteQueueSchedule removes the named schedule; jobs it already enqueued keep running, detached from it.
+// ErrNotFound when the tenant has none of that name.
+func (tx *TenantTx) DeleteQueueSchedule(name string) error {
+	if _, err := tx.exec(queueScheduleDetachJobs, sql.Named("name", name)); err != nil {
+		return err
+	}
+	res, err := tx.exec(queueScheduleDelete, sql.Named("name", name))
+	return rowsOne(res, err)
 }
 
 // QueueSchedule returns one schedule by name or ErrNotFound.

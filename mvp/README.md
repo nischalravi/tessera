@@ -40,6 +40,7 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
   (tenant admin) or Pat (policy admin) with a passkey.
 * API: http://127.0.0.1:8000. OpenAPI docs are at http://127.0.0.1:8000/docs
   Every `/api/...` route is also served under `/api/v1/...` (same auth, audit and limits); `Deprecation`/`Sunset` headers and the compatibility policy are in `docs/api/compatibility.md` (issue #587).
+  The complete OpenAPI 3.1 document of every registered route (permission, token scopes, step-up, errors) is `GET /api/openapi.json`, built from the route table (issue #587); `/openapi.json` stays the original core-route document.
 * Dev IdP: http://127.0.0.1:8001 (see [Signing in](#signing-in))
 
 Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`
@@ -472,8 +473,13 @@ like live results, and is audited as `readiness.item.attested_instead` in the sa
 result never passes for a real connector type. In the checklist, an item whose live check is
 unsupported shows an "Attest instead" form.
 
-Network path: `server/internal/safedial` shares safehttp's address policy for raw TCP. Only ports
-**636 (LDAPS)** and **389 (StartTLS required)** are dialled, private, loopback, link-local,
+Network path: `server/internal/safedial` shares safehttp's address policy for raw TCP. Ports are
+**389, 636 and 1024 and up** (LLDAP's 3890, LDAPS on 6360), never a database or admin port such as 3306 or 6379.
+Set the connection's **Transport security** (`tls_mode`): `ldaps`, `starttls`, or `none`, which is for development only
+(refused in production, never sends the bind password, and the Required `ldap.tls.ldaps` check still fails, so it can
+never be activated). Unset is LDAPS on 636 and StartTLS otherwise. The host must be a host name or IP (no spaces, scheme or
+port). Optional `page_size` (1 to 10000, default 500) and `attr_map` (extra LDAP attributes mapped to account or identity
+attributes, Mapping step; carried on the sync as staged attributes, not yet stored on the account). Private, loopback, link-local,
 CGNAT and metadata addresses are refused after DNS resolution, and TLS 1.2 or later is required.
 **The production path for a directory on a private network is the Directory Agent** (design
 `deployment-readiness.md` §5.3, DR-11, not built yet; `safedial.Transport` is the seam it will
@@ -491,7 +497,7 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
 3. Start the dev server with the lab host allowlisted (dev only; `TESSERA_ENV=prod` refuses this variable):
 
    ```bash
-   TESSERA_SAFEDIAL_ALLOW=192.168.1.20:636 ./run.sh     # host:port, CIDR:port or name:port; 389 or 636 only
+   TESSERA_SAFEDIAL_ALLOW=192.168.1.20:636 ./run.sh     # host:port, CIDR:port or name:port; 389, 636 or 1024 and up
    ```
 
 4. In Admin → Connections → New connection → **OpenLDAP / 389-DS** set the host, port 636, the
@@ -876,6 +882,7 @@ when a second reviewer is needed) ·
 `GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
 `GET|PUT /api/sod/view-settings` (SoD page columns and filters; PUT: sod.manage + step-up) · `GET /api/review-types` · `PUT /api/review-types/{type}` (campaign configuration per review type; PUT: reviews.manage + step-up) · `GET|PUT /api/stepup-policy` (step-up per action; GET: admin.read, PUT: admin.change.request + STEP_UP_ADMIN) · `GET|PUT /api/me/preferences` (the caller's own time zone, date format, locale, landing page; auth.self) · `GET|PUT /api/orgs/{org_id}/settings` · `GET|PUT /api/org-hierarchy-source` (organization owners, policies and hierarchy source; PUT: catalog.manage + step-up) ·
 `GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=|service_account_kind=&primary_owner_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`GET /api/queue/schedule-kinds` · `POST /api/queue/schedules` (`{name: custom.<name>, kind: connector_sync|review_tick, spec, payload, max_attempts}`, at most once a minute, 50 per tenant) · `DELETE /api/queue/schedules/{name}` (custom only) · `POST /api/queue/schedules/{name}/run` (queues the job now, once a minute at most); with the existing list, pause and resume these are the job schedules (jobs.manage + step-up, audited) ·
 `GET|POST /api/workflows` · `POST /api/workflows/validate` · `GET|PUT /api/workflows/{id}` · `POST /api/workflows/{id}/retire` · `PUT /api/workflows/{id}/assignments` (workflow designer; reads `graph.read`, writes `workflows.manage` + step-up, `validate` saves nothing) ·
 `GET /api/service-accounts` · `GET|POST /api/service-account-requests[?scope=mine|pending|all&status=]` · `GET /api/service-account-requests/{id}` · `POST /api/service-account-requests/{id}/approve|deny|cancel` (service-account requests: `requests.create`, approvers per stage as for access requests; approve needs step-up) ·
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?, answers?}` ·
@@ -2668,6 +2675,78 @@ assignment back through provisioning.
 - **Readiness.** Template `salesforce` (connection type `salesforce` in New connection).
 - **Tests.** `internal/connectors/salesforce` against `sffake`, an in-process org that verifies the JWT signature,
   audience and expiry, serves SOQL with paging and injects faults.
+
+### ServiceNow and Atlassian Cloud (issue #559)
+
+Both are creatable from Settings, Connections, New connection (category Cloud & SaaS, tiles "ServiceNow" and
+"Atlassian Jira and Confluence") as governed connections, with readiness templates `servicenow` and `atlassian`,
+and are read by the connector sync. Both can also be configured by environment (`TESSERA_CONNECTORS=servicenow` or
+`atlassian`). Every outbound call goes through `internal/safehttp`; credentials are sealed with `internal/seal` and
+never echoed (a 422 names the rule, never the value). Fakes (`snfake`, `atfake`) live beside the connectors and answer
+with stored rows and generated ids only.
+
+**ServiceNow** (`internal/connectors/servicenow`)
+
+- **Read.** The Table API (`GET /api/now/table/{table}`) over `sys_user`, `sys_user_group`, `sys_user_grmember`,
+  `sys_user_has_role` and `sys_user_role`, with `sysparm_query`, `sysparm_fields`, `sysparm_limit`/`sysparm_offset`
+  and `sysparm_exclude_reference_link`. Paging follows the `Link` header (`rel="next"`, same host and table only) or,
+  when there is none, the offset until an empty page: the instance applies the limit before ACLs, so a short page is
+  not the last one. Env: `TESSERA_SERVICENOW_BASE_URL`, `_AUTH` (`basic` default or `oauth`), `_USERNAME` (basic) or
+  `_CLIENT_ID` (oauth), `_SECRET` (`env:NAME` or `file:/abs/path`).
+- **Sign-in.** HTTP basic (a dedicated integration user), or the OAuth client credentials grant
+  (`POST /oauth_token.do`; the instance needs the grant enabled and an OAuth application user on the client).
+- **Hosts.** `*.service-now.com` and `*.servicenowservices.com` (gov) only, https, no path. Only the dev loopback
+  exception (refused in prod) admits a local fake.
+- **Queries.** An encoded query is fixed text plus values that passed an allow-list (letters, digits, space and
+  `@ . _ + ' -`; sys_ids are 32 hex): no caret, no colon (`javascript:` and `dynamic:` values are evaluated by the
+  instance), no operator characters. A value that fails is refused before any request. A ticket's correlation id is
+  derived from the operation key, so the key never reaches a query.
+- **Graph.** Groups (`servicenow_group`) and roles (`servicenow_role`) are requestable groups; `admin`,
+  `security_admin` and any role flagged `elevated_privilege` are privileged. A user is an account (disabled when
+  inactive or locked out), `member_of` its groups and every active role row (`state` not inactive or suspended), inherited ones included.
+- **Write.** Target kind `servicenow` (Admin > Provisioning). The credential is JSON, sealed and write-only:
+  `{"auth":"basic","username":"...","password":"..."}` or `{"auth":"oauth","client_id":"...","client_secret":"..."}`.
+  Direct mode: create a user, update an allow-listed set of fields, deactivate (a delete does the same; users are not
+  deleted), add or remove a group membership or a directly granted role (the sys_id says which). Removing a role
+  is verified against inherited rows too: if the user still holds it through a group, the change is not done and the
+  verdict names the group (`sys_group_has_role` and `sys_user_grmember`). Ticket mode (`"mode":"ticket"`, optional
+  `"assignment_group":"<sys_id>"`): one incident per change, found again by an HMAC correlation id under the
+  integration's own secret (not guessable, so an incident someone else makes cannot stand in for it). The operation
+  waits while the incident is open (it does not use up its verification attempts), fails at once if it is canceled
+  (state 8), and when it is resolved or closed (6, 7) counts as done only if the same read-back as direct mode finds
+  the change in the instance; otherwise it is a mismatch ("resolved but change not observed"). An incident left
+  open keeps the operation pending until it is cancelled in Tessera. Write-back is off by default and, once on,
+  follows the existing approval gates.
+
+**Atlassian Cloud** (`internal/connectors/atlassian`)
+
+- **Accounts stay on SCIM.** The Atlassian Cloud SCIM preset (tile "Atlassian Cloud") creates, updates and suspends
+  accounts. This connector adds what SCIM lacks: groups as the site holds them, project roles and product access.
+- **Read.** The site's Jira Cloud REST API with an API token (HTTP basic, account e-mail): `GET /rest/api/3/users/search`,
+  `/group/bulk` (also with `accessType=site-admin` and `admin`, which marks groups privileged), `/group/member`, and,
+  for the project keys in Settings (at most 50), `/project/{key}/role` and `/project/{key}/role/{id}`. With an
+  organization id and an organization API key (credential JSON `{"api_token":"...","admin_api_key":"..."}`), the admin
+  API `GET /admin/v1/orgs/{orgId}/users` adds each account's `product_access` and the e-mail a profile hides. Atlassian's `product_access` there is often empty in practice (JRACLOUD-97537), so an empty product list is not proof of no access; treat product groups as best effort. Settings:
+  `email`, `org_id`, `project_keys`. Env: `TESSERA_ATLASSIAN_BASE_URL`, `_EMAIL`, `_CREDENTIAL`, `_ORG_ID`, `_PROJECTS`.
+- **Hosts.** `*.atlassian.net` for the site and `api.atlassian.com` for the admin API, nothing else. The admin API
+  origin can be overridden only by a dev runtime (`TESSERA_ATLASSIAN_ADMIN_URL` through the governed endpoint
+  overrides, refused in prod and in test); a connection never carries one. A next-page link to any other origin or path
+  is refused.
+- **Graph.** Groups (`atlassian_group`) are requestable and privileged when the site lists them as `site-admin` or
+  `admin`; a project role (`jira_project_role`, id `KEY/roleId`) is requestable and privileged for the project's admin
+  role, its user actors are members and its group actors are `member_of` it; a product (`atlassian_product`, id
+  `product:key`) is not requestable, since access comes through groups. Users are accounts (`app` accounts are service
+  accounts, `customer` accounts are users).
+- **Write.** Target kind `atlassian`. The credential is JSON `{"email":"...","api_token":"..."}`. Operations:
+  add or remove a group member (`POST|DELETE /rest/api/3/group/user`) or a project role actor
+  (`POST /project/{key}/role/{id}`, `DELETE ...?user=`), each read first and re-read to verify. Account lifecycle is
+  refused with a pointer to the SCIM target. A user whose e-mail the profile hides can only be addressed by account id.
+- **Not covered.** OAuth 2.0 (3LO) and Confluence space permissions are not read; the site token is basic only.
+- **Verification.** The Atlassian paths, parameters and field names were checked against Atlassian's published OpenAPI
+  documents (Jira Cloud platform v3 and the Atlassian Access organization API). The ServiceNow Table API and
+  client-credentials token endpoint were checked against ServiceNow's documentation. `inherited`, `state` and
+  `elevated_privilege` exist on the stock tables but are not in the public docs; a requested column that does not exist
+  is ignored by the instance, so confirm them against a developer instance.
 
 ### Azure RBAC and Google Cloud IAM (issue #557)
 

@@ -9,8 +9,8 @@
 // TestProbers_ReadOnly scans the package for them. Attribute reads that only
 // count use the LDAP "types only" flag, so values never leave the server.
 //
-// The network path is internal/safedial: address policy, ports 389 and 636
-// only, TLS 1.2 or later. A password is sent only on a connection that
+// The network path is internal/safedial: address policy, any port with an
+// explicit TLS mode (ldaps, starttls, or none in dev only), TLS 1.2 or later. A password is sent only on a connection that
 // safedial reports as Secure; a server that refuses StartTLS is never sent
 // credentials.
 //
@@ -66,9 +66,16 @@ func (Secret) MarshalText() ([]byte, error) { return []byte("[redacted]"), nil }
 
 // Config is one connection's non-secret settings plus its credential.
 type Config struct {
-	Host   string
-	Port   int // 636 (LDAPS) or 389 (StartTLS required)
-	BindDN string
+	Host string
+	Port int // 1 to 65535
+	// TLSMode is ldaps, starttls or none (dev only); empty infers ldaps for
+	// 636 and starttls otherwise. A plain connection never carries a bind.
+	TLSMode string
+	// PageSize is the paged-search page of a sync (0: DefaultPageSize).
+	PageSize int
+	// AttrMap are extra attributes a sync reads for each account.
+	AttrMap []AttrMap
+	BindDN  string
 	// Password is the bind password, opened from the sealed secret just for
 	// this run.
 	Password Secret
@@ -105,8 +112,11 @@ func New(cfg Config) (*Prober, error) {
 	if cfg.Host == "" {
 		return nil, errors.New("ldap: host is required")
 	}
-	if cfg.Port != safedial.PortLDAPS && cfg.Port != safedial.PortStartTLS {
-		return nil, fmt.Errorf("ldap: port must be %d (StartTLS) or %d (LDAPS)", safedial.PortStartTLS, safedial.PortLDAPS)
+	if !safedial.PortAllowed(cfg.Port) {
+		return nil, errors.New("ldap: port is not an allowed directory port")
+	}
+	if cfg.PageSize < 0 || cfg.PageSize > MaxPageSize {
+		return nil, fmt.Errorf("ldap: page size must be 1 to %d", MaxPageSize)
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -139,10 +149,10 @@ func (p *Prober) open(ctx context.Context, bind, inspect bool) (*session, error)
 		return nil, ctx.Err()
 	}
 	rel := func() { <-p.sem }
-	conn, err := p.cfg.Dialer.Dial(ctx, p.cfg.Host, p.cfg.Port, inspect)
+	conn, err := p.cfg.Dialer.DialMode(ctx, p.cfg.Host, p.cfg.Port, p.cfg.TLSMode, inspect)
 	if err != nil {
 		rel()
-		if errors.Is(err, safedial.ErrBlockedAddress) || errors.Is(err, safedial.ErrPort) || errors.Is(err, safedial.ErrHost) {
+		if errors.Is(err, safedial.ErrBlockedAddress) || errors.Is(err, safedial.ErrPort) || errors.Is(err, safedial.ErrHost) || errors.Is(err, safedial.ErrTLSMode) {
 			return nil, fmt.Errorf("%w: %v", connectors.ErrTargetNotAllowed, err)
 		}
 		return nil, err
