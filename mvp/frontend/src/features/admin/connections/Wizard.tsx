@@ -10,7 +10,7 @@ import {
   Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, readiness, useApi,
 } from "../../../api";
 import { SourceDeletionGuard } from "../SourceDeletionGuard";
-import { VendorLogo } from "../../../components/VendorLogo"; // not in the barrel: keeps the brand marks out of the main chunk
+import { VendorLogo, vendorForType } from "../../../components/VendorLogo"; // not in the barrel: keeps the brand marks out of the main chunk
 import {
   Badge, Button, Callout, AttestInsteadDialog, ChecklistPanel, EmptyState, Kpi, Loading, Page, ReasonDialog, Step, Stepper, useConfirm, useToast,
 } from "../../../components";
@@ -503,7 +503,7 @@ export function ConnectionDetail() {
     <Page
       title={conn.name}
       crumbs={[["Settings"], ["Connections", "/admin/connections"], [conn.name]]}
-      badge={<span className="row tight"><StateBadge state={conn.state} />{conn.simulated && <SimulatedBadge />}</span>}
+      badge={<span className="row tight"><VendorLogo vendor={vendorForType(conn.system, conn.connector_type)} size={32} /><StateBadge state={conn.state} />{conn.simulated && <SimulatedBadge />}</span>}
       sub={<>Template <code>{conn.template.pin}</code> ({conn.template.display_name} {conn.template.version}{conn.template.overlay_version ? `, overlay v${conn.template.overlay_version}` : ""}) · system <code>{conn.system}</code> · role {conn.role.replace("_", " ")}{rev ? ` · revision ${rev.rev}` : ""}</>}
     >
       <div className="wizard">
