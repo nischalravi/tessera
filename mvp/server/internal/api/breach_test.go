@@ -120,7 +120,32 @@ func TestBreachAPI_EndToEnd(t *testing.T) {
 			t.Fatalf("attest answered %v", got)
 		}
 		body := `{"type":"breach.item.attest","payload":{"plan_id":"` + id + `","item_id":"` + it["id"].(string) + `","note":"disabled in the vendor console"}}`
+		itemDetail := func() string {
+			pv, _ := a.call("GET", "/api/breach/plans/"+id, "", 200)
+			for _, x := range planItems(pv) {
+				if x["id"] == it["id"] {
+					d, _ := x["detail"].(string)
+					return d
+				}
+			}
+			t.Fatalf("item %v vanished", it["id"])
+			return ""
+		}
+		if attested == 0 {
+			// a rejected request puts the item back in progress with a clear text (issue #547)
+			rej := requester.call("POST", "/api/admin/change-requests", body, 201)
+			if d := itemDetail(); d != "attestation requested; a second admin must approve it" {
+				t.Errorf("detail while requested = %q", d)
+			}
+			admin2.call("POST", "/api/admin/change-requests/"+rej["id"].(string)+"/reject", "{}", 200)
+			if d := itemDetail(); !strings.Contains(d, "not approved") || strings.Contains(d, "must approve") {
+				t.Errorf("detail after rejection = %q", d)
+			}
+		}
 		ch := requester.call("POST", "/api/admin/change-requests", body, 201)
+		if d := itemDetail(); d != "attestation requested; a second admin must approve it" {
+			t.Errorf("detail while requested = %q", d)
+		}
 		if ch["status"] != "pending_approval" || ch["two_person"] != true {
 			t.Fatalf("attest request = %v", ch)
 		}
@@ -145,6 +170,13 @@ func TestBreachAPI_EndToEnd(t *testing.T) {
 		for _, x := range planItems(v) {
 			if x["id"] == it["id"] && (x["state"] != "attested" || !strings.Contains(x["attested_by"].(string), "approved by")) {
 				t.Errorf("item after approval: %v", x)
+			}
+			if x["id"] == it["id"] {
+				d, _ := x["detail"].(string)
+				if !strings.HasPrefix(d, "attested by ") || !strings.Contains(d, ", approved by ") ||
+					!strings.HasSuffix(d, ": disabled in the vendor console") || strings.Contains(d, "must approve") {
+					t.Errorf("detail after approval = %q", d)
+				}
 			}
 		}
 	}
@@ -174,10 +206,13 @@ func TestBreachAPI_EndToEnd(t *testing.T) {
 			} `json:"attestations"`
 		} `json:"evidence"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &ev); err != nil || len(ev.Evidence.Attestations) != attested {
+	if err := json.Unmarshal(rec.Body.Bytes(), &ev); err != nil || len(ev.Evidence.Attestations) != attested+1 { // plus the one rejected request
 		t.Fatalf("evidence attestations = %+v, %v", ev.Evidence.Attestations, err)
 	}
 	for _, at := range ev.Evidence.Attestations {
+		if at.Status == "rejected" {
+			continue
+		}
 		if at.Status != "applied" || at.RequestedBy == "" || at.ApprovedBy == "" || at.RequestedBy == at.ApprovedBy {
 			t.Errorf("attestation evidence must name two different admins: %+v", at)
 		}

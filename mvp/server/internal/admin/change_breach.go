@@ -23,6 +23,10 @@ func init() {
 		p := v.(*breachAttestPayload)
 		return breachErr(breachSvc.AwaitAttest(e.tx, p.PlanID, p.ItemID, p.Note, ch.ID.String(), e.now))
 	}
+	t.afterEnd = func(e *env, _ *store.AdminChange, v any) error {
+		p := v.(*breachAttestPayload)
+		return breachErr(breachSvc.DropAttest(e.tx, p.PlanID, p.ItemID, e.now))
+	}
 	changeTypes[TypeBreachAttest] = t
 }
 
