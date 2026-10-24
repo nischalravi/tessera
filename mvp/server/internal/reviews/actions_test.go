@@ -67,7 +67,16 @@ func TestActions_ConsultReassignLockClose(t *testing.T) {
 		}
 		_ = n
 	}
-	manager := reviews.Actor{User: store.UserRef{Display: "mgr"}, Manager: true}
+	// a manager is a real user (the events table references platform_users)
+	var manager reviews.Actor
+	s.tx(func(c *store.TenantTx) error {
+		u := &store.PlatformUser{DisplayName: "mgr", CreatedAt: s.now}
+		if err := c.InsertPlatformUser(u); err != nil {
+			return err
+		}
+		manager = reviews.Actor{User: store.UserRef{ID: u.ID, Display: "mgr"}, Manager: true}
+		return nil
+	})
 	run := func(fn func(c *store.TenantTx) error) error {
 		var e error
 		s.tx(func(c *store.TenantTx) error { e = fn(c); return nil })
