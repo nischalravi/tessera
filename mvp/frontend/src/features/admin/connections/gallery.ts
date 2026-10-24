@@ -1,0 +1,58 @@
+// Filter model for the connection type gallery (New connection, step 1). Pure, so `npm test` covers it.
+
+export type Capability = "Identity source" | "Provisioning target" | "HR source";
+export type Category = "Directories & HR" | "Cloud & SaaS" | "Demo / simulated";
+
+export const CATEGORIES: Category[] = ["Demo / simulated", "Directories & HR", "Cloud & SaaS"]; // the default selection is a demo type, so it comes first
+export const CAPABILITIES: Capability[] = ["Identity source", "Provisioning target", "HR source"];
+
+export interface GalleryMeta { vendor: string; publisher: string; category: Category; capabilities: Capability[] }
+
+/** Presentation metadata per connector type id; the types themselves stay in CONNECTOR_TYPES. */
+export const GALLERY_META: Record<string, GalleryMeta> = {
+  "demo-ad": { vendor: "ad", publisher: "Tessera demo", category: "Demo / simulated", capabilities: ["Identity source"] },
+  "demo-okta": { vendor: "okta", publisher: "Tessera demo", category: "Demo / simulated", capabilities: ["Identity source"] },
+  "demo-workday": { vendor: "workday", publisher: "Tessera demo", category: "Demo / simulated", capabilities: ["HR source"] },
+  ad: { vendor: "ad", publisher: "Microsoft", category: "Directories & HR", capabilities: ["Identity source", "Provisioning target"] },
+  ldap: { vendor: "ldap", publisher: "OpenLDAP / 389 Directory Server", category: "Directories & HR", capabilities: ["Identity source"] },
+  entra: { vendor: "entra", publisher: "Microsoft", category: "Directories & HR", capabilities: ["Identity source", "Provisioning target"] },
+  okta: { vendor: "okta", publisher: "Okta", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
+  google: { vendor: "google", publisher: "Google", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
+  workday: { vendor: "workday", publisher: "Workday", category: "Directories & HR", capabilities: ["HR source"] },
+  scim_app: { vendor: "scim_app", publisher: "IETF RFC 7643 / 7644", category: "Cloud & SaaS", capabilities: ["Provisioning target"] },
+};
+
+export interface GalleryType { id: string; label: string; blurb: string; demo: boolean }
+export interface GalleryFilter { q: string; category: Category | ""; capability: Capability | "" }
+
+export const metaOf = (id: string): GalleryMeta =>
+  GALLERY_META[id] ?? { vendor: id, publisher: "", category: "Cloud & SaaS", capabilities: [] };
+
+/** Search matches name, description and publisher; chips narrow by category and capability. */
+export function filterGallery<T extends GalleryType>(items: T[], f: GalleryFilter): T[] {
+  const q = f.q.trim().toLowerCase();
+  return items.filter((t) => {
+    const m = metaOf(t.id);
+    if (f.category && m.category !== f.category) return false;
+    if (f.capability && !m.capabilities.includes(f.capability)) return false;
+    return !q || `${t.label} ${t.blurb} ${m.publisher}`.toLowerCase().includes(q);
+  });
+}
+
+/** Items grouped under their category heading, in CATEGORIES order, empty groups dropped. */
+export function groupGallery<T extends GalleryType>(items: T[]): { category: Category; items: T[] }[] {
+  return CATEGORIES.map((category) => ({ category, items: items.filter((t) => metaOf(t.id).category === category) }))
+    .filter((g) => g.items.length > 0);
+}
+
+/** Roving-tabindex target after an arrow/Home/End key; wraps. Returns the current index for other keys. */
+export function nextIndex(key: string, i: number, n: number): number {
+  if (n === 0) return -1;
+  switch (key) {
+    case "ArrowRight": case "ArrowDown": return (i + 1) % n;
+    case "ArrowLeft": case "ArrowUp": return (i - 1 + n) % n;
+    case "Home": return 0;
+    case "End": return n - 1;
+    default: return i;
+  }
+}
