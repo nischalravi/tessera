@@ -16,6 +16,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/okta"
@@ -32,6 +33,9 @@ const (
 	KindSCIM = "scim"
 	KindOkta = "okta"
 	KindFake = "fake"
+	// KindREST is the generic REST target (issue #552): any HTTP/JSON system, described by a
+	// declarative spec kept in Settings.REST (internal/connectors/restgen).
+	KindREST = "rest"
 
 	// Vault targets (issue #304): safe membership in a privileged-access vault.
 	KindCyberArk    = "cyberark"
@@ -55,6 +59,8 @@ const WorkerActor = "provisioning.worker"
 type Settings struct {
 	// Dialect is the SCIM dialect: "standard" or "entra".
 	Dialect string `json:"dialect,omitempty"`
+	// Preset is the SCIM vendor preset (provision/scim) whose PATCH quirks the client applies.
+	Preset string `json:"preset,omitempty"`
 	// Fault is the fake target's fault mode (dev only).
 	Fault string `json:"fault,omitempty"`
 	// OnDeprovision says what happens to a person's account here once the grace
@@ -69,9 +75,25 @@ type Settings struct {
 	// instead of calling the target itself, and the agent's report finishes
 	// the operation (issue #302). SCIM and Okta targets only.
 	AgentID string `json:"agent_id,omitempty"`
+	// REST is the spec of a generic REST target (restgen.Spec as JSON). It holds no secret; the
+	// credential is the sealed token. REST targets only.
+	REST json.RawMessage `json:"rest,omitempty"`
 	// Discovery is the last read of the target's ServiceProviderConfig and
 	// ResourceTypes (issue #542). It is informational and never gates provisioning.
 	Discovery *DiscoveryRecord `json:"discovery,omitempty"`
+}
+
+// scimClient builds the SCIM client of a target: its dialect, the quirks of its
+// vendor preset, and the capabilities its last discovery recorded.
+func (s Settings) scimClient(hc *http.Client, baseURL, token string) *scim.Client {
+	c := &scim.Client{HTTP: hc, BaseURL: baseURL, Token: token, Dialect: s.Dialect}
+	if p, ok := scim.PresetByID(s.Preset); ok {
+		c.Quirks = p.ClientQuirks()
+	}
+	if s.Discovery != nil {
+		c.SetCapabilities(s.Discovery.Capabilities)
+	}
+	return c
 }
 
 // Engine sends queued operations to their targets and verifies them.
@@ -268,19 +290,36 @@ func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) 
 	}
 	switch pt.Kind {
 	case KindSCIM, KindFake:
-		c := &scim.Client{HTTP: hc, BaseURL: pt.BaseURL, Token: token, Dialect: s.Dialect}
+		c := s.scimClient(hc, pt.BaseURL, token)
 		if pt.Kind == KindFake && s.Fault != "" {
 			c.Header = http.Header{"X-Fake-Fault": {s.Fault}}
 		}
 		return c, nil
 	case KindOkta:
 		return &okta.Client{HTTP: hc, BaseURL: pt.BaseURL, Token: token}, nil
+	case KindREST:
+		return buildREST(hc, pt, token, s, e.Runtime)
 	case KindCyberArk, KindDelinea, KindBeyondTrust:
 		return e.buildVault(hc, pt, token, s)
 	case KindSAP, KindOracle:
 		return e.buildERP(hc, pt, token, s)
 	}
 	return nil, fmt.Errorf("unknown target kind %q", pt.Kind)
+}
+
+// buildREST builds the generic REST target. The credential is the secret the spec's auth type uses
+// (or a JSON object of secrets); the spec's base URL is the target's base URL.
+func buildREST(hc *http.Client, pt *store.ProvTarget, token string, s Settings, rt connsync.Runtime) (target.Connector, error) {
+	spec, err := restgen.ParseSpec(s.REST)
+	if err != nil {
+		return nil, err
+	}
+	spec.BaseURL = pt.BaseURL
+	sec, err := restgen.ParseSecrets(spec.Auth.Type, token)
+	if err != nil {
+		return nil, err
+	}
+	return restgen.NewTarget(spec, sec, rt, hc)
 }
 
 // buildVault builds the target of a vault. The credential is "user:secret"

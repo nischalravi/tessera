@@ -24,6 +24,10 @@ type Discovery struct {
 	ResourceTypes []string `json:"resource_types"`
 	// AgentAdvertised: resource type "Agent" or schema AgentSchema is listed.
 	AgentAdvertised bool `json:"agent_advertised"`
+	// Capabilities are the features /ServiceProviderConfig advertises; Discover
+	// also hands them to the client, which chooses PATCH or PUT, filtered or
+	// whole-collection lookups and ETag preconditions from them.
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
 }
 
 type resourceType struct {
@@ -60,6 +64,8 @@ func (c *Client) Discover(ctx context.Context) (Discovery, error) {
 			errs = append(errs, "/ServiceProviderConfig is not a JSON object")
 		} else {
 			d.ServiceProviderConfig = true
+			d.Capabilities = parseCapabilities(spc)
+			c.caps.Store(d.Capabilities)
 		}
 	}
 	if b, err := c.get(ctx, "/ResourceTypes"); err != nil {

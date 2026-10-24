@@ -18,15 +18,25 @@ import (
 //	TESSERA_SAP_API_ROOT       optional path of the authorization service
 //	TESSERA_SAP_TOKEN_PATH     optional OAuth token path
 func FromEnv(system string, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
-	p := "TESSERA_" + strings.ToUpper(system) + "_"
-	secret, err := connsync.ResolveSecret(getenv(p+"CLIENT_SECRET"), getenv)
+	cfg, err := ConfigFromEnv(system, getenv)
 	if err != nil {
-		return nil, errors.New(p + "CLIENT_SECRET: " + err.Error())
+		return nil, err
 	}
-	s, err := Open(Config{System: system, BaseURL: getenv(p + "BASE_URL"), ClientID: getenv(p + "CLIENT_ID"), ClientSecret: secret,
-		APIRoot: getenv(p + "API_ROOT"), TokenPath: getenv(p + "TOKEN_PATH")}, rt, hc, now)
+	s, err := Open(cfg, rt, hc, now)
 	if err != nil {
 		return nil, err
 	}
 	return NewConnector(s, now), nil
+}
+
+// ConfigFromEnv is the environment mapping of FromEnv on its own, so a governed
+// connection (internal/connectors/governed) reads its settings the same way.
+func ConfigFromEnv(system string, getenv func(string) string) (Config, error) {
+	p := "TESSERA_" + strings.ToUpper(system) + "_"
+	secret, err := connsync.ResolveSecret(getenv(p+"CLIENT_SECRET"), getenv)
+	if err != nil {
+		return Config{}, errors.New(p + "CLIENT_SECRET: " + err.Error())
+	}
+	return Config{System: system, BaseURL: getenv(p + "BASE_URL"), ClientID: getenv(p + "CLIENT_ID"), ClientSecret: secret,
+		APIRoot: getenv(p + "API_ROOT"), TokenPath: getenv(p + "TOKEN_PATH")}, nil
 }

@@ -265,6 +265,9 @@ var readinessMutations = map[string]func(c *store.TenantTx, a, b refs) error{
 	"UpdateRevisionSecret": func(c *store.TenantTx, _, b refs) error {
 		return c.UpdateRevisionSecret(b["revision:ad"], "vault:x", "1", "h", storetest.Now)
 	},
+	"ClearRevisionSecret": func(c *store.TenantTx, _, b refs) error {
+		return c.ClearRevisionSecret(b["revision:ad"], "h", storetest.Now)
+	},
 	"BumpEvidence": func(c *store.TenantTx, _, b refs) error { return c.BumpEvidence(b["revision:ad"], storetest.Now) },
 	"UpdateBaselineMonitor": func(c *store.TenantTx, _, b refs) error {
 		return c.UpdateBaselineMonitor(&store.Baseline{RevisionID: b["revision:ad"], FailStreak: 99, LastRunAt: &storetest.Now})

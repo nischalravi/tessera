@@ -103,6 +103,9 @@ func init() {
 		case "sealed", "vault", "agent":
 			return pass("The credential is held as a "+kind+" reference.", map[string]any{"kind": kind})
 		case "":
+			if env.TemplateID == "agentcore" { // a recorded snapshot: nothing is authenticated
+				return pass("No credential is held: the connection reads a recorded snapshot.", map[string]any{"kind": "none"})
+			}
 			return fail("No credential or vault reference is set.", nil)
 		}
 		return fail("The credential reference is not sealed, vault or agent.", nil)
@@ -485,6 +488,20 @@ func init() {
 			return pass(what+" readable.", map[string]any{"available": true})
 		}
 	}
+	// read_probe: the connector's own reader returned objects (counts only). A read that
+	// returns nothing is a failure: an empty vault, ERP, organization or feed is nearly
+	// always a scope or rights mistake, and a clean-looking empty result hides it.
+	live("read_probe", template.OpSample, sample(connectors.SampleQuery{Op: "probe", Limit: connectors.MaxSample},
+		func(_ Env, _ Params, s connectors.SampleStats) Result {
+			obs := map[string]any{"objects": s.Objects, "classes": s.PerClass}
+			if !s.Available {
+				return fail("The source could not be read.", obs)
+			}
+			if s.Objects == 0 {
+				return fail("The read returned no objects: check the scope and the account's read rights.", obs)
+			}
+			return pass(fmt.Sprintf("Read %d objects (counts only).", s.Objects), obs)
+		}))
 	live("roles_readable", template.OpSample, sample(connectors.SampleQuery{Op: "roles", Limit: 20}, available("Admin role assignments")))
 	live("group_rules_readable", template.OpSample, sample(connectors.SampleQuery{Op: "rules", Limit: 20}, available("Group rules")))
 	live("signin_activity_available", template.OpSample, sample(connectors.SampleQuery{Op: "signin", Limit: 1}, available("signInActivity")))
@@ -502,6 +519,20 @@ func init() {
 			return fail(fmt.Sprintf("Member lists are truncated: %d on list calls, %d on get.", s.RangedCount, s.FullCount), obs)
 		}
 		return pass("Group membership is complete on list calls.", obs)
+	}))
+	live("mapping_applied", template.OpSample, sample(connectors.SampleQuery{Op: "mapping"}, func(env Env, _ Params, s connectors.SampleStats) Result {
+		obs := map[string]any{"mapped": s.Objects, "pages": s.Pages, "unmapped_fields": len(s.Missing)}
+		switch {
+		case s.Objects == 0:
+			return fail("Listing users returned no record the mapping could read (check items_path and fields.id and fields.username).", obs)
+		case len(s.Missing) > 0:
+			obs["missing"] = s.Missing
+			return fail("Mapped fields no record filled: "+strings.Join(s.Missing, ", "), obs)
+		case len(s.Findings) > 0:
+			obs["findings"] = s.Findings
+			return fail("The listing is inconsistent: "+strings.Join(s.Findings, "; "), obs)
+		}
+		return pass(fmt.Sprintf("%d users read over %d pages with every mapped field filled.", s.Objects, s.Pages), obs)
 	}))
 	live("field_inventory", template.OpSample, sample(connectors.SampleQuery{Op: "fields", Limit: 1}, func(env Env, p Params, s connectors.SampleStats) Result {
 		var found []string

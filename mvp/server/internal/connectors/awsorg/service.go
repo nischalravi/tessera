@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -58,7 +59,12 @@ type CreateInput struct {
 	Name        string
 	Config      Config
 	Credentials Credentials
+	// ExternalID, when set, is the sts:ExternalId the reader role already
+	// trusts (a governed connection's probe used it); empty generates one.
+	ExternalID string
 }
+
+var externalIDRE = regexp.MustCompile(`^[\w+=,.@:/-]{2,1000}$`)
 
 // MaxNameLen bounds a connector name.
 const MaxNameLen = 80
@@ -89,6 +95,13 @@ func (s *Service) CreateConnector(c *store.TenantTx, in CreateInput, actor strin
 	if err := in.Credentials.Validate(); err != nil {
 		return nil, invalid("invalid_credentials", "%v", err)
 	}
+	if in.ExternalID != "" && !externalIDRE.MatchString(in.ExternalID) {
+		return nil, invalid("invalid_external_id", "external_id is not a valid sts:ExternalId")
+	}
+	ext := in.ExternalID
+	if ext == "" {
+		ext = "tessera-" + seal.RandomString(32, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	}
 	id := uuid.NewString()
 	sealed, err := SealCredentials(s.Sealer, c.Tenant(), id, in.Credentials)
 	if err != nil {
@@ -100,7 +113,7 @@ func (s *Service) CreateConnector(c *store.TenantTx, in CreateInput, actor strin
 	}
 	k := &store.AWSConnector{ID: id, Name: in.Name, Config: cb, CredentialsEnc: sealed, CreatedBy: actor, CreatedAt: now, UpdatedAt: now,
 		// not a secret: the customer puts it in the role's trust policy (sts:ExternalId)
-		ExternalID: "tessera-" + seal.RandomString(32, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")}
+		ExternalID: ext}
 	if err := c.InsertAWSConnector(k); err != nil {
 		if errors.Is(err, store.ErrDuplicate) {
 			return nil, &InputError{Kind: "conflict", Code: "name_taken", Msg: "a connector with this name already exists"}

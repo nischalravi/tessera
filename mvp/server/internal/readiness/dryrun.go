@@ -11,11 +11,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/checks"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 // StageFunc writes a discovery result into the staging tables (ingest.Stage;
@@ -24,12 +26,14 @@ type StageFunc func(c *store.TenantTx, runID, system string, res *connectors.Dis
 
 // hrItems name the checklist item that maps the HR id, per template.
 var hrItems = map[string]string{"ad": "ad.key.employeeid", "ldap": "ldap.key.hr_id", "entra": "entra.key.employeeid",
-	"okta": "okta.key.employee_number", "google": "gws.key.employee", "scim_app": "scim.key.correlate"}
+	"okta": "okta.key.employee_number", "google": "gws.key.employee", "scim_app": "scim.key.correlate",
+	// the governed types have no HR attribute of their own: the generic correlation item holds the mapping
+	"pam": "base.correlation.rule", "erp": "base.correlation.rule", "agentcore": "base.correlation.rule"}
 
 // meta describes a revision for reconciliation.
 func meta(b *Bundle, now time.Time) reconcile.Meta {
 	m := reconcile.Meta{ConnectionID: b.Conn.ID, System: b.Conn.System, SystemName: b.Template.DisplayName,
-		TemplateID: b.Template.ID, Role: b.Conn.Role, CorrelationKey: b.Config.CorrelationKey,
+		TemplateID: b.Template.ID, Inventory: b.Template.Inventory, Role: b.Conn.Role, CorrelationKey: b.Config.CorrelationKey,
 		HRAttribute: b.Config.HRIDAttribute, HRItem: hrItems[b.Template.ID],
 		RequiredAttrs: b.Template.RequiredAttributes["user"], RecommendedAttrs: b.Template.RecommendedAttributes["user"],
 		Thresholds: b.Template.Thresholds, Privileged: b.Config.PrivilegedExpected, StaleDays: b.Config.StaleDays, Now: now}
@@ -47,14 +51,102 @@ func meta(b *Bundle, now time.Time) reconcile.Meta {
 	return m
 }
 
-// connectorFor returns the connector a dry run discovers through. Only the
-// demo connectors exist before DR-12..18; real types have none yet.
-func connectorFor(b *Bundle, now time.Time) (connectors.Connector, error) {
+// connectorFor returns the connector a dry run discovers through: the demo
+// connectors, and the governed types' own connectors built from the
+// connection (PAM, ERP, code scan, AgentCore; see GovOptions). The live
+// directory types arrive with DR-12 to DR-18.
+func (s *Service) connectorFor(b *Bundle, now time.Time) (connectors.Connector, error) {
 	if cn, ok := connectors.DemoConnectorFor(b.Conn.ConnectorType, now); ok {
 		return cn, nil
 	}
+	if govLive(b) {
+		return s.Runner.Gov.connector(b, now)
+	}
 	return nil, conflict("connector_unavailable", "no %s connector is available yet: live connectors arrive with DR-12 to DR-18",
 		b.Conn.ConnectorType)
+}
+
+// OpenConnector returns the connector of a live connection for its first
+// sync, or ok=false when the type has none to open (the live directory types
+// before DR-12 to DR-18, and the governed types whose records are read by
+// their own feature). A governed connection's connector is built from its
+// live revision's settings and sealed credential, opened inside the transaction.
+func (s *Service) OpenConnector(c *store.TenantTx, ac ActiveConnection, now time.Time) (cn connectors.Connector, ok bool, err error) {
+	if cn, ok := connectors.DemoConnectorFor(ac.connectorType, now); ok {
+		return cn, true, nil
+	}
+	t, isGov := governed.Lookup(ac.connectorType)
+	if !isGov || t.Feature {
+		return nil, false, nil
+	}
+	b, err := s.liveBundle(c, ac, now)
+	if err != nil {
+		return nil, false, err
+	}
+	cn, err = s.Runner.Gov.connector(b, now)
+	return cn, err == nil, err
+}
+
+// GovernedConnectors opens the connectors of a tenant's live governed
+// connections (PAM, ERP, code scan, AgentCore) for a sync, in its own read
+// transaction. A connection whose connector cannot be opened (its credential no
+// longer opens, the source refuses a setting) is returned in failed with the
+// reason, so the others are still read and the failure is reported rather than
+// hidden. Types that hand over to their own feature are not here: that feature
+// syncs them.
+func (s *Service) GovernedConnectors(ctx context.Context, db *store.DB, t tenancy.ID, now time.Time) (cns []connectors.Connector, failed map[string]error, err error) {
+	err = db.ReadTenant(ctx, t, func(c *store.TenantTx) (err error) {
+		cns, failed, err = s.GovernedConnectorsTx(c, now)
+		return err
+	})
+	return cns, failed, err
+}
+
+// GovernedConnectorsTx is GovernedConnectors inside the caller's transaction.
+func (s *Service) GovernedConnectorsTx(c *store.TenantTx, now time.Time) (cns []connectors.Connector, failed map[string]error, err error) {
+	failed = map[string]error{}
+	live, err := s.ActiveConnections(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, ac := range live {
+		if gt, ok := governed.Lookup(ac.connectorType); !ok || gt.Feature {
+			continue
+		}
+		cn, _, err := s.OpenConnector(c, ac, now)
+		if err != nil {
+			failed[ac.name] = err
+			continue
+		}
+		cns = append(cns, cn)
+	}
+	return cns, failed, nil
+}
+
+// GovernedParams returns a live governed connection as the governed package
+// opens it (settings and the opened credential), for the hand-over of the
+// connector types whose records are read by their own feature.
+func (s *Service) GovernedParams(c *store.TenantTx, ac ActiveConnection, now time.Time) (governed.Params, error) {
+	if _, ok := governed.Lookup(ac.connectorType); !ok {
+		return governed.Params{}, conflict("connector_unavailable", "%s is not a governed connector type", ac.connectorType)
+	}
+	b, err := s.liveBundle(c, ac, now)
+	if err != nil {
+		return governed.Params{}, err
+	}
+	return s.Runner.Gov.params(b), nil
+}
+
+func (s *Service) liveBundle(c *store.TenantTx, ac ActiveConnection, now time.Time) (*Bundle, error) {
+	rev, err := c.Revision(ac.revisionID)
+	if err != nil {
+		return nil, err
+	}
+	b, err := s.Load(c, rev, now)
+	if err != nil {
+		return nil, err
+	}
+	return b, s.loadCredential(c, b)
 }
 
 // DryRun stages a snapshot of the connection's in-progress revision and
@@ -104,7 +196,10 @@ func (s *Service) dryRun(ctx context.Context, st Scope, connID, actor string, cl
 		} else if n > 0 {
 			return conflict("dry_run_running", "a dry run is already in flight in this tenant")
 		}
-		if cn, err = connectorFor(b, start); err != nil {
+		if err = s.loadCredential(c, b); err != nil {
+			return err
+		}
+		if cn, err = s.connectorFor(b, start); err != nil {
 			return err
 		}
 		run = &store.CheckRun{ID: store.NewID(), RevisionID: pending.ID, Kind: "dry_run", Simulated: b.Simulated(),

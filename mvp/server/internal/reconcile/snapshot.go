@@ -11,11 +11,14 @@ import (
 
 // Meta is what reconciliation needs to know about the connection.
 type Meta struct {
-	ConnectionID     string
-	System           string
-	SystemName       string // display name of the system, e.g. "Okta"
-	TemplateID       string
-	Role             string // authoritative | account_source
+	ConnectionID string
+	System       string
+	SystemName   string // display name of the system, e.g. "Okta"
+	TemplateID   string
+	Role         string // authoritative | account_source
+	// Inventory: the source reports findings or records, not accounts; the
+	// staged account data checks do not apply.
+	Inventory        bool
 	CorrelationKey   string
 	HRAttribute      string
 	HRItem           string // checklist item that maps the HR id

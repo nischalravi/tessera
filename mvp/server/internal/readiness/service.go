@@ -21,7 +21,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/agent"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -45,6 +49,7 @@ type Service struct {
 func NewService(reg *template.Registry, env string) *Service {
 	s := &Service{Templates: reg, Env: env, LiveTTL: DefaultLiveTTL}
 	s.Runner.Live.Env = env
+	s.Runner.REST.Env = env
 	return s
 }
 
@@ -305,6 +310,11 @@ func (s *Service) Create(c *store.TenantTx, in CreateInput, actor string, now ti
 	if in.System == "" {
 		in.System = demoSystems[in.ConnectorType]
 	}
+	if gt, ok := governed.Lookup(in.ConnectorType); ok && in.System == "" {
+		// the system its connector writes into the graph, so counts, the call guard and the
+		// legacy env connector of the same system line up
+		in.System = gt.System
+	}
 	if in.System == "" {
 		in.System = strings.Trim(regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(strings.ToLower(in.Name), "-"), "-")
 	}
@@ -419,14 +429,37 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 	if cfg.WriteMode != "" && !slices.Contains(template.WriteModes, cfg.WriteMode) {
 		return nil, unprocessable("invalid_config", "write_mode must be one of %v", template.WriteModes)
 	}
+	if cfg.Rest != nil && b.Template.ID == "rest_generic" {
+		// the environment's URL policy (https only in prod) applies on save
+		if errs := cfg.Rest.Validate(connsync.Runtime{Env: s.Env, AllowLoopback: s.Env == config.Dev}); len(errs) > 0 {
+			fields := make([]FieldError, len(errs))
+			for i, e := range errs {
+				fields[i] = FieldError{"rest." + e.Field, e.Msg}
+			}
+			return nil, &Error{Status: http.StatusUnprocessableEntity, Code: "invalid_config", Msg: "the rest spec is not valid", Fields: fields}
+		}
+	}
 	before := passing(b.Eval)
 	changed := changedFields(b.Config, cfg)
 	rev := *b.Rev
+	// Where a REST connection sends its credential (hosts, auth type, header or query field) is part of the
+	// config. Moving it drops the stored credential, so it has to be entered again: an edit can never point a
+	// credential that was given for one place at another.
+	credCleared := rev.SecretRef != nil && b.Template.ID == "rest_generic" && restDestination(b.Config.Rest) != restDestination(cfg.Rest)
+	if credCleared {
+		rev.SecretRef, rev.SecretVersion = nil, nil
+	}
 	if err := setRevisionConfig(&rev, b.Conn, cfg); err != nil {
 		return nil, err
 	}
 	if err := c.UpdateRevisionConfig(rev.ID, rev.Config, rev.ConfigHash, rev.WriteMode, rev.ExpectedCounts, now); err != nil {
 		return nil, err
+	}
+	if credCleared {
+		if err := c.ClearRevisionSecret(rev.ID, rev.ConfigHash, now); err != nil {
+			return nil, err
+		}
+		changed = append(changed, "credential (cleared: the REST destination changed)")
 	}
 	if err := c.UpdateConnectionOwners(b.Conn.ID, optText(cfg.TechnicalOwner), optText(cfg.BusinessOwner), now); err != nil {
 		return nil, err
@@ -882,4 +915,12 @@ func (s *Service) TemplateForTenant(c *store.TenantTx, templateID string) (*temp
 		return t, err
 	}
 	return s.templateFor(c, templateID, strings.TrimPrefix(t.Pin(), t.ID+"@"), ov.Version)
+}
+
+// restDestination is the secret destination of a REST spec ("" for none).
+func restDestination(s *restgen.Spec) string {
+	if s == nil {
+		return ""
+	}
+	return s.SecretDestination()
 }

@@ -146,6 +146,7 @@ POST   /api/admin/archive/segments/{segment_id}/verify audit.verify  -  # issue 
 GET    /api/admin/archive/segments/{segment_id}/export audit.read    STEP_UP_ADMIN  # issue #298
 GET    /api/readiness/templates                      connections.read   -
 GET    /api/readiness/templates/{type}               connections.read   -
+GET    /api/scim/presets                             connections.read   -
 PUT    /api/readiness/overlays/{type}                connections.manage STEP_UP_POLICY
 GET    /api/readiness/openapi.json                   auth.self          -  #
 GET    /api/connections                              connections.read   -

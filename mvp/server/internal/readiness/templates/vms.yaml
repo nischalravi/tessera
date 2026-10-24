@@ -1,0 +1,85 @@
+# Contractor feeds from a vendor-management system: SAP Fieldglass, Beeline, and a CSV feed fetched
+# over HTTPS (issue #304). Assignments become contractors with a sponsor and an end date; the
+# contractor intake (not the account graph) holds them, so the staged account data checks do not
+# apply (inventory). Read-only: every request is a GET except the OAuth token request.
+template: vms
+version: 1.0.0
+extends: base@1
+display_name: Contractor feed (VMS)
+connector_types: [fieldglass, beeline, csvfeed]
+role: account_source
+inventory: true
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: worker_id
+required_attributes:
+  user: [worker_id, email]
+items:
+  - id: vms.endpoint
+    title: Base URL is HTTPS with a verified certificate and reachable through safehttp
+    category: transport
+    level: required
+    why: "Contractor records are personal data; clear text or an unverified certificate exposes them."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the VMS host name (no path); paths are separate settings."
+    config_fields: [base_url]
+
+  - id: vms.auth
+    title: Credential accepted (OAuth client id and secret for Fieldglass and Beeline, bearer token for a CSV feed)
+    category: access
+    level: required
+    why: "Proves the stored credential before any read."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Store the credential again as client_id:client_secret (a CSV feed: its bearer token)."
+    depends_on: [vms.endpoint]
+    config_fields: [base_url, settings, credential]
+
+  - id: vms.read
+    title: Worker assignments are readable
+    category: scope
+    level: required
+    why: "A feed that authenticates but returns nothing leaves contractors unmanaged without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Check the worker listing path (Fieldglass /api/v1/workers, Beeline /api/v2/assignments) and the integration's rights; the first real tenant should confirm the field names."
+    depends_on: [vms.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: vms.sponsor
+    title: Every contractor assignment names a sponsoring employee
+    category: ownership
+    level: required
+    why: "A contractor without a sponsor has no one to approve access or end it; the intake holds such records."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Map the sponsor field (Settings, mapping) or make the VMS require it on every assignment."
+    config_fields: [settings]
+
+  - id: vms.enddate
+    title: Every assignment carries an end date that drives the leaver plan
+    category: account_status
+    level: required
+    why: "The end date is the contractor's leaver trigger; without it access never ends by itself."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Make the VMS require an end date, or map the field that holds it."
+    config_fields: [settings]
+
+  - id: vms.replay
+    title: Replaying the feed changes nothing (stable event ids)
+    category: change_tracking
+    level: recommended
+    why: "A feed re-read after an outage must not create duplicate contractors."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Automatic: records carry a stable id per version. Confirm after the first sync that a second sync reports no changes."

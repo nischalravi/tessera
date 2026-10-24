@@ -14,10 +14,14 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
+	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -80,10 +84,13 @@ type targetView struct {
 	Kind           string `json:"kind"`
 	BaseURL        string `json:"base_url"`
 	Dialect        string `json:"dialect,omitempty"`
+	Preset         string `json:"preset,omitempty"` // SCIM vendor preset (quirk flags), when the target was set up from one
 	APIRoot        string `json:"api_root,omitempty"`
 	Fault          string `json:"fault,omitempty"`
 	OnDeprovision  string `json:"on_deprovision,omitempty"` // "delete": accounts are deleted after the grace period (issue #74)
 	AgentID        string `json:"agent_id,omitempty"`       // the Directory Agent that reaches this target (issue #302)
+	// Rest is a REST target's spec as saved (no base URL, no secret; issue #552).
+	Rest json.RawMessage `json:"rest,omitempty"`
 	// Discovery is the last read of a SCIM target's ServiceProviderConfig and ResourceTypes (issue #542).
 	Discovery     *provision.DiscoveryRecord `json:"discovery,omitempty"`
 	WriteBack     bool                       `json:"write_back"`
@@ -96,7 +103,7 @@ func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -252,10 +259,16 @@ type targetInput struct {
 	Kind    string `json:"kind"`
 	BaseURL string `json:"base_url"`
 	Dialect string `json:"dialect"`
-	Fault   string `json:"fault"`
+	// Preset is a SCIM vendor preset id (provision/scim): its PATCH quirks apply to this target.
+	Preset string `json:"preset"`
+	Fault  string `json:"fault"`
 	// APIRoot overrides the API path of a vault target.
 	APIRoot string `json:"api_root"`
-	// Token is the credential: an API token (Okta, SCIM) or "user:secret" (a vault).
+	// Rest is the declarative spec of a REST target (kind rest): base URL, auth type, mapping and the
+	// write operations as request templates (internal/connectors/restgen). It holds no secret.
+	Rest json.RawMessage `json:"rest"`
+	// Token is the credential: an API token (Okta, SCIM), "user:secret" (a vault), or for a REST target
+	// the secret its auth type uses (or a JSON object of client_secret, api_key, password, token).
 	Token     string `json:"token"`
 	WriteBack bool   `json:"write_back"`
 	// OnDeprovision is "disable" (the default: leave a deprovisioned guest's
@@ -273,7 +286,7 @@ type targetInput struct {
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	var st provision.Settings
 	switch in.Kind {
-	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle:
+	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle, provision.KindREST:
 		if s.cfg.Env == "prod" && !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://") {
 			return st, badRequest("invalid_base_url", "base_url must be https")
 		}
@@ -299,13 +312,20 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta, cyberark, delinea, beyondtrust, sap, oracle or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle or fake")
+	}
+	if in.Kind == provision.KindREST {
+		if err := s.validateRest(in, &st); err != nil {
+			return st, err
+		}
+	} else if len(in.Rest) > 0 {
+		return st, badRequest("invalid_rest", "rest applies to REST targets only")
 	}
 	vault := slices.Contains(provision.PAMKinds, in.Kind) || slices.Contains(provision.ERPKinds, in.Kind) // a target with a path root and a user:secret credential
 	switch {
-	case (in.Kind == provision.KindOkta || vault) && in.Dialect != "":
+	case (in.Kind == provision.KindOkta || vault || in.Kind == provision.KindREST) && in.Dialect != "":
 		return st, badRequest("invalid_dialect", "dialect applies to SCIM targets only")
-	case in.Kind != provision.KindOkta && !vault && !slices.Contains([]string{"", "standard", "entra"}, in.Dialect):
+	case in.Kind != provision.KindOkta && !vault && in.Kind != provision.KindREST && !slices.Contains([]string{"", "standard", "entra"}, in.Dialect):
 		return st, badRequest("invalid_dialect", "dialect must be standard or entra")
 	case in.APIRoot != "" && !vault:
 		return st, badRequest("invalid_api_root", "api_root applies to vault and ERP targets only")
@@ -313,7 +333,13 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		return st, badRequest("invalid_api_root", "api_root must be an absolute path")
 	}
 	st.Dialect, st.APIRoot = in.Dialect, in.APIRoot
-	if in.Kind == provision.KindOkta || vault {
+	if in.Preset != "" {
+		if _, ok := scimpreset.PresetByID(in.Preset); !ok || in.Kind != provision.KindSCIM {
+			return st, badRequest("invalid_preset", "preset must be the id of a SCIM vendor preset, on a scim target")
+		}
+		st.Preset = in.Preset
+	}
+	if in.Kind == provision.KindOkta || vault || in.Kind == provision.KindREST {
 		st.Dialect = ""
 	}
 	if in.AgentID != "" {
@@ -338,6 +364,43 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		return st, badRequest("invalid_credential", "token is longer than 4 KiB")
 	}
 	return st, nil
+}
+
+// validateRest checks the spec of a REST target and keeps it, without the base URL (which is the
+// target's own), in the settings. Every problem is returned at once, by field.
+func (s *Server) validateRest(in *targetInput, st *provision.Settings) error {
+	if len(in.Rest) == 0 {
+		return badRequest("invalid_rest", "a REST target needs its rest spec")
+	}
+	spec, err := restgen.ParseSpec(in.Rest)
+	if err != nil {
+		return badRequest("invalid_rest", err.Error())
+	}
+	spec.BaseURL = in.BaseURL
+	if errs := spec.Validate(connsync.Runtime{Env: s.cfg.Env, AllowLoopback: s.cfg.Env == config.Dev}); len(errs) > 0 {
+		fields := make([]readiness.FieldError, len(errs))
+		for i, e := range errs {
+			fields[i] = readiness.FieldError{Field: e.Field, Msg: e.Msg}
+		}
+		return &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "invalid_rest",
+			Msg: "the rest spec is not valid", Fields: fields}
+	}
+	if spec.Writes == nil {
+		return &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "invalid_rest", Msg: "the rest spec is not valid",
+			Fields: []readiness.FieldError{{Field: "writes", Msg: "a provisioning target needs at least one write operation"}}}
+	}
+	if in.Token != "" {
+		if _, err := restgen.ParseSecrets(spec.Auth.Type, in.Token); err != nil {
+			return badRequest("invalid_credential", err.Error()) // the message never holds the secret
+		}
+	}
+	spec.BaseURL = "" // the target's base_url is the one of record
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		return err
+	}
+	st.REST = raw
+	return nil
 }
 
 func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
@@ -387,6 +450,14 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	// stored token must never follow the target to another origin or kind: an
 	// edit that moves it has to bring a new token (#315).
 	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL))
+	if existing && !moved && in.Kind == provision.KindREST {
+		// where a REST target sends its secret is also in the spec: the token URL's origin, the auth type and
+		// the header or query parameter. Moving any of them moves the credential.
+		var os provision.Settings
+		if json.Unmarshal([]byte(old.Settings), &os) != nil || restDestination(os.REST, old.BaseURL) != restDestination(st.REST, in.BaseURL) {
+			moved = true
+		}
+	}
 	if existing && !moved {
 		// an edit that leaves the destination alone keeps what discovery found there
 		var os provision.Settings
@@ -424,6 +495,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 			Msg: "changing the target's kind or origin (scheme, host, port) needs a new token; the stored credential does not move with it"}
 	case in.Kind == provision.KindOkta && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
+	case in.Kind == provision.KindREST && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "a REST target needs its credential (the secret its auth type uses)")
 	case isUserSecretKind(in.Kind) && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "a vault or ERP target needs its credential as user:secret (client_id:client_secret for an ERP)")
 	}
@@ -448,6 +521,16 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, viewTarget(saved, conn.Name), nil
+}
+
+// restDestination is the secret destination of a stored REST spec, whose own base URL is the target's.
+func restDestination(raw json.RawMessage, baseURL string) string {
+	spec, err := restgen.ParseSpec(raw)
+	if err != nil {
+		return "unreadable"
+	}
+	spec.BaseURL = baseURL
+	return spec.SecretDestination()
 }
 
 // isUserSecretKind: the kinds whose credential is "user:secret" (vaults and ERPs).

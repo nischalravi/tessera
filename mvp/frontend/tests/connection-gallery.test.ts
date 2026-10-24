@@ -1,5 +1,6 @@
 // New connection, step 1: the app-gallery filter model. Run with `npm test`.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { CATEGORIES, GALLERY_META, filterGallery, groupGallery, nextIndex } from "../src/features/admin/connections/gallery.ts";
@@ -10,7 +11,14 @@ const T = [
   ["demo-workday", "Workday (demo)", "The demo HR source", true], ["ad", "Active Directory", "Through the Directory Agent", false],
   ["ldap", "OpenLDAP / 389-DS", "Generic LDAP", false], ["entra", "Microsoft Entra ID", "Microsoft Graph", false],
   ["okta", "Okta", "OAuth service app", false], ["google", "Google Workspace", "Domain-wide delegation", false],
-  ["workday", "Workday", "Integration system user", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false],
+  ["workday", "Workday", "Integration system user", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false], ["scim:auth0", "Auth0", "Enterprise connection", false],
+  ["awsorg", "AWS Organizations and IAM", "Reader role in each account", false], ["githubscan", "GitHub (code scan)", "Reads MCP configuration", false],
+  ["sap", "SAP", "Roles and transaction codes", false], ["oracle", "Oracle Fusion Applications", "Roles of Oracle Fusion", false],
+  ["cyberark", "CyberArk Privileged Access Manager", "Safes and vaulted accounts", false], ["beyondtrust", "BeyondTrust Password Safe", "Smart rules", false],
+  ["delinea", "Delinea Secret Server", "Folders and secrets", false], ["fieldglass", "SAP Fieldglass", "Contractor assignments", false],
+  ["beeline", "Beeline", "Contractor assignments", false], ["csvfeed", "Contractor CSV feed", "A contractor file", false],
+  ["agentcore", "AWS Bedrock AgentCore", "Agent runtimes", false],
+  ["rest_generic", "Generic REST API", "Any HTTP/JSON system, mapped by a declarative spec", false],
 ].map(([id, label, blurb, demo]) => ({ id, label, blurb, demo })) as { id: string; label: string; blurb: string; demo: boolean }[];
 const none = { q: "", category: "" as const, capability: "" as const };
 const ids = (f: Partial<typeof none>) => filterGallery(T, { ...none, ...f }).map((t) => t.id);
@@ -26,14 +34,41 @@ test("search matches name, description and publisher, ignoring case and padding"
   assert.deepEqual(ids({ q: "ldap" }), ["ldap"]);
   assert.deepEqual(ids({ q: "graph" }), ["entra"]); // description
   assert.deepEqual(ids({ q: "7644" }), ["scim_app"]); // publisher
+  assert.deepEqual(ids({ q: "json" }), ["rest_generic"]); // description and publisher
   assert.deepEqual(ids({ q: "nothing like this" }), []);
 });
 
 test("chips filter by category and capability, and combine with search", () => {
   assert.deepEqual(ids({ category: "Demo / simulated" }), ["demo-ad", "demo-okta", "demo-workday"]);
   assert.deepEqual(ids({ capability: "HR source" }), ["demo-workday", "workday"]);
-  assert.deepEqual(ids({ capability: "Provisioning target", category: "Cloud & SaaS" }), ["okta", "google", "scim_app"]);
+  assert.deepEqual(ids({ capability: "Provisioning target", category: "Cloud & SaaS" }), ["okta", "google", "scim_app", "rest_generic"]);
   assert.deepEqual(ids({ capability: "HR source", q: "demo" }), ["demo-workday"]);
+});
+
+test("the connectors the server already had are in the gallery under their categories", () => {
+  const want: Record<string, string[]> = {
+    "Cloud & IaaS": ["awsorg"], "Source code": ["githubscan"], ERP: ["sap", "oracle"], "Privileged access": ["cyberark", "beyondtrust", "delinea"],
+    "Contractor & VMS": ["fieldglass", "beeline", "csvfeed"], "AI agents": ["agentcore"],
+  };
+  for (const [category, types] of Object.entries(want)) {
+    assert.ok(CATEGORIES.includes(category as never), category);
+    assert.deepEqual(ids({ category: category as never }), types, category);
+  }
+  assert.deepEqual(ids({ capability: "Agent discovery" }), ["githubscan", "agentcore"]);
+  assert.deepEqual(ids({ capability: "Contractor source" }), ["fieldglass", "beeline", "csvfeed"]);
+  assert.deepEqual(ids({ capability: "Access inventory", category: "Privileged access" }), ["cyberark", "beyondtrust", "delinea"]);
+  assert.deepEqual(ids({ q: "fieldglass" }), ["fieldglass"]);
+  assert.deepEqual(ids({ q: "  privileged " }), ["cyberark"]);
+});
+
+test("every type has a logo: a simple-icons mark or an original glyph", () => {
+  const src = readFileSync(new URL("../src/components/VendorLogo.tsx", import.meta.url), "utf8");
+  for (const t of T) {
+    const vendor = GALLERY_META[t.id].vendor;
+    assert.match(src, new RegExp(`^\\s+${vendor}: \\{`, "m"), `${t.id}: no mark or glyph for ${vendor}`);
+  }
+  assert.match(src, /siSap\b/, "the SAP mark");
+  assert.match(src, /siGithub\b/, "the GitHub mark");
 });
 
 test("groups follow category order and drop empty ones", () => {

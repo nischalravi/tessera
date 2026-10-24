@@ -556,21 +556,31 @@ func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
 }
 
 // upgradeProvTargetKinds lets a SQLite database created before the vault and ERP target
-// kinds (issue #304) take them. CREATE TABLE IF NOT EXISTS cannot change a CHECK, and the
-// table holds sealed credentials that must survive, so it is rebuilt: the new table is
-// made from the old definition with the wider list, the rows are copied, the old table
-// (with its index and triggers, which the schema run recreates) is dropped, and the new
-// one takes its name. Postgres does this in migration 0601.
+// kinds (issue #304) or the generic REST kind (issue #552) take them. CREATE TABLE IF NOT
+// EXISTS cannot change a CHECK, and the table holds sealed credentials that must survive, so
+// it is rebuilt: the new table is made from the old definition with the wider list, the rows
+// are copied, the old table (with its index and triggers, which the schema run recreates) is
+// dropped, and the new one takes its name. Postgres does this in migrations 0601 and 0850.
 func (d *DB) upgradeProvTargetKinds(ctx context.Context) error {
-	const old = "CHECK (kind IN ('scim','okta','fake'))"
-	const wider = "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle'))"
+	const wider = "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest'))"
+	olds := []string{"CHECK (kind IN ('scim','okta','fake'))",
+		"CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle'))"}
 	var ddl string
 	err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'provisioning_targets'`).Scan(&ddl)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !strings.Contains(ddl, old)) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	old := ""
+	for _, o := range olds {
+		if strings.Contains(ddl, o) {
+			old = o
+		}
+	}
+	if old == "" {
+		return nil
 	}
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {

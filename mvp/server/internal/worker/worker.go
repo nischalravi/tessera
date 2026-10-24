@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,9 +28,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/queue"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 // Kinds are the queue kinds a worker (or an API process) can run. The set is
@@ -92,6 +95,11 @@ type Deps struct {
 	Log   *slog.Logger
 	// Connectors returns the configured connectors (the API's cfg.Connectors).
 	Connectors func(now time.Time) ([]connectors.Connector, error)
+	// Governed opens the connectors of a tenant's live governed connections
+	// (readiness.Service.GovernedConnectors): they sync with the configured ones.
+	// The map names the connections whose connector could not be opened. Nil:
+	// only the configured connectors sync.
+	Governed func(ctx context.Context, t tenancy.ID, now time.Time) ([]connectors.Connector, map[string]error, error)
 	// Provision sends a tenant's due provisioning operations.
 	Provision *provision.Engine
 	// Guard enforces per-target limits and circuit breakers on every call to a
@@ -202,9 +210,26 @@ func (d *Deps) connectorSync(ctx context.Context, j queue.Job) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	var failed map[string]error
+	if d.Governed != nil {
+		gov, f, err := d.Governed(ctx, j.Tenant, now)
+		if err != nil {
+			return nil, err
+		}
+		conns, failed = MergeGoverned(conns, gov), f
+	}
 	out, err := d.syncTenant(ctx, j.Tenant, now, conns, p.Mode == "full", "connector.worker", j.ID)
 	if err != nil {
 		return nil, err
+	}
+	if len(failed) > 0 {
+		names := make([]string, 0, len(failed))
+		for n, e := range failed {
+			names = append(names, n)
+			d.log().Warn("governed connection not synced", "tenant", j.Tenant.String(), "connection", n, "err", e)
+		}
+		sort.Strings(names)
+		out = append(out, ojson.KV{Key: "governed_not_opened", Value: names})
 	}
 	return out, nil
 }

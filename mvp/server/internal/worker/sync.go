@@ -30,6 +30,25 @@ func RunSync(ctx context.Context, tx *store.TenantTx, now time.Time, conns []con
 	return ingestResults(tx, now, results, actor)
 }
 
+// MergeGoverned appends the connectors of a tenant's governed connections to the
+// configured ones, except those of a system a configured connector already reads:
+// the env-configured connector of a system keeps working as it did, and is not
+// read twice because a governed connection of the same system was also activated.
+func MergeGoverned(conns, governed []connectors.Connector) []connectors.Connector {
+	have := map[string]bool{}
+	for _, c := range conns {
+		have[c.System()] = true
+	}
+	out := append([]connectors.Connector(nil), conns...)
+	for _, g := range governed {
+		if !have[g.System()] {
+			have[g.System()] = true
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
 func discoverAll(ctx context.Context, conns []connectors.Connector, full bool) ([]*connectors.DiscoveryResult, error) {
 	results, _, err := discoverGuarded(ctx, conns, full, nil)
 	return results, err

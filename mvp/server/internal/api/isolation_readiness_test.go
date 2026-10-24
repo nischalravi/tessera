@@ -166,6 +166,7 @@ func readinessGetPaths(r map[string]string) map[string]string {
 		"/api/connections/{id}/readiness/evidence":     conn + "/readiness/evidence",
 		"/api/insights/deployment-health/evidence":     "/api/insights/deployment-health/evidence",
 		"/api/readiness/templates":                     "/api/readiness/templates",
+		"/api/scim/presets":                            "/api/scim/presets",
 		"/api/connections":                             "/api/connections",
 		"/api/insights/deployment-health":              "/api/insights/deployment-health",
 		"/api/summary?include=readiness":               "/api/summary?include=readiness",
