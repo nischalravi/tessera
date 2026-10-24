@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 
+import { GALLERY_META } from "../src/features/admin/connections/gallery";
 import { ALICE, report, seriousViolations, settle } from "./helpers";
+
+const TILES = Object.keys(GALLERY_META).length;
 
 // New connection, step 1: the app-gallery picker. A radiogroup of tiles (roving tabindex), filter chips, search.
 
@@ -20,15 +23,16 @@ test("tiles are one radio group: arrows move and select, Space selects, one tab 
   await page.goto("/admin/connections/new");
   await settle(page);
   const group = page.getByRole("radiogroup", { name: "Connector type" });
-  await expect(group.getByRole("radio")).toHaveCount(22);
+  await expect(group.getByRole("radio")).toHaveCount(TILES);
   await expect(group.getByRole("radio", { name: "Active Directory (demo)" })).toBeChecked();
   await group.getByRole("radio", { name: "Active Directory (demo)" }).focus();
   await page.keyboard.press("ArrowRight");
   await expect(group.getByRole("radio", { name: "Okta (demo)" })).toBeChecked();
   await expect(group.getByRole("radio", { name: "Okta (demo)" })).toBeFocused();
   await page.keyboard.press("End");
-  await expect(group.getByRole("radio", { name: "Auth0" })).toBeChecked();
+  await expect(group.getByRole("radio").last()).toBeChecked();
   await page.keyboard.press("ArrowLeft");
+  await expect(group.getByRole("radio").nth(TILES - 2)).toBeChecked();
   await page.keyboard.press("Space");
   await expect(group.getByRole("radio", { checked: true })).toHaveCount(1);
   expect(await group.locator('[role="radio"][tabindex="0"]').count()).toBe(1);
@@ -51,5 +55,5 @@ test("search and chips narrow the tiles, and an empty result says so", async ({ 
   await page.getByRole("searchbox", { name: "Search connector types" }).fill("zzz");
   await expect(page.getByRole("heading", { name: "No systems match" })).toBeVisible();
   await page.getByRole("button", { name: "Clear search and filters" }).click();
-  await expect(radios).toHaveCount(22);
+  await expect(radios).toHaveCount(TILES);
 });

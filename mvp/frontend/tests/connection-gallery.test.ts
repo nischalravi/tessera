@@ -55,3 +55,7 @@ test("arrow keys wrap, Home and End jump, other keys stay put, empty list has no
   assert.equal(nextIndex("ArrowRight", 0, 0), -1);
 });
 
+
+test("Salesforce is an identity source and provisioning target in Cloud & SaaS", () => {
+  assert.deepEqual(GALLERY_META.salesforce, { vendor: "salesforce", publisher: "Salesforce", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] });
+});
