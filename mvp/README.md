@@ -3630,12 +3630,17 @@ Postgres variant): `grp_pit_assigns`, the point-in-time history of attribute ass
   `timeWindow` are alternatives. The same condition tree is rendered as Cedar text and evaluated by the
   decision point (`TestLimits_EvaluatedByPDP`).
 - **Context for conditional denies.** A disallow whose limit reads a `ctx.*` value that the check
-  request does not carry does not apply (a missing value fails the limit, as in Cedar), so callers must
-  supply the context for a conditional deny to take effect. A limit that cannot compile is the
-  opposite case: a disallow with one stays in force unconditionally (and exports as an unconditional
+  request does not carry (or carries malformed, such as an unparseable `ip`) applies: it fails closed, and
+  exports as a `forbid` guarded with `!(context has ip) || ...`. Callers must supply the context to get
+  an allow past such a deny; the check response lists the keys in `context_missing`. An allow whose limit
+  lacks a value still grants nothing. A limit that cannot compile is the opposite case: a disallow with one stays in force unconditionally (and exports as an unconditional
   `forbid`), an allow with one grants nothing. Limits are validated on write (`422 invalid_limit` from
   `/api/groups/attr-assignments`), so this only guards rows stored earlier
   (`TestLimits_UncompilableDisallowFailsClosed`).
+- **Effective view and limited denies.** `GET /api/groups/permissions/effective` evaluates no context, so a
+  deny whose winning disallows all have limits is reported `allowed: false, conditional: true` with a `note`
+  (it denies unless a limit is evaluated and false, and when a context value is missing); an unlimited
+  disallow stays an unconditional deny (`TestEffective_LimitedDisallowIsConditional`).
 - **PIT view.** `grp_pit_assigns` is filled from the `attribute.*` events (and rebuilt by
   `POST /api/groups/pit/rebuild`, pruned by retention). `as_of=T` answers from it and from the effective
   membership history. What the history does not keep is read as it is now: the implication closures, and

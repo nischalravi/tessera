@@ -47,6 +47,14 @@ func (s *Set) Policy(now time.Time) string {
 		if a.Disallowed {
 			effect = "forbid"
 		}
+		// a forbid's limit is guarded with `!(context has x) ||`: a missing context
+		// value must not switch the deny off (fail closed, as Decide does)
+		condText := func() string {
+			if a.Disallowed {
+				return CedarClosed(cond)
+			}
+			return cond.Cedar()
+		}
 		principal := fmt.Sprintf("principal in Tessera::Group::%s", strconv.Quote(a.RoleName))
 		if a.Subject != nil {
 			principal = fmt.Sprintf("principal == Tessera::Identity::\"%d\"", *a.Subject)
@@ -57,11 +65,11 @@ func (s *Set) Policy(now time.Time) string {
 			// the pair also needs the role: the identity holds it only while a member
 			fmt.Fprintf(&b, "\nwhen { principal in Tessera::Group::%s", strconv.Quote(a.RoleName))
 			if cond != nil {
-				fmt.Fprintf(&b, " && (%s)", cond.Cedar())
+				fmt.Fprintf(&b, " && (%s)", condText())
 			}
 			b.WriteString(" }")
 		} else if cond != nil {
-			fmt.Fprintf(&b, "\nwhen { %s }", cond.Cedar())
+			fmt.Fprintf(&b, "\nwhen { %s }", condText())
 		}
 		b.WriteString(";\n\n")
 	}
