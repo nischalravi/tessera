@@ -128,7 +128,7 @@ var tables = []string{
 	// identity model for guests (schema/0226_identity_model.sql)
 	"guest_populations", "identity_source_records", "identity_identifiers", "affiliations",
 	// access requests (schema/0205_requests.sql)
-	"catalog_items", "access_request_lines", "access_request_events",
+	"catalog_items", "access_request_lines", "access_request_events", "access_request_comments", "access_request_attachments",
 	// business roles (schema/0206_business_roles.sql)
 	"business_roles", "business_role_entitlements", "business_role_versions", "business_role_members",
 	"business_role_requests",
