@@ -344,5 +344,26 @@ func GenerateRLS() ([]byte, error) {
 			fmt.Fprintf(&b, "CREATE POLICY lookup_by_hash ON %s FOR SELECT\n  USING (current_setting('app.lookup', true) = '%s');\n", t.Name, setting)
 		}
 	}
+	// Grants are re-applied after every migration run, so a table created by a
+	// migration after 0900_roles.sql is usable by the application role too (#605).
+	b.WriteString(pgAppGrants)
 	return []byte(b.String()), nil
 }
+
+// pgAppGrants mirrors schema/postgres/0900_roles.sql. It is idempotent and does
+// nothing when the tessera_app role does not exist (fail closed).
+const pgAppGrants = `
+-- Privileges of the application role, re-applied after every migration (see 0900_roles.sql).
+DO $roles$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'tessera_app') THEN
+		EXECUTE format('GRANT USAGE ON SCHEMA %I TO tessera_app', current_schema());
+		EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO tessera_app', current_schema());
+		EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO tessera_app', current_schema());
+		REVOKE UPDATE, DELETE, TRUNCATE ON audit_events, audit_checkpoints FROM tessera_app;
+		GRANT UPDATE (anchor_status, anchor_ref, anchored_at, anchor_attempts) ON audit_checkpoints TO tessera_app;
+		EXECUTE format('REVOKE ALL ON %I.schema_migrations FROM tessera_app', current_schema());
+	END IF;
+END
+$roles$;
+`
