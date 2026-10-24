@@ -340,7 +340,8 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	}
 	if in.Kind == provision.KindSalesforce {
 		if _, err := salesforce.CheckURL(in.BaseURL, s.sfRuntime()); err != nil {
-			return st, badRequest("invalid_base_url", "base_url: "+err.Error())
+			// a fixed message: the error text can carry the submitted URL, which is not echoed back
+			return st, badRequest("invalid_base_url", sfURLRule("base_url"))
 		}
 	}
 	if in.Kind == provision.KindREST {
@@ -511,7 +512,7 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		}
 		if cred.LoginURL != "" {
 			if _, err := salesforce.CheckURL(cred.LoginURL, s.sfRuntime()); err != nil {
-				return 0, nil, badRequest("invalid_credential", "login_url: "+err.Error())
+				return 0, nil, badRequest("invalid_credential", sfURLRule("login_url"))
 			}
 		}
 	}
@@ -568,6 +569,11 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, viewTarget(saved, conn.Name), nil
+}
+
+// sfURLRule is the fixed error text for a Salesforce URL that fails salesforce.CheckURL.
+func sfURLRule(field string) string {
+	return field + " must be an https URL on a Salesforce domain (*.my.salesforce.com, *.salesforce.com or *.force.com), with no path"
 }
 
 // sfRuntime is the outbound runtime of Salesforce targets: the dev loopback exception exists in dev only.
