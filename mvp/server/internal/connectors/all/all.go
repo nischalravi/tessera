@@ -37,6 +37,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
@@ -67,7 +68,7 @@ import (
 // eligible assignments (TESSERA_AZURE_*); "gcp" reads Google Cloud IAM policies, roles and service
 // accounts (TESSERA_GCP_*). Both reach the public cloud only: an endpoint override is refused in prod.
 //
-// Register adds the okta, entra, google, workday, rest, sql, salesforce, servicenow, atlassian, azure, gcp, github-scan and aws-agentcore factories. hc is the
+// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, azure, gcp, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -81,6 +82,11 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	}
 	connectors.Factories["workday"] = func(now time.Time) (connectors.Connector, error) {
 		return workday.FromEnv(os.Getenv, now, rt, hc)
+	}
+	// SAP SuccessFactors (issue #556): "successfactors" reads people, jobs and lifecycle events as an
+	// HR source (TESSERA_SUCCESSFACTORS_*; see internal/connectors/successfactors).
+	connectors.Factories["successfactors"] = func(now time.Time) (connectors.Connector, error) {
+		return successfactors.FromEnv(os.Getenv, now, rt, hc)
 	}
 	connectors.Factories["github-scan"] = func(now time.Time) (connectors.Connector, error) {
 		return githubscan.FromEnv(os.Getenv, now, rt, hc)

@@ -51,6 +51,7 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   beeline: { vendor: "beeline", publisher: "Beeline", category: "Contractor & VMS", capabilities: ["Contractor source"] },
   csvfeed: { vendor: "csvfeed", publisher: "CSV over HTTPS", category: "Contractor & VMS", capabilities: ["Contractor source"] },
   agentcore: { vendor: "agentcore", publisher: "Amazon Web Services", category: "AI agents", capabilities: ["Agent discovery"] },
+  successfactors: { vendor: "sap", publisher: "SAP", category: "Directories & HR", capabilities: ["HR source"] },
   rest_generic: { vendor: "rest_generic", publisher: "Declarative JSON or YAML spec", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
 };
 

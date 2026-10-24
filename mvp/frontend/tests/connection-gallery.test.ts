@@ -23,6 +23,7 @@ const T = [
   ["agentcore", "AWS Bedrock AgentCore", "Agent runtimes", false],
   ["rest_generic", "Generic REST API", "Any HTTP/JSON system, mapped by a declarative spec", false],
   ["sql", "Database (SQL)", "PostgreSQL, MySQL, SQL Server or Oracle", false],
+  ["successfactors", "SAP SuccessFactors", "Employee Central as an HR source", false],
 ].map(([id, label, blurb, demo]) => ({ id, label, blurb, demo })) as { id: string; label: string; blurb: string; demo: boolean }[];
 const none = { q: "", category: "" as const, capability: "" as const };
 const ids = (f: Partial<typeof none>) => filterGallery(T, { ...none, ...f }).map((t) => t.id);
@@ -46,7 +47,7 @@ test("search matches name, description and publisher, ignoring case and padding"
 
 test("chips filter by category and capability, and combine with search", () => {
   assert.deepEqual(ids({ category: "Demo / simulated" }), ["demo-ad", "demo-okta", "demo-workday"]);
-  assert.deepEqual(ids({ capability: "HR source" }), ["demo-workday", "workday"]);
+  assert.deepEqual(ids({ capability: "HR source" }), ["demo-workday", "workday", "successfactors"]);
   assert.deepEqual(ids({ capability: "Provisioning target", category: "Cloud & SaaS" }), ["okta", "google", "servicenow", "atlassian", "scim_app", "rest_generic"]);
   assert.deepEqual(ids({ capability: "HR source", q: "demo" }), ["demo-workday"]);
 });
