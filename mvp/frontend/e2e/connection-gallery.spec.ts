@@ -31,9 +31,10 @@ test("tiles are one radio group: arrows move and select, Space selects, one tab 
   await expect(group.getByRole("radio", { name: "Okta (demo)" })).toBeChecked();
   await expect(group.getByRole("radio", { name: "Okta (demo)" })).toBeFocused();
   await page.keyboard.press("End");
-  await expect(group.getByRole("radio", { name: "Generic REST API" })).toBeChecked(); // the last tile
+  // End and ArrowLeft by position, so adding a tile does not break the spec
+  await expect(group.getByRole("radio").last()).toBeChecked();
   await page.keyboard.press("ArrowLeft");
-  await expect(group.getByRole("radio", { name: "SCIM 2.0 application" })).toBeChecked();
+  await expect(group.getByRole("radio").nth(TILES - 2)).toBeChecked();
   await page.keyboard.press("Space");
   await expect(group.getByRole("radio", { checked: true })).toHaveCount(1);
   expect(await group.locator('[role="radio"][tabindex="0"]').count()).toBe(1);
