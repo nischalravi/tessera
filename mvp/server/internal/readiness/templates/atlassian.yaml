@@ -1,0 +1,143 @@
+# Atlassian Cloud site, read through the Jira Cloud REST API and, with an organization API key, the
+# organization admin API (issue #559): users, groups, project roles and product access. Accounts are
+# provisioned through the Atlassian Cloud SCIM preset; write-back here is group membership and project role
+# actors, gated by write_mode and the second approver.
+template: atlassian
+version: 1.0.0
+extends: base@1
+display_name: Atlassian Cloud (Jira and Confluence)
+connector_types: [atlassian]
+role: account_source
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: accountId
+default_hr_id_attribute: emailAddress
+host_allowlist: ["*.atlassian.net"]
+required_attributes:
+  user: [accountId, accountType, active]
+  group: [groupId, name]
+recommended_attributes:
+  user: [emailAddress, displayName]
+items:
+  - id: atlassian.endpoint
+    title: Site URL is HTTPS on an atlassian.net host and reachable through safehttp
+    category: transport
+    level: required
+    why: "Prevents SSRF and clear-text transport: the API token goes only to *.atlassian.net, and the admin key only to api.atlassian.com."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the site host name (https://name.atlassian.net), no path."
+    config_fields: [base_url]
+
+  - id: atlassian.auth
+    title: API token sign-in succeeds (and the organization admin key, when one is set)
+    category: access
+    level: required
+    why: "Proves the token before any read. A token is the dedicated account's, so the account's rights are the connector's."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Create an API token for the dedicated account, check the e-mail in Settings and store the token again. With an organization id, store JSON with api_token and admin_api_key."
+    depends_on: [atlassian.endpoint]
+    config_fields: [base_url, settings, credential]
+
+  - id: atlassian.integration.dedicated
+    title: The token belongs to an account dedicated to Tessera, with Browse users and groups and no more than needed
+    category: access
+    level: required
+    why: "A person's token ends with their employment and carries all their rights; reading users and groups needs Browse users and groups only."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a service account for Tessera. For write-back it also needs site administration (groups) or Administer Projects (roles); leave write-back off otherwise."
+    config_fields: [settings, credential]
+
+  - id: atlassian.read
+    title: Users and groups are readable
+    category: scope
+    level: required
+    why: "A connector that authenticates but reads nothing leaves access unreviewed without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Grant the account Browse users and groups. For product access, set the organization id and an organization API key."
+    depends_on: [atlassian.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: atlassian.profile.email
+    title: E-mail addresses are visible on the profiles (or come from the organization admin API)
+    category: identity_keys
+    level: recommended
+    why: "A user who hides their e-mail cannot be correlated to a person by it; the organization admin API shows the e-mail of a managed account."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: emailAddress, min: 0.9 }
+    remediation:
+      hint: "Verify the domain and manage the accounts in Atlassian Administration, then set the organization id so the admin API supplies the e-mail."
+    config_fields: [settings]
+
+  - id: atlassian.status
+    title: active mapped to the account status vocabulary
+    category: account_status
+    level: required
+    why: "A deactivated user must not read as active access."
+    verify:
+      - kind: data
+        check: status_mapped
+    remediation:
+      hint: "Automatic: the reader maps active and the organization's account status."
+    depends_on: [atlassian.read]
+
+  - id: atlassian.key.account
+    title: accountId used as the key; unique across Atlassian
+    category: identity_keys
+    level: required
+    why: "accountId is permanent and unique; an e-mail address can be hidden or change."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: accountId }
+    remediation:
+      hint: "Keep accountId as the correlation key."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: atlassian.groups
+    title: Groups and project roles read as entitlements, with membership resolved
+    category: groups
+    level: required
+    why: "Product access and permissions come from group membership and project roles."
+    verify:
+      - kind: data
+        check: member_resolution
+    remediation:
+      hint: "Automatic. Name the projects whose roles to read in Settings (project keys)."
+    depends_on: [atlassian.read]
+    config_fields: [settings]
+
+  - id: atlassian.privileged
+    title: Site-admin and admin groups and project admin roles tagged privileged
+    category: groups
+    level: recommended
+    why: "Groups the site lists as site-admin or admin, and a project's administrators role, change who has access."
+    verify:
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "Review who holds them."
+    config_fields: [privileged_expected]
+
+  - id: atlassian.products
+    title: Product access read from the organization admin API
+    category: groups
+    level: optional
+    why: "Which products an account can use is what a licence review needs; it is not in the site's REST API."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set the organization id in Settings and store an organization API key with the token."
+    config_fields: [settings, credential]

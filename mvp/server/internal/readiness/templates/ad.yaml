@@ -83,7 +83,7 @@ items:
 
   # ---- transport
   - id: ad.tls.ldaps
-    title: LDAPS (636) or StartTLS (389); no simple bind in clear text
+    title: LDAPS or StartTLS (any port); no simple bind in clear text
     category: transport
     level: required
     why: "Simple bind sends the password in clear text."
@@ -93,7 +93,7 @@ items:
         params: { min_version: "1.2" }
     remediation:
       hint: "Enable LDAPS on the domain controllers."
-    config_fields: [host, port]
+    config_fields: [host, port, tls_mode]
 
   - id: ad.tls.chain
     title: Server certificate chains to a configured CA, hostname matches, valid more than 30 days
@@ -108,7 +108,7 @@ items:
       hint: "Upload the issuing CA (often your AD CS root) in Connection, Transport. Tessera does not offer skip verification."
       link: https://learn.microsoft.com/troubleshoot/windows-server/active-directory/enable-ldap-over-ssl-3rd-certification-authority
     depends_on: [ad.tls.ldaps]
-    config_fields: [host, port]
+    config_fields: [host, port, tls_mode]
 
   - id: ad.tls.signing_cb
     title: Domain controllers require LDAP signing and channel binding (ADV190023)
@@ -133,7 +133,7 @@ items:
     remediation:
       hint: "Check the account, password, domain controller names and firewall."
     depends_on: [ad.tls.chain]
-    config_fields: [host, port, credential]
+    config_fields: [host, port, tls_mode, credential]
 
   - id: ad.dc.redundancy
     title: At least two domain controllers, or the DNS SRV locator, configured
@@ -466,7 +466,7 @@ items:
     remediation:
       hint: "Use domain controllers, not the global catalog port, for sync."
     depends_on: [ad.topo.domains]
-    config_fields: [host, port]
+    config_fields: [host, port, tls_mode]
 
   - id: ad.topo.trusts
     title: External and forest trusts inventoried; trusted forests connected or flagged

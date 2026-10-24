@@ -338,7 +338,7 @@ func TestAgent_OnlyTypedOps(t *testing.T) {
 				j.Op, j.Sample = agent.OpSample, &connectors.SampleQuery{Limit: connectors.MaxSample + 1}
 			},
 			"sample negative":   func(j *agent.Job) { j.Op, j.Sample = agent.OpSample, &connectors.SampleQuery{Limit: -1} },
-			"port 3268":         func(j *agent.Job) { j.Target.Port = 3268 },
+			"port 3306":         func(j *agent.Job) { j.Target.Port = 3306 },
 			"port 80":           func(j *agent.Job) { j.Target.Port = 80 },
 			"cred path":         func(j *agent.Job) { j.Config.CredName = "../../etc/shadow" },
 			"cred empty":        func(j *agent.Job) { j.Config.CredName = "" },
@@ -1093,7 +1093,7 @@ func TestConfig(t *testing.T) {
 		"missing url":    `{"server_ca_file":"c","state_dir":"s"}`,
 		"wildcard":       `{"server_url":"u","server_ca_file":"c","state_dir":"s","allowed_targets":["*.corp:636"]}`,
 		"broad cidr":     `{"server_url":"u","server_ca_file":"c","state_dir":"s","allowed_targets":["10.0.0.0/8:636"]}`,
-		"other port":     `{"server_url":"u","server_ca_file":"c","state_dir":"s","allowed_targets":["ldap.corp:3268"]}`,
+		"other port":     `{"server_url":"u","server_ca_file":"c","state_dir":"s","allowed_targets":["ldap.corp:3306"]}`,
 		"joined entries": `{"server_url":"u","server_ca_file":"c","state_dir":"s","allowed_targets":["a.corp:636,b.corp:636"]}`,
 		"trailing data":  good + `{}`,
 		"not json":       `allowed_targets: []`,

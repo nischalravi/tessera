@@ -319,7 +319,7 @@ func (s *Service) VerifyAccessToken(r *http.Request) (*auth.VerifiedToken, *auth
 			ClientRowID: ct.client.ID}, nil, nil
 	}
 	// 7. the DPoP proof, bound to this request, this token and its key
-	_, err = s.dpop.ValidateProof(ctx, r.Header, dpop.ProofParams{Method: r.Method, URL: s.cfg.PublicURL + r.URL.Path,
+	_, err = s.dpop.ValidateProof(ctx, r.Header, dpop.ProofParams{Method: r.Method, URL: s.cfg.PublicURL + RequestPath(r),
 		AccessToken: token, ExpectedJKT: c.Cnf.JKT, RequireNonce: s.cfg.RSNonce, Now: now})
 	if err != nil {
 		var pe *dpop.ProofError
@@ -394,4 +394,21 @@ func (s *Service) checkClaims(c *rawClaims, tenant store.Tenant, slug string, no
 		return "the access token subject is not a user"
 	}
 	return ""
+}
+
+type requestPathKey struct{}
+
+// WithRequestPath records the path the client requested, when the router served
+// the request under another one (/api/v1/x is served as /api/x). Proofs bound to
+// the request URL (DPoP htu, the guest claim proof) are checked against it.
+func WithRequestPath(ctx context.Context, path string) context.Context {
+	return context.WithValue(ctx, requestPathKey{}, path)
+}
+
+// RequestPath is the path the client requested (see WithRequestPath).
+func RequestPath(r *http.Request) string {
+	if p, ok := r.Context().Value(requestPathKey{}).(string); ok {
+		return p
+	}
+	return r.URL.Path
 }
