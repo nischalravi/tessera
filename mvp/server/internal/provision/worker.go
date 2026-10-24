@@ -3,6 +3,7 @@ package provision
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldapwrite"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
@@ -25,6 +27,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
+	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -53,6 +56,11 @@ const (
 	// or an application's own tables (issue #553, internal/connectors/sqldb). The target's
 	// Settings.SQL holds the connection; the credential is the database password.
 	KindSQL = "sql"
+	// KindLDAP and KindAD: accounts and group membership in an LDAP directory or Active Directory
+	// (issue #586, internal/connectors/ldapwrite). Settings.LDAP holds the directory; the credential
+	// is the bind password.
+	KindLDAP = "ldap"
+	KindAD   = "ad"
 )
 
 // ERPKinds are the ERP target kinds; the kind is the system's name in internal/connectors/erp.
@@ -86,6 +94,8 @@ type Settings struct {
 	AgentID string `json:"agent_id,omitempty"`
 	// SQL is the database connection of a KindSQL target (no secret in it).
 	SQL *sqldb.Config `json:"sql,omitempty"`
+	// LDAP is the directory of a KindLDAP or KindAD target (no secret in it).
+	LDAP *ldapwrite.Config `json:"ldap,omitempty"`
 	// REST is the spec of a generic REST target (restgen.Spec as JSON). It holds no secret; the
 	// credential is the sealed token. REST targets only.
 	REST json.RawMessage `json:"rest,omitempty"`
@@ -130,6 +140,10 @@ type Engine struct {
 	// Runtime says whether the dev loopback exception applies to vault and ERP
 	// targets (connsync.RuntimeFromConfig). The zero value is the production rules.
 	Runtime connsync.Runtime
+	// DialAllow is the dev-only private-directory allowlist (TESSERA_SAFEDIAL_ALLOW) of ldap and ad targets.
+	DialAllow []safedial.AllowEntry
+	// LDAPDialer replaces the safedial dialer of ldap and ad targets (tests).
+	LDAPDialer func() (*safedial.Dialer, error)
 	// Build creates the connector of a target (tests inject fakes).
 	Build func(t *store.ProvTarget, token string) (target.Connector, error)
 	// Guard, when set, runs every call to a target under that target's
@@ -322,6 +336,8 @@ func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) 
 		return salesforce.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
 	case KindSQL:
 		return e.buildSQL(token, s)
+	case KindLDAP, KindAD:
+		return e.buildLDAP(pt, token, s)
 	}
 	return nil, fmt.Errorf("unknown target kind %q", pt.Kind)
 }
@@ -383,6 +399,39 @@ func (e *Engine) buildSQL(token string, s Settings) (target.Connector, error) {
 		rt = e.Runtime
 	}
 	return sqldb.NewTarget(*s.SQL, connsync.NewSecret(token), rt)
+}
+
+// buildLDAP builds the target of a directory. The credential is the bind password; the connection
+// is made by internal/safedial (the address policy, LDAPS or StartTLS), not by the HTTP client.
+func (e *Engine) buildLDAP(pt *store.ProvTarget, token string, s Settings) (target.Connector, error) {
+	if s.LDAP == nil {
+		return nil, errors.New("the directory settings are missing")
+	}
+	cfg := *s.LDAP
+	cfg.Flavor = pt.Kind
+	var roots *x509.CertPool
+	if cfg.CACertPEM != "" {
+		var err error
+		if roots, err = ldapwrite.CAPool(cfg.CACertPEM); err != nil {
+			return nil, errors.New("the directory's CA bundle is not usable")
+		}
+	}
+	// only a dev runtime is dev: any other environment name gets the production rules
+	env, allow := config.Prod, []safedial.AllowEntry(nil)
+	if e.Runtime.Env == config.Dev {
+		env, allow = config.Dev, e.DialAllow
+	}
+	dial := func() (*safedial.Dialer, error) {
+		return safedial.New(safedial.Options{Env: env, Allow: allow, RootCAs: roots})
+	}
+	if e.LDAPDialer != nil {
+		dial = e.LDAPDialer
+	}
+	d, err := dial()
+	if err != nil {
+		return nil, err
+	}
+	return ldapwrite.NewTarget(cfg, connsync.NewSecret(token), d)
 }
 
 func (e *Engine) workerCtx(ctx context.Context) context.Context {

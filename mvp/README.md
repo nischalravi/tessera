@@ -6256,3 +6256,21 @@ It writes a private JSON report, refusing overwrites without `--force`,
 without opening the database or changing access. Native vendor compatibility is
 unverified; unsupported logic is reported as blocking diagnostics.
 See [the contract, examples and phase limits](../docs/migration-assessment.md).
+
+### LDAP and Active Directory provisioning (issue #586)
+
+- **Target kinds `ldap` and `ad`** (`PUT /api/provisioning/targets/{connection}` with an `ldap` settings object; the bind
+  password is `token`). Package `internal/connectors/ldapwrite`. Write-back is off by default and the engine's approval
+  gates and deletion guard apply (disable and delete are guarded).
+- **Operations.** `create_account` (DN template, `${user.*}` attribute templates, candidate account names tried until one is
+  unique across `unique_attrs`, optional disabled start, random initial password from `password`), `update_account`
+  (allow-listed `update_attrs`; `attrs {"tessera.enabled":"true|false"}` enables or disables; `{"tessera.password":"reset"}`
+  sets a new random password when `allow_password_reset` is on), `disable_account` (AD `userAccountControl` bit 2, or
+  `nsaccountlock`, `ppolicy`, or a configured attribute; optional move to `disabled_ou`), `delete_account`, and
+  `add_entitlement` / `remove_entitlement` (`member`, `uniqueMember` or `memberUid`).
+- **Safety.** LDAPS (636) or StartTLS (389) only, dialled through `internal/safedial`; a bind or password never goes on a
+  clear connection. Every written DN must be below a `write_scope` OU. Templates escape values (RFC 4514 for DNs, RFC 4515
+  for filters). Each change reads first and is re-read to verify. Generated passwords are never stored, logged or returned
+  (AD accounts must change them at next sign-in). Errors are fixed text.
+- **Not yet.** Reaching a private directory through the Directory Agent (the agent push job handles SCIM and Okta only), group
+  create/update, and showing a reset password to the user. Tests use an in-process fake (`ldapwrite/ldapfake`).

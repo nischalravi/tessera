@@ -16,6 +16,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldapwrite"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
@@ -93,6 +94,8 @@ type targetView struct {
 	AgentID        string `json:"agent_id,omitempty"`       // the Directory Agent that reaches this target (issue #302)
 	// SQL is a database target's connection (no secret in it; issue #553).
 	SQL *sqldb.Config `json:"sql,omitempty"`
+	// LDAP is an ldap or ad target's directory settings (no secret in it; issue #586).
+	LDAP *ldapwrite.Config `json:"ldap,omitempty"`
 	// Rest is a REST target's spec as saved (no base URL, no secret; issue #552).
 	Rest json.RawMessage `json:"rest,omitempty"`
 	// Discovery is the last read of a SCIM target's ServiceProviderConfig and ResourceTypes (issue #542).
@@ -107,7 +110,7 @@ func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, SQL: st.SQL, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, SQL: st.SQL, LDAP: st.LDAP, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -287,6 +290,8 @@ type targetInput struct {
 	AgentID string `json:"agent_id"`
 	// SQL is the database connection of a sql target (issue #553). The password is token.
 	SQL *sqldb.Config `json:"sql"`
+	// LDAP is the directory of an ldap or ad target (issue #586). The bind password is token.
+	LDAP *ldapwrite.Config `json:"ldap"`
 }
 
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
@@ -323,6 +328,27 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		}
 		in.BaseURL = "sql://" + net.JoinHostPort(strings.ToLower(in.SQL.Host), strconv.Itoa(in.SQL.EffectivePort())) + "/" + in.SQL.Engine
 		st.SQL = in.SQL
+	case provision.KindLDAP, provision.KindAD:
+		// a directory: LDAPS or StartTLS only (there is no setting for clear text), the bind DN and
+		// password are the credential, and the write scope names the OUs the target may change
+		if in.LDAP == nil {
+			return st, badRequest("invalid_ldap", "ldap (the directory settings) is required for an ldap or ad target")
+		}
+		if in.Fault != "" || in.AgentID != "" || in.Dialect != "" || in.APIRoot != "" || len(in.Rest) > 0 || in.SQL != nil {
+			return st, badRequest("invalid_ldap", "fault, agent_id, dialect, api_root, rest and sql do not apply to an ldap or ad target")
+		}
+		cfg := *in.LDAP
+		cfg.Flavor = in.Kind
+		if err := cfg.Validate(); err != nil {
+			return st, badRequest("invalid_ldap", err.Error()) // fixed text, never the submitted value
+		}
+		if cfg.CACertPEM != "" {
+			if _, err := ldapwrite.CAPool(cfg.CACertPEM); err != nil {
+				return st, badRequest("invalid_ldap", "ca_cert_pem holds no PEM certificate")
+			}
+		}
+		in.BaseURL = "ldaps://" + net.JoinHostPort(strings.ToLower(cfg.Host), strconv.Itoa(cfg.Port))
+		st.LDAP = &cfg
 	case provision.KindFake:
 		if s.cfg.FakeTargetURL == "" {
 			return st, badRequest("fake_unavailable", "the fake target is available only in dev (TESSERA_DEV_FAKE_TARGET)")
@@ -336,7 +362,7 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle, sql, salesforce or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle, sql, salesforce, ldap, ad or fake")
 	}
 	if in.Kind == provision.KindSalesforce {
 		if _, err := salesforce.CheckURL(in.BaseURL, s.sfRuntime()); err != nil {
@@ -352,7 +378,7 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		return st, badRequest("invalid_rest", "rest applies to REST targets only")
 	}
 	vault := slices.Contains(provision.PAMKinds, in.Kind) || slices.Contains(provision.ERPKinds, in.Kind) // a target with a path root and a user:secret credential
-	noDialect := vault || in.Kind == provision.KindSalesforce
+	noDialect := vault || in.Kind == provision.KindSalesforce || in.Kind == provision.KindLDAP || in.Kind == provision.KindAD
 	switch {
 	case (in.Kind == provision.KindOkta || noDialect || in.Kind == provision.KindREST) && in.Dialect != "":
 		return st, badRequest("invalid_dialect", "dialect applies to SCIM targets only")
@@ -482,7 +508,7 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	// edit that moves it has to bring a new token (#315).
 	// A change to a database target's settings (engine, host, port, database, user, TLS, CA, mode
 	// or any statement) moves it too: the password was entered for those settings, not for new ones.
-	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL) || sqlSettingsChanged(old.Settings, st.SQL))
+	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL) || sqlSettingsChanged(old.Settings, st.SQL) || ldapSettingsChanged(old.Settings, st.LDAP))
 	if existing && !moved && in.Kind == provision.KindREST {
 		// where a REST target sends its secret is also in the spec: the token URL's origin, the auth type and
 		// the header or query parameter. Moving any of them moves the credential.
@@ -539,6 +565,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 			Msg: "changing the target's kind or origin (scheme, host, port) needs a new token; the stored credential does not move with it"}
 	case in.Kind == provision.KindSQL && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "a sql target needs the database password as token")
+	case (in.Kind == provision.KindLDAP || in.Kind == provision.KindAD) && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "an ldap or ad target needs the bind password as token")
 	case in.Kind == provision.KindOkta && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
 	case in.Kind == provision.KindSalesforce && len(t.CredentialEnc) == 0:
@@ -590,6 +618,23 @@ func sqlSettingsChanged(oldSettings string, now *sqldb.Config) bool {
 	a, _ := json.Marshal(os.SQL)
 	b, _ := json.Marshal(now)
 	return string(a) != string(b)
+}
+
+// ldapSettingsChanged reports whether the destination of an ldap or ad target's bind password
+// (host, port, bind DN, CA) differs between its saved settings and the new ones.
+func ldapSettingsChanged(oldSettings string, now *ldapwrite.Config) bool {
+	var os provision.Settings
+	if json.Unmarshal([]byte(oldSettings), &os) != nil {
+		return true
+	}
+	dest := func(c *ldapwrite.Config) string {
+		if c == nil {
+			return ""
+		}
+		b, _ := json.Marshal([]any{c.Host, c.Port, c.BindDN, c.CACertPEM})
+		return string(b)
+	}
+	return dest(os.LDAP) != dest(now)
 }
 
 // restDestination is the secret destination of a stored REST spec, whose own base URL is the target's.

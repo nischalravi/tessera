@@ -2,6 +2,7 @@ package ldapwrite
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"io"
 	"math/big"
@@ -109,9 +110,9 @@ func GeneratePassword(p PasswordPolicy, r io.Reader) (connsync.Secret, error) {
 // UTF-16 little endian. It is only accepted over an encrypted connection.
 func UnicodePwd(pw string) []byte {
 	u := utf16.Encode([]rune(`"` + pw + `"`))
-	out := make([]byte, 0, len(u)*2)
-	for _, c := range u {
-		out = append(out, byte(c), byte(c>>8))
+	out := make([]byte, len(u)*2)
+	for i, c := range u {
+		binary.LittleEndian.PutUint16(out[2*i:], c)
 	}
 	return out
 }

@@ -86,3 +86,14 @@ func firstRDN(dn string) (string, bool) {
 	}
 	return rdnString(d.RDNs[0]), true
 }
+
+// InScope reports whether dn is strictly below one of the write-scope OUs. It is the check every
+// write passes: a DN outside the named OUs, or one that does not parse, is never written.
+func (c *Config) InScope(dn string) bool {
+	for _, ou := range c.WriteScope {
+		if dnBelow(dn, ou) {
+			return true
+		}
+	}
+	return false
+}
