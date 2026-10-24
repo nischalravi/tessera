@@ -238,7 +238,7 @@ func (w *v1Writer) Write(b []byte) (int, error) {
 		w.mode = v1Pass
 		w.Header().Set("Tessera-Paging", "skipped")
 		w.ResponseWriter.WriteHeader(w.status)
-		if _, err := w.ResponseWriter.Write(w.buf.Bytes()); err != nil {
+		if _, err := w.ResponseWriter.Write(w.buf.Bytes()); err != nil { // #nosec G705 -- the route's own JSON answer, passed on whole as application/json with nosniff
 			return 0, err
 		}
 		w.buf.Reset()
