@@ -1451,6 +1451,7 @@ and Run now.
 Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
 `internal/admin`, routes in `internal/api/admin_routes.go`, UI under Settings → Admin: Users,
 Authentication, Change requests, API clients, and a banner on every page while a change is pending).
+Admin → API developer (`/admin/api-developer`, issue #587) lists the tenant's machine clients with their scopes, downloads the OpenAPI document (`GET /api/openapi.json`) and shows curl examples for the token flow; clients are registered under API clients.
 
 **Four-eyes compares people, not user ids** (#402). One person can hold several platform users (sign-in makes one
 per IdP connection and subject), so two users are the same actor when their ids match or both are linked to the

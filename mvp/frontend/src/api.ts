@@ -4436,6 +4436,28 @@ export const apiClients = {
   revoke: (clientId: string) => api<ApiClient>(`/admin/api-clients/${encodeURIComponent(clientId)}/revoke`, {}),
 };
 
+/** The complete OpenAPI 3.1 document of the API (GET /api/openapi.json), saved as a file. */
+export async function downloadApiSpec(): Promise<void> {
+  const res = await fetch("/api/openapi.json", { credentials: "same-origin" });
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "tessera-openapi.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ------------------------------------------------------------ log retention and the archive (issue #298)
 
 /** The data classes with a retention setting, in the order the archival job runs them. */
