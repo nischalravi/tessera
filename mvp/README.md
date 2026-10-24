@@ -39,6 +39,7 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
   Sign in to `larkspur` through the dev IdP (see [Signing in](#signing-in)), for example as Alice
   (tenant admin) or Pat (policy admin) with a passkey.
 * API: http://127.0.0.1:8000. OpenAPI docs are at http://127.0.0.1:8000/docs
+  Every `/api/...` route is also served under `/api/v1/...` (same auth, audit and limits); `Deprecation`/`Sunset` headers and the compatibility policy are in `docs/api/compatibility.md` (issue #587).
 * Dev IdP: http://127.0.0.1:8001 (see [Signing in](#signing-in))
 
 Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`

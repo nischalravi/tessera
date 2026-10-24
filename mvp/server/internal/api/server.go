@@ -128,6 +128,9 @@ type Config struct {
 	// Env is TESSERA_ENV: "dev" allows activating non-demo connector types,
 	// and is otherwise informational.
 	Env string
+	// Deprecations announce the removal of /api/v1 routes (Deprecation and Sunset
+	// headers; at least 6 months' notice, enforced at startup).
+	Deprecations []Deprecation
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string
@@ -610,6 +613,7 @@ func New(cfg Config) *Server {
 	s.registerAdminClientRoutes()
 	s.registerOpsRoutes()
 	s.checkPublicRoutes()
+	s.checkDeprecations()
 	return s
 }
 
@@ -642,6 +646,7 @@ func (s *Server) Handler() http.Handler {
 	h = s.rateLimit(h)
 	h = s.logRequests(h)
 	h = s.securityHeaders(h)
+	h = s.versioned(h)
 	// The probes /livez and /readyz are answered before the API pipeline
 	// (rate limit, audit, sessions): see probes. Metrics wrap everything.
 	return obs.Instrument(s.probes(h))
