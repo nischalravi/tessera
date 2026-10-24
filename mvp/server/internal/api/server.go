@@ -550,6 +550,7 @@ func New(cfg Config) *Server {
 	s.registerRequestDraftRoutes()
 	s.registerQuestionnaireRoutes()
 	s.registerWorkflowRoutes()
+	s.registerDatasetRoutes()
 	s.registerServiceAccountRoutes()
 	s.registerOrgRoutes()
 	s.registerOrgSettingsRoutes()

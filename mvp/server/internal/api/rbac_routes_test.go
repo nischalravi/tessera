@@ -239,6 +239,14 @@ GET    /api/questionnaires/{id}                      catalog.manage  -  # issue 
 PUT    /api/questionnaires/{id}                      catalog.manage  -  # issue #298
 POST   /api/questionnaires/{id}/retire               catalog.manage  -  # issue #298
 PUT    /api/questionnaires/{id}/attachments          catalog.manage  -  # issue #298
+GET    /api/datasets                                 workflows.manage      -  # issue #588
+POST   /api/datasets                                 workflows.manage  STEP_UP_POLICY  # issue #588
+GET    /api/datasets/{id}                            workflows.manage      -  # issue #588
+PUT    /api/datasets/{id}                            workflows.manage  STEP_UP_POLICY  # issue #588
+DELETE /api/datasets/{id}                            workflows.manage  STEP_UP_POLICY  # issue #588
+POST   /api/datasets/{id}/values                     workflows.manage  STEP_UP_POLICY  # issue #588
+POST   /api/datasets/{id}/upload                     workflows.manage  STEP_UP_POLICY  # issue #588
+GET    /api/datasets/{id}/contains                   workflows.manage      -  # issue #588
 GET    /api/workflows                                graph.read      -  # issue #298
 POST   /api/workflows                                workflows.manage STEP_UP_POLICY  # issue #298
 POST   /api/workflows/validate                       workflows.manage -  # issue #298
