@@ -24,7 +24,7 @@ type StageFunc func(c *store.TenantTx, runID, system string, res *connectors.Dis
 
 // hrItems name the checklist item that maps the HR id, per template.
 var hrItems = map[string]string{"ad": "ad.key.employeeid", "ldap": "ldap.key.hr_id", "entra": "entra.key.employeeid",
-	"okta": "okta.key.employee_number", "google": "gws.key.employee", "scim_app": "scim.key.correlate"}
+	"okta": "okta.key.employee_number", "google": "gws.key.employee", "scim_app": "scim.key.correlate", "salesforce": "salesforce.key.employee"}
 
 // meta describes a revision for reconciliation.
 func meta(b *Bundle, now time.Time) reconcile.Meta {

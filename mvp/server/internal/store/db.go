@@ -562,15 +562,25 @@ func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
 // (with its index and triggers, which the schema run recreates) is dropped, and the new
 // one takes its name. Postgres does this in migration 0601.
 func (d *DB) upgradeProvTargetKinds(ctx context.Context) error {
-	const old = "CHECK (kind IN ('scim','okta','fake'))"
-	const wider = "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle'))"
+	// Two earlier lists are upgraded: the first three kinds, and the list before Salesforce (issue #555).
+	const wider = "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','salesforce'))"
+	olds := []string{"CHECK (kind IN ('scim','okta','fake'))", "CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle'))"}
 	var ddl string
 	err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'provisioning_targets'`).Scan(&ddl)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !strings.Contains(ddl, old)) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	old := ""
+	for _, o := range olds {
+		if strings.Contains(ddl, o) {
+			old = o
+		}
+	}
+	if old == "" {
+		return nil
 	}
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {

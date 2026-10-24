@@ -1,0 +1,159 @@
+# Salesforce org, read through the REST API with the OAuth JWT bearer flow (issue #555).
+template: salesforce
+version: 1.0.0
+extends: base@1
+display_name: Salesforce
+connector_types: [salesforce]
+role: account_source
+default_correlation_key: Username
+default_hr_id_attribute: EmployeeNumber
+required_attributes:
+  user: [Id, Username, Email, IsActive, ProfileId]
+  group: [Id, Name]
+recommended_attributes:
+  user: [EmployeeNumber, Title, Department]
+items:
+  - id: salesforce.endpoint
+    title: My Domain URL is HTTPS and reachable through safehttp
+    category: transport
+    level: required
+    why: "Prevents SSRF and clear-text transport."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the org's My Domain URL (https://name.my.salesforce.com)."
+    config_fields: [base_url]
+
+  - id: salesforce.auth
+    title: JWT bearer login succeeds for the integration user
+    category: access
+    level: required
+    why: "A connected app with a certificate and a pre-authorised integration user avoids passwords and refresh tokens."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Upload the certificate to the connected app, pre-authorise the integration user's profile or permission set, and check the consumer key."
+    depends_on: [salesforce.endpoint]
+    config_fields: [base_url, credential]
+
+  - id: salesforce.readonly
+    title: Integration user can read Setup objects and holds no more than the access needed
+    category: scope
+    level: required
+    why: "Reading users, profiles and assignments needs View Setup and Configuration; Modify All Data is not needed to read."
+    verify:
+      - kind: live
+        check: roles_readable
+    remediation:
+      hint: "Give the integration user a permission set with API Enabled and View Setup and Configuration only."
+    depends_on: [salesforce.auth]
+
+  - id: salesforce.paging
+    title: Query paging (nextRecordsUrl) works to the end
+    category: scope
+    level: required
+    why: "Broken paging silently truncates."
+    verify:
+      - kind: live
+        check: paging
+    remediation:
+      hint: "Automatic."
+    depends_on: [salesforce.auth]
+
+  - id: salesforce.key.username
+    title: Username (or Id) used as the key; unique in the org
+    category: identity_keys
+    level: required
+    why: "Usernames are unique across all Salesforce orgs; an e-mail address is not."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: Username }
+    remediation:
+      hint: "Select Username or Id as the key."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: salesforce.key.correlate
+    title: EmployeeNumber or Email mapped for correlation
+    category: identity_keys
+    level: recommended
+    why: "Needed to correlate accounts to HR."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: EmployeeNumber, min: 0.95 }
+    remediation:
+      hint: "Populate EmployeeNumber, or correlate by e-mail."
+    config_fields: [hr_id_attribute]
+
+  - id: salesforce.status
+    title: IsActive and frozen logins (UserLogin.IsFrozen) mapped to account status
+    category: account_status
+    level: required
+    why: "Salesforce users are deactivated, never deleted; a frozen user cannot sign in but stays active."
+    verify:
+      - kind: data
+        check: status_mapped
+    remediation:
+      hint: "Automatic."
+
+  - id: salesforce.groups
+    title: Profiles, roles, permission sets and permission set groups read as entitlements
+    category: groups
+    level: required
+    why: "Effective access is the profile plus every permission set and group assigned."
+    verify:
+      - kind: data
+        check: member_resolution
+    remediation:
+      hint: "Automatic."
+
+  - id: salesforce.groups.nested
+    title: Permission set group components resolved
+    category: groups
+    level: recommended
+    why: "A group grants what its component sets grant."
+    verify:
+      - kind: data
+        check: nesting_resolved
+    remediation:
+      hint: "Automatic."
+    depends_on: [salesforce.groups]
+
+  - id: salesforce.entitlements
+    title: Modify All Data, View All Data, Manage Users and Author Apex tagged privileged
+    category: groups
+    level: recommended
+    why: "These system permissions reach every record or change who has access."
+    verify:
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "Review who holds them."
+    config_fields: [privileged_expected]
+
+  - id: salesforce.lastlogin
+    title: Last login read (User.LastLoginDate)
+    category: account_status
+    level: optional
+    why: "Needed for staleness."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Automatic."
+
+  - id: salesforce.ratelimit
+    title: API request limit has headroom during validation
+    category: change_tracking
+    level: recommended
+    why: "A synced org shares its daily API limit with other integrations."
+    verify:
+      - kind: live
+        check: rate_headroom
+        params: { min_remaining: 0.5 }
+    remediation:
+      hint: "Run the sync off-peak."
+    depends_on: [salesforce.auth]

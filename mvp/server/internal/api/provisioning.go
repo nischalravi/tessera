@@ -14,6 +14,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -273,7 +274,7 @@ type targetInput struct {
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	var st provision.Settings
 	switch in.Kind {
-	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle:
+	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle, provision.KindSalesforce:
 		if s.cfg.Env == "prod" && !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://") {
 			return st, badRequest("invalid_base_url", "base_url must be https")
 		}
@@ -299,13 +300,14 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta, cyberark, delinea, beyondtrust, sap, oracle or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, cyberark, delinea, beyondtrust, sap, oracle, salesforce or fake")
 	}
 	vault := slices.Contains(provision.PAMKinds, in.Kind) || slices.Contains(provision.ERPKinds, in.Kind) // a target with a path root and a user:secret credential
+	noDialect := vault || in.Kind == provision.KindSalesforce
 	switch {
-	case (in.Kind == provision.KindOkta || vault) && in.Dialect != "":
+	case (in.Kind == provision.KindOkta || noDialect) && in.Dialect != "":
 		return st, badRequest("invalid_dialect", "dialect applies to SCIM targets only")
-	case in.Kind != provision.KindOkta && !vault && !slices.Contains([]string{"", "standard", "entra"}, in.Dialect):
+	case in.Kind != provision.KindOkta && !noDialect && !slices.Contains([]string{"", "standard", "entra"}, in.Dialect):
 		return st, badRequest("invalid_dialect", "dialect must be standard or entra")
 	case in.APIRoot != "" && !vault:
 		return st, badRequest("invalid_api_root", "api_root applies to vault and ERP targets only")
@@ -313,7 +315,7 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		return st, badRequest("invalid_api_root", "api_root must be an absolute path")
 	}
 	st.Dialect, st.APIRoot = in.Dialect, in.APIRoot
-	if in.Kind == provision.KindOkta || vault {
+	if in.Kind == provision.KindOkta || noDialect {
 		st.Dialect = ""
 	}
 	if in.AgentID != "" {
@@ -401,6 +403,11 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	if len(t.CredentialEnc) > 0 {
 		credential = "kept"
 	}
+	if in.Token != "" && in.Kind == provision.KindSalesforce {
+		if _, err := salesforce.ParseCredential(in.Token); err != nil {
+			return 0, nil, badRequest("invalid_credential", err.Error())
+		}
+	}
 	switch {
 	case in.Token != "" && isUserSecretKind(in.Kind) && !strings.Contains(strings.Trim(in.Token, ":"), ":"):
 		return 0, nil, badRequest("invalid_credential", "the credential is user:secret")
@@ -424,6 +431,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 			Msg: "changing the target's kind or origin (scheme, host, port) needs a new token; the stored credential does not move with it"}
 	case in.Kind == provision.KindOkta && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
+	case in.Kind == provision.KindSalesforce && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "a Salesforce target needs its credential (JSON with client_id, username and private_key)")
 	case isUserSecretKind(in.Kind) && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "a vault or ERP target needs its credential as user:secret (client_id:client_secret for an ERP)")
 	}

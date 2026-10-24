@@ -30,6 +30,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
@@ -44,6 +45,9 @@ import (
 //
 // ERPs (issue #304): "sap" and "oracle" read roles, t-codes and authorization objects as
 // fine-grained entitlements (TESSERA_SAP_*, TESSERA_ORACLE_*).
+//
+// Salesforce (issue #555): "salesforce" reads users, profiles, roles, permission sets and permission set groups
+// (TESSERA_SALESFORCE_*, OAuth JWT bearer flow).
 //
 // Register adds the okta, entra, google, workday, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
@@ -72,6 +76,9 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 		connectors.Factories[system] = func(now time.Time) (connectors.Connector, error) {
 			return erp.FromEnv(system, os.Getenv, rt, hc, func() time.Time { return now })
 		}
+	}
+	connectors.Factories["salesforce"] = func(now time.Time) (connectors.Connector, error) {
+		return salesforce.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
 	}
 	connectors.Factories["aws-agentcore"] = func(now time.Time) (connectors.Connector, error) {
 		return agentcore.FromEnv(os.Getenv, now)

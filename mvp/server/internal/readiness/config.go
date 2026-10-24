@@ -214,7 +214,7 @@ func Validate(cfg ConnConfig, t *template.Resolved) []FieldError {
 			bad("interface", "must be one of %s", strings.Join(interfaces, ", "))
 		}
 		text("time_zone", cfg.TimeZone, 64)
-	case "scim_app":
+	case "scim_app", "salesforce":
 		httpsURL("base_url", cfg.BaseURL, nil)
 	}
 	if cfg.CorrelationKey == "" || !attrRE.MatchString(cfg.CorrelationKey) {

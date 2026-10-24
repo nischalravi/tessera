@@ -4184,7 +4184,7 @@ export interface ProvOpDetail extends ProvOp { payload: { account?: Record<strin
 export interface ProvDiscovery { checked_at: string; agent_advertised: boolean; service_provider_config: boolean; resource_types: string[]; error?: string }
 
 export interface ProvTarget {
-  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle"; base_url: string; api_root?: string;
+  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle" | "salesforce"; base_url: string; api_root?: string;
   dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; agent_id?: string; discovery?: ProvDiscovery; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
