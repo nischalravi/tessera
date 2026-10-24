@@ -153,6 +153,8 @@ func (p *ScenarioProber) Authenticate(ctx context.Context) (AuthInfo, error) {
 		a.Identity, a.Mode = "ISU_Tessera", "basic"
 	case "scim_app":
 		a.Identity, a.Mode = "tessera-scim-client", "oauth_client_credentials"
+	case "sql":
+		a.Identity, a.Mode = "tessera_ro", "password_tls"
 	}
 	return a, ctx.Err()
 }

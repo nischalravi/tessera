@@ -1,0 +1,107 @@
+# Generic database readiness template: PostgreSQL, MySQL, SQL Server and Oracle Database,
+# read from their own catalogue or from application tables (issue #553).
+template: sql
+version: 1.0.0
+extends: base@1
+display_name: Database (PostgreSQL, MySQL, SQL Server, Oracle)
+connector_types: [sql]
+role: account_source
+default_correlation_key: username
+default_hr_id_attribute: email
+required_attributes:
+  user: [id, username, status]
+  group: [id, name]
+recommended_attributes:
+  user: [email]
+items:
+  - id: sql.svc.readonly
+    title: Dedicated read-only database user; not postgres, root, sa, SYS or a DBA
+    category: access
+    level: required
+    why: "A superuser credential reads and changes every database it can reach."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Grant only what the catalogue reads need: SELECT on mysql.user and role_edges, VIEW ANY DEFINITION on SQL Server, SELECT on the DBA_ views on Oracle."
+    config_fields: [sql, credential]
+
+  - id: sql.tls
+    title: TLS with a verified certificate chain and host name (verify-full)
+    category: transport
+    level: required
+    why: "The database password and every account name cross the network."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Enable TLS on the server, upload the issuing CA if it is private, and leave tls at verify-full. Production refuses tls disable."
+    config_fields: [sql, ca_bundle]
+
+  - id: sql.network
+    title: Host is a public or allow-listed address; no loopback, private, link-local or metadata address
+    category: topology
+    level: required
+    why: "Tessera dials customer databases through the same SSRF policy as every outbound call."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Publish the database on a routable address, or reach it through the Directory Agent."
+    config_fields: [sql]
+
+  - id: sql.limits
+    title: Query timeout and row cap fit the data size; expected counts entered
+    category: scope
+    level: recommended
+    why: "A read that stops at the row cap is partial, and the deletion guard then holds every removal."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Raise max_rows above the account count, or narrow the statements."
+    config_fields: [sql, expected_counts]
+
+  - id: sql.statements.reviewed
+    title: "Application statements reviewed (app mode): reads are SELECTs, writes use named placeholders"
+    category: scope
+    level: recommended
+    why: "Statements are administrator-written SQL; Tessera binds values and never splices them."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Have the application owner review each statement. Native mode needs none."
+    config_fields: [sql]
+
+  - id: sql.key.username
+    title: Username unique and stable as the key
+    category: identity_keys
+    level: required
+    why: "Renamed or reused database users must not merge into one person."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: username }
+    remediation:
+      hint: "Select a unique, immutable column as the id."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: sql.status
+    title: Account status mapped (locked, disabled and expired read as disabled)
+    category: account_status
+    level: required
+    why: "A locked database login is not an active account."
+    verify:
+      - kind: data
+        check: status_mapped
+    remediation:
+      hint: "In app mode, return a status column; native mode maps the catalogue."
+
+  - id: sql.privileged
+    title: Privileged roles and grants captured; unexpected members flagged
+    category: groups
+    level: recommended
+    why: "DBA, sysadmin and superuser roles are privileged access."
+    verify:
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "List the expected members of each privileged role."
+    config_fields: [privileged_expected]

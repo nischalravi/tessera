@@ -27,7 +27,45 @@ var bannedImports = []string{
 	"modernc.org/sqlite/",
 	"github.com/jackc/pgx/",
 	"github.com/mattn/go-sqlite3",
+	"github.com/go-sql-driver/",
+	"github.com/microsoft/go-mssqldb",
+	"github.com/sijms/go-ora/",
 	"unsafe",
+}
+
+// sqlDBDir is the one directory besides storeDir that may import database/sql
+// and the SQL drivers and call Query/Exec. It is the generic database
+// connector (issue #553), which reads and provisions CUSTOMER databases
+// (PostgreSQL, MySQL, SQL Server, Oracle) and never touches Tessera's own
+// data. The exemption is deliberately narrow:
+//
+//   - exactly this directory, not its subpackages;
+//   - only the database/sql, database/sql/driver and SQL-driver imports and the
+//     Query/Exec-style calls; unsafe, reflect, go:linkname and the SQLite
+//     driver stay banned there;
+//   - TestSQLDBExemptionIsNarrow keeps the package from importing
+//     internal/store (so it cannot reach tenant data), and the driver imports
+//     above stay banned everywhere else.
+//
+// Tessera's own data still goes only through storeDir.
+const sqlDBDir = "internal/connectors/sqldb"
+
+// sqlDBDrivers are the banned import paths (or prefixes) sqlDBDir may use.
+var sqlDBDrivers = []string{"database/sql", "database/sql/driver", "github.com/jackc/pgx/", "github.com/go-sql-driver/",
+	"github.com/microsoft/go-mssqldb", "github.com/sijms/go-ora/"}
+
+// sqlDBAllows reports whether a violation message is one of the exempt kinds
+// for sqlDBDir.
+func sqlDBAllows(v string) bool {
+	if strings.Contains(v, "which runs SQL outside "+storeDir) {
+		return true
+	}
+	for _, p := range sqlDBDrivers {
+		if strings.Contains(v, " imports "+p) && strings.HasSuffix(v, " (only "+storeDir+" may)") {
+			return true
+		}
+	}
+	return false
 }
 
 // unsafeAllowed are the files outside the store that may import unsafe (every
@@ -174,6 +212,9 @@ func TestIsolation_NoRawSQLOutsideStore(t *testing.T) {
 		for _, v := range checkFile(fset, f) {
 			if unsafeAllowed[rel] && strings.HasSuffix(v, "imports unsafe (only "+storeDir+" may)") {
 				continue // the one exemption, see unsafeAllowed
+			}
+			if filepath.ToSlash(filepath.Dir(rel)) == sqlDBDir && sqlDBAllows(v) {
+				continue // the customer-database connector, see sqlDBDir
 			}
 			t.Error(v)
 		}

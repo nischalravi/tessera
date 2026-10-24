@@ -443,9 +443,11 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 	changed := changedFields(b.Config, cfg)
 	rev := *b.Rev
 	// Where a REST connection sends its credential (hosts, auth type, header or query field) is part of the
-	// config. Moving it drops the stored credential, so it has to be entered again: an edit can never point a
-	// credential that was given for one place at another.
-	credCleared := rev.SecretRef != nil && b.Template.ID == "rest_generic" && restDestination(b.Config.Rest) != restDestination(cfg.Rest)
+	// config, and so is everything a database connection's password was entered for (engine, host, port,
+	// database, user, TLS, mode, statements). Moving it drops the stored credential, so it has to be entered
+	// again: an edit can never point a credential that was given for one place at another.
+	credCleared := rev.SecretRef != nil && ((b.Template.ID == "rest_generic" && restDestination(b.Config.Rest) != restDestination(cfg.Rest)) ||
+		(b.Template.ID == "sql" && sqlConfigChanged(b.Config, cfg)))
 	if credCleared {
 		rev.SecretRef, rev.SecretVersion = nil, nil
 	}
@@ -459,7 +461,11 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 		if err := c.ClearRevisionSecret(rev.ID, rev.ConfigHash, now); err != nil {
 			return nil, err
 		}
-		changed = append(changed, "credential (cleared: the REST destination changed)")
+		if b.Template.ID == "sql" {
+			changed = append(changed, "credential (cleared: the database settings changed)")
+		} else {
+			changed = append(changed, "credential (cleared: the REST destination changed)")
+		}
 	}
 	if err := c.UpdateConnectionOwners(b.Conn.ID, optText(cfg.TechnicalOwner), optText(cfg.BusinessOwner), now); err != nil {
 		return nil, err
@@ -482,6 +488,12 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 		}
 	}
 	return res, nil
+}
+
+func sqlConfigChanged(a, b ConnConfig) bool {
+	x, _ := json.Marshal(a.SQL)
+	y, _ := json.Marshal(b.SQL)
+	return string(x) != string(y)
 }
 
 func passing(e *Evaluation) map[string]bool {

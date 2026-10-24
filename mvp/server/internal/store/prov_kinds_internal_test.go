@@ -21,7 +21,7 @@ func TestUpgradeProvTargetKinds_KeepsRowsAndWidensTheCheck(t *testing.T) {
 	if err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE name = 'provisioning_targets'`).Scan(&ddl); err != nil {
 		t.Fatal(err)
 	}
-	narrow := strings.Replace(ddl, "'fake','cyberark','delinea','beyondtrust','sap','oracle','rest'", "'fake'", 1)
+	narrow := strings.Replace(ddl, "'fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql'", "'fake'", 1)
 	if narrow == ddl {
 		t.Fatal("the schema does not list the new kinds")
 	}
@@ -48,7 +48,7 @@ func TestUpgradeProvTargetKinds_KeepsRowsAndWidensTheCheck(t *testing.T) {
 	if err := d.sql.QueryRowContext(ctx, `SELECT kind, credential_enc FROM provisioning_targets WHERE id = 'pt1'`).Scan(&kind, &enc); err != nil || kind != "scim" || len(enc) != 2 {
 		t.Fatalf("row after the upgrade: %q %v %v", kind, enc, err)
 	}
-	for _, k := range []string{"cyberark", "delinea", "beyondtrust", "sap", "oracle", "rest"} {
+	for _, k := range []string{"cyberark", "delinea", "beyondtrust", "sap", "oracle", "rest", "sql"} {
 		if _, err := d.sql.ExecContext(ctx, `INSERT INTO provisioning_targets (id, tenant_id, connection_id, kind, base_url, created_by, created_at, updated_at)
 			VALUES ('k-`+k+`', 't1', 'c-`+k+`', '`+k+`', 'https://b.example', 'a', 'x', 'x')`); err != nil {
 			t.Errorf("kind %s refused: %v", k, err)

@@ -142,7 +142,7 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 			return rsvc.GovernedConnectors(ctx, st, t, now)
 		},
 		Connectors: func(now time.Time) ([]connectors.Connector, error) { return connectors.Load("", now) },
-		Provision: &provision.Engine{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Guard: guard,
+		Provision: &provision.Engine{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Guard: guard, Runtime: connsync.RuntimeFromConfig(cfg),
 			Log: logger.With("component", "provisioning")}}
 	q := &queue.Queue{DB: st, Clock: clock, Owner: o.id, Concurrency: o.concurrency, Poll: o.poll, Lease: o.lease,
 		ShutdownGrace: o.grace, Log: logger.With("component", "queue")}

@@ -2638,6 +2638,57 @@ assignment back through provisioning.
   service (`oracle.go`). Both are exercised by `erpfake` (paging over 230 roles and users, a refused token, 429, 5xx,
   malformed, failing and dropped writes). Paths are settings; the first real tenant should confirm field names.
 
+### Database connector (PostgreSQL, MySQL, SQL Server, Oracle; issue #553)
+
+`internal/connectors/sqldb` reads accounts, roles and grants from a database and provisions them back. Pure-Go
+drivers (pgx, `go-sql-driver/mysql` v1.10.1, `microsoft/go-mssqldb` v1.11.2, `sijms/go-ora/v2` v2.9.0). The New
+connection gallery has a **Database (SQL)** tile (category Databases; template `sql`).
+
+- **Architecture exception.** Tessera's own data goes only through `internal/store`; `internal/archtest` bans
+  `database/sql`, drivers and `Query`/`Exec` calls elsewhere. This package talks to a customer database, so archtest
+  exempts exactly `internal/connectors/sqldb` (not its subpackages) for those three rules and nothing else (`unsafe`,
+  `reflect` tricks, `go:linkname` and the SQLite driver stay banned there). `TestSQLDBExemptionIsNarrow` fails if the
+  package ever imports `internal/store`, and the MySQL, SQL Server and Oracle drivers are banned everywhere else.
+- **Read, native mode** (`mode: native`). Fixed catalogue statements per engine: `pg_roles` and `pg_auth_members`;
+  `mysql.user` and `mysql.role_edges` (MySQL 8.0+); `sys.server_principals`, `sys.server_role_members`,
+  `sys.database_principals`, `sys.database_role_members`, `sys.server_permissions`; `DBA_USERS`, `DBA_ROLES`,
+  `DBA_ROLE_PRIVS`, `DBA_SYS_PRIVS` (Oracle 12c+). A login is an account (`locked` reads as `disabled`), a role is a
+  requestable group, nested roles are `member_of`, system privileges are permissions (`SUPERUSER`, `CONTROL SERVER`,
+  `SELECT ANY TABLE`, ...) and a role is privileged when it holds one of the dangerous ones or is a privileged role
+  by name (`sysadmin`, `DBA`, `db_owner`) directly or through nesting. SQL Server entitlement ids are `server:<role>`
+  and `db:<role>` (database roles come from the database in the connection; a database user is assumed to carry its
+  login's name). The reading user needs `SELECT` on those catalogues (SQL Server: `VIEW ANY DEFINITION`).
+- **Read, app mode** (`mode: app`). Two administrator-written SELECTs: accounts (columns `id`, and optionally
+  `username`, `email`, `display_name`, `status`) and entitlements (`account`, `entitlement`, optional `description`).
+  A statement must be a single SELECT/WITH with no comments, no `;`, no writing keyword and no placeholder.
+- **Write.** Target kind `sql` (the connection is `sql`, the credential is the database password, sealed as every
+  target token; the base URL is derived, `sql://host:port/engine`). Native: `create_account`, `disable_account`,
+  `update_account` with `attrs.status` `active` or `locked`, `delete_account`, `add_entitlement` and
+  `remove_entitlement`, each a fixed per-engine statement (see `engine.go`, golden-tested) with identifiers quoted by
+  the engine's quoting function (`quote.go`: pgx `Identifier.Sanitize`, backticks, `[]`, `""`) and nothing spliced.
+  A created login gets a random credential nobody learns: it signs in through the database's external
+  authentication or an administrator sets a password. App mode: INSERT, UPDATE and DELETE templates for the six
+  operations with named placeholders only (`:username`, `:external_id`, `:email`, `:display_name`, `:entitlement`,
+  `:entitlement_name`, `:attr_<name>`), rendered to the engine's bind markers (`$1`, `?`, `@p1`, `:1`), so a value is
+  always an argument. Both modes read first and change nothing already as asked, then the engine re-reads to verify.
+- **Safety.** Reads run in a read-only transaction (PostgreSQL, MySQL; Oracle `SET TRANSACTION READ ONLY`; SQL
+  Server's driver has no such option, so its reads are fixed statements or validated SELECTs on an
+  `ApplicationIntent=ReadOnly` connection: give the user read-only rights) with a query timeout (default 30 s, max
+  5 min) and a row cap (default 100000, max 1000000); a capped read is `Partial`, so the deletion guard holds
+  removals. The connection is dialled through `safehttp`'s address policy (loopback, private, link-local, metadata
+  and the other blocked ranges refused in prod; only the configured port). TLS is verify-full (chain and host name,
+  TLS 1.2+, the connection's CA bundle or the system roots); `tls: disable` is accepted in dev only. The password is a
+  `connsync.Secret` and is scrubbed from every error.
+- **Run it.** Source: `TESSERA_CONNECTORS=sql` with `TESSERA_SQL_ENGINE`, `_HOST`, `_PORT`, `_DATABASE`, `_USERNAME`,
+  `_PASSWORD` (`file:`/`env:` reference), `_MODE`, `_TLS`, `_CA_FILE`, `_APP` (JSON file of statements), `_SYSTEM`.
+  Target: `PUT /api/provisioning/targets/{connection}` with `{"kind":"sql","token":"<password>","sql":{...}}`.
+  Migration 0860 (Postgres) and the SQLite rebuild widen the `provisioning_targets.kind` check; no new table.
+- **Tests.** Statement generation, quoting, templates and the readers run against a recording fake
+  `database/sql` driver (no server, no sqlmock). Live tests (`live_test.go`) skip engines without a server:
+  PostgreSQL with `TESSERA_TEST_PG_URL` (as the rest of the suite), the others with
+  `TESSERA_TEST_SQL_MYSQL`, `_SQLSERVER` or `_ORACLE` set to `user:password@host:port/database` (a user that can create
+  logins and roles; the tests drop what they make). The MySQL, SQL Server and Oracle statements are verified by
+  golden text only; run the live tests against a real server before relying on them.
 ### Generic REST connector (issue #552)
 
 `internal/connectors/restgen` makes any HTTP/JSON system an identity source and a provisioning target from a

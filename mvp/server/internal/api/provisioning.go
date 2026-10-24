@@ -17,6 +17,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -89,6 +90,8 @@ type targetView struct {
 	Fault          string `json:"fault,omitempty"`
 	OnDeprovision  string `json:"on_deprovision,omitempty"` // "delete": accounts are deleted after the grace period (issue #74)
 	AgentID        string `json:"agent_id,omitempty"`       // the Directory Agent that reaches this target (issue #302)
+	// SQL is a database target's connection (no secret in it; issue #553).
+	SQL *sqldb.Config `json:"sql,omitempty"`
 	// Rest is a REST target's spec as saved (no base URL, no secret; issue #552).
 	Rest json.RawMessage `json:"rest,omitempty"`
 	// Discovery is the last read of a SCIM target's ServiceProviderConfig and ResourceTypes (issue #542).
@@ -103,7 +106,7 @@ func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, SQL: st.SQL, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -281,6 +284,8 @@ type targetInput struct {
 	// The base URL must then be https, and its host:port must be on the agent's
 	// own allowed_push_targets.
 	AgentID string `json:"agent_id"`
+	// SQL is the database connection of a sql target (issue #553). The password is token.
+	SQL *sqldb.Config `json:"sql"`
 }
 
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
@@ -299,6 +304,24 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		if in.Fault != "" {
 			return st, badRequest("invalid_fault", "fault applies to the dev fake target only")
 		}
+	case provision.KindSQL:
+		// a database: the connection is the sql object, the base URL is derived from it (no
+		// credential in it) so the origin check that keeps a stored password from moving still works
+		if in.SQL == nil {
+			return st, badRequest("invalid_sql", "sql (the database settings) is required for a sql target")
+		}
+		rt := connsync.Runtime{Env: config.Prod} // only dev may disable TLS; "test" gets the production rules
+		if s.cfg.Env == config.Dev {
+			rt.Env = config.Dev
+		}
+		if err := in.SQL.Validate(rt); err != nil {
+			return st, badRequest("invalid_sql", err.Error())
+		}
+		if in.Fault != "" || in.AgentID != "" {
+			return st, badRequest("invalid_sql", "fault and agent_id do not apply to a sql target")
+		}
+		in.BaseURL = "sql://" + net.JoinHostPort(strings.ToLower(in.SQL.Host), strconv.Itoa(in.SQL.EffectivePort())) + "/" + in.SQL.Engine
+		st.SQL = in.SQL
 	case provision.KindFake:
 		if s.cfg.FakeTargetURL == "" {
 			return st, badRequest("fake_unavailable", "the fake target is available only in dev (TESSERA_DEV_FAKE_TARGET)")
@@ -312,7 +335,7 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle, sql or fake")
 	}
 	if in.Kind == provision.KindREST {
 		if err := s.validateRest(in, &st); err != nil {
@@ -449,7 +472,9 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	// The sealed credential is bound to the row, not to the destination, so a
 	// stored token must never follow the target to another origin or kind: an
 	// edit that moves it has to bring a new token (#315).
-	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL))
+	// A change to a database target's settings (engine, host, port, database, user, TLS, CA, mode
+	// or any statement) moves it too: the password was entered for those settings, not for new ones.
+	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL) || sqlSettingsChanged(old.Settings, st.SQL))
 	if existing && !moved && in.Kind == provision.KindREST {
 		// where a REST target sends its secret is also in the spec: the token URL's origin, the auth type and
 		// the header or query parameter. Moving any of them moves the credential.
@@ -493,6 +518,8 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	case moved && len(t.CredentialEnc) > 0:
 		return 0, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "credential_required",
 			Msg: "changing the target's kind or origin (scheme, host, port) needs a new token; the stored credential does not move with it"}
+	case in.Kind == provision.KindSQL && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "a sql target needs the database password as token")
 	case in.Kind == provision.KindOkta && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
 	case in.Kind == provision.KindREST && len(t.CredentialEnc) == 0:
@@ -521,6 +548,17 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, viewTarget(saved, conn.Name), nil
+}
+
+// sqlSettingsChanged reports whether a database target's saved settings differ from the new ones.
+func sqlSettingsChanged(oldSettings string, now *sqldb.Config) bool {
+	var os provision.Settings
+	if json.Unmarshal([]byte(oldSettings), &os) != nil {
+		return true
+	}
+	a, _ := json.Marshal(os.SQL)
+	b, _ := json.Marshal(now)
+	return string(a) != string(b)
 }
 
 // restDestination is the secret destination of a stored REST spec, whose own base URL is the target's.
