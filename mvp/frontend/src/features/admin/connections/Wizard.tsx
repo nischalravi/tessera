@@ -19,6 +19,7 @@ import {
 } from "./shared";
 import { CAPABILITIES, CATEGORIES, Capability, Category, filterGallery, groupGallery, metaOf, nextIndex } from "./gallery";
 import { GOVERNED, settingValues, settingsPatch } from "./governed";
+import { BASE_URL_FIELDS } from "./baseUrl";
 
 // ---------------------------------------------------------------- step 1
 /** The spec as editable text: JSON, since that is what the server stores. */
@@ -171,7 +172,7 @@ function TypeGallery({ type, onPick, taken }: { type: string; onPick: (id: strin
 }
 
 // ---------------------------------------------------------------- detail
-type StepId = "type" | "connect" | "scope" | "mapping" | "validate" | "dryrun" | "activate";
+type StepId = "type" | "connect" | "scope" | "mapping" | "validate" | "dryrun" | "activate" | "guard";
 const WIZARD_STEPS: { id: StepId; label: string; sub: string }[] = [
   { id: "type", label: "Choose type", sub: "Template pinned" },
   { id: "connect", label: "Connect", sub: "Endpoint, credential, owners" },
@@ -179,6 +180,7 @@ const WIZARD_STEPS: { id: StepId; label: string; sub: string }[] = [
   { id: "mapping", label: "Mapping", sub: "Correlation key, HR id, status" },
   { id: "validate", label: "Validate", sub: "Read-only live checks" },
   { id: "dryrun", label: "Dry run", sub: "Staging snapshot and reconciliation" },
+  { id: "guard", label: "Deletion guard", sub: "Limits on what a sync may remove" },
   { id: "activate", label: "Review and activate", sub: "Every gate re-evaluated" },
 ];
 const ORDER: string[] = ["draft", "ready_to_validate", "validated", "dry_run_reconciled", "active"];
@@ -330,7 +332,8 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             {tid === "entra" && <>{input("tenant_id", "Tenant id", "The directory GUID from the Overview page, not a domain.")}{input("cloud", "Cloud", "global, usgov or china")}</>}
             {tid === "google" && <>{input("customer", "Customer", "my_customer or the customer id")}{input("domain", "Primary domain")}</>}
             {tid === "workday" && <>{input("tenant_host", "Tenant host", "*.workday.com or *.myworkday.com")}{input("interface", "Interface", "get_workers or raas")}{input("time_zone", "Tenant time zone")}</>}
-            {tid === "scim_app" && input("base_url", "SCIM base URL", scimUrlHint(cfg.preset, presets))}
+            {tid === "scim_app" && input("base_url", BASE_URL_FIELDS.scim_app.label, scimUrlHint(cfg.preset, presets))}
+            {!gov && tid !== "scim_app" && BASE_URL_FIELDS[tid] && input("base_url", BASE_URL_FIELDS[tid].label, BASE_URL_FIELDS[tid].hint, { "aria-required": true })}
             {gov?.baseUrl && input("base_url", gov.baseUrl.label, gov.baseUrl.hint, { "aria-required": gov.baseUrl.required })}
             {gov?.settings.map((f) => <Fragment key={f.key}>{input(`settings.${f.key}`, f.label, f.hint, { "aria-required": !!f.required })}</Fragment>)}
             {tid === "rest_generic" && (
@@ -577,6 +580,8 @@ export function ConnectionDetail() {
         case "validate": return { ...s, done: atLeast(st, "validated"), disabled: st === "draft" && !live, reason: "Move to Ready to validate first" };
         case "dryrun": return { ...s, done: atLeast(st, "dry_run_reconciled"), disabled: !atLeast(st, "validated"), reason: "Validation must pass first" };
         case "activate": return { ...s, done: live, disabled: !atLeast(st, "dry_run_reconciled"), reason: "The dry run must be reconciled first" };
+        // the guard can be set at any time, before the first sync included; it is never "done"
+        case "guard": return { ...s, done: false, disabled: !!conn.retired_at, reason: "A retired connection has no deletion guard" };
         default: return { ...s, done: atLeast(st, "ready_to_validate") };
       }
     });
@@ -606,6 +611,9 @@ export function ConnectionDetail() {
       <div className="wizard">
         <div className="stack">
           <Stepper steps={steps} current={step} onSelect={setStep} />
+          {step === "guard" ? (
+            <SourceDeletionGuard kind="connection" id={conn.id} heading={`${WIZARD_STEPS.findIndex((s) => s.id === "guard") + 1}. Deletion guard`} />
+          ) : (
           <div className="card stack">
             <h2>{WIZARD_STEPS.findIndex((s) => s.id === step) + 1}. {WIZARD_STEPS.find((s) => s.id === step)!.label}</h2>
             {(step === "connect" || step === "scope" || step === "mapping") && (
@@ -616,7 +624,7 @@ export function ConnectionDetail() {
             {step === "activate" && <ActivateStep conn={conn} />}
             {conn.state === "draft" && conn.next && (step === "connect" || step === "scope" || step === "mapping") && <ReadyToValidate conn={conn} onDone={() => { refresh(); setStep("validate"); }} />}
           </div>
-          {!conn.retired_at && <SourceDeletionGuard kind="connection" id={conn.id} />}
+          )}
         </div>
         <div className="wizard-side">
           {cl ? (

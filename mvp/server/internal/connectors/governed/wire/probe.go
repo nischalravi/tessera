@@ -25,6 +25,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vms"
 )
 
@@ -195,6 +196,26 @@ func Prober(p governed.Params, n governed.Net) (connectors.Prober, error) {
 			}
 			return counts, err
 		}}, nil
+	case governed.UnixSSH:
+		getenv, err := p.Env()
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := unixssh.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := unixssh.New(cfg, n.RT, nil)
+		if err != nil {
+			return nil, err
+		}
+		return &cloudProber{id: c.Identity(), probe: func(ctx context.Context) (cloudProbe, error) {
+			snap, err := c.Read(ctx)
+			if err != nil {
+				return cloudProbe{}, err
+			}
+			return cloudProbe{mode: "ssh_key", counts: map[string]int{"account": len(snap.Accounts), "group": len(snap.Groups), "sudo_rule": len(snap.Rules)}}, nil
+		}, refused: unixssh.ErrRefused}, nil
 	case governed.AWSOrg:
 		if n.AWS == nil {
 			return nil, errors.New("awsorg: no AWS client")

@@ -89,9 +89,12 @@ start_devidp() {
 }
 
 setup_frontend() {
-  if [ ! -d "$FRONTEND/node_modules" ]; then
+  # Install when node_modules is missing, and again whenever package-lock.json is newer than the
+  # last install (npm writes node_modules/.package-lock.json), so a pulled dependency is never missing.
+  local marker="$FRONTEND/node_modules/.package-lock.json"
+  if [ ! -d "$FRONTEND/node_modules" ] || [ ! -f "$marker" ] || [ "$FRONTEND/package-lock.json" -nt "$marker" ]; then
     echo "==> installing frontend dependencies"
-    (cd "$FRONTEND" && npm install --no-fund --no-audit)
+    (cd "$FRONTEND" && npm install --no-fund --no-audit && touch node_modules/.package-lock.json)
   fi
 }
 

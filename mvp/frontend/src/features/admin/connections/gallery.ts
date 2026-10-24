@@ -1,9 +1,9 @@
 // Filter model for the connection type gallery (New connection, step 1). Pure, so `npm test` covers it.
 
 export type Capability = "Identity source" | "Provisioning target" | "HR source" | "Access inventory" | "Contractor source" | "Agent discovery";
-export type Category = "Directories & HR" | "Cloud & SaaS" | "Identity providers" | "Databases" | "Cloud & IaaS" | "Source code" | "ERP" | "Privileged access" | "Contractor & VMS" | "AI agents" | "Demo / simulated";
+export type Category = "Directories & HR" | "Cloud & SaaS" | "Identity providers" | "Databases" | "Servers & hosts" | "Cloud & IaaS" | "Source code" | "ERP" | "Privileged access" | "Contractor & VMS" | "AI agents" | "Demo / simulated";
 
-export const CATEGORIES: Category[] = ["Demo / simulated", "Directories & HR", "Cloud & SaaS", "Identity providers", "Databases", "Cloud & IaaS", "Source code", "ERP",
+export const CATEGORIES: Category[] = ["Demo / simulated", "Directories & HR", "Cloud & SaaS", "Identity providers", "Databases", "Servers & hosts", "Cloud & IaaS", "Source code", "ERP",
   "Privileged access", "Contractor & VMS", "AI agents"]; // the default selection is a demo type, so it comes first
 export const CAPABILITIES: Capability[] = ["Identity source", "Provisioning target", "HR source", "Access inventory", "Contractor source", "Agent discovery"];
 
@@ -41,6 +41,7 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   awsorg: { vendor: "aws", publisher: "Amazon Web Services", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
   azurerbac: { vendor: "azure", publisher: "Microsoft", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
   gcpiam: { vendor: "gcp", publisher: "Google Cloud", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
+  unixssh: { vendor: "linux", publisher: "Linux, Unix and AIX hosts", category: "Servers & hosts", capabilities: ["Access inventory"] },
   githubscan: { vendor: "github", publisher: "GitHub", category: "Source code", capabilities: ["Agent discovery"] },
   sap: { vendor: "sap", publisher: "SAP", category: "ERP", capabilities: ["Access inventory", "Provisioning target"] },
   oracle: { vendor: "oracle", publisher: "Oracle", category: "ERP", capabilities: ["Access inventory", "Provisioning target"] },

@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { siAtlassian, siAuth0, siBox, siDatabricks, siDropbox, siGithub, siGooglecloud, siGoogle, siKeycloak, siOkta, siSap, siSnowflake, siZendesk, siZoom } from "simple-icons";
+import { siAtlassian, siAuth0, siBox, siDatabricks, siDropbox, siGithub, siGooglecloud, siGoogle, siKeycloak, siLinux, siOkta, siSap, siSnowflake, siZendesk, siZoom } from "simple-icons";
 
 /**
  * A recognizable mark per system on a fixed light "logo plate" (white, subtle border, both themes) so brand colours
@@ -22,6 +22,7 @@ const BRAND: Record<string, { path: string; hex: string }> = {
   keycloak: { path: siKeycloak.path, hex: siKeycloak.hex },
   sap: { path: siSap.path, hex: siSap.hex },
   gcp: { path: siGooglecloud.path, hex: siGooglecloud.hex },
+  linux: { path: siLinux.path, hex: siLinux.hex },
 };
 
 const stroke = { fill: "none", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" } as const;
@@ -92,7 +93,7 @@ export function VendorLogo({ vendor, label, size = 56 }: { vendor: string; label
 }
 
 // Connector type and system names that share another system's mark.
-const ALIAS: Record<string, string> = { awsorg: "aws", azurerbac: "azure", gcpiam: "gcp", githubscan: "github", "github-scan": "github", "aws-agentcore": "agentcore", csv: "csvfeed", successfactors: "sap" };
+const ALIAS: Record<string, string> = { awsorg: "aws", azurerbac: "azure", gcpiam: "gcp", unixssh: "linux", unix: "linux", githubscan: "github", "github-scan": "github", "aws-agentcore": "agentcore", csv: "csvfeed", successfactors: "sap" };
 
 /** The logo vendor for a connection: the first id that has a mark ("demo-okta" is Okta), else the generic protocol glyph. */
 export function vendorForType(...ids: string[]): string {
