@@ -2668,6 +2668,78 @@ assignment back through provisioning.
 - **Tests.** `internal/connectors/salesforce` against `sffake`, an in-process org that verifies the JWT signature,
   audience and expiry, serves SOQL with paging and injects faults.
 
+### ServiceNow and Atlassian Cloud (issue #559)
+
+Both are creatable from Settings, Connections, New connection (category Cloud & SaaS, tiles "ServiceNow" and
+"Atlassian Jira and Confluence") as governed connections, with readiness templates `servicenow` and `atlassian`,
+and are read by the connector sync. Both can also be configured by environment (`TESSERA_CONNECTORS=servicenow` or
+`atlassian`). Every outbound call goes through `internal/safehttp`; credentials are sealed with `internal/seal` and
+never echoed (a 422 names the rule, never the value). Fakes (`snfake`, `atfake`) live beside the connectors and answer
+with stored rows and generated ids only.
+
+**ServiceNow** (`internal/connectors/servicenow`)
+
+- **Read.** The Table API (`GET /api/now/table/{table}`) over `sys_user`, `sys_user_group`, `sys_user_grmember`,
+  `sys_user_has_role` and `sys_user_role`, with `sysparm_query`, `sysparm_fields`, `sysparm_limit`/`sysparm_offset`
+  and `sysparm_exclude_reference_link`. Paging follows the `Link` header (`rel="next"`, same host and table only) or,
+  when there is none, the offset until an empty page: the instance applies the limit before ACLs, so a short page is
+  not the last one. Env: `TESSERA_SERVICENOW_BASE_URL`, `_AUTH` (`basic` default or `oauth`), `_USERNAME` (basic) or
+  `_CLIENT_ID` (oauth), `_SECRET` (`env:NAME` or `file:/abs/path`).
+- **Sign-in.** HTTP basic (a dedicated integration user), or the OAuth client credentials grant
+  (`POST /oauth_token.do`; the instance needs the grant enabled and an OAuth application user on the client).
+- **Hosts.** `*.service-now.com` and `*.servicenowservices.com` (gov) only, https, no path. Only the dev loopback
+  exception (refused in prod) admits a local fake.
+- **Queries.** An encoded query is fixed text plus values that passed an allow-list (letters, digits, space and
+  `@ . _ + ' -`; sys_ids are 32 hex): no caret, no colon (`javascript:` and `dynamic:` values are evaluated by the
+  instance), no operator characters. A value that fails is refused before any request. A ticket's correlation id is
+  derived from the operation key, so the key never reaches a query.
+- **Graph.** Groups (`servicenow_group`) and roles (`servicenow_role`) are requestable groups; `admin`,
+  `security_admin` and any role flagged `elevated_privilege` are privileged. A user is an account (disabled when
+  inactive or locked out), `member_of` its groups and every active role row (`state` not inactive or suspended), inherited ones included.
+- **Write.** Target kind `servicenow` (Admin > Provisioning). The credential is JSON, sealed and write-only:
+  `{"auth":"basic","username":"...","password":"..."}` or `{"auth":"oauth","client_id":"...","client_secret":"..."}`.
+  Direct mode: create a user, update an allow-listed set of fields, deactivate (a delete does the same; users are not
+  deleted), add or remove a group membership or a directly granted role (the sys_id says which). Removing a role
+  is verified against inherited rows too: if the user still holds it through a group, the change is not done and the
+  verdict names the group (`sys_group_has_role` and `sys_user_grmember`). Ticket mode (`"mode":"ticket"`, optional
+  `"assignment_group":"<sys_id>"`): one incident per change, found again by an HMAC correlation id under the
+  integration's own secret (not guessable, so an incident someone else makes cannot stand in for it). The operation
+  waits while the incident is open (it does not use up its verification attempts), fails at once if it is canceled
+  (state 8), and when it is resolved or closed (6, 7) counts as done only if the same read-back as direct mode finds
+  the change in the instance; otherwise it is a mismatch ("resolved but change not observed"). An incident left
+  open keeps the operation pending until it is cancelled in Tessera. Write-back is off by default and, once on,
+  follows the existing approval gates.
+
+**Atlassian Cloud** (`internal/connectors/atlassian`)
+
+- **Accounts stay on SCIM.** The Atlassian Cloud SCIM preset (tile "Atlassian Cloud") creates, updates and suspends
+  accounts. This connector adds what SCIM lacks: groups as the site holds them, project roles and product access.
+- **Read.** The site's Jira Cloud REST API with an API token (HTTP basic, account e-mail): `GET /rest/api/3/users/search`,
+  `/group/bulk` (also with `accessType=site-admin` and `admin`, which marks groups privileged), `/group/member`, and,
+  for the project keys in Settings (at most 50), `/project/{key}/role` and `/project/{key}/role/{id}`. With an
+  organization id and an organization API key (credential JSON `{"api_token":"...","admin_api_key":"..."}`), the admin
+  API `GET /admin/v1/orgs/{orgId}/users` adds each account's `product_access` and the e-mail a profile hides. Atlassian's `product_access` there is often empty in practice (JRACLOUD-97537), so an empty product list is not proof of no access; treat product groups as best effort. Settings:
+  `email`, `org_id`, `project_keys`. Env: `TESSERA_ATLASSIAN_BASE_URL`, `_EMAIL`, `_CREDENTIAL`, `_ORG_ID`, `_PROJECTS`.
+- **Hosts.** `*.atlassian.net` for the site and `api.atlassian.com` for the admin API, nothing else. The admin API
+  origin can be overridden only by a dev runtime (`TESSERA_ATLASSIAN_ADMIN_URL` through the governed endpoint
+  overrides, refused in prod and in test); a connection never carries one. A next-page link to any other origin or path
+  is refused.
+- **Graph.** Groups (`atlassian_group`) are requestable and privileged when the site lists them as `site-admin` or
+  `admin`; a project role (`jira_project_role`, id `KEY/roleId`) is requestable and privileged for the project's admin
+  role, its user actors are members and its group actors are `member_of` it; a product (`atlassian_product`, id
+  `product:key`) is not requestable, since access comes through groups. Users are accounts (`app` accounts are service
+  accounts, `customer` accounts are users).
+- **Write.** Target kind `atlassian`. The credential is JSON `{"email":"...","api_token":"..."}`. Operations:
+  add or remove a group member (`POST|DELETE /rest/api/3/group/user`) or a project role actor
+  (`POST /project/{key}/role/{id}`, `DELETE ...?user=`), each read first and re-read to verify. Account lifecycle is
+  refused with a pointer to the SCIM target. A user whose e-mail the profile hides can only be addressed by account id.
+- **Not covered.** OAuth 2.0 (3LO) and Confluence space permissions are not read; the site token is basic only.
+- **Verification.** The Atlassian paths, parameters and field names were checked against Atlassian's published OpenAPI
+  documents (Jira Cloud platform v3 and the Atlassian Access organization API). The ServiceNow Table API and
+  client-credentials token endpoint were checked against ServiceNow's documentation. `inherited`, `state` and
+  `elevated_privilege` exist on the stock tables but are not in the public docs; a requested column that does not exist
+  is ignored by the instance, so confirm them against a developer instance.
+
 ### Azure RBAC and Google Cloud IAM (issue #557)
 
 Two read connectors bring cloud entitlements into the access graph for the effective-permission

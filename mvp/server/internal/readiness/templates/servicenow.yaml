@@ -1,0 +1,142 @@
+# ServiceNow instance, read through the Table API (issue #559): users, groups, roles and who holds them.
+# Write-back (user lifecycle, group membership and role assignment, or an incident per change) is gated by
+# write_mode and the second approver; the integration's own rights cannot be read through the Table API,
+# so the base write-scope check is attested instead.
+template: servicenow
+version: 1.0.0
+extends: base@1
+display_name: ServiceNow
+connector_types: [servicenow]
+role: account_source
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: user_name
+default_hr_id_attribute: employee_number
+host_allowlist: ["*.service-now.com", "*.servicenowservices.com"]
+required_attributes:
+  user: [sys_id, user_name, email, active]
+  group: [sys_id, name]
+recommended_attributes:
+  user: [employee_number, title]
+items:
+  - id: servicenow.endpoint
+    title: Instance URL is HTTPS on a ServiceNow domain and reachable through safehttp
+    category: transport
+    level: required
+    why: "Prevents SSRF and clear-text transport: the credential goes only to *.service-now.com or *.servicenowservices.com."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the instance host name (https://name.service-now.com), no path."
+    config_fields: [base_url]
+
+  - id: servicenow.auth
+    title: Sign-in succeeds (basic integration user or OAuth client credentials)
+    category: access
+    level: required
+    why: "Proves the credential before any read. OAuth client credentials avoid a user password; the instance must have the grant enabled."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Check the user or client id in Settings and store the password or client secret again. For OAuth, enable the client credentials grant and set the OAuth application user on the client."
+    depends_on: [servicenow.endpoint]
+    config_fields: [base_url, settings, credential]
+
+  - id: servicenow.integration.dedicated
+    title: Integration identity is dedicated to Tessera, with read-only roles and not admin
+    category: access
+    level: required
+    why: "A shared or administrator identity blurs accountability; reading the five tables needs read access only."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a service identity for Tessera. Grant it read on sys_user, sys_user_group, sys_user_grmember, sys_user_has_role and sys_user_role through a custom role, not admin."
+    config_fields: [settings, credential]
+
+  - id: servicenow.read
+    title: Users, groups and roles are readable
+    category: scope
+    level: required
+    why: "A connector that authenticates but reads nothing leaves access unreviewed without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Grant the integration read access to the five tables and their fields."
+    depends_on: [servicenow.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: servicenow.acl.complete
+    title: The integration's ACLs show every user, group and role (nothing is hidden)
+    category: scope
+    level: recommended
+    why: "The instance applies the page limit before ACL evaluation: a row the integration may not read is absent, not an error, so a hidden privileged group goes unreviewed."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Compare the user and group counts with a console list run as an administrator, or set expected_counts."
+    config_fields: [expected_counts]
+
+  - id: servicenow.status
+    title: active and locked_out mapped to the account status vocabulary
+    category: account_status
+    level: required
+    why: "A deactivated or locked-out user must not read as active access."
+    verify:
+      - kind: data
+        check: status_mapped
+    remediation:
+      hint: "Automatic: the reader maps active and locked_out; report an unmapped value."
+    depends_on: [servicenow.read]
+
+  - id: servicenow.key.user_name
+    title: user_name used as the key; unique on the instance
+    category: identity_keys
+    level: required
+    why: "user_name is unique on an instance; an e-mail address is not always."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: user_name }
+    remediation:
+      hint: "Select user_name or sys_id as the key."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: servicenow.key.employee
+    title: employee_number or e-mail populated for correlation
+    category: identity_keys
+    level: recommended
+    why: "Needed to correlate accounts to HR."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: employee_number, min: 0.95 }
+    remediation:
+      hint: "Populate employee_number on the instance, or correlate by e-mail."
+    config_fields: [hr_id_attribute]
+
+  - id: servicenow.groups
+    title: Groups and roles read as entitlements, with membership resolved
+    category: groups
+    level: required
+    why: "Effective access is the roles a user holds plus the roles that come with each group."
+    verify:
+      - kind: data
+        check: member_resolution
+    remediation:
+      hint: "Automatic."
+    depends_on: [servicenow.read]
+
+  - id: servicenow.privileged
+    title: admin, security_admin and elevated-privilege roles tagged privileged
+    category: groups
+    level: recommended
+    why: "These roles reach every record or change who has access; an elevated-privilege role also needs a manual step to use."
+    verify:
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "Review who holds them."
+    config_fields: [privileged_expected]

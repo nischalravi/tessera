@@ -15,12 +15,14 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/certs"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldapwrite"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -52,6 +54,12 @@ const (
 	KindOracle = "oracle"
 	// KindSalesforce: user lifecycle and permission-set assignment in a Salesforce org (issue #555).
 	KindSalesforce = "salesforce"
+	// KindServiceNow: user lifecycle, group membership and role assignment in a ServiceNow instance, or
+	// (credential mode "ticket") an incident per change for a person to act on (issue #559).
+	KindServiceNow = "servicenow"
+	// KindAtlassian: group membership and project role actors of an Atlassian Cloud site (issue #559). Accounts
+	// are provisioned through the Atlassian Cloud SCIM preset.
+	KindAtlassian = "atlassian"
 	// KindSQL is a database (PostgreSQL, MySQL, SQL Server, Oracle): native accounts and roles,
 	// or an application's own tables (issue #553, internal/connectors/sqldb). The target's
 	// Settings.SQL holds the connection; the credential is the database password.
@@ -202,6 +210,10 @@ const (
 )
 
 func (e *Engine) maxAttempts() int { return orInt(e.MaxAttempts, 5) }
+
+// waitStep is the backoff step of an operation waiting for a person (about ten minutes by default).
+const waitStep = 8
+
 func (e *Engine) maxVerifies() int { return orInt(e.MaxVerifies, 3) }
 
 func orInt(v, d int) int {
@@ -334,6 +346,18 @@ func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) 
 			return nil, err
 		}
 		return salesforce.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
+	case KindServiceNow:
+		cred, err := servicenow.ParseCredential(token)
+		if err != nil {
+			return nil, err
+		}
+		return servicenow.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
+	case KindAtlassian:
+		cred, err := atlassian.ParseTargetCredential(token)
+		if err != nil {
+			return nil, err
+		}
+		return atlassian.OpenTarget(pt.BaseURL, cred, e.Runtime, hc, e.Clock)
 	case KindSQL:
 		return e.buildSQL(token, s)
 	case KindLDAP, KindAD:
@@ -670,13 +694,19 @@ func (e *Engine) verify(ctx context.Context, t tenancy.ID, op *store.ProvOp, con
 	case err != nil:
 		// The read itself failed: try again later, and give up after the same
 		// number of tries a disagreeing read gets.
-		if op.VerifyAttempts >= e.maxVerifies() {
+		if !target.Retryable(err) || op.VerifyAttempts >= e.maxVerifies() {
 			return e.fail(ctx, t, op, fmt.Errorf("could not re-read the target to verify: %w", err), st)
 		}
 		st.Retrying++
 		return e.set(ctx, t, op, PendingVerification, store.ProvOpState{Status: PendingVerification, Attempts: op.Attempts,
 			VerifyAttempts: op.VerifyAttempts, NextAttemptAt: now.Add(e.backoff(op.VerifyAttempts)),
 			LastError: sp("re-read failed: " + errText(err))}, "", nil)
+	case !v.OK && v.Waiting:
+		// a person has to act: stay pending, re-read later, and do not spend a verification attempt
+		st.Retrying++
+		return e.set(ctx, t, op, PendingVerification, store.ProvOpState{Status: PendingVerification, Attempts: op.Attempts,
+			VerifyAttempts: max(0, op.VerifyAttempts-1), NextAttemptAt: now.Add(e.backoff(waitStep)),
+			LastError: sp("waiting: " + v.Observed), Observed: sp(v.Observed)}, "", nil)
 	case !v.OK && op.VerifyAttempts < e.maxVerifies():
 		st.Retrying++
 		return e.set(ctx, t, op, PendingVerification, store.ProvOpState{Status: PendingVerification, Attempts: op.Attempts,

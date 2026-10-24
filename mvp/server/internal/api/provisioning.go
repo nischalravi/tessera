@@ -15,10 +15,12 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldapwrite"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
@@ -297,7 +299,7 @@ type targetInput struct {
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	var st provision.Settings
 	switch in.Kind {
-	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle, provision.KindREST, provision.KindSalesforce:
+	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle, provision.KindREST, provision.KindSalesforce, provision.KindServiceNow, provision.KindAtlassian:
 		if s.cfg.Env == "prod" && !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://") {
 			return st, badRequest("invalid_base_url", "base_url must be https")
 		}
@@ -365,12 +367,23 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle, sql, salesforce, ldap, ad or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle, sql, salesforce, servicenow, atlassian, ldap, ad or fake")
 	}
 	if in.Kind == provision.KindSalesforce {
 		if _, err := salesforce.CheckURL(in.BaseURL, s.sfRuntime()); err != nil {
 			// a fixed message: the error text can carry the submitted URL, which is not echoed back
 			return st, badRequest("invalid_base_url", sfURLRule("base_url"))
+		}
+	}
+	switch in.Kind {
+	case provision.KindServiceNow:
+		if u, err := servicenow.CheckURL(in.BaseURL, s.sfRuntime()); err != nil || u.Path != "" {
+			// a fixed message: the error text can carry the submitted URL, which is not echoed back
+			return st, badRequest("invalid_base_url", "base_url must be an https URL on a ServiceNow domain (*.service-now.com or *.servicenowservices.com), with no path")
+		}
+	case provision.KindAtlassian:
+		if u, err := atlassian.CheckSiteURL(in.BaseURL, s.sfRuntime()); err != nil || u.Path != "" {
+			return st, badRequest("invalid_base_url", "base_url must be an https URL on an Atlassian Cloud site (*.atlassian.net), with no path")
 		}
 	}
 	if in.Kind == provision.KindREST {
@@ -381,7 +394,7 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		return st, badRequest("invalid_rest", "rest applies to REST targets only")
 	}
 	vault := slices.Contains(provision.PAMKinds, in.Kind) || slices.Contains(provision.ERPKinds, in.Kind) // a target with a path root and a user:secret credential
-	noDialect := vault || in.Kind == provision.KindSalesforce || in.Kind == provision.KindLDAP || in.Kind == provision.KindAD
+	noDialect := vault || in.Kind == provision.KindSalesforce || in.Kind == provision.KindServiceNow || in.Kind == provision.KindAtlassian || in.Kind == provision.KindLDAP || in.Kind == provision.KindAD
 	switch {
 	case (in.Kind == provision.KindOkta || noDialect || in.Kind == provision.KindREST) && in.Dialect != "":
 		return st, badRequest("invalid_dialect", "dialect applies to SCIM targets only")
@@ -545,6 +558,17 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 			}
 		}
 	}
+	if in.Token != "" && in.Kind == provision.KindServiceNow {
+		if _, err := servicenow.ParseCredential(in.Token); err != nil {
+			// fixed text: the parser's error is never echoed back
+			return 0, nil, badRequest("invalid_credential", "the ServiceNow credential is JSON: auth basic with username and password, or oauth with client_id and client_secret; optional mode (direct or ticket) and assignment_group (a sys_id)")
+		}
+	}
+	if in.Token != "" && in.Kind == provision.KindAtlassian {
+		if _, err := atlassian.ParseTargetCredential(in.Token); err != nil {
+			return 0, nil, badRequest("invalid_credential", "the Atlassian credential is JSON with email and api_token")
+		}
+	}
 	switch {
 	case in.Token != "" && isUserSecretKind(in.Kind) && !strings.Contains(strings.Trim(in.Token, ":"), ":"):
 		return 0, nil, badRequest("invalid_credential", "the credential is user:secret")
@@ -574,6 +598,10 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
 	case in.Kind == provision.KindSalesforce && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "a Salesforce target needs its credential (JSON with client_id, username and private_key)")
+	case in.Kind == provision.KindServiceNow && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "a ServiceNow target needs its credential (JSON: auth basic with username and password, or oauth with client_id and client_secret)")
+	case in.Kind == provision.KindAtlassian && len(t.CredentialEnc) == 0:
+		return 0, nil, badRequest("invalid_credential", "an Atlassian target needs its credential (JSON with email and api_token)")
 	case in.Kind == provision.KindREST && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "a REST target needs its credential (the secret its auth type uses)")
 	case isUserSecretKind(in.Kind) && len(t.CredentialEnc) == 0:
@@ -607,7 +635,7 @@ func sfURLRule(field string) string {
 	return field + " must be an https URL on a Salesforce domain (*.my.salesforce.com, *.salesforce.com or *.force.com), with no path"
 }
 
-// sfRuntime is the outbound runtime of Salesforce targets: the dev loopback exception exists in dev only.
+// sfRuntime is the outbound runtime of Salesforce, ServiceNow and Atlassian targets: the dev loopback exception exists in dev only.
 func (s *Server) sfRuntime() connsync.Runtime {
 	return connsync.Runtime{Env: s.cfg.Env, AllowLoopback: s.cfg.Env == config.Dev}
 }
