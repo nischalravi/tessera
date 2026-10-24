@@ -155,6 +155,12 @@ func TestDatasetInWorkflowCondition(t *testing.T) {
 			}
 			return p.Stages[0].Approver
 		}
+		if r, _ := workflow.ForRequestType(c, workflow.RequestAccess); r != nil {
+			pl, _ := r.Resolve(map[string]string{"system": "okta"})
+			if cur, _ := datasets.Get(c, ds.ID); pl == nil || pl.Datasets["Restricted"] != cur.Version || cur.Version == 0 {
+				t.Errorf("the plan records the dataset version: %+v (dataset v%d)", pl, cur.Version)
+			}
+		}
 		if got := route("okta"); got != workflow.ApproverDecider {
 			t.Errorf("in the dataset: %s", got)
 		}

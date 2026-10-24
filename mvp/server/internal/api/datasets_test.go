@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
@@ -19,8 +20,16 @@ func TestDatasetsAPI(t *testing.T) {
 	admin := signIn(t, f.DB, f.B.ID, authtest.User{Email: "pa@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, now)
 	other := signIn(t, f.DB, f.A.ID, authtest.User{Email: "pa@a.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, now)
 
+	stale := signIn(t, f.DB, f.B.ID, authtest.User{Email: "stale@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}},
+		authtest.Ctx{AAL: 2, Phr: true, AuthTime: now.Add(-20 * time.Minute)}, now)
 	if rec := reqDo(h, viewer, "POST", "/api/datasets", `{"name":"x"}`); rec.Code != 403 {
 		t.Errorf("viewer create: %d", rec.Code)
+	}
+	if rec := reqDo(h, viewer, "GET", "/api/datasets", ""); rec.Code != 403 {
+		t.Errorf("viewer lists: %d", rec.Code)
+	}
+	if rec := reqDo(h, stale, "POST", "/api/datasets", `{"name":"x"}`); rec.Code != 401 || !strings.Contains(rec.Body.String(), "step_up_required") {
+		t.Errorf("create without a fresh sign-in: %d %s", rec.Code, rec.Body)
 	}
 	rec := reqDo(h, admin, "POST", "/api/datasets", `{"name":"Cost centers","description":"d","values":["cc-1"]}`)
 	var d datasetView
@@ -56,10 +65,18 @@ func TestDatasetsAPI(t *testing.T) {
 	if rec := csvReq(admin, base+"/upload?mode=replace", "only\n"); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"count":1`) {
 		t.Errorf("replace: %d %s", rec.Code, rec.Body)
 	}
-	if rec := reqDo(h, viewer, "GET", base+"/contains?value=only", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"contains":true`) {
+	if rec := reqDo(h, viewer, "GET", base+"/contains?value=only", ""); rec.Code != 403 {
+		t.Errorf("viewer tests membership: %d", rec.Code)
+	}
+	for _, c := range []struct{ method, path, body string }{{"POST", base + "/values", `{"add":["z"]}`}, {"PUT", base, `{"version":1,"name":"x","description":""}`}, {"DELETE", base, ""}} {
+		if rec := reqDo(h, stale, c.method, c.path, c.body); rec.Code != 401 {
+			t.Errorf("%s %s without a fresh sign-in: %d", c.method, c.path, rec.Code)
+		}
+	}
+	if rec := reqDo(h, admin, "GET", base+"/contains?value=only", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"contains":true`) {
 		t.Errorf("contains: %d %s", rec.Code, rec.Body)
 	}
-	if rec := reqDo(h, viewer, "GET", base+"?limit=10", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"values":["only"]`) {
+	if rec := reqDo(h, admin, "GET", base+"?limit=10", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"values":["only"]`) {
 		t.Errorf("get: %d %s", rec.Code, rec.Body)
 	}
 	if rec := reqDo(h, admin, "PUT", base, `{"version":1,"name":"Renamed","description":""}`); rec.Code != 409 {

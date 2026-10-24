@@ -7,7 +7,7 @@ import { Badge, Button, Callout, Column, DataTable, EmptyState, GovernanceTabs, 
 /**
  * Governance → Datasets (issue #588): named lookup tables (allowed cost centers, restricted
  * systems) that workflow conditions read by name. Values are added and removed one batch at a time
- * or loaded from a CSV file (first column). Changes need catalog.manage and are audited; a dataset
+ * or loaded from a CSV file (first column). Changes need workflows.manage and are audited; a dataset
  * an active workflow names cannot be renamed or deleted.
  */
 export function Datasets() {
@@ -15,7 +15,7 @@ export function Datasets() {
   const list = useApi<DatasetList>(datasetsPath);
   const [selected, setSelected] = useSelected();
   const rows = list.data?.datasets ?? null;
-  const manage = !!list.data?.can_manage && can("catalog.manage");
+  const manage = !!list.data?.can_manage && can("workflows.manage");
   const creating = selected === "new";
   const current = rows?.find((d) => d.id === selected) ?? null;
   const cols: Column<Dataset>[] = [
@@ -32,7 +32,7 @@ export function Datasets() {
       sub="Named lists of values that workflow conditions test an attribute against. Change a list here and every workflow that names it follows."
     >
       <div className="stack">
-        {!manage && list.data && <Callout tone="neutral">Datasets are managed by people who hold catalog.manage. You can read them here.</Callout>}
+        {!manage && list.data && <Callout tone="neutral">Datasets are managed by people who hold workflows.manage. You can read them here.</Callout>}
         {list.error && <Callout tone="bad">{list.error.message}</Callout>}
         <DataTable
           id="datasets"

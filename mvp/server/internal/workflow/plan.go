@@ -49,6 +49,8 @@ type Plan struct {
 	Actions        []Action    `json:"actions"`
 	Questionnaires []string    `json:"questionnaires"`
 	Provision      bool        `json:"provision"`
+	// Datasets are the versions of the datasets the path's conditions read (issue #588).
+	Datasets map[string]int `json:"datasets,omitempty"`
 }
 
 // StageAt returns the plan of stage idx, or nil.

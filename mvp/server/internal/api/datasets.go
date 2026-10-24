@@ -16,7 +16,7 @@ import (
 
 // Datasets (issue #588): named lookup tables that rules and request forms read by name.
 //
-//	GET    /api/datasets                       every dataset with its value count (graph.read)
+//	GET    /api/datasets                       every dataset with its value count (workflows.manage)
 //	POST   /api/datasets                       {name, description, values}: creates one
 //	GET    /api/datasets/{id}?limit=&offset=   one, with a page of its values
 //	PUT    /api/datasets/{id}                  {version, name, description}: renames or describes it
@@ -26,19 +26,22 @@ import (
 //	                                           first row, ?mode=replace makes the file the whole content
 //	GET    /api/datasets/{id}/contains?value=  {contains}: membership of one value
 //
-// Writing needs catalog.manage (the dataset feeds request forms and rules) and is audited in the same
-// transaction.
+// A dataset's values steer approval routing, so reading and writing need workflows.manage, writing also a
+// fresh sign-in (step-up), and every change is audited in the same transaction.
 func (s *Server) registerDatasetRoutes() {
 	const G, P, PU, D = http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete
-	manage := need(auth.PermCatalogManage)
-	s.handle(G, "/api/datasets", read, need(auth.PermGraphRead), s.listDatasets)
+	// Values steer approval routing (workflow conditions), so they are changed like workflows are: with
+	// workflows.manage and a fresh phishing-resistant sign-in. Reading them needs workflows.manage too.
+	manage := needStepUp(auth.PermWorkflowsManage, auth.StepUpPolicy)
+	view := need(auth.PermWorkflowsManage)
+	s.handle(G, "/api/datasets", read, view, s.listDatasets)
 	s.handle(P, "/api/datasets", write, manage, s.createDataset)
-	s.handle(G, "/api/datasets/{id}", read, need(auth.PermGraphRead), s.getDataset)
+	s.handle(G, "/api/datasets/{id}", read, view, s.getDataset)
 	s.handle(PU, "/api/datasets/{id}", write, manage, s.updateDataset)
 	s.handle(D, "/api/datasets/{id}", write, manage, s.deleteDataset)
 	s.handle(P, "/api/datasets/{id}/values", write, manage, s.editDatasetValues)
-	s.handle(P, "/api/datasets/{id}/upload", write, Route{Perm: auth.PermCatalogManage, BodyType: "text/csv"}, s.uploadDataset)
-	s.handle(G, "/api/datasets/{id}/contains", read, need(auth.PermGraphRead), s.datasetContains)
+	s.handle(P, "/api/datasets/{id}/upload", write, Route{Perm: auth.PermWorkflowsManage, BodyType: "text/csv", Authn: manage.Authn}, s.uploadDataset)
+	s.handle(G, "/api/datasets/{id}/contains", read, view, s.datasetContains)
 }
 
 type datasetView struct {
@@ -72,7 +75,7 @@ func (s *Server) listDatasets(_ http.ResponseWriter, r *http.Request, _ *params)
 	for _, d := range ds {
 		out = append(out, viewOf(d))
 	}
-	return map[string]any{"datasets": out, "can_manage": s.can(r, auth.PermCatalogManage),
+	return map[string]any{"datasets": out, "can_manage": s.can(r, auth.PermWorkflowsManage),
 		"limits": map[string]int{"datasets": datasets.MaxDatasets, "values": datasets.MaxValues, "value_length": datasets.MaxValueLen,
 			"csv_bytes": datasets.MaxCSVBytes}}, nil
 }

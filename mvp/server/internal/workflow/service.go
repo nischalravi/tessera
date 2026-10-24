@@ -438,6 +438,8 @@ type Resolved struct {
 	Version int
 	Def     Definition
 	sets    Sets // the datasets its conditions name
+	// setVersions are those datasets' versions when the workflow was resolved (0: no such dataset)
+	setVersions map[string]int
 }
 
 func resolveTarget(tx *store.TenantTx, kind, target string) (*Resolved, error) {
@@ -462,11 +464,11 @@ func resolveTarget(tx *store.TenantTx, kind, target string) (*Resolved, error) {
 	if err != nil {
 		return nil, err
 	}
-	sets, err := loadSets(tx, d)
+	sets, vers, err := loadSets(tx, d)
 	if err != nil {
 		return nil, err
 	}
-	return &Resolved{ID: w.ID, Name: w.Name, Version: w.Version, Def: d, sets: sets}, nil
+	return &Resolved{ID: w.ID, Name: w.Name, Version: w.Version, Def: d, sets: sets, setVersions: vers}, nil
 }
 
 // ForItem is the workflow that routes requests for a catalog item: the item's own, else the
@@ -485,7 +487,12 @@ func ForRequestType(tx *store.TenantTx, requestType string) (*Resolved, error) {
 
 // Resolve compiles the workflow for a request's attributes.
 func (r *Resolved) Resolve(attrs map[string]string) (*Plan, error) {
-	return r.Def.compile(r.ID, r.Version, attrs, r.sets)
+	p, err := r.Def.compile(r.ID, r.Version, attrs, r.sets)
+	if err == nil && len(r.setVersions) > 0 {
+		// which version of each dataset decided the path, for an audit of the routing
+		p.Datasets = r.setVersions
+	}
+	return p, err
 }
 
 // datasetNames lists the datasets a definition's conditions name.
@@ -499,30 +506,33 @@ func (d Definition) datasetNames() []string {
 	return out
 }
 
-func loadSets(tx *store.TenantTx, d Definition) (Sets, error) {
+func loadSets(tx *store.TenantTx, d Definition) (Sets, map[string]int, error) {
 	names := d.datasetNames()
 	if len(names) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	sets := Sets{}
+	vers := map[string]int{}
 	for _, n := range names {
 		ds, err := tx.DatasetByName(n)
 		if errors.Is(err, store.ErrNotFound) {
+			vers[n] = 0
 			continue
 		} else if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		vals, err := tx.DatasetValues(ds.ID, ds.Count+1, 0)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		vers[n] = ds.Version
 		set := make(map[string]bool, len(vals))
 		for _, v := range vals {
 			set[v] = true
 		}
 		sets[n] = set
 	}
-	return sets, nil
+	return sets, vers, nil
 }
 
 // DatasetsInUse lists the datasets the conditions of active workflows (at their current version) name.
