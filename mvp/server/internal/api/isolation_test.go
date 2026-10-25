@@ -354,6 +354,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/t/{slug}/mcp/") || strings.HasPrefix(rt.Pattern, "/api/mcp/") {
 			continue // TestMCP_CrossTenant (UUID and token ids, a tenant slug in the path)
 		}
+		if strings.HasPrefix(rt.Pattern, "/t/{slug}/aws/.well-known/") {
+			continue // TestAWSFederation_PublicDocuments (public; the tenant is the slug, and its keys are its own)
+		}
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
 		}

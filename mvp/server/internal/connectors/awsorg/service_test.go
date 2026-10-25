@@ -19,7 +19,7 @@ import (
 
 func newService(t *testing.T, r *awsreplay.Replay) *Service {
 	t.Helper()
-	return &Service{Sealer: testSealer(t), Client: testClient(r, nil), CatalogVersion: "2026-10-08-0123456789abcdef",
+	return &Service{Sealer: testSealer(t), Client: testClient(r, nil), CatalogVersion: "2026-10-08-0123456789abcdef", AllowStaticKeys: true,
 		Clock: func() time.Time { return testNow }}
 }
 

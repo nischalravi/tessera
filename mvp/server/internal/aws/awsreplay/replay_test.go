@@ -116,3 +116,32 @@ func TestReplay(t *testing.T) {
 		}
 	}
 }
+
+// TestUnsignedOnlyWebIdentity: sts:AssumeRoleWithWebIdentity is the one call
+// the replayer accepts without a signature (it is recorded with no access key);
+// any other unsigned call is refused.
+func TestUnsignedOnlyWebIdentity(t *testing.T) {
+	r := NewReplay(nil).Enqueue("sts/AssumeRoleWithWebIdentity", Response{Body: "<ok/>"})
+	post := func(host, form string) (*http.Response, error) {
+		req, _ := http.NewRequest("POST", "https://"+host+"/", strings.NewReader(form))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+		return r.Do(req)
+	}
+	resp, err := post("sts.us-east-1.amazonaws.com", "Action=AssumeRoleWithWebIdentity&WebIdentityToken=t")
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("web identity: %v %v", resp, err)
+	}
+	q := r.Requests()[0]
+	if q.Service != "sts" || q.Operation != "AssumeRoleWithWebIdentity" || q.Region != "us-east-1" || q.AccessKeyID != "" || q.Form.Get("WebIdentityToken") != "t" {
+		t.Errorf("request = %+v", q)
+	}
+	for name, c := range map[string][2]string{
+		"another STS action": {"sts.us-east-1.amazonaws.com", "Action=AssumeRole"},
+		"another service":    {"iam.amazonaws.com", "Action=AssumeRoleWithWebIdentity"},
+		"odd STS host":       {"sts.evil.us-east-1.amazonaws.com", "Action=AssumeRoleWithWebIdentity"},
+	} {
+		if _, err := post(c[0], c[1]); err == nil {
+			t.Errorf("%s: served unsigned", name)
+		}
+	}
+}

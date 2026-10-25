@@ -82,7 +82,8 @@ func (s *Server) awsCollector() (*awsorg.Service, error) {
 		canonical = v.C.CanonicalAction // the usage ingest files only actions the catalog has
 	}
 	return &awsorg.Service{Sealer: s.cfg.Sealer, Client: &awsorg.Client{HTTP: s.cfg.AWSHTTP, Now: s.clock}, Clock: s.clock,
-		CatalogVersion: cat.Cat.Version(), Eval: cfg, Canonical: canonical}, nil
+		CatalogVersion: cat.Cat.Version(), Eval: cfg, Canonical: canonical, AllowStaticKeys: s.cfg.AWSAllowStaticKeys,
+		Federation: &awsorg.Federation{DB: s.store, Sealer: s.cfg.Sealer, PublicURL: s.cfg.PublicURL, Clock: s.clock}}, nil
 }
 
 type awsCollectPayload struct {

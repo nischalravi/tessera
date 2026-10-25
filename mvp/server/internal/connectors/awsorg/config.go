@@ -45,6 +45,25 @@ type Config struct {
 	IdentityCenterRegion string `json:"identity_center_region"`
 	// Usage turns on usage ingest (CloudTrail, Access Advisor); nil: none.
 	Usage *UsageConfig `json:"usage,omitempty"`
+	// Auth is how the connector gets AWS credentials: AuthFederated (STS
+	// AssumeRoleWithWebIdentity with a Tessera-issued token; nothing secret is
+	// stored) or AuthStaticKey (a sealed access key; only where the server
+	// allows it). A config stored before federation has none: AuthStaticKey.
+	Auth string `json:"auth,omitempty"`
+}
+
+// The connector's authentication modes.
+const (
+	AuthFederated = "federated"
+	AuthStaticKey = "static_key"
+)
+
+// Mode is the effective authentication mode.
+func (c *Config) Mode() string {
+	if c.Auth == "" {
+		return AuthStaticKey
+	}
+	return c.Auth
 }
 
 // Validate normalizes c (default role name, sorted unique ids) and checks
@@ -55,6 +74,9 @@ func (c *Config) Validate() error {
 	}
 	if !roleNameRE.MatchString(c.RoleName) {
 		return errors.New("role_name is not a valid IAM role name")
+	}
+	if c.Auth != "" && c.Auth != AuthFederated && c.Auth != AuthStaticKey {
+		return errors.New("auth must be federated or static_key")
 	}
 	if len(c.Regions) == 0 || len(c.Regions) > MaxRegions {
 		return fmt.Errorf("regions: between 1 and %d regions are required", MaxRegions)

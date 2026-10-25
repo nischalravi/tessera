@@ -5341,12 +5341,30 @@ stdlib SigV4 signer (`internal/aws/sigv4`, tested against the published `get-van
 sent through `internal/safehttp`. Throttling and 5xx are retried with exponential backoff and full
 jitter (honouring `Retry-After`); every `List*` follows its token to the last page.
 
-- **Credentials.** The connector holds an access key pair, sealed with `internal/seal` (AAD bound to
-  tenant, table, column and connector id) and never returned by the API. It signs only
-  `sts:AssumeRole` with it; everything else is read as the customer's role (default `TesseraReader`)
-  in each account, with an `sts:ExternalId` the connector generates and shows (`external_id`) for
-  the role's trust policy. `awsorg.ReaderPolicy()` is the role's permissions policy: only List and
-  Read actions, verified against the action catalog (`CheckReadOnly`, tested).
+- **Credentials (federated, no stored keys; issue #638).** A new connector is federated: it stores
+  no secret. For each account it signs a short-lived JWT (ES256, 5 minutes) with the tenant's key
+  from `internal/keys` and calls STS `AssumeRoleWithWebIdentity` (an unsigned call, through
+  `safehttp`) for one hour of credentials in the customer's read-only role, cached until 5 minutes
+  before they expire. Claims: `iss` `{TESSERA_PUBLIC_URL}/t/{slug}/aws`, `aud` `sts.amazonaws.com`,
+  `sub` `tessera:tenant:{tenant-id}:aws-connector:{connector-id}`, `jti`. The token is never
+  served; the only public documents are `GET /t/{slug}/aws/.well-known/openid-configuration` and
+  `.../jwks.json`. No error, audit event or log holds a token or temporary credentials.
+  Customer setup, in each account the connector reads (an IAM OIDC provider is per account; use a
+  StackSet for many):
+  1. Create an IAM OIDC provider: URL = the connector's `federation.issuer`, audience (client id)
+     `sts.amazonaws.com`.
+  2. Create the role (default `TesseraReader`) with the trust policy in the connector's
+     `federation.trust_policy` (`StringEquals` on `<issuer host/path>:aud` and `:sub`: only this
+     tenant's connector can assume it) and `awsorg.ReaderPolicy()` as its permissions policy: only
+     List and Read actions, verified against the action catalog (`CheckReadOnly`, tested).
+  3. Collect. There is no `sts:ExternalId` in this mode: the `sub` pin replaces it.
+
+  The issuer needs an https `TESSERA_PUBLIC_URL` that AWS can reach. **Stored-key mode** (a sealed
+  access key that signs `sts:AssumeRole`, with an `external_id`) remains only behind
+  `TESSERA_AWS_ALLOW_STATIC_KEYS`: default on in dev and test, off in prod, and prod refuses it
+  set to true (the server will not start). With it off, creating a keyed connector (directly or by a
+  governed connection's handover) is refused (`422 static_keys_disabled`) and a stored one is not
+  collected from; in prod, governed AWS connections (which hold a key) are not probed either. Existing connectors without `config.auth` are stored-key ones.
 - **Fail closed (design §3.3).** A stored policy that does not parse, a statement dropped as an
   ingest anomaly, and a read that fails (an account that refuses the role, a bucket policy that is
   denied, a list that fails) are never skipped: each is a *finding* with the scope of decisions it
@@ -5360,7 +5378,9 @@ jitter (honouring `Retry-After`); every `List*` follows its token to the last pa
 - **API** (connections permissions; writes need step-up): `GET|POST /api/aws/connectors`,
   `DELETE /api/aws/connectors/{id}`, `GET /api/aws/snapshots`, `GET /api/aws/snapshots/{id}`.
   `POST /api/aws/connectors` takes `{name, config: {regions, account_ids, management_account_id,
-  role_name, identity_center_region}, credentials: {access_key_id, secret_access_key}}`.
+  role_name, identity_center_region}}` and creates a federated connector; its response (and the
+  list) carry `auth` and `federation: {issuer, audience, subject, trust_policy}`. With
+  `TESSERA_AWS_ALLOW_STATIC_KEYS` it also accepts `credentials: {access_key_id, secret_access_key}`.
 - **Collection job** (issue #637). A collection reads every account, so it is a job of the durable
   queue (kind `aws_collect`, shown under Jobs), not a request:
 
