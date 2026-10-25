@@ -73,7 +73,7 @@ test("the connectors the server already had are in the gallery under their categ
   assert.deepEqual(ids({ capability: "Access inventory", category: "Servers & hosts" }), ["unixssh"]);
   assert.deepEqual(ids({ q: "racf" }), ["racf"]);
   assert.deepEqual(ids({ q: "special authorities" }), ["ibmi"]);
-  assert.deepEqual(ids({ capability: "Identity source", category: "Servers & hosts" }), ["racf", "ibmi"]);
+  assert.deepEqual(ids({ capability: "Identity source", category: "Servers & hosts" }), ["sftpdrop", "racf", "ibmi"]);
   assert.deepEqual(ids({ q: "  privileged " }), ["cyberark"]);
 });
 
