@@ -95,3 +95,26 @@ func TestModuleAttribute(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentSyncPayload_RACFRefusesBadSuffix: an SDBM suffix that is not a DN
+// is refused on the server, before a job is queued; the agent re-checks it.
+func TestAgentSyncPayload_RACFRefusesBadSuffix(t *testing.T) {
+	ref := "agent:ag1/racf"
+	for cfg, wantErr := range map[string]bool{
+		racfConfig: false,
+		`{"host":"zos.corp.example","port":636,"bind_dn":"racfid=T,profiletype=USER,cn=RACFA","base_dns":["cn=RACFA,=x"]}`: true,
+		`{"host":"zos.corp.example","port":636,"bind_dn":"racfid=T,profiletype=USER,cn=RACFA","base_dns":["not a dn"]}`:    true,
+	} {
+		rev := &store.ConnectionRevision{TemplateID: "racf", SecretRef: &ref, Config: cfg}
+		_, spec, ok, err := worker.AgentSyncPayload(&store.Connection{Name: "zos", System: "zos"}, rev)
+		if (err != nil) != wantErr || ok == wantErr {
+			t.Errorf("%s: ok %v err %v", cfg, ok, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "not a dn") {
+			t.Errorf("the error echoes the suffix: %v", err)
+		}
+		if !wantErr && spec.Module != agent.ModuleRACF {
+			t.Errorf("module %q", spec.Module)
+		}
+	}
+}

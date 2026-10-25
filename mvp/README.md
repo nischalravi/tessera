@@ -605,23 +605,30 @@ agent (`agent:<agent id>/<name>`); a secret typed in Tessera or a vault referenc
 
 - **RACF** (`internal/connectors/racf`, template `racf`, connector type `racf`). Read through the z/OS LDAP server's
   SDBM backend with the shared read-only LDAP reader (TLS only, no write operation). Base DN is the SDBM suffix
-  (for example `cn=RACFA`); the module searches `profiletype=USER` and `profiletype=GROUP` below it. Users
-  (`racfid`; disabled when `racfAttributes` holds `REVOKE`), groups, connects (the union of the user's
-  `racfConnectGroupName` and the group's `racfGroupUserids`, once each), and the user attributes SPECIAL, OPERATIONS
-  and AUDITOR as three privileged groups (`racf-attr:SPECIAL` and so on). Account attributes `racfDefaultGroup`,
-  `racfOwner`, `racfProgrammerName`, plus the connection's extra attributes. The bind user needs list authority
-  (group-AUDITOR, ROAUDIT or IRR.LISTUSER), not SPECIAL. Live checks: TLS handshake, chain and bind through the agent.
-  Not covered yet: group-level authorities, connect authority (USE, CREATE, CONNECT, JOIN), dataset and general
-  resource profiles. The attribute names follow the IBM SDBM schema and have only been run against the in-process
+  (for example `cn=RACFA`); the module searches `profiletype=USER`, `profiletype=GROUP` and `profiletype=CONNECT`
+  below it, and matches users, groups and connects within one suffix (each suffix is its own RACF database). Users
+  (`racfid`; disabled when `racfAttributes` holds `REVOKED`: the permanent flag only, a pending revoke or resume date
+  is not evaluated), groups, connects (the union of the user's `racfConnectGroupName` and the group's
+  `racfGroupUserids`, once each, minus connects whose CONNECT profile is `REVOKED`), the user attributes SPECIAL,
+  OPERATIONS, AUDITOR and ROAUDIT as privileged groups (`racf-attr:SPECIAL` and so on), and a connect's group-level
+  SPECIAL, OPERATIONS and AUDITOR as one privileged group per group (`racf-group-attr:SPECIAL:<group DN>`, kept when
+  the connect is revoked). A listing in which no user carries `racfAttributes` fails the sync (the bind user cannot
+  read them). Account attributes `racfDefaultGroup`, `racfOwner`, `racfProgrammerName`, plus the connection's extra
+  attributes. The bind user needs list authority (group-AUDITOR, ROAUDIT or IRR.LISTUSER), not SPECIAL. Live
+  checks: TLS handshake, chain and bind through the agent, never a direct dial from the server. Coverage is partial:
+  connect group authority (USE, CREATE, CONNECT, JOIN), CLAUTH, dataset and general resource profiles are not read. The attribute names follow the IBM SDBM schema and have only been run against the in-process
   fake (a live z/OS check is still to do).
 - **IBM i** (`internal/connectors/ibmi`, template `ibmi`, connector type `ibmi`). IBM i has no LDAP view of its
   profiles; they are read from Db2 for i (`QSYS2.USER_INFO`) over the host servers (DRDA), which the Go standard
   library cannot speak. So this release ships the plug-in contract (`ibmi.Source`: list profiles, bounded, read-only)
   and the module that maps profiles to the typed result: each profile is an account (`*DISABLED` is disabled), each
-  group profile and supplemental group a group, each special authority a group (privileged for `*ALLOBJ`, `*SECADM`,
-  `*AUDIT`, `*IOSYSCFG`, `*SERVICE`) and the `*SECOFR` and `*SECADM` classes privileged groups. **The live transport is
+  group profile and supplemental group a group (privileged when the group profile itself holds a privileged
+  authority or class, since members hold the group's special authorities), each special authority a group (all
+  eight are privileged) and the `*SECOFR` and `*SECADM` classes privileged groups. **The live transport is
   not built:** the agent build registers `ibmi.NoTransport`, which answers `unsupported`, and the template has no live
-  check (its items are attested). The connection's user field holds the profile name (1 to 10 characters); no base DN.
+  check (its items are attested); the gallery tile and wizard say it is a preview that cannot sync yet. The
+  connection's user field holds the profile name (1 to 10 of A-Z, 0-9, `#`, `$`, `@`, `_`, not starting with a digit
+  or `_`); no base DN.
 
 Tests use in-process fakes only: `go test -race ./internal/agent ./internal/connectors/racf ./internal/connectors/ibmi
 ./internal/worker ./internal/readiness/... ./cmd/tessera-agent`.

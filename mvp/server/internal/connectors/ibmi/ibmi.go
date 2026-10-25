@@ -13,8 +13,9 @@
 //     account (disabled when its status is *DISABLED); each group profile and
 //     supplemental group is a group; each special authority (*ALLOBJ, *SECADM,
 //     *AUDIT, *IOSYSCFG, *SERVICE, *SAVSYS, *JOBCTL, *SPLCTL) and the *SECOFR
-//     and *SECADM user classes is a synthetic group, privileged for the
-//     authorities that give control of the system.
+//     and *SECADM user classes is a synthetic group, privileged (every special
+//     authority is system-wide); a group profile that holds one is a
+//     privileged group, since its members hold its special authorities.
 //   - NoTransport is the transport of this build: it answers "unsupported". The
 //     live transport is a follow-up; it plugs in as an Opener and gets the
 //     agent's safedial Dialer in agent.ProberSpec, like every module.
@@ -89,10 +90,18 @@ type syncer struct {
 	open Opener
 }
 
-var nameRE = regexp.MustCompile(`^[A-Za-z#$@][A-Za-z0-9#$@_.]{0,9}$`)
+// nameRE is an IBM i user profile name: A-Z, 0-9, # $ @ and _, at most 10,
+// not starting with a digit or _ (no period, unlike other object names).
+var nameRE = regexp.MustCompile(`^[A-Za-z#$@][A-Za-z0-9#$@_]{0,9}$`)
 
-// authorities that give control of the system.
-var privilegedAuth = map[string]bool{"*ALLOBJ": true, "*SECADM": true, "*AUDIT": true, "*IOSYSCFG": true, "*SERVICE": true}
+// privilegedAuth are the eight IBM i special authorities. Each one is
+// system-wide: beyond the five that give control of the system (*ALLOBJ,
+// *SECADM, *AUDIT, *IOSYSCFG, *SERVICE), *SAVSYS saves and restores any object
+// whatever its authority (a copy of every library), *SPLCTL reads every
+// spooled file and *JOBCTL controls every job and subsystem. A reviewer must
+// see them all.
+var privilegedAuth = map[string]bool{"*ALLOBJ": true, "*SECADM": true, "*AUDIT": true, "*IOSYSCFG": true, "*SERVICE": true,
+	"*SAVSYS": true, "*SPLCTL": true, "*JOBCTL": true}
 
 var privilegedClass = map[string]bool{"*SECOFR": true, "*SECADM": true}
 
@@ -122,6 +131,7 @@ func Map(profiles []Profile, lim agent.SyncLimits) (*agent.SyncResult, error) {
 	}
 	out := &agent.SyncResult{Accounts: []agent.SyncAccount{}, Groups: []agent.SyncGroup{}, Members: []agent.SyncMember{}}
 	seen := map[string]bool{}
+	privProfile := map[string]bool{} // profile name -> holds a privileged authority or class
 	groups := map[string]agent.SyncGroup{}
 	type edge struct{ acct, group string }
 	var edges []edge
@@ -172,9 +182,22 @@ func Map(profiles []Profile, lim agent.SyncLimits) (*agent.SyncResult, error) {
 				return nil, ErrBadProfile
 			}
 			addGroup("authority:"+a, "IBM i special authority "+a, privilegedAuth[a])
+			if privilegedAuth[a] {
+				privProfile[name] = true
+			}
 		}
 		if c := strings.ToUpper(p.UserClass); privilegedClass[c] {
 			addGroup("class:"+c, "IBM i user class "+c, true)
+			privProfile[name] = true
+		}
+	}
+	// A member of a group profile holds the group's special authorities (IBM i
+	// authority checking uses them), so a group profile that is itself
+	// privileged makes its group privileged.
+	for id, g := range groups {
+		if name, ok := strings.CutPrefix(id, "group:"); ok && privProfile[name] {
+			g.Privileged = true
+			groups[id] = g
 		}
 	}
 	ids := make([]string, 0, len(groups))

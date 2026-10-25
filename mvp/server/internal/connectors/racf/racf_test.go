@@ -3,6 +3,7 @@ package racf_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -105,8 +106,9 @@ func TestDiscover_UsersGroupsConnectsAndAuthorities(t *testing.T) {
 	if err := res.Validate(); err != nil {
 		t.Fatalf("the result must pass the protocol's own validation: %v", err)
 	}
-	// SDBM is searched below profiletype=USER and profiletype=GROUP, by object class, and nothing else.
-	want := []string{"profiletype=USER,cn=RACFA|(objectclass=racfUser)", "profiletype=GROUP,cn=RACFA|(objectclass=racfGroup)"}
+	// SDBM is searched below profiletype=USER, GROUP and CONNECT, by object class, and nothing else.
+	want := []string{"profiletype=USER,cn=RACFA|(objectclass=racfUser)", "profiletype=GROUP,cn=RACFA|(objectclass=racfGroup)",
+		"profiletype=CONNECT,cn=RACFA|(objectclass=racfConnect)"}
 	if strings.Join(f.searches, ";") != strings.Join(want, ";") {
 		t.Errorf("searches %v", f.searches)
 	}
@@ -148,7 +150,7 @@ func TestDiscover_UsersGroupsConnectsAndAuthorities(t *testing.T) {
 			t.Errorf("group %s: %+v", n, g)
 		}
 	}
-	for _, a := range []string{"SPECIAL", "OPERATIONS", "AUDITOR"} {
+	for _, a := range []string{"SPECIAL", "OPERATIONS", "AUDITOR"} { // ROAUDIT: no holder in this fixture
 		if g, ok := groups["RACF "+a+" attribute"]; !ok || !g.Privileged || g.ExternalID != "racf-attr:"+a {
 			t.Errorf("authority %s: %+v", a, g)
 		}
@@ -266,5 +268,175 @@ func TestOpenLDAP_GoesThroughSafedial(t *testing.T) {
 	s.Password = ""
 	if _, err := racf.OpenLDAP(context.Background(), s); !errors.Is(err, ldap.ErrBindRefused) {
 		t.Errorf("empty password: %v", err)
+	}
+}
+
+// TestDiscover_PrivilegedAttributesAlwaysFlagged: ROAUDIT is a system-wide
+// authority too, and a server that packs several keywords into one value
+// cannot hide a SPECIAL.
+func TestDiscover_PrivilegedAttributesAlwaysFlagged(t *testing.T) {
+	u := "racfid=AUD1,profiletype=USER," + suffix
+	f := &fakeSDBM{entries: map[string][]ldap.Entry{
+		"profiletype=USER," + suffix: {ent(u, "racfid", "AUD1", "racfattributes", "ROAUDIT", "racfattributes", "special, revoked")},
+	}}
+	res, err := discover(t, f, spec(), lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Accounts[0].Status != "disabled" {
+		t.Errorf("a packed REVOKED was missed: %+v", res.Accounts[0])
+	}
+	priv := map[string]bool{}
+	for _, g := range res.Groups {
+		priv[g.ExternalID] = g.Privileged
+	}
+	members := map[string]bool{}
+	for _, m := range res.Members {
+		members[m.Group] = m.Account == u
+	}
+	for _, id := range []string{"racf-attr:ROAUDIT", "racf-attr:SPECIAL"} {
+		if !priv[id] || !members[id] {
+			t.Errorf("%s: privileged %v, member %v (%+v)", id, priv[id], members[id], res)
+		}
+	}
+}
+
+// TestDiscover_OpenErrorsAreFixedText: a dial or bind failure that carries the
+// server's diagnostic (a DN, an address) is reported as fixed text; the policy
+// sentinels survive for the agent's error codes.
+func TestDiscover_OpenErrorsAreFixedText(t *testing.T) {
+	for in, want := range map[error]error{
+		errors.New("LDAP Result Code 49 \"\": ICH408I USER(TESSERA) racfid=TESSERA,profiletype=USER,cn=RACFA pw"): racf.ErrConnect,
+		fmt.Errorf("%w: StartTLS: server said racfid=X", safedial.ErrNoTLS):                                       safedial.ErrNoTLS,
+		fmt.Errorf("dial 10.1.2.3: %w", safedial.ErrBlockedAddress):                                               safedial.ErrBlockedAddress,
+		ldap.ErrBindRefused: ldap.ErrBindRefused,
+	} {
+		open := func(context.Context, agent.ProberSpec) (racf.Searcher, error) { return nil, in }
+		sy, _ := racf.Module(open).New(spec())
+		_, err := sy.Discover(context.Background(), lim)
+		if err != want || strings.Contains(err.Error(), "racfid") || strings.Contains(err.Error(), "10.1.2.3") {
+			t.Errorf("%v: got %v, want %v", in, err, want)
+		}
+	}
+}
+
+func connect(user, group string, attrs ...string) ldap.Entry {
+	e := ent("racfuserid="+user+"+racfgroupid="+group+",profiletype=CONNECT,"+suffix, "racfuserid", user, "racfgroupid", group)
+	for _, a := range attrs {
+		e.Attrs["racfconnectattributes"] = append(e.Attrs["racfconnectattributes"], a)
+	}
+	return e
+}
+
+// TestDiscover_ConnectProfiles: a connect's group-level SPECIAL, OPERATIONS
+// and AUDITOR are privileged groups of their own (kept when the connect is
+// revoked: a dormant authority stays visible), and a revoked connect is not a
+// live membership whichever side names it.
+func TestDiscover_ConnectProfiles(t *testing.T) {
+	f := sdbm()
+	f.entries["profiletype=CONNECT,"+suffix] = []ldap.Entry{
+		connect("ALICE", "PAYROLL", "SPECIAL"),
+		connect("BOB", "PAYROLL", "REVOKED", "AUDITOR"),
+		connect("IBMUSER", "PAYROLL", "REVOKED"),
+		connect("GHOST", "PAYROLL", "SPECIAL"), // not a user: dropped
+	}
+	res, err := discover(t, f, spec(), lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	u := func(id string) string { return "racfid=" + id + ",profiletype=USER," + suffix }
+	pay := "racfid=PAYROLL,profiletype=GROUP," + suffix
+	members := map[string]bool{}
+	for _, m := range res.Members {
+		members[m.Account+" -> "+m.Group] = true
+	}
+	priv := map[string]bool{}
+	for _, g := range res.Groups {
+		priv[g.ExternalID] = g.Privileged
+	}
+	for id, want := range map[string]bool{"racf-group-attr:SPECIAL:" + pay: true, "racf-group-attr:AUDITOR:" + pay: true, pay: false} {
+		if got, ok := priv[id]; !ok || got != want {
+			t.Errorf("group %s: present %v privileged %v", id, ok, got)
+		}
+	}
+	for k, want := range map[string]bool{
+		u("ALICE") + " -> racf-group-attr:SPECIAL:" + pay: true,
+		u("BOB") + " -> racf-group-attr:AUDITOR:" + pay:   true,  // revoked, still visible
+		u("ALICE") + " -> " + pay:                         true,  // a live connect
+		u("BOB") + " -> " + pay:                           false, // revoked: named by the group only
+		u("IBMUSER") + " -> " + pay:                       false, // revoked: named by the user only
+	} {
+		if members[k] != want {
+			t.Errorf("membership %s: %v, want %v", k, members[k], want)
+		}
+	}
+}
+
+// TestDiscover_SuffixesAreSeparateDatabases: the same racfid under two
+// suffixes is two accounts, each keeping its own SPECIAL, and connects match
+// within their suffix only.
+func TestDiscover_SuffixesAreSeparateDatabases(t *testing.T) {
+	f := &fakeSDBM{entries: map[string][]ldap.Entry{
+		"profiletype=USER,cn=A":  {ent("racfid=ADM,profiletype=USER,cn=A", "racfid", "ADM", "racfconnectgroupname", "SYS1", "racfattributes", "AUDITOR")},
+		"profiletype=USER,cn=B":  {ent("racfid=ADM,profiletype=USER,cn=B", "racfid", "ADM", "racfattributes", "SPECIAL")},
+		"profiletype=GROUP,cn=B": {ent("racfid=SYS1,profiletype=GROUP,cn=B", "racfid", "SYS1")},
+	}}
+	s := spec()
+	s.Config.BaseDNs = []string{"cn=A", "cn=B"}
+	res, err := discover(t, f, s, lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Accounts) != 2 {
+		t.Fatalf("accounts: %+v", res.Accounts)
+	}
+	members := map[string]bool{}
+	for _, m := range res.Members {
+		members[m.Account+" -> "+m.Group] = true
+	}
+	if !members["racfid=ADM,profiletype=USER,cn=B -> racf-attr:SPECIAL"] || !members["racfid=ADM,profiletype=USER,cn=A -> racf-attr:AUDITOR"] {
+		t.Errorf("privileges: %v", members)
+	}
+	if members["racfid=ADM,profiletype=USER,cn=A -> racfid=SYS1,profiletype=GROUP,cn=B"] {
+		t.Error("a connect crossed suffixes")
+	}
+}
+
+// TestDiscover_NoReadableAttributesFails: users without any racfAttributes
+// mean the bind user cannot read them; the sync fails rather than report no
+// privileged holder.
+func TestDiscover_NoReadableAttributesFails(t *testing.T) {
+	f := &fakeSDBM{entries: map[string][]ldap.Entry{
+		"profiletype=USER," + suffix: {ent("racfid=A,profiletype=USER,"+suffix, "racfid", "A"), ent("racfid=B,profiletype=USER,"+suffix, "racfid", "B")},
+	}}
+	if res, err := discover(t, f, spec(), lim); !errors.Is(err, racf.ErrNoAttributes) || res != nil {
+		t.Errorf("%v %v", res, err)
+	}
+	// an empty database is not an error
+	if _, err := discover(t, &fakeSDBM{entries: map[string][]ldap.Entry{}}, spec(), lim); err != nil {
+		t.Errorf("empty: %v", err)
+	}
+}
+
+// TestDiscover_GroupLimitBoundary: the synthetic groups count only when
+// emitted. The fixture has three groups and three synthetic ones.
+func TestDiscover_GroupLimitBoundary(t *testing.T) {
+	if _, err := discover(t, sdbm(), spec(), agent.SyncLimits{Accounts: 100, Groups: 6, Members: 100}); err != nil {
+		t.Errorf("at the limit: %v", err)
+	}
+	if _, err := discover(t, sdbm(), spec(), agent.SyncLimits{Accounts: 100, Groups: 5, Members: 100}); !errors.Is(err, racf.ErrTooLarge) {
+		t.Errorf("over the limit: %v", err)
+	}
+	// no privileged holder: every slot is for real groups
+	f := sdbm()
+	for i, e := range f.entries["profiletype=USER,"+suffix] {
+		e.Attrs["racfattributes"] = []string{"PROTECTED"}
+		f.entries["profiletype=USER,"+suffix][i] = e
+	}
+	if _, err := discover(t, f, spec(), agent.SyncLimits{Accounts: 100, Groups: 3, Members: 100}); err != nil {
+		t.Errorf("three groups, no synthetic: %v", err)
 	}
 }

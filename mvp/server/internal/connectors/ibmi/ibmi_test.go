@@ -93,7 +93,7 @@ func TestDiscover_ProfilesAuthoritiesAndGroups(t *testing.T) {
 		groups[g.ExternalID] = g.Privileged
 	}
 	wantPriv := map[string]bool{"authority:*ALLOBJ": true, "authority:*SECADM": true, "authority:*AUDIT": true, "authority:*IOSYSCFG": true,
-		"authority:*SERVICE": true, "authority:*SAVSYS": false, "authority:*JOBCTL": false, "authority:*SPLCTL": false,
+		"authority:*SERVICE": true, "authority:*SAVSYS": true, "authority:*JOBCTL": true, "authority:*SPLCTL": true,
 		"class:*SECOFR": true, "group:PAYGRP": false, "group:DEVGRP": false}
 	if len(groups) != len(wantPriv) {
 		t.Errorf("groups: %v", groups)
@@ -164,5 +164,43 @@ func TestNoTransport(t *testing.T) {
 	e := &agent.Executor{Allow: nil, Creds: nil}
 	if err := e.Register(ibmi.Module(ibmi.NoTransport)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestMap_GroupProfileAuthoritiesMakeTheGroupPrivileged: IBM i gives a member
+// the special authorities of its group profile, so a group profile holding
+// *ALLOBJ (or the *SECOFR class) is a privileged group; one with none is not.
+func TestMap_GroupProfileAuthoritiesMakeTheGroupPrivileged(t *testing.T) {
+	res, err := ibmi.Map([]ibmi.Profile{
+		{Name: "ALICE", GroupProfile: "ADMGRP", SupplementalGroups: []string{"OFFGRP", "USRGRP"}},
+		{Name: "ADMGRP", SpecialAuthorities: []string{"*ALLOBJ"}},
+		{Name: "OFFGRP", UserClass: "*SECOFR"},
+		{Name: "USRGRP", UserClass: "*USER"},
+	}, lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv := map[string]bool{}
+	for _, g := range res.Groups {
+		priv[g.ExternalID] = g.Privileged
+	}
+	if !priv["group:ADMGRP"] || !priv["group:OFFGRP"] || priv["group:USRGRP"] {
+		t.Errorf("groups: %v", priv)
+	}
+}
+
+// TestMap_ProfileNames: a period is not valid in a user profile name, nor a
+// leading digit or underscore.
+func TestMap_ProfileNames(t *testing.T) {
+	for _, n := range []string{"A.B", "1ABC", "_ABC", "TOOLONGNAME"} {
+		if _, err := ibmi.Map([]ibmi.Profile{{Name: n}}, lim); !errors.Is(err, ibmi.ErrBadProfile) {
+			t.Errorf("%q: %v", n, err)
+		}
+		if _, err := ibmi.Map([]ibmi.Profile{{Name: "OK", GroupProfile: n}}, lim); !errors.Is(err, ibmi.ErrBadProfile) {
+			t.Errorf("group %q: %v", n, err)
+		}
+	}
+	if _, err := ibmi.Map([]ibmi.Profile{{Name: "#T$@_9"}}, lim); err != nil {
+		t.Errorf("valid name: %v", err)
 	}
 }

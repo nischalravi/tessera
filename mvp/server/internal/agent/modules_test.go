@@ -98,11 +98,17 @@ func TestModules_Host(t *testing.T) {
 	})
 
 	t.Run("the target still has to be on the local allowlist", func(t *testing.T) {
-		j := job(agent.ModuleRACF)
-		j.Spec.Target.Host = "evil.example"
-		res := newExec(creds()).ExecuteSync(context.Background(), j)
-		if res.Error == nil || res.Error.Code != agent.CodeTargetNotAllowed {
-			t.Errorf("%+v", res.Error)
+		// a known, registered module does not skip the allowlist, and the
+		// credential is not read for an off-list target
+		for _, m := range []string{agent.ModuleRACF, ""} {
+			asked = nil
+			j := job(m)
+			j.Spec.Target.Host = "evil.example"
+			c := creds()
+			res := newExec(c).ExecuteSync(context.Background(), j)
+			if res.Error == nil || res.Error.Code != agent.CodeTargetNotAllowed || c.reads != 0 || len(asked) != 0 {
+				t.Errorf("module %q: %+v, %d credential reads, built %v", m, res.Error, c.reads, asked)
+			}
 		}
 	})
 }

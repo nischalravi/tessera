@@ -9,6 +9,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
@@ -53,6 +54,15 @@ func AgentSyncPayload(c *store.Connection, rev *store.ConnectionRevision) (agent
 			CABundle: cfg.CABundle, PageSize: cfg.PageSize, AttrMap: attrMap(cfg.AttrMap)}}
 	if err := spec.Validate(); err != nil {
 		return "", spec, false, fmt.Errorf("connection %s: %w", c.Name, err)
+	}
+	if module == agent.ModuleRACF {
+		// the SDBM suffixes become search bases on the agent: refuse a
+		// non-DN here, before anything is dispatched
+		for _, dn := range spec.Config.BaseDNs {
+			if ldap.ValidDN(dn) != nil {
+				return "", spec, false, fmt.Errorf("connection %s: an SDBM suffix is not a distinguished name", c.Name)
+			}
+		}
 	}
 	return id, spec, true, nil
 }

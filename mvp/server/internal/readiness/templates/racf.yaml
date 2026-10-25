@@ -1,6 +1,8 @@
 # RACF on IBM z/OS (issue #561), read through the z/OS LDAP server's SDBM backend by a Directory
-# Agent module inside the customer network: users (racfid), groups, connects, and the SPECIAL,
-# OPERATIONS and AUDITOR attributes as privileged entitlements. Read-only; no write-back.
+# Agent module inside the customer network: users (racfid), groups, connects, the user attributes
+# SPECIAL, OPERATIONS, AUDITOR and ROAUDIT and the group-level SPECIAL, OPERATIONS and AUDITOR of a
+# connect as privileged entitlements. Read-only; no write-back. Partial coverage: connect group
+# authority (JOIN, CONNECT, CREATE), CLAUTH and resource profiles are not read.
 template: racf
 version: 1.0.0
 extends: base@1
@@ -32,7 +34,7 @@ items:
     verify:
       - kind: attestation
     remediation:
-      hint: "Create a PROTECTED-style service user, give it read access to the IRR.LISTUSER and IRR.LISTGRP profiles of the FACILITY class, and no SPECIAL or OPERATIONS."
+      hint: "Create a PROTECTED-style service user, give it read access to the IRR.LISTUSER and IRR.LISTGRP profiles of the FACILITY class (it must see racfAttributes and the CONNECT profiles: a sync where no user carries racfAttributes fails), and no SPECIAL or OPERATIONS. A ROAUDIT service user appears in the ROAUDIT privileged group: list it as expected."
     config_fields: [bind_dn, credential]
 
   - id: racf.tls.ldaps
@@ -115,14 +117,14 @@ items:
     config_fields: [hr_id_attribute]
 
   - id: racf.status.revoked
-    title: A revoked user (REVOKE in racfAttributes) is a disabled account
+    title: A revoked user (REVOKED in racfAttributes) is a disabled account; a revoked connect is not a membership
     category: account_status
     level: required
     why: "Treating revoked users as active inflates access reviews; the reverse hides leavers."
     verify:
       - kind: attestation
     remediation:
-      hint: "Automatic. Resume dates and inactivity revokes are decided by RACF; Tessera shows the state RACF reports."
+      hint: "Automatic for the permanent REVOKED flag only. A pending revoke or resume date (racfRevokeDate, racfResumeDate, and the connect's dates) is not evaluated: RACF decides it at logon, and Tessera shows the flag RACF reports until then."
 
   - id: racf.groups.connects
     title: Group connects resolve to users in scope
@@ -137,10 +139,10 @@ items:
     depends_on: [racf.scope.suffix]
 
   - id: racf.priv.attributes
-    title: SPECIAL, OPERATIONS and AUDITOR holders are tagged privileged, each with an expected-member list
+    title: SPECIAL, OPERATIONS, AUDITOR and ROAUDIT holders, and group-level SPECIAL, OPERATIONS and AUDITOR, are tagged privileged, each with an expected-member list
     category: groups
     level: required
-    why: "These attributes are system-wide authorities. They appear as the privileged groups RACF SPECIAL, OPERATIONS and AUDITOR."
+    why: "The user attributes are system-wide authorities (privileged groups RACF SPECIAL, OPERATIONS, AUDITOR and ROAUDIT attribute); a connect's group-level ones apply within one group (RACF group-SPECIAL in <group> and so on, kept when the connect is revoked). Coverage is partial: connect group authority (JOIN, CONNECT), CLAUTH and resource profiles are not read."
     verify:
       - kind: attestation
       - kind: data

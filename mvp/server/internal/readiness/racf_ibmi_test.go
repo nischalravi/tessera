@@ -33,21 +33,25 @@ func TestValidateConn_RACFAndIBMi(t *testing.T) {
 		mut   func(*ConnConfig)
 		field string
 	}{
-		"racf ok":                   {"racf", racf, func(c *ConnConfig) {}, ""},
-		"racf no suffix":            {"racf", racf, func(c *ConnConfig) { c.BaseDNs = nil }, "base_dns"},
-		"racf bad suffix":           {"racf", racf, func(c *ConnConfig) { c.BaseDNs = []string{"not a dn"} }, "base_dns"},
-		"racf bind is not a DN":     {"racf", racf, func(c *ConnConfig) { c.BindDN = "TESSERA" }, "bind_dn"},
-		"racf scheme in host":       {"racf", racf, func(c *ConnConfig) { c.Host = "ldaps://zos" }, "host"},
-		"racf ssh port":             {"racf", racf, func(c *ConnConfig) { c.Port = 22 }, "port"},
-		"racf plain in prod":        {"racf", racf, func(c *ConnConfig) { c.TLSMode = "none" }, "tls_mode"},
-		"ibmi ok":                   {"ibmi", ibmi, func(c *ConnConfig) {}, ""},
-		"ibmi no profile":           {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "" }, "bind_dn"},
-		"ibmi profile too long":     {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "ELEVENCHARS" }, "bind_dn"},
-		"ibmi profile with a space": {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "A B" }, "bind_dn"},
-		"ibmi profile is a DN":      {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "cn=x,dc=y" }, "bind_dn"},
-		"ibmi base dn":              {"ibmi", ibmi, func(c *ConnConfig) { c.BaseDNs = []string{"dc=x"} }, "base_dns"},
-		"ibmi database port":        {"ibmi", ibmi, func(c *ConnConfig) { c.Port = 3306 }, "port"},
-		"ibmi bad host":             {"ibmi", ibmi, func(c *ConnConfig) { c.Host = "as400/x" }, "host"},
+		"racf ok":                          {"racf", racf, func(c *ConnConfig) {}, ""},
+		"racf no suffix":                   {"racf", racf, func(c *ConnConfig) { c.BaseDNs = nil }, "base_dns"},
+		"racf bad suffix":                  {"racf", racf, func(c *ConnConfig) { c.BaseDNs = []string{"not a dn"} }, "base_dns"},
+		"racf bind is not a DN":            {"racf", racf, func(c *ConnConfig) { c.BindDN = "TESSERA" }, "bind_dn"},
+		"racf scheme in host":              {"racf", racf, func(c *ConnConfig) { c.Host = "ldaps://zos" }, "host"},
+		"racf ssh port":                    {"racf", racf, func(c *ConnConfig) { c.Port = 22 }, "port"},
+		"racf plain in prod":               {"racf", racf, func(c *ConnConfig) { c.TLSMode = "none" }, "tls_mode"},
+		"ibmi ok":                          {"ibmi", ibmi, func(c *ConnConfig) {}, ""},
+		"ibmi no profile":                  {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "" }, "bind_dn"},
+		"ibmi profile too long":            {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "ELEVENCHARS" }, "bind_dn"},
+		"ibmi profile with a space":        {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "A B" }, "bind_dn"},
+		"ibmi profile with a period":       {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "TESS.ERA" }, "bind_dn"},
+		"ibmi profile starts with a digit": {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "1TESSERA" }, "bind_dn"},
+		"ibmi profile starts with _":       {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "_TESSERA" }, "bind_dn"},
+		"ibmi profile with # $ @ _":        {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "#T$@_9" }, ""},
+		"ibmi profile is a DN":             {"ibmi", ibmi, func(c *ConnConfig) { c.BindDN = "cn=x,dc=y" }, "bind_dn"},
+		"ibmi base dn":                     {"ibmi", ibmi, func(c *ConnConfig) { c.BaseDNs = []string{"dc=x"} }, "base_dns"},
+		"ibmi database port":               {"ibmi", ibmi, func(c *ConnConfig) { c.Port = 3306 }, "port"},
+		"ibmi bad host":                    {"ibmi", ibmi, func(c *ConnConfig) { c.Host = "as400/x" }, "host"},
 	} {
 		cfg := tc.cfg
 		tc.mut(&cfg)
@@ -137,4 +141,29 @@ func TestTemplates_RACFAndIBMi(t *testing.T) {
 	if got := live(ibmi); len(got) != 0 {
 		t.Errorf("ibmi has live checks %v before its transport exists", got)
 	}
+}
+
+// TestLive_RACFNeverDialsDirectly: a RACF revision that somehow holds a
+// server-side credential still gets no direct-dial prober.
+func TestLive_RACFNeverDialsDirectly(t *testing.T) {
+	st, s, _, _ := agentSvc(t)
+	s.Runner.Live.Env = config.Dev
+	var id string
+	write(t, st, func(c *store.TenantTx) error {
+		b, err := s.Create(c, CreateInput{Name: "MF", ConnectorType: "racf", System: "mf",
+			Config: json.RawMessage(`{"host":"zos.corp.example","port":636,"bind_dn":"racfid=T,profiletype=USER,cn=RACFA","base_dns":["cn=RACFA"],"correlation_key":"racfid"}`)}, "admin", t0)
+		if err == nil {
+			id = b.Conn.ID
+		}
+		return err
+	})
+	read(t, st, func(c *store.TenantTx) error {
+		b, _ := s.Current(c, id, t0)
+		ref := "sealed:x"
+		b.Rev.SecretRef, b.cred = &ref, "pw"
+		if p, ok, err := s.Runner.Live.liveProber(b, t0); p != nil || !ok || err == nil {
+			t.Errorf("%T %v %v", p, ok, err)
+		}
+		return nil
+	})
 }

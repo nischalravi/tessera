@@ -152,6 +152,7 @@ function TypeGallery({ type, onPick, taken }: { type: string; onPick: (id: strin
                     </span>
                     <span className="gallery-foot row tight">
                       {t.demo ? <Badge tone="info">Simulated</Badge> : <Badge tone="outline">Needs DR-10+</Badge>}
+                      {t.preview && <Badge tone="warning" title={t.preview}>Preview: cannot sync yet</Badge>}
                       {taken(t.id) && <Badge>Exists</Badge>}
                     </span>
                   </div>
@@ -362,6 +363,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
               {tid !== "ibmi" && input("page_size", "Page size", "Entries per search page, 1 to 10000. Empty uses 500.", { inputMode: "numeric" })}
               {tid === "ad" && flag("use_dirsync", "Use the DirSync control", "Needs the Replicating Directory Changes right, which conflicts with least privilege. Leave off unless required.")}
             </>}
+            {CONNECTOR_TYPES.find((t) => t.id === conn.connector_type)?.preview && <p className="muted" role="note"><b>{CONNECTOR_TYPES.find((t) => t.id === conn.connector_type)?.preview}</b></p>}
             {agentOnly && <p className="muted" role="note">Read by a Directory Agent inside your network: store the credential on the agent and reference it as agent:&lt;agent id&gt;/&lt;credential name&gt;. A password entered here is refused.</p>}
             {tid === "racf" && <>
               {input("bind_dn", "Bind DN (the RACF user)", "For example racfid=TESSERA,profiletype=USER,cn=RACFA. A dedicated user with list-only authority, never SPECIAL.")}

@@ -82,10 +82,10 @@ items:
       hint: "Automatic."
 
   - id: ibmi.priv.authorities
-    title: Special authorities (*ALLOBJ, *SECADM, *AUDIT, *IOSYSCFG, *SERVICE) and *SECOFR holders are tagged privileged, each with an expected-member list
+    title: All eight special authorities, the *SECOFR and *SECADM classes, and group profiles that hold them are tagged privileged, each with an expected-member list
     category: groups
     level: required
-    why: "*ALLOBJ alone bypasses object authority checks."
+    why: "*ALLOBJ alone bypasses object authority checks; *SAVSYS copies any object, *SPLCTL reads every spooled file and *JOBCTL controls every job. A member of a group profile holds the group's special authorities."
     verify:
       - kind: attestation
       - kind: data

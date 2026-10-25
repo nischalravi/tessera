@@ -165,8 +165,8 @@ type FieldError struct {
 var (
 	hostRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
 	guidRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	// ibmiProfileRE is an IBM i user profile name (QSYS naming: A-Z, 0-9, # $ @ _ ., at most 10)
-	ibmiProfileRE = regexp.MustCompile(`^[A-Za-z#$@][A-Za-z0-9#$@_.]{0,9}$`)
+	// ibmiProfileRE is an IBM i user profile name (A-Z, 0-9, # $ @ _, at most 10, not starting with a digit or _; no period)
+	ibmiProfileRE = regexp.MustCompile(`^[A-Za-z#$@][A-Za-z0-9#$@_]{0,9}$`)
 	dnRE          = regexp.MustCompile(`(?i)^([a-z][a-z0-9-]*=[^,]+)(,\s*[a-z][a-z0-9-]*=[^,]+)*$`)
 	attrRE        = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,63}$`)
 	apiVersionRE  = regexp.MustCompile(`^v[0-9]{1,3}(\.[0-9]{1,2})?$`)

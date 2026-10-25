@@ -136,6 +136,11 @@ func (o LiveOptions) liveProber(b *Bundle, now time.Time) (p connectors.Prober, 
 				CABundle: cfg.CABundle})
 		return rp, true, err
 	}
+	if b.Template.ID != "ldap" {
+		// RACF is read only through a Directory Agent: never a direct dial from
+		// the server, whatever credential the revision holds.
+		return nil, true, errors.New("readiness: this connection is read only through a Directory Agent")
+	}
 	if cfg.BindDN == "" || b.cred == "" {
 		return nil, true, errors.New("readiness: no bind DN or stored credential for the LDAP connection")
 	}

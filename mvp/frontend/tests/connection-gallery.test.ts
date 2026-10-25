@@ -125,3 +125,12 @@ test("ServiceNow and Atlassian are identity sources and provisioning targets in 
   const gov = readFileSync(new URL("../src/features/admin/connections/governed.ts", import.meta.url), "utf8");
   for (const id of ["servicenow", "atlassian"]) assert.match(gov, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a connect form`);
 });
+
+test("IBM i is marked as a preview that cannot sync yet, on its tile and in the wizard", () => {
+  const shared = readFileSync(new URL("../src/features/admin/connections/shared.tsx", import.meta.url), "utf8");
+  const ibmi = shared.split("\n").findIndex((l) => l.includes('{ id: "ibmi"'));
+  assert.ok(ibmi >= 0);
+  assert.match(shared.split("\n").slice(ibmi, ibmi + 2).join("\n"), /preview: "Preview: IBM i cannot sync yet/);
+  const wizard = readFileSync(new URL("../src/features/admin/connections/Wizard.tsx", import.meta.url), "utf8");
+  assert.match(wizard, /t\.preview && <Badge/);
+});
