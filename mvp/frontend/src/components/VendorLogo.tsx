@@ -47,6 +47,10 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   azure: { color: "#0f6cbd", glyph: <g {...stroke} stroke="#0f6cbd"><path d="M7 14a4 4 0 01-.6-7.95A5.5 5.5 0 0117 5.5a4.2 4.2 0 01.5 8.5" /><rect x="6" y="16" width="4" height="4" rx=".8" /><rect x="14" y="16" width="4" height="4" rx=".8" /><path d="M10 18h4M12 14v2" /></g> },
   // database cylinder (no single vendor: PostgreSQL, MySQL, SQL Server and Oracle share this tile)
   sql: { color: "#1d5f8a", glyph: <g {...stroke} stroke="#1d5f8a"><ellipse cx="12" cy="5.5" rx="7.5" ry="3" /><path d="M4.5 5.5v13c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-13M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3" /></g> },
+  // mainframe frame with a keyhole (RACF; no simple-icons mark for IBM, so an original glyph, not vendor artwork)
+  racf: { color: "#1f4e79", glyph: <g {...stroke} stroke="#1f4e79"><rect x="4" y="3" width="16" height="18" rx="1.5" /><path d="M4 8h16M4 13h16" /><circle cx="12" cy="17" r="1.2" /><path d="M8 5.5h2M8 10.5h2" /></g> },
+  // midrange server tower with drive slots (IBM i; an original glyph, not vendor artwork)
+  ibmi: { color: "#2d6a4f", glyph: <g {...stroke} stroke="#2d6a4f"><rect x="5" y="3" width="14" height="18" rx="1.5" /><path d="M8 8h8M8 12h8M8 16h3" /><circle cx="16" cy="16" r=".8" /></g> },
   // no simple-icons mark in 16.30.0 for these four: original glyphs, not vendor artwork
   // speech bubble (chat workspace)
   slack: { color: "#611f69", glyph: <g {...stroke} stroke="#611f69"><path d="M4 5.5h16v10H11l-4.5 4v-4H4z" /><path d="M8 9.5h8M8 12.5h5" /></g> },

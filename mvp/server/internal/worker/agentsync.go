@@ -19,12 +19,25 @@ import (
 // agentActor is the audit actor of a sync an agent reported.
 const agentActor = "directory-agent"
 
+// agentTemplates are the templates whose connections an agent syncs, and the
+// agent module that reads each ("" is the built-in LDAP reader): the plug-in
+// host of issue #561.
+var agentTemplates = map[string]string{"ldap": "", "racf": agent.ModuleRACF, "ibmi": agent.ModuleIBMi}
+
+func tmplOf(rev *store.ConnectionRevision) string {
+	if rev == nil {
+		return ""
+	}
+	return rev.TemplateID
+}
+
 // AgentSyncPayload builds the sync job of a connection from its live
 // revision, or ok=false when the connection does not reach its directory
 // through an agent (or is not a directory the agent can read). It carries no
 // secret: the credential is named, and lives on the agent.
 func AgentSyncPayload(c *store.Connection, rev *store.ConnectionRevision) (agentID string, spec agent.SyncSpec, ok bool, err error) {
-	if rev == nil || rev.SecretRef == nil || rev.TemplateID != "ldap" || !strings.HasPrefix(*rev.SecretRef, "agent:") {
+	module, known := agentTemplates[tmplOf(rev)]
+	if rev == nil || rev.SecretRef == nil || !known || !strings.HasPrefix(*rev.SecretRef, "agent:") {
 		return "", spec, false, nil
 	}
 	id, cred, valid := agent.ParseRef(*rev.SecretRef)
@@ -35,7 +48,7 @@ func AgentSyncPayload(c *store.Connection, rev *store.ConnectionRevision) (agent
 	if err != nil {
 		return "", spec, false, err
 	}
-	spec = agent.SyncSpec{System: c.System, Target: agent.Target{Host: cfg.Host, Port: cfg.Port, TLSMode: cfg.TLSMode},
+	spec = agent.SyncSpec{System: c.System, Module: module, Target: agent.Target{Host: cfg.Host, Port: cfg.Port, TLSMode: cfg.TLSMode},
 		Config: agent.ProbeConfig{BindDN: cfg.BindDN, CredName: cred, BaseDNs: cfg.BaseDNs, UserFilter: cfg.UserFilter,
 			CABundle: cfg.CABundle, PageSize: cfg.PageSize, AttrMap: attrMap(cfg.AttrMap)}}
 	if err := spec.Validate(); err != nil {
@@ -118,7 +131,7 @@ func RecordAgentSync(tx *store.TenantTx, now time.Time, job *store.AgentJob, spe
 			rec.Identity = &connectors.IdentityRef{Email: a.Email}
 		}
 		for _, x := range a.Extra {
-			if !mapped(spec.Config.AttrMap, x) {
+			if !mapped(spec.Config.AttrMap, x) && !(x.Scope == "account" && agent.ModuleAttribute(spec.Module, x.Target)) {
 				continue // the agent is not trusted to name attributes the connection did not map
 			}
 			if rec.Attributes == nil {

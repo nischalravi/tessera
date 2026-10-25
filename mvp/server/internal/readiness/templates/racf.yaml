@@ -1,0 +1,151 @@
+# RACF on IBM z/OS (issue #561), read through the z/OS LDAP server's SDBM backend by a Directory
+# Agent module inside the customer network: users (racfid), groups, connects, and the SPECIAL,
+# OPERATIONS and AUDITOR attributes as privileged entitlements. Read-only; no write-back.
+template: racf
+version: 1.0.0
+extends: base@1
+display_name: RACF (z/OS LDAP SDBM)
+connector_types: [racf]
+role: account_source
+default_correlation_key: racfid
+default_hr_id_attribute: employeeNumber
+required_attributes:
+  user: [racfid]
+  group: [racfid]
+items:
+  - id: racf.agent
+    title: A Directory Agent in the mainframe network reads RACF; the target is on its local allowlist and the credential is on the agent
+    category: access
+    level: required
+    why: "z/OS LDAP is not reachable from the internet, and its RACF password must not be stored anywhere but the agent's own store."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Install the agent, add the z/OS LDAP host and port to allowed_targets, store the credential with tessera-agent credential set, and reference it as agent:<id>/<name>."
+    config_fields: [host, port, credential]
+
+  - id: racf.svc.readonly
+    title: Dedicated RACF user with list-only authority (group-AUDITOR, ROAUDIT or an IRR.LISTUSER grant), not SPECIAL
+    category: access
+    level: required
+    why: "SDBM reads need RACF authority to list other users. SPECIAL would let a leaked credential change the whole security database."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a PROTECTED-style service user, give it read access to the IRR.LISTUSER and IRR.LISTGRP profiles of the FACILITY class, and no SPECIAL or OPERATIONS."
+    config_fields: [bind_dn, credential]
+
+  - id: racf.tls.ldaps
+    title: LDAPS or StartTLS (AT-TLS or the LDAP server's own TLS); no simple bind in clear text
+    category: transport
+    level: required
+    why: "A RACF password sent in clear text can be captured on the network."
+    verify:
+      - kind: live
+        check: tls_handshake
+        params: { min_version: "1.2" }
+    remediation:
+      hint: "Enable sslPort 636 on the z/OS LDAP server (or AT-TLS) with a RACF key ring certificate."
+    config_fields: [host, port, tls_mode]
+
+  - id: racf.tls.chain
+    title: Server certificate chains to a configured CA, hostname matches, valid more than 30 days
+    category: transport
+    level: required
+    why: "Without certificate validation anyone on the path can impersonate the LDAP server and capture the bind password."
+    verify:
+      - kind: live
+        check: tls_chain
+        params: { min_days_valid: 30 }
+    remediation:
+      hint: "Upload the CA that issued the z/OS LDAP certificate (often the site CA held in RACDCERT) in Connection, Transport."
+    depends_on: [racf.tls.ldaps]
+    config_fields: [host, port, tls_mode, ca_bundle]
+
+  - id: racf.bind
+    title: Bind succeeds as the service user
+    category: access
+    level: required
+    why: "Baseline connectivity and credential check."
+    verify:
+      - kind: live
+        check: bind
+    remediation:
+      hint: "Check the bind DN (racfid=USERID,profiletype=USER,<suffix>), that the RACF password or passphrase has not expired or been revoked, and the firewall."
+    depends_on: [racf.tls.chain]
+    config_fields: [host, port, tls_mode, bind_dn, ca_bundle, credential]
+
+  - id: racf.scope.suffix
+    title: The SDBM suffix is configured as the base DN (for example cn=RACFA)
+    category: scope
+    level: required
+    why: "The module searches profiletype=USER and profiletype=GROUP below each base DN. A wrong suffix returns no people, not an error."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Use the suffix of the SDBM backend in the z/OS LDAP configuration (the sdbm suffix line)."
+    depends_on: [racf.bind]
+    config_fields: [base_dns]
+
+  - id: racf.key.racfid
+    title: The RACF user id (racfid) is the account key
+    category: identity_keys
+    level: required
+    why: "A RACF user id is unique in the database and never reused while the profile exists."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: racfid }
+    remediation:
+      hint: "Automatic: the module keys accounts by the entry's DN, which contains the racfid."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: racf.key.hr_id
+    title: An HR worker id is mapped (for example from a site attribute in the extra attributes)
+    category: identity_keys
+    level: recommended
+    why: "RACF has no email address; without an HR id, correlation to people relies on user id naming."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: employeeNumber, min: 0.75 }
+    remediation:
+      hint: "Map an SDBM attribute that holds the worker id (installation data or a custom segment field) to identity.employeeNumber."
+    config_fields: [hr_id_attribute]
+
+  - id: racf.status.revoked
+    title: A revoked user (REVOKE in racfAttributes) is a disabled account
+    category: account_status
+    level: required
+    why: "Treating revoked users as active inflates access reviews; the reverse hides leavers."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Automatic. Resume dates and inactivity revokes are decided by RACF; Tessera shows the state RACF reports."
+
+  - id: racf.groups.connects
+    title: Group connects resolve to users in scope
+    category: groups
+    level: required
+    why: "A connect is how RACF grants group access; a connect to a user outside the suffix is dropped."
+    verify:
+      - kind: data
+        check: member_resolution
+    remediation:
+      hint: "Add every SDBM suffix that holds users to the base DNs."
+    depends_on: [racf.scope.suffix]
+
+  - id: racf.priv.attributes
+    title: SPECIAL, OPERATIONS and AUDITOR holders are tagged privileged, each with an expected-member list
+    category: groups
+    level: required
+    why: "These attributes are system-wide authorities. They appear as the privileged groups RACF SPECIAL, OPERATIONS and AUDITOR."
+    verify:
+      - kind: attestation
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "List the expected members of each privileged group."
+    depends_on: [racf.groups.connects]
+    config_fields: [privileged_expected]

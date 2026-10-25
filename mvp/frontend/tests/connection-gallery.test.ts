@@ -15,7 +15,7 @@ const T = [
   ["servicenow", "ServiceNow", "Users, groups and roles through the Table API", false],
   ["atlassian", "Atlassian Jira and Confluence", "Groups, project roles and product access", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false], ["scim:auth0", "Auth0", "Enterprise connection", false],
   ["awsorg", "AWS Organizations and IAM", "Reader role in each account", false],
-  ["azurerbac", "Azure RBAC", "Role assignments of subscriptions", false], ["gcpiam", "Google Cloud IAM", "IAM policies of an organization", false], ["unixssh", "Unix/Linux host (SSH)", "Local accounts, groups and sudoers rules", false], ["githubscan", "GitHub (code scan)", "Reads MCP configuration", false],
+  ["azurerbac", "Azure RBAC", "Role assignments of subscriptions", false], ["gcpiam", "Google Cloud IAM", "IAM policies of an organization", false], ["unixssh", "Unix/Linux host (SSH)", "Local accounts, groups and sudoers rules", false], ["racf", "RACF (z/OS)", "Users, groups, connects and the SPECIAL attributes through the z/OS LDAP (SDBM) interface", false], ["ibmi", "IBM i", "User profiles, group profiles and special authorities", false], ["githubscan", "GitHub (code scan)", "Reads MCP configuration", false],
   ["sap", "SAP", "Roles and transaction codes", false], ["oracle", "Oracle Fusion Applications", "Roles of Oracle Fusion", false],
   ["cyberark", "CyberArk Privileged Access Manager", "Safes and vaulted accounts", false], ["beyondtrust", "BeyondTrust Password Safe", "Smart rules", false],
   ["delinea", "Delinea Secret Server", "Folders and secrets", false], ["fieldglass", "SAP Fieldglass", "Contractor assignments", false],
@@ -36,7 +36,7 @@ test("no filter shows everything", () => assert.equal(ids({}).length, T.length))
 
 test("search matches name, description and publisher, ignoring case and padding", () => {
   assert.deepEqual(ids({ q: "  OKTA " }), ["demo-okta", "okta"]);
-  assert.deepEqual(ids({ q: "ldap" }), ["ldap"]);
+  assert.deepEqual(ids({ q: "ldap" }), ["ldap", "racf"]); // RACF is read through z/OS LDAP
   assert.deepEqual(ids({ q: "graph" }), ["entra"]); // description
   assert.deepEqual(ids({ q: "7644" }), ["scim_app"]); // publisher
   assert.deepEqual(ids({ q: "oracle" }), ["oracle", "sql"]); // the Oracle ERP tile and the database tile
@@ -54,7 +54,7 @@ test("chips filter by category and capability, and combine with search", () => {
 
 test("the connectors the server already had are in the gallery under their categories", () => {
   const want: Record<string, string[]> = {
-    "Cloud & IaaS": ["awsorg", "azurerbac", "gcpiam"], "Servers & hosts": ["unixssh"], "Source code": ["githubscan"], ERP: ["sap", "oracle"], "Privileged access": ["cyberark", "beyondtrust", "delinea"],
+    "Cloud & IaaS": ["awsorg", "azurerbac", "gcpiam"], "Servers & hosts": ["unixssh", "racf", "ibmi"], "Source code": ["githubscan"], ERP: ["sap", "oracle"], "Privileged access": ["cyberark", "beyondtrust", "delinea"],
     "Contractor & VMS": ["fieldglass", "beeline", "csvfeed"], "AI agents": ["agentcore"],
   };
   for (const [category, types] of Object.entries(want)) {
@@ -70,6 +70,9 @@ test("the connectors the server already had are in the gallery under their categ
   assert.deepEqual(ids({ q: "google cloud" }), ["gcpiam"]);
   assert.deepEqual(ids({ q: "sudoers" }), ["unixssh"]);
   assert.deepEqual(ids({ capability: "Access inventory", category: "Servers & hosts" }), ["unixssh"]);
+  assert.deepEqual(ids({ q: "racf" }), ["racf"]);
+  assert.deepEqual(ids({ q: "special authorities" }), ["ibmi"]);
+  assert.deepEqual(ids({ capability: "Identity source", category: "Servers & hosts" }), ["racf", "ibmi"]);
   assert.deepEqual(ids({ q: "  privileged " }), ["cyberark"]);
 });
 

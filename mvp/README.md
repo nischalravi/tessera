@@ -589,6 +589,43 @@ open inbound at the customer; the agent needs only HTTPS out to `TESSERA_AGENT_A
   credential store (the existing Directory Agent design), and a job carries only its name. A server-held
   credential (the token of a private provisioning target) is different: it is sealed to the agent's key, below.
 
+##### Agent modules: RACF and IBM i (issue #561)
+
+The agent is a plug-in host. LDAP and Active Directory are built in; a system that needs the same placement is
+a **module**: a `SyncerFactory` registered under a name (`agent.Module`, `Executor.Register`, `internal/agent/modules.go`).
+Modules are compiled into the agent binary (no dynamic loading, scripts or downloaded code) and get exactly what
+the built-in reader gets: the typed job, the credential from the agent's own store and the agent-local `safedial`
+Dialer, so every connection a module opens is checked against `allowed_targets`. A module returns the same bounded
+`SyncResult`. The module names are a closed set shared by both ends (`agent.ModuleNames`): a sync job names its module
+in `spec.module` (empty is the LDAP reader); Tessera refuses a name outside the set and an agent that does not carry
+the module answers `unsupported` before it reads the credential. `tessera-agent run` logs the registered modules.
+ACF2 and Top Secret join the same list later. The Admin gallery has a **RACF (z/OS)** and an **IBM i** tile
+(category Servers & hosts, original glyphs: simple-icons has no IBM mark). Both templates need the credential on the
+agent (`agent:<agent id>/<name>`); a secret typed in Tessera or a vault reference is refused (`agent_required`).
+
+- **RACF** (`internal/connectors/racf`, template `racf`, connector type `racf`). Read through the z/OS LDAP server's
+  SDBM backend with the shared read-only LDAP reader (TLS only, no write operation). Base DN is the SDBM suffix
+  (for example `cn=RACFA`); the module searches `profiletype=USER` and `profiletype=GROUP` below it. Users
+  (`racfid`; disabled when `racfAttributes` holds `REVOKE`), groups, connects (the union of the user's
+  `racfConnectGroupName` and the group's `racfGroupUserids`, once each), and the user attributes SPECIAL, OPERATIONS
+  and AUDITOR as three privileged groups (`racf-attr:SPECIAL` and so on). Account attributes `racfDefaultGroup`,
+  `racfOwner`, `racfProgrammerName`, plus the connection's extra attributes. The bind user needs list authority
+  (group-AUDITOR, ROAUDIT or IRR.LISTUSER), not SPECIAL. Live checks: TLS handshake, chain and bind through the agent.
+  Not covered yet: group-level authorities, connect authority (USE, CREATE, CONNECT, JOIN), dataset and general
+  resource profiles. The attribute names follow the IBM SDBM schema and have only been run against the in-process
+  fake (a live z/OS check is still to do).
+- **IBM i** (`internal/connectors/ibmi`, template `ibmi`, connector type `ibmi`). IBM i has no LDAP view of its
+  profiles; they are read from Db2 for i (`QSYS2.USER_INFO`) over the host servers (DRDA), which the Go standard
+  library cannot speak. So this release ships the plug-in contract (`ibmi.Source`: list profiles, bounded, read-only)
+  and the module that maps profiles to the typed result: each profile is an account (`*DISABLED` is disabled), each
+  group profile and supplemental group a group, each special authority a group (privileged for `*ALLOBJ`, `*SECADM`,
+  `*AUDIT`, `*IOSYSCFG`, `*SERVICE`) and the `*SECOFR` and `*SECADM` classes privileged groups. **The live transport is
+  not built:** the agent build registers `ibmi.NoTransport`, which answers `unsupported`, and the template has no live
+  check (its items are attested). The connection's user field holds the profile name (1 to 10 characters); no base DN.
+
+Tests use in-process fakes only: `go test -race ./internal/agent ./internal/connectors/racf ./internal/connectors/ibmi
+./internal/worker ./internal/readiness/... ./cmd/tessera-agent`.
+
 ##### Provisioning pushes to private targets through an agent (issue #302)
 
 A SCIM or Okta-style target in a private network, which the server cannot dial, is reached through an agent. Set

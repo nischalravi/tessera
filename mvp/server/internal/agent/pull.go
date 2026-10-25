@@ -69,7 +69,12 @@ const (
 // SyncSpec is the payload of a sync job: the directory, the non-secret
 // settings and the system name the records belong to.
 type SyncSpec struct {
-	System string      `json:"system"`
+	System string `json:"system"`
+	// Module names the plug-in that reads the directory (see Executor.Modules):
+	// empty is the built-in LDAP reader, otherwise one of the closed set of
+	// ModuleNames. An agent that does not carry the module answers
+	// "unsupported".
+	Module string      `json:"module,omitempty"`
 	Target Target      `json:"target"`
 	Config ProbeConfig `json:"config"`
 }
@@ -78,6 +83,9 @@ type SyncSpec struct {
 func (s SyncSpec) Validate() error {
 	if s.System == "" || len(s.System) > maxSyncText || strings.ContainsAny(s.System, "\r\n\x00") {
 		return errors.New("system is not valid")
+	}
+	if s.Module != "" && !ValidModuleName(s.Module) {
+		return errors.New("module is not valid")
 	}
 	return validateTarget(s.Target, s.Config)
 }

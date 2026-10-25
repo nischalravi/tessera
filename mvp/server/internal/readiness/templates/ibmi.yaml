@@ -1,0 +1,95 @@
+# IBM i user profiles and special authorities (issue #561), read by a Directory Agent module inside
+# the customer network. The module contract and mapping ship now; the live transport (Db2 for i
+# QSYS2.USER_INFO over the host servers) is a follow-up, so the live items below stay attested
+# until it exists. Read-only; no write-back.
+template: ibmi
+version: 1.0.0
+extends: base@1
+display_name: IBM i (user profiles)
+connector_types: [ibmi]
+role: account_source
+default_correlation_key: USER_NAME
+default_hr_id_attribute: employeeNumber
+required_attributes:
+  user: [USER_NAME]
+items:
+  - id: ibmi.agent
+    title: A Directory Agent in the IBM i network reads the profiles; the target is on its local allowlist and the credential is on the agent
+    category: access
+    level: required
+    why: "IBM i is a private system, and its profile password must not be stored anywhere but the agent's own store."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Install the agent, add the IBM i host and port to allowed_targets, store the credential with tessera-agent credential set, and reference it as agent:<id>/<name>."
+    config_fields: [host, port, credential]
+
+  - id: ibmi.profile.readonly
+    title: A dedicated profile with no *ALLOBJ, *SECADM or *IOSYSCFG, granted only *USE to QSYS2.USER_INFO
+    category: access
+    level: required
+    why: "Reading user profiles needs no special authority. A leaked all-object profile is control of the system."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create the profile with USRCLS(*USER) and SPCAUT(*NONE), and grant it the Db2 for i authority to select from QSYS2.USER_INFO (or the QIBM_DB_SECADM function usage)."
+    config_fields: [bind_dn, credential]
+
+  - id: ibmi.tls
+    title: The connection to the IBM i uses TLS (the secure host server port)
+    category: transport
+    level: required
+    why: "A profile password sent in clear text can be captured on the network."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Use the TLS-protected host server and a certificate from the digital certificate manager, and add the CA to the connection."
+    config_fields: [host, port, tls_mode, ca_bundle]
+
+  - id: ibmi.key.profile
+    title: The profile name (USER_NAME) is the account key
+    category: identity_keys
+    level: required
+    why: "A profile name is unique on the system. Renames create a new profile."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: USER_NAME }
+    remediation:
+      hint: "Automatic."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: ibmi.status.disabled
+    title: A profile with STATUS *DISABLED is a disabled account
+    category: account_status
+    level: required
+    why: "Treating disabled profiles as active inflates access reviews; the reverse hides leavers."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Automatic."
+
+  - id: ibmi.groups.profiles
+    title: Group profiles and supplemental groups resolve to profiles in scope
+    category: groups
+    level: recommended
+    why: "Group profiles carry object authority for their members."
+    verify:
+      - kind: data
+        check: member_resolution
+    remediation:
+      hint: "Automatic."
+
+  - id: ibmi.priv.authorities
+    title: Special authorities (*ALLOBJ, *SECADM, *AUDIT, *IOSYSCFG, *SERVICE) and *SECOFR holders are tagged privileged, each with an expected-member list
+    category: groups
+    level: required
+    why: "*ALLOBJ alone bypasses object authority checks."
+    verify:
+      - kind: attestation
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "List the expected members of each privileged group."
+    config_fields: [privileged_expected]
