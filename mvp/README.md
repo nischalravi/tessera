@@ -2020,7 +2020,7 @@ conditional-access step-up, decided in one place (`Principal.StepUpMet`, used by
 and roles, CSRF, tenant scoping and four-eyes are unchanged. The server logs a WARN at startup, the `http.request`
 audit event of a request that would have needed step-up carries `step_up_bypassed: true`, `GET /api/auth/session`
 returns `step_up_bypass`, and the UI shows "Step-up is off (dev/test)". **Production refuses to start with it
-set**, and the API ignores it when `TESSERA_ENV=prod`. `./run.sh` turns it on for local dev;
+set**, and the API honours it only when `TESSERA_ENV` is exactly `dev` or `test`. `./run.sh` turns it on by default only with `TESSERA_ENV=dev`;
 `TESSERA_STEPUP_BYPASS=0 ./run.sh` restores step-up, and `./run.sh test` always runs with it off.
 
 **User preferences** (My account → Preferences, `user_preferences`). `GET|PUT /api/me/preferences` act on the

@@ -32,6 +32,10 @@ func TestStepUpBypass(t *testing.T) {
 		{"off, fresh sign-in", false, "test", "fresh", 200, false},
 		{"on, viewer: permissions still enforced", true, "test", "viewer", 403, false},
 		{"on in prod: ignored at the use site", true, "prod", "stale", 401, false},
+		{"on, Env unset: ignored (allow-list)", true, "", "stale", 401, false},
+		{"on, Env Prod: ignored (allow-list)", true, "Prod", "stale", 401, false},
+		{"on, Env with whitespace: ignored", true, " prod", "stale", 401, false},
+		{"on, unknown Env: ignored", true, "staging", "stale", 401, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := storetest.TwoTenants(t)

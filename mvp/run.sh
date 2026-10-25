@@ -43,10 +43,13 @@ export TESSERA_DEV_IDP_URL="$DEVIDP_URL"
 export TESSERA_POLICY_DIR="${TESSERA_POLICY_DIR:-$SERVER/policies}"
 # local development: every API call needs a session; users sign in through the dev IdP
 export TESSERA_ENV="${TESSERA_ENV:-dev}"
-# dev only: step-up (the "Confirm it's you" passkey prompt) is off so manual testing is not interrupted;
+# local dev only: step-up (the "Confirm it's you" passkey prompt) is off so manual testing is not interrupted;
 # the UI shows a banner and the audit trail marks the requests. TESSERA_STEPUP_BYPASS=0 ./run.sh restores
-# it. The API refuses it in production.
-export TESSERA_STEPUP_BYPASS="${TESSERA_STEPUP_BYPASS:-1}"
+# it. The default applies only with TESSERA_ENV=dev (a test or prod launch keeps step-up unless it is set
+# explicitly), and the API refuses it in production.
+if [ "$TESSERA_ENV" = "dev" ]; then
+  export TESSERA_STEPUP_BYPASS="${TESSERA_STEPUP_BYPASS:-1}"
+fi
 # dev only: an in-process fake SCIM target so Admin → Provisioning can be tried without a real
 # system (the API refuses it in production). TESSERA_DEV_FAKE_TARGET=0 turns it off.
 export TESSERA_DEV_FAKE_TARGET="${TESSERA_DEV_FAKE_TARGET:-1}"
@@ -174,7 +177,7 @@ case "${1:-}" in
         prev="$a"
       done
       echo "==> groups scale gate: REST (${percent}% tenant)"
-      TESSERA_ENV=test TESSERA_GROUPS_SCALE_GATE=1 TESSERA_GROUPS_SCALE_PERCENT="$percent" \
+      env -u TESSERA_STEPUP_BYPASS TESSERA_ENV=test TESSERA_GROUPS_SCALE_GATE=1 TESSERA_GROUPS_SCALE_PERCENT="$percent" \
         "$GO" test -count=1 -run 'TestGroupsScaleGate_REST$' -timeout 3h -v ./internal/api || rc=$?
       exit "$rc"
     fi
