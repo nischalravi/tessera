@@ -309,6 +309,9 @@ func Operation(req *http.Request, body []byte) string {
 			return "GetPolicy"
 		}
 	case host == "s3.amazonaws.com" || strings.Contains(host, ".s3.") || strings.HasPrefix(host, "s3."):
+		if q.Get("list-type") == "2" {
+			return "ListObjectsV2"
+		}
 		for sub, op := range map[string]string{"policy": "GetBucketPolicy", "acl": "GetBucketAcl",
 			"ownershipControls": "GetBucketOwnershipControls", "publicAccessBlock": "GetBucketPublicAccessBlock"} {
 			if _, ok := q[sub]; ok {
@@ -317,6 +320,9 @@ func Operation(req *http.Request, body []byte) string {
 		}
 		if p == "/" && strings.HasPrefix(host, "s3.") {
 			return "ListAllMyBuckets"
+		}
+		if req.Method == http.MethodGet && strings.HasSuffix(p, ".gz") {
+			return "GetObject"
 		}
 	}
 	return "Unknown"

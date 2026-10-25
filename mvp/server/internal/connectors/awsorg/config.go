@@ -43,6 +43,8 @@ type Config struct {
 	// IdentityCenterRegion is the region of the IAM Identity Center instance;
 	// empty skips Identity Center.
 	IdentityCenterRegion string `json:"identity_center_region"`
+	// Usage turns on usage ingest (CloudTrail, Access Advisor); nil: none.
+	Usage *UsageConfig `json:"usage,omitempty"`
 }
 
 // Validate normalizes c (default role name, sorted unique ids) and checks
@@ -85,6 +87,9 @@ func (c *Config) Validate() error {
 	}
 	if c.ManagementAccountID == "" && len(c.AccountIDs) == 0 {
 		return errors.New("account_ids: list the accounts to read, or set management_account_id")
+	}
+	if c.Usage != nil {
+		return c.Usage.validate(c)
 	}
 	return nil
 }

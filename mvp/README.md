@@ -5382,6 +5382,58 @@ jitter (honouring `Retry-After`); every `List*` follows its token to the last pa
   `0932`); a run left queued or running for 2 hours (its worker stopped) is failed so it stops
   blocking the connector. Audit events: `aws.collection.queued`, `aws.snapshot.collected`,
   `aws.snapshot.materialized`, `aws.collection.failed`.
+- **Usage ingest** (issue #644, LP-1). A connector whose config has `usage` also reads what its
+  principals *did*, in the same `aws_collect` job, after the estate (`awsorg.Service.CollectUsage`;
+  a failure shows as `usage_error` in the run's `result` and never fails the collection):
+
+  ```json
+  "usage": {"access_advisor": true, "advisor_per_run": 100,
+    "cloudtrail": {"bucket": "acme-trail-logs", "prefix": "trail", "region": "us-east-1",
+      "account_id": "111111111111", "organization_id": "o-abcde12345",
+      "trail_arn": "arn:aws:cloudtrail:us-east-1:111111111111:trail/org-trail",
+      "kms_key_arn": "arn:aws:kms:...", "backfill_days": 30, "max_objects_per_run": 2000}}
+  ```
+
+  - **CloudTrail** (S3, gzip JSON under `<prefix>/AWSLogs/[<org id>/]<account>/CloudTrail/<region>/yyyy/mm/dd/`).
+    The reader role of `account_id` lists and reads the log prefix; every request names that account
+    as the expected bucket owner. The cursor is the last key read per account and region, saved in
+    the same transaction as the counts it produced, so a file is counted once. A run reads at most
+    `max_objects_per_run` files (a backlog continues next run); the first run reads back
+    `backfill_days`. Limits: 16 MiB per file, 128 MiB inflated, 200,000 records; a file over a bound,
+    not gzip, or not a CloudTrail log is refused whole (no partial counts), recorded as a gap, and
+    passed over. Denied or errored calls are not usage. Role sessions are filed under their role;
+    services and federated users are not filed. A file delivered later than a later key (more than a
+    5-minute window late) is not read. For a trail encrypted with a KMS key the reader role needs
+    `kms:Decrypt` in the **key policy** (it is not a read action, so it is not in `ReaderPolicy`); a
+    denial is a gap that says so.
+  - **Access Advisor** (`GenerateServiceLastAccessedDetails` at `ACTION_LEVEL`, then
+    `GetServiceLastAccessedDetails`): for each user and role of the latest snapshot, up to
+    `advisor_per_run` per run, 0.5 s apart, with the client's backoff on throttling (a throttle that
+    outlasts it ends the run; the next run resumes at that principal). A finished round rests a day.
+    Action-level rows are `service:Action`; where AWS tracks only the service the row is `service:*`.
+    Advisor rows have count 1 (last used that day): Advisor has no call counts.
+  - **Table** `aws_usage_daily` (`schema/0915`, Postgres `0933`): key (connector, principal ARN,
+    action, resource scope, day, source) with `count` and `last_seen`. Actions are in the evaluator's
+    spelling: CloudTrail event sources and names are mapped (`monitoring` is `cloudwatch`,
+    `HeadObject` is `s3:GetObject`, `ListObjectsV2` is `s3:ListBucket`, ...) and checked against the
+    action catalog; an action the catalog lacks is counted and listed in a gap, never guessed. The
+    resource scope is `*`, the event's resource ARN, or `arn:aws:s3:::bucket/*` for an object.
+    `aws_usage_state` holds the cursor, the days covered (`covered_from`, `covered_to`: how far the
+    slowest prefix has read) and `s3_data_events`; `aws_usage_gaps` records what could not be read
+    (`too_large`, `malformed`, `AccessDenied`, `rate_limited`, `unmapped_actions`, ...). Rows are
+    kept 400 days, gaps 180.
+  - **S3 data events.** `trail_arn` lets the connector read the trail's event selectors
+    (`cloudtrail:GetEventSelectors`). `s3_data_events` is `enabled` only when a selector logs every
+    bucket for reads and writes, `disabled` when none logs S3 objects, and `unknown` when it logs
+    some (or no `trail_arn` is set). The confidence model (#645) reads it to mark object actions
+    unknown. `leastpriv.UsedCallsFromUsage` turns rows into the `UsedCall`s `VerifyAWS` takes.
+  - **Read-only.** `ReaderActions` gains `iam:GenerateServiceLastAccessedDetails`,
+    `iam:GetServiceLastAccessedDetails` and `cloudtrail:GetEventSelectors` (all Read; `CheckReadOnly`
+    passes). `s3:ListBucket` and `s3:GetObject` on `*` would read every bucket, so they are not in it:
+    `awsorg.TrailReaderPolicy(cfg)` is the second policy for the bucket's account, scoped to that bucket's
+    log prefix, and `CheckReadOnly` accepts it too.
+  - **Not here.** CloudTrail Lake and EventBridge (near-real-time denials) are not ingested yet;
+    how much a gap weighs is #645.
 - **Tests** use `internal/aws/awstest` (test-only): `Replay` serves recorded responses from
   `internal/connectors/awsorg/testdata/http/<service>/<operation>/<n>.<ext>`, verifies every
   signature and reports calls with no recording. It does not enforce IAM; these are collection

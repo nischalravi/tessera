@@ -257,7 +257,7 @@ func TestCollect_UsesOnlyReaderActions(t *testing.T) {
 		used[action] = true
 	}
 	for _, a := range ReaderActions {
-		if !used[a] {
+		if !used[a] && !usageActions[a] { // those are called by the usage ingest (TestCollectUsage_UsesOnlyReaderActions)
 			t.Errorf("ReaderActions has %s, which the fixture run never calls", a)
 		}
 	}
