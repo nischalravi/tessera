@@ -40,7 +40,11 @@ const (
 	GCPIAM         = "gcpiam"
 	ServiceNow     = "servicenow"
 	Atlassian      = "atlassian"
-	UnixSSH        = "unixssh"
+	// Kubernetes reads a Kubernetes or OpenShift cluster's RBAC; Vault reads a HashiCorp Vault server's
+	// policies, auth roles and identities. Both are read-only.
+	Kubernetes = "kubernetes"
+	Vault      = "vault"
+	UnixSSH    = "unixssh"
 )
 
 // Type describes one governed connector type.
@@ -74,6 +78,8 @@ var Types = []Type{
 	{ID: GCPIAM, Template: "gcpiam", System: "gcp", Vendor: GCPIAM},
 	{ID: ServiceNow, Template: "servicenow", System: "servicenow", Vendor: ServiceNow},
 	{ID: Atlassian, Template: "atlassian", System: "atlassian", Vendor: Atlassian},
+	{ID: Kubernetes, Template: "kubernetes", System: "kubernetes", Vendor: Kubernetes},
+	{ID: Vault, Template: "vault", System: "vault", Vendor: Vault},
 	{ID: UnixSSH, Template: "unixssh", System: "unix", Vendor: UnixSSH},
 }
 
@@ -152,6 +158,13 @@ func SettingSpecs(typ string) []Setting {
 			{"email", "Account e-mail", "The dedicated account whose API token is the credential. It needs Browse users and groups; to write back, site administration.", true},
 			{"org_id", "Organization id", "Optional: adds the organization admin API (product access). The credential is then JSON with api_token and admin_api_key.", false},
 			{"project_keys", "Project keys", "Comma separated, at most 50. Optional: the projects whose project roles are read.", false}}
+	case Kubernetes:
+		return []Setting{
+			{"namespaces", "Namespaces", "Comma separated, at most 100. Optional: read the roles, role bindings and service accounts of these namespaces only (cluster roles and cluster role bindings are always read).", false},
+			{"openshift", "OpenShift", "true or false (default false). true also reads the groups of user.openshift.io. The credential is a ServiceAccount token that can list RBAC objects (and groups).", false}}
+	case Vault:
+		return []Setting{
+			{"namespace", "Namespace", "Vault Enterprise namespace path, optional. The credential is a Vault token of a read-only policy (see the README).", false}}
 	case UnixSSH:
 		return []Setting{
 			{"host", "Host", "The host name or IP address of the Unix or Linux host. Private, loopback and link-local addresses are refused from the server.", true},
@@ -176,7 +189,7 @@ func SettingSpecs(typ string) []Setting {
 // it is empty; AWS and AgentCore take none.
 func BaseURLUse(typ string) (required, takes bool) {
 	switch typ {
-	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed, SuccessFactors, ServiceNow, Atlassian:
+	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed, SuccessFactors, ServiceNow, Atlassian, Kubernetes, Vault:
 		return true, true
 	case GitHubScan:
 		return false, true
@@ -197,6 +210,8 @@ var (
 	companyRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	sfUserRE  = regexp.MustCompile(`^[^\x00-\x1f\x7f:]{1,128}$`)
 	entityRE  = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,64}$`)
+	nsRE      = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
+	vaultNSRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}(?:/[A-Za-z0-9._-]{1,64}){0,7}$`)
 	guidRE    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	mgRE      = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
 	numRE     = regexp.MustCompile(`^[0-9]{1,20}$`)
@@ -364,7 +379,13 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 			if !hostKeyRE.MatchString(v) {
 				bad(s.Key, "must be a SHA256:<fingerprint> or a public key line (ssh-ed25519 AAAA...)")
 			}
-		case "include_eligible", "use_sudo":
+		case "namespaces":
+			checkList(v, 100, nsRE, "a namespace name", s.Key, bad)
+		case "namespace":
+			if !vaultNSRE.MatchString(v) || strings.Contains(v, "..") {
+				bad(s.Key, "must be a namespace path (letters, digits, . _ - and /)")
+			}
+		case "include_eligible", "use_sudo", "openshift":
 			if v != "true" && v != "false" {
 				bad(s.Key, "must be true or false")
 			}

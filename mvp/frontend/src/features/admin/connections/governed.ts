@@ -32,6 +32,8 @@ export const SETTING_KEYS: Record<string, string[]> = {
   servicenow: ["auth_mode", "username", "client_id"],
   atlassian: ["email", "org_id", "project_keys"],
   unixssh: ["host", "port", "username", "host_key", "use_sudo"],
+  kubernetes: ["namespaces", "openshift"],
+  vault: ["namespace"],
 };
 
 const VAULT_URL = { label: "Vault URL", hint: "The vault's HTTPS host name, no path.", required: true };
@@ -148,6 +150,21 @@ export const GOVERNED: Record<string, GovType> = {
       { key: "use_sudo", label: "Read sudoers through sudo", hint: "true or false (default false). Needs NOPASSWD sudo entries for exactly the two read commands (see the README)." },
     ],
     credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
+  },
+  kubernetes: {
+    baseUrl: { label: "API server URL", hint: "https://api.cluster.example.com:6443; HTTPS host name and port, no path. Its certificate must chain to a public CA.", required: true },
+    settings: [
+      { key: "namespaces", label: "Namespaces", hint: "Comma separated, at most 100. Optional: read the roles, role bindings and service accounts of these namespaces only." },
+      { key: "openshift", label: "OpenShift", hint: "true or false (default false). true also reads the groups of user.openshift.io." },
+    ],
+    credential: { label: "ServiceAccount token", hint: "The bearer token of a ServiceAccount that can only list RBAC objects, service accounts and (OpenShift) groups. Read-only: Tessera never writes to the cluster.", area: true },
+  },
+  vault: {
+    baseUrl: { label: "Vault URL", hint: "https://vault.example.com:8200; HTTPS host name and port, no path.", required: true },
+    settings: [
+      { key: "namespace", label: "Namespace", hint: "Vault Enterprise namespace path. Optional: one connection reads one namespace." },
+    ],
+    credential: { label: "Vault token", hint: "A periodic token of a read-only policy (read sys/policies/acl and sys/auth, list and read the auth role, user, group and identity collections). Never a root token. Read-only: no secret is read.", area: true },
   },
   agentcore: {
     settings: [{ key: "snapshot", label: "Snapshot file", required: true, hint: "A recorded AgentCore snapshot (JSON) in this tenant's directory. There is no live AgentCore client; refused in prod." }],

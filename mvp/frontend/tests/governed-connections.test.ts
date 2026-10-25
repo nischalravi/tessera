@@ -19,6 +19,10 @@ test("which types take a base URL and a credential", () => {
   assert.equal(GOVERNED.gcpiam.credential?.area, true); // the key JSON
   assert.equal(GOVERNED.unixssh.baseUrl, undefined); // the host is a setting, not a URL
   assert.equal(GOVERNED.unixssh.credential?.area, true); // the private key
+  for (const type of ["kubernetes", "vault"]) {
+    assert.equal(GOVERNED[type].baseUrl?.required, true, type); // the server's own address
+    assert.equal(GOVERNED[type].credential?.area, true, type);
+  }
   assert.equal(GOVERNED.agentcore.credential, null); // a recorded snapshot holds no secret
   assert.equal(GOVERNED.awsorg.credential?.area, true); // JSON keys
   for (const [type, t] of Object.entries(GOVERNED)) if (type !== "agentcore") assert.ok(t.credential, type);
@@ -50,6 +54,8 @@ test("required fields are named until they are filled", () => {
   assert.deepEqual(missingRequired("agentcore", "", {}), ["Snapshot file"]);
   assert.deepEqual(missingRequired("azurerbac", "", {}), ["Directory (tenant) id", "Application (client) id"]); // no base URL: the public cloud
   assert.deepEqual(missingRequired("gcpiam", "", {}), []); // one of organization, folders or projects: the server checks
+  assert.deepEqual(missingRequired("kubernetes", "", {}), ["API server URL"]);
+  assert.deepEqual(missingRequired("vault", "", {}), ["Vault URL"]);
   assert.deepEqual(missingRequired("unixssh", "", {}), ["Host", "SSH user", "Host key"]);
   assert.deepEqual(missingRequired("ldap", "", {}), []);
 });

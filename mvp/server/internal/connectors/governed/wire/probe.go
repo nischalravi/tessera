@@ -22,10 +22,12 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/kubernetes"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vault"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vms"
 )
 
@@ -195,6 +197,45 @@ func Prober(p governed.Params, n governed.Net) (connectors.Prober, error) {
 				counts["organization_user"] = r.AdminUsers
 			}
 			return counts, err
+		}}, nil
+	case governed.Kubernetes:
+		getenv, err := p.Env()
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := kubernetes.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := kubernetes.Open(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		return &saasProber{base: p.BaseURL, hc: n.HC, id: c.Identity(), mode: c.Mode(), probe: func(ctx context.Context) (map[string]int, error) {
+			r, err := c.Probe(ctx)
+			counts := map[string]int{"cluster_role": r.ClusterRoles, "cluster_role_binding": r.ClusterRoleBindings, "service_account": r.ServiceAccounts}
+			if c.OpenShift() {
+				counts["group"] = r.Groups
+			}
+			return counts, err
+		}}, nil
+	case governed.Vault:
+		getenv, err := p.Env()
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := vault.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := vault.Open(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		id := "token"
+		return &saasProber{base: p.BaseURL, hc: n.HC, id: id, mode: c.Mode(), probe: func(ctx context.Context) (map[string]int, error) {
+			r, err := c.Probe(ctx)
+			return map[string]int{"policy": r.Policies, "auth_method": r.AuthMethods, "entity": r.Entities}, err
 		}}, nil
 	case governed.UnixSSH:
 		getenv, err := p.Env()

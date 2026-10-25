@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { siAtlassian, siAuth0, siBox, siDatabricks, siDropbox, siGithub, siGooglecloud, siGoogle, siKeycloak, siLinux, siOkta, siSap, siSnowflake, siZendesk, siZoom } from "simple-icons";
+import { siAtlassian, siAuth0, siBox, siDatabricks, siDropbox, siGithub, siGooglecloud, siGoogle, siKeycloak, siKubernetes, siLinux, siOkta, siSap, siSnowflake, siVault, siZendesk, siZoom } from "simple-icons";
 
 /**
  * A recognizable mark per system on a fixed light "logo plate" (white, subtle border, both themes) so brand colours
@@ -23,6 +23,8 @@ const BRAND: Record<string, { path: string; hex: string }> = {
   sap: { path: siSap.path, hex: siSap.hex },
   gcp: { path: siGooglecloud.path, hex: siGooglecloud.hex },
   linux: { path: siLinux.path, hex: siLinux.hex },
+  kubernetes: { path: siKubernetes.path, hex: siKubernetes.hex },
+  vault: { path: siVault.path, hex: siVault.hex },
 };
 
 const stroke = { fill: "none", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" } as const;

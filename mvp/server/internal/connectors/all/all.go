@@ -31,6 +31,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/kubernetes"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
@@ -39,6 +40,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vault"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
@@ -72,7 +74,12 @@ import (
 // Unix and Linux over SSH (issue #558): "unix" reads accounts, groups and sudoers rules of one host
 // (TESSERA_UNIXSSH_*) with a pinned host key and a key credential; it is read-only.
 //
-// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, azure, gcp, unix, github-scan and aws-agentcore factories. hc is the
+// Kubernetes, OpenShift and Vault (issue #560): "kubernetes" reads Roles, ClusterRoles, their bindings,
+// ServiceAccounts and OpenShift groups (TESSERA_KUBERNETES_*); "vault" reads ACL policies, auth roles,
+// users, identity entities and groups (TESSERA_VAULT_*). Both are read-only, take the server's address as
+// an https base URL and a sealed bearer token or Vault token.
+//
+// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, kubernetes, vault, azure, gcp, unix, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -113,6 +120,12 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	}
 	connectors.Factories["atlassian"] = func(now time.Time) (connectors.Connector, error) {
 		return atlassian.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["kubernetes"] = func(now time.Time) (connectors.Connector, error) {
+		return kubernetes.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["vault"] = func(now time.Time) (connectors.Connector, error) {
+		return vault.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
 	}
 	connectors.Factories["rest"] = func(time.Time) (connectors.Connector, error) {
 		return restgen.FromEnv(os.Getenv, rt, hc)

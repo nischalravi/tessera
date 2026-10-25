@@ -19,10 +19,12 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/kubernetes"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vault"
 )
 
 // Connector builds the connector of a connection by the connector's own
@@ -57,6 +59,10 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 			return nil, err
 		}
 		cn, err = atlassian.FromEnv(getenv, rt, hc, now)
+	case governed.Kubernetes:
+		cn, err = kubernetes.FromEnv(getenv, rt, hc, now)
+	case governed.Vault:
+		cn, err = vault.FromEnv(getenv, rt, hc, now)
 	case governed.UnixSSH:
 		cn, err = unixssh.FromEnv(getenv, rt)
 	case governed.AzureRBAC, governed.GCPIAM:
