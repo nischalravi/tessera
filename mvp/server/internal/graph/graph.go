@@ -413,6 +413,20 @@ func (g *Snapshot) Successors(key string) []string { return g.succ[key] }
 // EdgeData returns the attributes of src -> dst (nil if absent).
 func (g *Snapshot) EdgeData(src, dst string) *Edge { return g.edges[edgeKey{src, dst}] }
 
+// EdgesExplanation returns the evaluator explanation id of the first of the
+// edges ((src, dst) pairs) that carries one, or "" (design EP-8). It is the
+// link a finding follows to the trace of the AWS decision behind it.
+func (g *Snapshot) EdgesExplanation(edges [][]string) string {
+	for _, e := range edges {
+		if len(e) == 2 {
+			if d := g.EdgeData(e[0], e[1]); d != nil && d.ExplanationID != "" {
+				return d.ExplanationID
+			}
+		}
+	}
+	return ""
+}
+
 // Identities returns identity ids in node order.
 func (g *Snapshot) Identities(includeTerminated bool) []int64 {
 	var out []int64

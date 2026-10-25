@@ -1446,6 +1446,10 @@ func campaignView(c *store.TenantTx, cmp *store.ReviewCampaign, withItems bool) 
 		if err != nil {
 			return nil, err
 		}
+		expl, err := c.EdgeExplanations()
+		if err != nil {
+			return nil, err
+		}
 		for _, it := range items {
 			var reviewer any
 			if it.ReviewerID != nil {
@@ -1455,6 +1459,9 @@ func campaignView(c *store.TenantTx, cmp *store.ReviewCampaign, withItems bool) 
 				{Key: "grant", Value: it.GrantLabel}, {Key: "edge_id", Value: it.EdgeID}, {Key: "reasons", Value: it.Reasons},
 				{Key: "context", Value: it.Context}, {Key: "reviewer", Value: reviewer}, {Key: "decision", Value: it.Decision},
 				{Key: "comment", Value: it.Comment}, {Key: "decided_at", Value: timeutil.ISOPtr(it.DecidedAt)}}
+			if it.EdgeID != nil && expl[*it.EdgeID] != "" { // EP-8: the evaluator trace behind the grant
+				row = append(row, ojson.KV{Key: "explanation_id", Value: expl[*it.EdgeID]})
+			}
 			if m, ok := memberships[it.ID]; ok { // a role membership item (issue #214)
 				row = append(row, m...)
 			}

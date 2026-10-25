@@ -45,6 +45,9 @@ const edgeFrom = ` FROM grant_edges e LEFT JOIN aws_edge_evaluations v ON v.tena
 var (
 	edgesList = tq("grant_edges.list", `
 		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant ORDER BY e.id`)
+	edgeExplanations = tq("aws_edge_evaluations.explanations", `
+		SELECT v.edge_id, v.explanation_id FROM aws_edge_evaluations v
+		WHERE v.tenant_id = @tenant AND v.explanation_id <> '' ORDER BY v.edge_id`)
 	edgesGet = tq("grant_edges.get", `
 		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant AND e.id = @id`)
 	edgesBetween = tq("grant_edges.between", `
@@ -118,6 +121,26 @@ func scanEdge(s scanner) (*GrantEdge, error) {
 
 // Edges returns every grant edge, in id order.
 func (tx *TenantTx) Edges() ([]*GrantEdge, error) { return collect(tx, scanEdge, edgesList) }
+
+// EdgeExplanations maps a grant edge id to the evaluator explanation id of its
+// evaluation, for the edges that have one (EP-8: findings link to the trace).
+func (tx *TenantTx) EdgeExplanations() (map[int64]string, error) {
+	rows, err := tx.query(edgeExplanations)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]string{}
+	for rows.Next() {
+		var id int64
+		var x string
+		if err := rows.Scan(&id, &x); err != nil {
+			return nil, err
+		}
+		out[id] = x
+	}
+	return out, rows.Err()
+}
 
 // Edge returns one grant edge by id.
 func (tx *TenantTx) Edge(id int64) (*GrantEdge, error) {

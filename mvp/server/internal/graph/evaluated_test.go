@@ -69,3 +69,28 @@ func TestPathEval(t *testing.T) {
 		t.Errorf("perm:2 = %+v; want conditional by the trust edge", ep)
 	}
 }
+
+// EdgesExplanation returns the first implicated edge's explanation id, and ""
+// when none of them was evaluated (EP-8).
+func TestEdgesExplanation(t *testing.T) {
+	g := New()
+	for _, k := range []string{"account:1", "group:1", "perm:1"} {
+		g.AddNode(&Node{Key: k, Kind: k[:len(k)-2], Status: "active"})
+	}
+	g.setEdge("account:1", "group:1", &Edge{Relation: "member", Source: "connector"})
+	g.setEdge("group:1", "perm:1", &Edge{Relation: "grants", Source: "evaluator", Outcome: OutcomeAllow, Fidelity: FidelityExact, ExplanationID: "g"})
+	for _, tc := range []struct {
+		name  string
+		edges [][]string
+		want  string
+	}{
+		{"none", nil, ""},
+		{"unevaluated only", [][]string{{"account:1", "group:1"}}, ""},
+		{"absent edge", [][]string{{"x", "y"}}, ""},
+		{"first evaluated", [][]string{{"account:1", "group:1"}, {"group:1", "perm:1"}}, "g"},
+	} {
+		if got := g.EdgesExplanation(tc.edges); got != tc.want {
+			t.Errorf("%s: EdgesExplanation = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
