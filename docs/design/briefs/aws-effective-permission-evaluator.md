@@ -43,7 +43,7 @@ Goal: pure-Go engine answering "does principal P get action A on resource R, and
 ## Honest status
 - **Agreement with real AWS has never been measured.** All 12 cassettes in `testdata/aws/cassettes/` are synthetic (hand-authored; `Case.Synthetic` is set and the corpus test checks each is bound to its fixture version). They prove the harness plumbing, not the engine's fidelity. The 99.5% (Wilson, n >= 10,000) target is a goal, not a result.
 - `Collect` is not wired to any route or job, so nothing collects on its own. Snapshots come only from tests or a direct call to `Service.Collect`. #637 does the route and scheduler.
-- The connector still stores a sealed long-lived access key (it signs only `sts:AssumeRole`); the design's federation (no stored keys) is not built.
+- Federated reader credentials are built (#638): `AssumeRoleWithWebIdentity` with a Tessera JWT, no stored key; the sealed-key mode exists only behind `TESSERA_AWS_ALLOW_STATIC_KEYS`, which prod refuses (`mvp/README.md` "AWS connector").
 - The UI is the Insights "AWS access" page (`mvp/frontend/src/features/insights/AwsAccess.tsx`). Fidelity badges, the profile chip and a trace viewer are not built yet (#642).
 
 ## API (`/api/aws/*`, all read-only except connector and pr-comment settings)

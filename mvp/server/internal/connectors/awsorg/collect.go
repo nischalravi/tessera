@@ -17,8 +17,12 @@ import (
 type Collector struct {
 	Client *Client
 	Config *Config
-	// Base are the keys AssumeRole is signed with.
+	// Base are the keys AssumeRole is signed with (static-key mode).
 	Base sigv4.Credentials
+	// WebIdentity, when set, makes the collector federated: each account's role
+	// is assumed with AssumeRoleWithWebIdentity and a token it returns, and
+	// Base and ExternalID are not used.
+	WebIdentity TokenSource
 	// ExternalID is the sts:ExternalId sent on every AssumeRole.
 	ExternalID string
 	// Now stamps the snapshot (default time.Now).
@@ -46,7 +50,18 @@ func (c *Collector) assume(ctx context.Context, cache map[string]*accountSession
 	}
 	base := session{cl: c.Client, creds: c.Base}
 	roleARN := "arn:aws:iam::" + account + ":role/" + c.Config.RoleName
-	creds, exp, err := base.assumeRole(ctx, c.Config.Regions[0], roleARN, c.ExternalID, "tessera-collect")
+	var creds sigv4.Credentials
+	var exp time.Time
+	var err error
+	if c.WebIdentity != nil {
+		var token string
+		if token, err = c.WebIdentity(ctx); err != nil {
+			return nil, err
+		}
+		creds, exp, err = base.assumeRoleWithWebIdentity(ctx, c.Config.Regions[0], roleARN, token, "tessera-collect")
+	} else {
+		creds, exp, err = base.assumeRole(ctx, c.Config.Regions[0], roleARN, c.ExternalID, "tessera-collect")
+	}
 	if err != nil {
 		return nil, err
 	}

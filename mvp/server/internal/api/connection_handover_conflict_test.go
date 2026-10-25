@@ -38,17 +38,17 @@ func TestHandover_NameTakenByADifferentSourceIsAConflict(t *testing.T) {
 	ap := governed.Params{Type: governed.AWSOrg, Secret: awsSecret, Settings: map[string]string{"regions": "us-east-1",
 		"management_account_id": "111111111111", "external_id": "tessera-abc123"}}
 	testkit.Write(t, st, func(c *store.TenantTx) error {
-		_, err := handoverAWS(c, sealer, "AWS", ap, testkit.Now)
+		_, err := handoverAWS(c, sealer, true, "AWS", ap, testkit.Now)
 		return err
 	})
 	diff := ap
 	diff.Settings = map[string]string{"regions": "eu-west-1", "management_account_id": "111111111111", "external_id": "tessera-abc123"}
 	testkit.Write(t, st, func(c *store.TenantTx) error {
 		var re *readiness.Error
-		if _, err := handoverAWS(c, sealer, "AWS", diff, testkit.Now); !errors.As(err, &re) || re.Code != "handover_conflict" {
+		if _, err := handoverAWS(c, sealer, true, "AWS", diff, testkit.Now); !errors.As(err, &re) || re.Code != "handover_conflict" {
 			t.Errorf("different regions: %v", err)
 		}
-		if _, err := handoverAWS(c, sealer, "AWS", ap, testkit.Now); !errors.Is(err, errHandoverExists) {
+		if _, err := handoverAWS(c, sealer, true, "AWS", ap, testkit.Now); !errors.Is(err, errHandoverExists) {
 			t.Errorf("same connector: %v", err)
 		}
 		return nil

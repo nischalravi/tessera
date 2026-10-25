@@ -34,7 +34,7 @@ func (s *Server) handover(c *store.TenantTx, ac readiness.ActiveConnection, t go
 	switch t.ID {
 	case governed.AWSOrg:
 		feature = "aws_connector"
-		id, err = handoverAWS(c, s.cfg.Sealer, ac.Name(), p, now)
+		id, err = handoverAWS(c, s.cfg.Sealer, s.cfg.AWSAllowStaticKeys, ac.Name(), p, now)
 	default:
 		feature = "vms_source"
 		id, err = handoverVMS(c, s.provSeal, ac.Name(), ac.ConnectionID(), t, p, now)
@@ -83,12 +83,12 @@ func handoverVMS(c *store.TenantTx, sealer *seal.Sealer, name, connectionID stri
 	return v.ID, nil
 }
 
-func handoverAWS(c *store.TenantTx, sealer *seal.Sealer, name string, p governed.Params, now time.Time) (string, error) {
+func handoverAWS(c *store.TenantTx, sealer *seal.Sealer, allowStatic bool, name string, p governed.Params, now time.Time) (string, error) {
 	var creds awsorg.Credentials
 	if err := awsorg.ParseCredentials(p.Secret, &creds); err != nil {
 		return "", err
 	}
-	k, err := (&awsorg.Service{Sealer: sealer}).CreateConnector(c, awsorg.CreateInput{Name: name, Config: awsorg.ConfigOf(p), Credentials: creds,
+	k, err := (&awsorg.Service{Sealer: sealer, AllowStaticKeys: allowStatic}).CreateConnector(c, awsorg.CreateInput{Name: name, Config: awsorg.ConfigOf(p), Credentials: creds,
 		ExternalID: p.Settings["external_id"]}, "system", now)
 	var ie *awsorg.InputError
 	if errors.As(err, &ie) && ie.Code == "name_taken" {

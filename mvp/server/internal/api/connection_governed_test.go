@@ -174,7 +174,7 @@ func TestHandover_AWS(t *testing.T) {
 	var id string
 	testkit.Write(t, st, func(c *store.TenantTx) error {
 		var err error
-		id, err = handoverAWS(c, sealer, "AWS production", p, testkit.Now)
+		id, err = handoverAWS(c, sealer, true, "AWS production", p, testkit.Now)
 		return err
 	})
 	testkit.Read(t, st, func(c *store.TenantTx) error {
@@ -196,12 +196,12 @@ func TestHandover_AWS(t *testing.T) {
 		return nil
 	})
 	testkit.Write(t, st, func(c *store.TenantTx) error {
-		if _, err := handoverAWS(c, sealer, "AWS production", p, testkit.Now); !errors.Is(err, errHandoverExists) {
+		if _, err := handoverAWS(c, sealer, true, "AWS production", p, testkit.Now); !errors.Is(err, errHandoverExists) {
 			t.Errorf("second hand-over: %v", err)
 		}
 		bad := p
 		bad.Secret = `{"access_key_id":"x"}`
-		if _, err := handoverAWS(c, sealer, "Another", bad, testkit.Now); err == nil {
+		if _, err := handoverAWS(c, sealer, true, "Another", bad, testkit.Now); err == nil {
 			t.Error("bad keys accepted")
 		}
 		return nil

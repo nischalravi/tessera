@@ -2,8 +2,10 @@ package awsorg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/sigv4"
@@ -20,6 +22,19 @@ type assumeRoleResp struct {
 			Expiration      string `xml:"Expiration"`
 		} `xml:"Credentials"`
 	} `xml:"AssumeRoleResult"`
+}
+
+// webIdentityResp is the reply of AssumeRoleWithWebIdentity: the credentials
+// are the same, the result element is named after the action.
+type webIdentityResp struct {
+	Result struct {
+		Credentials struct {
+			AccessKeyID     string `xml:"AccessKeyId"`
+			SecretAccessKey string `xml:"SecretAccessKey"`
+			SessionToken    string `xml:"SessionToken"`
+			Expiration      string `xml:"Expiration"`
+		} `xml:"Credentials"`
+	} `xml:"AssumeRoleWithWebIdentityResult"`
 }
 
 // assumeRole is sts:AssumeRole with the connector's external id. The session
@@ -39,6 +54,45 @@ func (s session) assumeRole(ctx context.Context, region, roleARN, externalID, se
 	}
 	exp, _ := time.Parse(time.RFC3339, c.Expiration) // zero when unparseable: assumed again on the next use
 	return sigv4.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken}, exp, nil
+}
+
+// assumeRoleWithWebIdentity is sts:AssumeRoleWithWebIdentity: an unsigned call
+// that trades the Tessera-issued token for one hour of credentials in the role.
+// No error it returns holds the token.
+func (s session) assumeRoleWithWebIdentity(ctx context.Context, region, roleARN, token, sessionName string) (sigv4.Credentials, time.Time, error) {
+	p := url.Values{"RoleArn": {roleARN}, "RoleSessionName": {sessionName}, "WebIdentityToken": {token}, "DurationSeconds": {"3600"}}
+	var r webIdentityResp
+	us := session{cl: s.cl, unsigned: true}
+	if err := us.query(ctx, svcSTS, region, "2011-06-15", "AssumeRoleWithWebIdentity", p, &r); err != nil {
+		return sigv4.Credentials{}, time.Time{}, redact(err, token)
+	}
+	c := r.Result.Credentials
+	if c.AccessKeyID == "" || c.SecretAccessKey == "" || c.SessionToken == "" {
+		return sigv4.Credentials{}, time.Time{}, fmt.Errorf("aws: sts AssumeRoleWithWebIdentity returned no credentials")
+	}
+	exp, _ := time.Parse(time.RFC3339, c.Expiration) // zero when unparseable: assumed again on the next use
+	return sigv4.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken}, exp, nil
+}
+
+// redact removes secret from an error. An AWS error keeps its code, status and
+// operation; any other error that mentions the secret is replaced.
+func redact(err error, secret string) error {
+	if err == nil || secret == "" {
+		return err
+	}
+	var ae *Error
+	if errors.As(err, &ae) {
+		cp := *ae
+		cp.Message = strings.ReplaceAll(cp.Message, secret, "[redacted]")
+		if strings.Contains(err.Error(), secret) {
+			cp.Message = "[redacted]"
+		}
+		return &cp
+	}
+	if strings.Contains(err.Error(), secret) {
+		return errors.New("aws: sts AssumeRoleWithWebIdentity failed (details withheld: they held the token)")
+	}
+	return err
 }
 
 // ---------------------------------------------------------------- IAM

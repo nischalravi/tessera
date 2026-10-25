@@ -61,6 +61,8 @@ func endpoint(service, region string) (host, signRegion string) {
 type session struct {
 	cl    *Client
 	creds sigv4.Credentials
+	// unsigned sends query calls without a signature (AssumeRoleWithWebIdentity).
+	unsigned bool
 }
 
 const formType = "application/x-www-form-urlencoded; charset=utf-8"
@@ -78,7 +80,7 @@ func (s session) query(ctx context.Context, service, region, version, action str
 	form.Set("Version", version)
 	host, signRegion := endpoint(service, region)
 	body, _, err := s.cl.do(ctx, s.creds, call{Service: service, Host: host, Region: signRegion, Method: http.MethodPost, Path: "/",
-		Header: http.Header{"Content-Type": {formType}}, Body: []byte(encodeQuery(form)), Op: action})
+		Header: http.Header{"Content-Type": {formType}}, Body: []byte(encodeQuery(form)), Op: action, Unsigned: s.unsigned})
 	if err != nil {
 		return err
 	}

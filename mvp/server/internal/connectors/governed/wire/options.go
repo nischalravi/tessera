@@ -19,6 +19,11 @@ import (
 func Options(hc *http.Client, rt connsync.Runtime, dataDir string, prod bool) readiness.GovOptions {
 	return readiness.GovOptions{Client: hc, Runtime: rt, DataDir: dataDir, Prod: prod, Prober: Prober, Connector: Connector,
 		AWS: func(p governed.Params, hc *http.Client, now func() time.Time) (connectors.Prober, error) {
+			if prod {
+				// a governed AWS connection holds an access key; prod reads AWS
+				// with federated credentials only (/api/aws/connectors, EP-2)
+				return nil, awsorg.ErrStaticKeysDisabled
+			}
 			return awsorg.GovernedProber(p, hc, now)
 		}}
 }

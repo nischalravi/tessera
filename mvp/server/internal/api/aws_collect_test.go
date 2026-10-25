@@ -91,7 +91,7 @@ func newCollectEnv(t *testing.T, mutate ...func(*Config)) *collectEnv {
 	d := &collectDoer{}
 	d.next(nil)
 	cfg := Config{Store: st.DB, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Env: "test", Sealer: sealer, AWSCatalog: testAWSCatalog, AWSHTTP: d,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Env: "test", Sealer: sealer, AWSCatalog: testAWSCatalog, AWSHTTP: d, AWSAllowStaticKeys: true,
 		RateLimits: noRateLimits, AllowedOrigins: []string{"http://localhost:5173"}}
 	for _, m := range mutate {
 		m(&cfg)
@@ -506,7 +506,7 @@ func TestAWSCollectTenantIsolation(t *testing.T) {
 	d := &collectDoer{}
 	d.next(nil)
 	srv := New(Config{Store: f.DB, Clock: timeutil.Frozen(storetest.Now), Policies: policy.NewLoader(policies.FS),
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Env: "test", Sealer: sealer, AWSCatalog: testAWSCatalog, AWSHTTP: d,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Env: "test", Sealer: sealer, AWSCatalog: testAWSCatalog, AWSHTTP: d, AWSAllowStaticKeys: true,
 		RateLimits: noRateLimits, AllowedOrigins: []string{"http://localhost:5173"}})
 	h := srv.Handler()
 	la := signIn(t, f.DB, f.A.ID, testAdmin, authtest.Phr, storetest.Now)

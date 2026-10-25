@@ -1,0 +1,17 @@
+<AssumeRoleWithWebIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleWithWebIdentityResult>
+    <Credentials>
+      <AccessKeyId>ASIAEXAMPLEEXAMPLE1</AccessKeyId>
+      <SecretAccessKey>secretsecretsecretsecretsecret0123456789</SecretAccessKey>
+      <SessionToken>FwoGZXIvYXdzEXAMPLETOKEN</SessionToken>
+      <Expiration>2099-01-01T00:00:00Z</Expiration>
+    </Credentials>
+    <SubjectFromWebIdentityToken>tessera:tenant:example:aws-connector:example</SubjectFromWebIdentityToken>
+    <Audience>sts.amazonaws.com</Audience>
+    <AssumedRoleUser>
+      <AssumedRoleId>AROAEXAMPLE:tessera-collect</AssumedRoleId>
+      <Arn>arn:aws:sts::111111111111:assumed-role/TesseraReader/tessera-collect</Arn>
+    </AssumedRoleUser>
+  </AssumeRoleWithWebIdentityResult>
+  <ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000002</RequestId></ResponseMetadata>
+</AssumeRoleWithWebIdentityResponse>
