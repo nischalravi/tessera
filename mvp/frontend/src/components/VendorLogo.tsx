@@ -72,6 +72,10 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   csvfeed: { color: "#3f4a5a", glyph: <g {...stroke} stroke="#3f4a5a"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M3.5 9.5h17M3.5 14.5h17M9.5 4.5v15" /></g> },
   // agent: a robot head
   agentcore: { color: "#6d28d9", glyph: <g {...stroke} stroke="#6d28d9"><rect x="5" y="8" width="14" height="10" rx="2.5" /><circle cx="9.5" cy="13" r="1.2" /><circle cx="14.5" cy="13" r="1.2" /><path d="M12 8V5M10 5h4M3 12v2M21 12v2" /></g> },
+  // a plug into a socket: the Model Context Protocol connects tools to agents
+  mcp: { color: "#0f766e", glyph: <g {...stroke} stroke="#0f766e"><path d="M9 3v4M15 3v4M6.5 7h11v4a5.5 5.5 0 01-11 0zM12 16.5V21" /></g> },
+  // a robot head over a cloud shelf: an agent on Amazon Bedrock
+  bedrock: { color: "#c2410c", glyph: <g {...stroke} stroke="#c2410c"><rect x="6" y="4" width="12" height="9" rx="2.5" /><circle cx="10" cy="8.5" r="1.1" /><circle cx="14" cy="8.5" r="1.1" /><path d="M12 4V2M4 20h16M7 16.5h10" /></g> },
   // curly braces around a request arrow: a JSON API described by a spec
   rest_generic: { color: "#7c3aed", glyph: <g {...stroke} stroke="#7c3aed"><path d="M8 3.5C6 3.5 5.5 4.6 5.5 6.2v2.1c0 1.2-.7 2.2-2 2.7 1.3.5 2 1.5 2 2.7v2.1c0 1.6.5 2.7 2.5 2.7M16 3.5c2 0 2.5 1.1 2.5 2.7v2.1c0 1.2.7 2.2 2 2.7-1.3.5-2 1.5-2 2.7v2.1c0 1.6-.5 2.7-2.5 2.7" /><path d="M9.5 12h5M12.5 9.5l2.5 2.5-2.5 2.5" /></g> },
   // protocol glyph: two-way arrows

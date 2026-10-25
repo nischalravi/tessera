@@ -35,6 +35,8 @@ var govConfig = map[string]string{
 	"successfactors": `{"base_url":"https://api4.successfactors.com","correlation_key":"person_id","settings":{"company_id":"acme","username":"tessera-api"}}`,
 	"servicenow":     `{"base_url":"https://acme.service-now.com","settings":{"username":"tessera.integration"}}`,
 	"atlassian":      `{"base_url":"https://acme.atlassian.net","settings":{"email":"tessera@acme.example","project_keys":"PROJ"}}`,
+	"mcp":            `{"base_url":"https://tools.acme.example/mcp","settings":{"owner":"olu@acme.example"}}`,
+	"bedrock":        `{"correlation_key":"id","settings":{"region":"us-east-1"}}`,
 	"unixssh":        `{"correlation_key":"id","settings":{"host":"host1.example.com","username":"tessera","host_key":"SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8"}}`,
 }
 
@@ -486,7 +488,7 @@ func TestGoverned_ERPWriteScopeAttestedWhenUnsupported(t *testing.T) {
 
 func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 	reg := template.MustDefault()
-	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "unixssh"} {
+	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "unixssh", "mcp", "bedrock"} {
 		r, ok := reg.Get(id)
 		if !ok {
 			t.Fatalf("no template %s", id)

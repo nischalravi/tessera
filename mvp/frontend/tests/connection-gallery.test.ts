@@ -21,6 +21,7 @@ const T = [
   ["delinea", "Delinea Secret Server", "Folders and secrets", false], ["fieldglass", "SAP Fieldglass", "Contractor assignments", false],
   ["beeline", "Beeline", "Contractor assignments", false], ["csvfeed", "Contractor CSV feed", "A contractor file", false],
   ["agentcore", "AWS Bedrock AgentCore", "Agent runtimes", false],
+  ["bedrock", "Amazon Bedrock Agents", "Agents of one region", false], ["mcp", "MCP server", "Tools a Model Context Protocol server exposes", false],
   ["rest_generic", "Generic REST API", "Any HTTP/JSON system, mapped by a declarative spec", false],
   ["sql", "Database (SQL)", "PostgreSQL, MySQL, SQL Server or Oracle", false],
   ["successfactors", "SAP SuccessFactors", "Employee Central as an HR source", false],
@@ -55,13 +56,13 @@ test("chips filter by category and capability, and combine with search", () => {
 test("the connectors the server already had are in the gallery under their categories", () => {
   const want: Record<string, string[]> = {
     "Cloud & IaaS": ["awsorg", "azurerbac", "gcpiam"], "Servers & hosts": ["unixssh"], "Source code": ["githubscan"], ERP: ["sap", "oracle"], "Privileged access": ["cyberark", "beyondtrust", "delinea"],
-    "Contractor & VMS": ["fieldglass", "beeline", "csvfeed"], "AI agents": ["agentcore"],
+    "Contractor & VMS": ["fieldglass", "beeline", "csvfeed"], "AI agents": ["agentcore", "bedrock", "mcp"],
   };
   for (const [category, types] of Object.entries(want)) {
     assert.ok(CATEGORIES.includes(category as never), category);
     assert.deepEqual(ids({ category: category as never }), types, category);
   }
-  assert.deepEqual(ids({ capability: "Agent discovery" }), ["githubscan", "agentcore"]);
+  assert.deepEqual(ids({ capability: "Agent discovery" }), ["githubscan", "agentcore", "bedrock", "mcp"]);
   assert.deepEqual(ids({ capability: "Contractor source" }), ["fieldglass", "beeline", "csvfeed"]);
   assert.deepEqual(ids({ capability: "Access inventory", category: "Privileged access" }), ["cyberark", "beyondtrust", "delinea"]);
   assert.deepEqual(ids({ q: "fieldglass" }), ["fieldglass"]);
@@ -121,4 +122,14 @@ test("ServiceNow and Atlassian are identity sources and provisioning targets in 
   for (const id of ["servicenow", "atlassian"]) assert.match(picker, new RegExp(`id: "${id}", label: "[^"]+", template: "${id}"`), id);
   const gov = readFileSync(new URL("../src/features/admin/connections/governed.ts", import.meta.url), "utf8");
   for (const id of ["servicenow", "atlassian"]) assert.match(gov, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a connect form`);
+});
+
+test("MCP servers and Bedrock agents are agent-discovery tiles in AI agents, each with a logo, a picker entry and a connect form", () => {
+  for (const id of ["mcp", "bedrock"]) assert.deepEqual(GALLERY_META[id].capabilities, ["Agent discovery"], id);
+  assert.deepEqual(ids({ q: "model context protocol" }), ["mcp"]);
+  assert.deepEqual(ids({ q: "one region" }), ["bedrock"]);
+  const picker = readFileSync(new URL("../src/features/admin/connections/shared.tsx", import.meta.url), "utf8");
+  for (const id of ["mcp", "bedrock"]) assert.match(picker, new RegExp(`id: "${id}", label: "[^"]+", template: "${id}"`), id);
+  const gov = readFileSync(new URL("../src/features/admin/connections/governed.ts", import.meta.url), "utf8");
+  for (const id of ["mcp", "bedrock"]) assert.match(gov, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a connect form`);
 });

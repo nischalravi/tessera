@@ -17,11 +17,13 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/bedrockagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/mcpserver"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
@@ -216,6 +218,43 @@ func Prober(p governed.Params, n governed.Net) (connectors.Prober, error) {
 			}
 			return cloudProbe{mode: "ssh_key", counts: map[string]int{"account": len(snap.Accounts), "group": len(snap.Groups), "sudo_rule": len(snap.Rules)}}, nil
 		}, refused: unixssh.ErrRefused}, nil
+	case governed.MCP:
+		getenv, err := p.Env()
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := mcpserver.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := mcpserver.Open(cfg, n.RT, n.HC)
+		if err != nil {
+			return nil, err
+		}
+		return &saasProber{base: p.BaseURL, hc: n.HC, id: c.Identity(), mode: c.Mode(), probe: func(ctx context.Context) (map[string]int, error) {
+			r, err := c.Probe(ctx)
+			return map[string]int{"tool": len(r.Tools)}, err
+		}}, nil
+	case governed.Bedrock:
+		getenv, err := p.Env()
+		if err == nil {
+			getenv, err = n.Overrides(getenv)
+		}
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := bedrockagents.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := bedrockagents.Open(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		return &cloudProber{id: c.Identity(), probe: func(ctx context.Context) (cloudProbe, error) {
+			r, err := c.Probe(ctx)
+			return cloudProbe{mode: c.Mode(), counts: map[string]int{"agent": r.Agents}}, err
+		}, refused: bedrockagents.ErrCredential}, nil
 	case governed.AWSOrg:
 		if n.AWS == nil {
 			return nil, errors.New("awsorg: no AWS client")

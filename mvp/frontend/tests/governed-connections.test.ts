@@ -60,3 +60,12 @@ test("SuccessFactors: API server, company and API user are required; the credent
   assert.equal(GOVERNED.successfactors.credential?.area, true); // a PEM bundle is multi-line
   assert.deepEqual(settingsPatch("successfactors", { "settings.company_id": "acme", "settings.username": "svc", "settings.password": "x" }, undefined), { company_id: "acme", username: "svc" });
 });
+
+test("MCP: the endpoint and an owner are required, the credential is a token; Bedrock: only the region, the credential is JSON keys", () => {
+  assert.deepEqual(missingRequired("mcp", "", {}), ["MCP endpoint", "Owner"]);
+  assert.deepEqual(missingRequired("mcp", "https://tools.acme.example/mcp", { "settings.owner": "olu@acme.example" }), []);
+  assert.equal(GOVERNED.mcp.baseUrl?.required, true);
+  assert.equal(GOVERNED.bedrock.baseUrl, undefined); // the region's public endpoint
+  assert.deepEqual(missingRequired("bedrock", "", {}), ["Region"]);
+  assert.equal(GOVERNED.bedrock.credential?.area, true);
+});

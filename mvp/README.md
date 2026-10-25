@@ -6039,6 +6039,53 @@ identities) and `mcp_findings`, both tenant-scoped with cross-tenant guard trigg
 creator, sponsor status and violating policy ids; `GET /api/nhi` is unchanged. The demo company
 supplies Okta-sourced agents and five sample findings, so the screens work without any connector.
 
+### MCP servers and Amazon Bedrock Agents (issue #562)
+
+Two read-only agent-platform connections in the New connection gallery (category **AI agents**, capability
+Agent discovery, templates `mcp` and `bedrock`; both have a logo, readiness checklist and live prober).
+Both are governed types, so the credential is sealed like every connection secret and is never printed
+(the connectors' own `%v` and `%+v` print only a host or region), and every outbound call goes through
+`internal/safehttp`. Errors carry a status and a short provider code, never request input or a response body.
+
+**MCP server** (`internal/connectors/mcpserver`, system `mcp`, env `TESSERA_MCP_*`). One connection per server.
+`base_url` is the server's MCP endpoint (Streamable HTTP, https only, a path is allowed; private, loopback and
+link-local addresses are refused by safehttp at connect time, and plain http only to loopback in dev). Settings:
+`owner` (required, the e-mail address of the accountable person, since MCP carries no owner), `server_name` and
+`auth_header` (an API key header instead of `Authorization: Bearer`). The credential is the token or key.
+The connector sends `initialize`, the `initialized` notification and a paged `tools/list`, and **never calls a
+tool** (a test asserts the methods seen). Mapping: the server is a `service` identity `mcp:<host-path>` owned by
+the configured owner; each tool is a resource (`mcp_tool`) with a `call` permission granted to the server's
+account, **privileged** when `annotations.destructiveHint` is true or, with no annotation, the name says it
+runs commands or deletes (`exec`, `shell`, `delete`, `drop`, `admin` ...); `readOnlyHint` tools are not. It also
+records an `mcp_server` finding (the MCP config findings tab). The **auth mode is observed**: with a credential
+set, an `initialize` is also sent without it; a server that answers accepts anonymous callers, which is the
+`auth_mode=anonymous` account attribute and an `anonymous_access` tag on every tool (otherwise `required`).
+Tool descriptions and input schemas are not stored (free text from the server's operator, a known
+prompt-injection carrier); only the name and the hints are.
+
+**Amazon Bedrock Agents** (`internal/connectors/bedrockagents`, system `aws-bedrock`, env `TESSERA_BEDROCK_*`).
+Unlike the fixture-only AgentCore snapshot above, this is a live client of the `bedrock-agent` control-plane API
+(SigV4 service `bedrock`, no AWS SDK). One connection per region (`region` setting; agents are regional); the
+endpoint is the region's public `bedrock-agent.<region>.amazonaws.com` and a different host is refused (an
+override exists for tests only, through the governed `Net.Endpoints`, and any non-dev runtime refuses it). The
+credential is JSON, `{"access_key_id","secret_access_key","session_token"}` (the token optional), of a principal
+that holds only `bedrock:ListAgents`, `GetAgent`, `ListAgentActionGroups`, `GetAgentActionGroup`,
+`ListAgentKnowledgeBases` and `ListTagsForResource` (`bedrockagents.ReaderPolicy`; a test checks it is all
+List/Get). Only those operations are sent (the list operations of this API are POSTs and are reads). Mapping, per
+agent: an `ai_agent` identity `bedrock:<agent id>` owned by its `sponsor` (else `owner`) tag when that is an
+e-mail address, `creator` kept as the creator reference, an `agent` account and an agent profile of kind
+`bedrock_agent`; access (each a direct grant) to the execution role (`assume_role`), the foundation model
+(`bedrock:InvokeModel`), every ENABLED action group (`lambda:InvokeFunction` on its Lambda, or `return_control`
+when the caller runs it; the built-in **code interpreter** is privileged) and every ENABLED knowledge base
+(`bedrock:Retrieve`). A tag `pii=true` marks all of that as PII so `ai-agents-no-pii` applies. What the execution
+role itself can do is read by the AWS Organizations connection: the agent links to the role by ARN. Agents
+missing from a read disappear (the result is a complete snapshot of the source), and a 404 on an agent deleted
+mid-read is skipped.
+
+Tests use in-process fakes of both vendor APIs (`mcpserver/mcpfake`, `bedrockagents/bedrockfake`, the latter
+re-signs every request it receives and counts bad signatures and unserved operations), covering paging, event
+streams, throttling, refused credentials, malformed answers and the host and override checks.
+
 **Entra Agent ID blueprints (issue #478).** With `TESSERA_ENTRA_DISCOVER_AGENTS=true` the connector also reads
 Graph **beta** `applications/microsoft.graph.agentIdentityBlueprint` and its `sponsors`, and, on each agent identity,
 `agentIdentityBlueprintId` (the blueprint's **appId**, not its object id) and `managerApplications` (application

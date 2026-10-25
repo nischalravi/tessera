@@ -32,6 +32,8 @@ export const SETTING_KEYS: Record<string, string[]> = {
   servicenow: ["auth_mode", "username", "client_id"],
   atlassian: ["email", "org_id", "project_keys"],
   unixssh: ["host", "port", "username", "host_key", "use_sudo"],
+  mcp: ["owner", "server_name", "auth_header"],
+  bedrock: ["region"],
 };
 
 const VAULT_URL = { label: "Vault URL", hint: "The vault's HTTPS host name, no path.", required: true };
@@ -148,6 +150,19 @@ export const GOVERNED: Record<string, GovType> = {
       { key: "use_sudo", label: "Read sudoers through sudo", hint: "true or false (default false). Needs NOPASSWD sudo entries for exactly the two read commands (see the README)." },
     ],
     credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
+  },
+  mcp: {
+    baseUrl: { label: "MCP endpoint", hint: "https://host/mcp: the server's Streamable HTTP endpoint, HTTPS only. Private, loopback and link-local addresses are refused from the server.", required: true },
+    settings: [
+      { key: "owner", label: "Owner", required: true, hint: "The e-mail address of the person accountable for the server. MCP carries no owner, so its tools are linked to this person." },
+      { key: "server_name", label: "Display name", hint: "Optional. Default: the name the server reports, then its host." },
+      { key: "auth_header", label: "Credential header", hint: "Optional. The header an API key goes in (X-Api-Key). Default: Authorization: Bearer." },
+    ],
+    credential: { label: "Bearer token or API key", hint: "A token that may list tools. Tessera never calls a tool. It also tries the server without it, to record whether it accepts anonymous callers." },
+  },
+  bedrock: {
+    settings: [{ key: "region", label: "Region", required: true, hint: "The AWS region whose agents are read, for example us-east-1. Agents are regional: add one connection per region." }],
+    credential: { label: "AWS keys (JSON)", hint: "{\"access_key_id\": \"...\", \"secret_access_key\": \"...\", \"session_token\": \"...\"} of a principal with the Bedrock agent list and get rights only; session_token is optional.", area: true },
   },
   agentcore: {
     settings: [{ key: "snapshot", label: "Snapshot file", required: true, hint: "A recorded AgentCore snapshot (JSON) in this tenant's directory. There is no live AgentCore client; refused in prod." }],

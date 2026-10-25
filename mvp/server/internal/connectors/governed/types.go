@@ -41,6 +41,10 @@ const (
 	ServiceNow     = "servicenow"
 	Atlassian      = "atlassian"
 	UnixSSH        = "unixssh"
+	// MCP inventories one Model Context Protocol server (tools exposed, auth mode); Bedrock reads the agents of
+	// Amazon Bedrock Agents in one region (issue #562).
+	MCP     = "mcp"
+	Bedrock = "bedrock"
 )
 
 // Type describes one governed connector type.
@@ -75,6 +79,8 @@ var Types = []Type{
 	{ID: ServiceNow, Template: "servicenow", System: "servicenow", Vendor: ServiceNow},
 	{ID: Atlassian, Template: "atlassian", System: "atlassian", Vendor: Atlassian},
 	{ID: UnixSSH, Template: "unixssh", System: "unix", Vendor: UnixSSH},
+	{ID: MCP, Template: "mcp", System: "mcp", Vendor: MCP},
+	{ID: Bedrock, Template: "bedrock", System: "aws-bedrock", Vendor: Bedrock},
 }
 
 // Lookup returns the type with the id.
@@ -159,6 +165,14 @@ func SettingSpecs(typ string) []Setting {
 			{"username", "SSH user", "A dedicated account. Its private key is the credential. It runs only getent, lastlog and the sudoers read.", true},
 			{"host_key", "Host key", "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A host whose key differs is refused.", true},
 			{"use_sudo", "Read sudoers through sudo", "true or false (default false). Needs NOPASSWD sudo entries for exactly the two read commands (see the README).", false}}
+	case MCP:
+		return []Setting{
+			{"owner", "Owner", "The e-mail address of the person accountable for the server. MCP carries no owner, so the agent and its tools are linked to this person.", true},
+			{"server_name", "Display name", "Optional. Default: the name the server reports, then its host.", false},
+			{"auth_header", "Credential header", "Optional. The header an API key goes in (X-Api-Key). Default: Authorization: Bearer <credential>.", false}}
+	case Bedrock:
+		return []Setting{
+			{"region", "Region", "The AWS region whose agents are read (one connection per region), for example us-east-1. The credential is JSON: access_key_id, secret_access_key and optionally session_token, of a principal with the list and get rights in the README.", true}}
 	case AWSOrg:
 		return []Setting{
 			{"role_name", "Reader role name", "The role assumed in each account. Default TesseraReader.", false},
@@ -176,7 +190,7 @@ func SettingSpecs(typ string) []Setting {
 // it is empty; AWS and AgentCore take none.
 func BaseURLUse(typ string) (required, takes bool) {
 	switch typ {
-	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed, SuccessFactors, ServiceNow, Atlassian:
+	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed, SuccessFactors, ServiceNow, Atlassian, MCP:
 		return true, true
 	case GitHubScan:
 		return false, true
@@ -204,6 +218,8 @@ var (
 	emailRE   = regexp.MustCompile(`^[^\x00-\x1f\x7f\s@]{1,128}@[^\x00-\x1f\x7f\s@]{1,128}$`)
 	orgIDRE   = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 	jiraKeyRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{1,99}$`)
+	headerRE  = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+	nameRE    = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,128}$`)
 	sshUserRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
 	sshHostRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
 	// hostKeyRE is the shape only (the connector parses the key itself): a fingerprint, or a public key line.
@@ -341,6 +357,22 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 		case "auth_mode":
 			if v != "basic" && v != "oauth" {
 				bad(s.Key, "must be basic or oauth")
+			}
+		case "owner":
+			if !emailRE.MatchString(v) {
+				bad(s.Key, "must be an e-mail address")
+			}
+		case "server_name":
+			if !nameRE.MatchString(v) {
+				bad(s.Key, "must be 1 to 128 printable characters")
+			}
+		case "auth_header":
+			if !headerRE.MatchString(v) || strings.EqualFold(v, "host") || strings.EqualFold(v, "content-type") || strings.EqualFold(v, "accept") || strings.EqualFold(v, "content-length") {
+				bad(s.Key, "must be a header name (letters, digits and hyphens), not Host, Content-Type, Accept or Content-Length")
+			}
+		case "region":
+			if !regionRE.MatchString(v) {
+				bad(s.Key, "must be an AWS region such as us-east-1")
 			}
 		case "email":
 			if !emailRE.MatchString(v) {

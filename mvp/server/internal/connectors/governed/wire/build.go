@@ -15,10 +15,12 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/bedrockagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/mcpserver"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
@@ -59,6 +61,13 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 		cn, err = atlassian.FromEnv(getenv, rt, hc, now)
 	case governed.UnixSSH:
 		cn, err = unixssh.FromEnv(getenv, rt)
+	case governed.MCP:
+		cn, err = mcpserver.FromEnv(getenv, rt, hc, now)
+	case governed.Bedrock:
+		if getenv, err = n.Overrides(getenv); err != nil {
+			return nil, err
+		}
+		cn, err = bedrockagents.FromEnv(getenv, rt, hc, now)
 	case governed.AzureRBAC, governed.GCPIAM:
 		if getenv, err = n.Overrides(getenv); err != nil {
 			return nil, err

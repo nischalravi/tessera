@@ -8,7 +8,7 @@ import (
 func TestLookup(t *testing.T) {
 	want := map[string]string{"awsorg": "awsorg", "githubscan": "githubscan", "sap": "erp", "oracle": "erp", "cyberark": "pam",
 		"beyondtrust": "pam", "delinea": "pam", "fieldglass": "vms", "beeline": "vms", "csvfeed": "vms", "agentcore": "agentcore", "azurerbac": "azurerbac", "gcpiam": "gcpiam", "successfactors": "successfactors", "unixssh": "unixssh",
-		"servicenow": "servicenow", "atlassian": "atlassian"}
+		"servicenow": "servicenow", "atlassian": "atlassian", "mcp": "mcp", "bedrock": "bedrock"}
 	if len(Types) != len(want) {
 		t.Errorf("%d types, want %d", len(Types), len(want))
 	}
@@ -25,7 +25,7 @@ func TestLookup(t *testing.T) {
 		t.Error("ldap is not a governed type")
 	}
 	// the connectors that read straight into the graph, and the ones that hand over to a feature
-	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false, "azurerbac": false, "gcpiam": false, "successfactors": false, "unixssh": false, "servicenow": false, "atlassian": false,
+	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false, "azurerbac": false, "gcpiam": false, "successfactors": false, "unixssh": false, "servicenow": false, "atlassian": false, "mcp": false, "bedrock": false,
 		"awsorg": true, "fieldglass": true, "beeline": true, "csvfeed": true} {
 		if got, _ := Lookup(id); got.Feature != feature {
 			t.Errorf("%s feature = %v", id, got.Feature)
@@ -52,6 +52,8 @@ func TestValidateSettings(t *testing.T) {
 		UnixSSH:        {"host": "host1.example.com", "port": "2222", "username": "tessera", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "use_sudo": "true"},
 		ServiceNow:     {"username": "tessera.integration"},
 		Atlassian:      {"email": "tessera@acme.example", "org_id": "abc-123", "project_keys": "PROJ, OPS_1"},
+		MCP:            {"owner": "olu@acme.example", "server_name": "Acme tools", "auth_header": "X-Api-Key"},
+		Bedrock:        {"region": "eu-west-1"},
 	}
 	for name, set := range map[string]map[string]string{"servicenow basic": {"auth_mode": "basic", "username": "svc"}, "servicenow oauth": {"auth_mode": "oauth", "client_id": "cid"}} {
 		if errs := ValidateSettings(ServiceNow, set); len(errs) != 0 {
@@ -118,6 +120,16 @@ func TestValidateSettings(t *testing.T) {
 		{UnixSSH, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:short"}, "host_key"},
 		{UnixSSH, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "use_sudo": "yes"}, "use_sudo"},
 		{UnixSSH, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "command": "id"}, "command"},
+		{MCP, map[string]string{}, "owner"},
+		{MCP, map[string]string{"owner": "not-an-email"}, "owner"},
+		{MCP, map[string]string{"owner": "a@b.c", "server_name": "bad\nname"}, "server_name"},
+		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "X Bad"}, "auth_header"},
+		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "Host"}, "auth_header"},
+		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "x-api-key\r\nHost"}, "auth_header"},
+		{MCP, map[string]string{"owner": "a@b.c", "url": "https://x.example"}, "url"},
+		{Bedrock, map[string]string{}, "region"},
+		{Bedrock, map[string]string{"region": "us-east-1.evil.example"}, "region"},
+		{Bedrock, map[string]string{"region": "us-east-1", "agent_url": "https://x.example"}, "agent_url"},
 		{GCPIAM, map[string]string{}, "organization_id"},
 		{GCPIAM, map[string]string{"organization_id": "organizations/1"}, "organization_id"},
 		{GCPIAM, map[string]string{"folder_ids": "a"}, "folder_ids"},

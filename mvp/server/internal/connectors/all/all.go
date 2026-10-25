@@ -25,12 +25,14 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/bedrockagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/entra"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/mcpserver"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
@@ -72,7 +74,11 @@ import (
 // Unix and Linux over SSH (issue #558): "unix" reads accounts, groups and sudoers rules of one host
 // (TESSERA_UNIXSSH_*) with a pinned host key and a key credential; it is read-only.
 //
-// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, azure, gcp, unix, github-scan and aws-agentcore factories. hc is the
+// AI agent platforms (issue #562): "mcp" inventories one MCP server's tools and auth mode (TESSERA_MCP_*, a
+// customer-hosted https endpoint reached through safehttp); "bedrock" reads the Amazon Bedrock Agents of one
+// region, their action groups and knowledge bases (TESSERA_BEDROCK_*, SigV4 with a key pair). Both are read-only.
+//
+// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, azure, gcp, unix, mcp, bedrock, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -131,6 +137,12 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	}
 	connectors.Factories["gcp"] = func(now time.Time) (connectors.Connector, error) {
 		return gcpiam.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["mcp"] = func(now time.Time) (connectors.Connector, error) {
+		return mcpserver.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["bedrock"] = func(now time.Time) (connectors.Connector, error) {
+		return bedrockagents.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
 	}
 	connectors.Factories["aws-agentcore"] = func(now time.Time) (connectors.Connector, error) {
 		return agentcore.FromEnv(os.Getenv, now)
