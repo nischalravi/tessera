@@ -152,6 +152,7 @@ function TypeGallery({ type, onPick, taken }: { type: string; onPick: (id: strin
                     </span>
                     <span className="gallery-foot row tight">
                       {t.demo ? <Badge tone="info">Simulated</Badge> : <Badge tone="outline">Needs DR-10+</Badge>}
+                      {t.preview && <Badge tone="warning" title={t.preview}>Preview: cannot sync yet</Badge>}
                       {taken(t.id) && <Badge>Exists</Badge>}
                     </span>
                   </div>
@@ -218,6 +219,9 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
   const rev = conn.pending_revision ?? conn.active_revision!;
   const cfg = rev.config;
   const tid = conn.template.id;
+  // LDAP-family forms: RACF is read through z/OS LDAP (SDBM); IBM i takes a host, a port and a user profile (no tree)
+  const ldapLike = tid === "ad" || tid === "ldap" || tid === "racf";
+  const agentOnly = tid === "racf" || tid === "ibmi";
   const gov = GOVERNED[conn.connector_type]; // the connector types the server already had (vaults, ERP, AWS, ...)
   const writes = !gov || tid === "pam" || tid === "erp"; // the others only read
   const { data: presets } = useApi<ScimPreset[]>(cfg.preset ? "/scim/presets" : null);
@@ -282,7 +286,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
     if (step === "connect") {
       (["host", "bind_dn", "ca_bundle", "org_url", "tenant_id", "cloud", "customer", "domain", "base_url", "tenant_host", "api_version", "interface", "time_zone", "technical_owner", "business_owner"] as const).forEach(str);
       if (v.port && Number(v.port) !== cfg.port) next.port = Number(v.port);
-      if (tid === "ad" || tid === "ldap") {
+      if (ldapLike || tid === "ibmi") {
         str("tls_mode");
         if (v.page_size !== String(cfg.page_size ?? "")) (next as Record<string, unknown>).page_size = v.page_size ? Number(v.page_size) : null;
       }
@@ -305,7 +309,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       if (v.privileged !== privToText(cfg.privileged_expected)) next.privileged_expected = textToPriv(v.privileged);
     }
     if (step === "mapping") {
-      if ((tid === "ad" || tid === "ldap") && v.attr_map !== (cfg.attr_map ?? []).map((m) => `${m.ldap}=${m.scope}.${m.target}`).join("\n")) {
+      if (ldapLike && v.attr_map !== (cfg.attr_map ?? []).map((m) => `${m.ldap}=${m.scope}.${m.target}`).join("\n")) {
         // one mapping per line: ldapAttribute=account.target or ldapAttribute=identity.target; the server validates
         const rows = lines(v.attr_map).map((l) => {
           const [ldap = "", rest = ""] = l.split("=", 2);
@@ -345,9 +349,9 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       {step === "connect" && (
         <>
           <div className="form-grid">
-            {(tid === "ad" || tid === "ldap") && <>
-              {input("host", "Domain controller or server", "A host name or IP address such as ldap.example.com. Not the connection's name, and no ldaps:// or port.")}
-              {input("port", "Port", "389 or 636, or a port from 1024 up such as 3890 (LLDAP) or 6360. Database and admin ports are refused.", { inputMode: "numeric" })}
+            {(ldapLike || tid === "ibmi") && <>
+              {input("host", tid === "racf" ? "z/OS LDAP server" : tid === "ibmi" ? "IBM i system" : "Domain controller or server", "A host name or IP address such as ldap.example.com. Not the connection's name, and no ldaps:// or port.")}
+              {input("port", "Port", tid === "ibmi" ? "The TLS-protected host server port, 9471 by default." : "389 or 636, or a port from 1024 up such as 3890 (LLDAP) or 6360. Database and admin ports are refused.", { inputMode: "numeric" })}
               <Field label="Transport security" hint="Empty: LDAPS on port 636, StartTLS on any other port. Plain LDAP (none) is for development only and can never be activated.">
                 <select className="input" value={v.tls_mode ?? ""} onChange={set("tls_mode")}>
                   <option value="">Automatic (from the port)</option>
@@ -356,8 +360,18 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
                   <option value="none">None (development only)</option>
                 </select>
               </Field>
-              {input("page_size", "Page size", "Entries per search page, 1 to 10000. Empty uses 500.", { inputMode: "numeric" })}
+              {tid !== "ibmi" && input("page_size", "Page size", "Entries per search page, 1 to 10000. Empty uses 500.", { inputMode: "numeric" })}
               {tid === "ad" && flag("use_dirsync", "Use the DirSync control", "Needs the Replicating Directory Changes right, which conflicts with least privilege. Leave off unless required.")}
+            </>}
+            {CONNECTOR_TYPES.find((t) => t.id === conn.connector_type)?.preview && <p className="muted" role="note"><b>{CONNECTOR_TYPES.find((t) => t.id === conn.connector_type)?.preview}</b></p>}
+            {agentOnly && <p className="muted" role="note">Read by a Directory Agent inside your network: store the credential on the agent and reference it as agent:&lt;agent id&gt;/&lt;credential name&gt;. A password entered here is refused.</p>}
+            {tid === "racf" && <>
+              {input("bind_dn", "Bind DN (the RACF user)", "For example racfid=TESSERA,profiletype=USER,cn=RACFA. A dedicated user with list-only authority, never SPECIAL.")}
+              {area("ca_bundle", "CA certificate (PEM)", "Public certificates only: the CA that signed the z/OS LDAP server certificate. Empty uses the system roots.")}
+            </>}
+            {tid === "ibmi" && <>
+              {input("bind_dn", "User profile", "A dedicated profile with no special authority, 1 to 10 characters. Its password is stored on the agent.")}
+              {area("ca_bundle", "CA certificate (PEM)", "Public certificates only. Empty uses the system roots.")}
             </>}
             {tid === "ldap" && <>
               {input("bind_dn", "Bind DN (the account's distinguished name)", "For example uid=svc-tessera,ou=people,dc=example,dc=com. A dedicated read-only account (LLDAP: a member of lldap_strict_readonly), never the root DN. Its password goes in the credential below, in Or the secret.")}
@@ -421,6 +435,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       )}
       {step === "scope" && (
         <div className="form-grid">
+          {tid === "racf" && area("base_dns", "SDBM suffix", "One per line: the suffix of the SDBM backend in the z/OS LDAP configuration, for example cn=RACFA. Users are read from profiletype=USER and groups from profiletype=GROUP below it.")}
           {(tid === "ad" || tid === "ldap") && (
             <>
               {area("base_dns", "Base DNs", "One per line. A typo returns zero objects, not an error.")}
@@ -447,7 +462,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
           {input("hr_id_attribute", "HR id attribute", "Tier-1 correlation to the HR worker id (for AD usually employeeID).")}
           {input("stale_days", "Dormancy threshold (days)", "Default 90 (PCI DSS v4 8.2.6).", { inputMode: "numeric" })}
           {input("sync_schedule", "Sync schedule", "Full sync at least weekly plus incremental.")}
-          {(tid === "ad" || tid === "ldap") && area("attr_map", "Extra attributes", "One per line: ldapAttribute=account.name or ldapAttribute=identity.name, for example department=identity.department. At most 32.")}
+          {ldapLike && area("attr_map", "Extra attributes", "One per line: ldapAttribute=account.name or ldapAttribute=identity.name, for example department=identity.department. At most 32.")}
           {writes && (
             <Field label="Write-back" hint="Write-enabled connections need a second approver (DR-10).">
               <select className="input" value={v.write_mode ?? "off"} onChange={set("write_mode")}>

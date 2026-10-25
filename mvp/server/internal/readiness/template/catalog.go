@@ -4,7 +4,7 @@ import "slices"
 
 // TemplateIDs are the connector templates that ship (base is extended, not used directly).
 var TemplateIDs = []string{"ad", "ldap", "entra", "okta", "google", "workday", "scim_app", "rest_generic",
-	"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "sql", "azurerbac", "gcpiam", "salesforce", "successfactors", "unixssh", "sftpdrop", "servicenow", "atlassian", "kubernetes", "vault"}
+	"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "sql", "azurerbac", "gcpiam", "salesforce", "successfactors", "unixssh", "sftpdrop", "servicenow", "atlassian", "kubernetes", "vault", "racf", "ibmi"}
 
 // Categories group checklist items in the UI (§10.2).
 var Categories = []string{"access", "ownership", "transport", "scope", "identity_keys", "account_status",
@@ -63,9 +63,9 @@ var Checks = map[string]CheckSpec{
 	"cred_expiry":               live(OpAuthenticate),
 	"clock_skew":                live(OpTime),
 	"write_scope":               live(OpEffectiveRight),
-	"tls_handshake":             live(OpConnect, "ad", "ldap"),
-	"tls_chain":                 live(OpConnect, "ad", "ldap"),
-	"bind":                      live(OpAuthenticate, "ad", "ldap"),
+	"tls_handshake":             live(OpConnect, "ad", "ldap", "racf"),
+	"tls_chain":                 live(OpConnect, "ad", "ldap", "racf"),
+	"bind":                      live(OpAuthenticate, "ad", "ldap", "racf"),
 	"token_acquire":             live(OpAuthenticate, "entra", "okta", "google"),
 	"auth_ok":                   live(OpAuthenticate, "scim_app", "workday", "rest_generic", "awsorg", "githubscan", "erp", "pam", "vms", "azurerbac", "gcpiam", "salesforce", "successfactors", "unixssh", "sftpdrop", "servicenow", "atlassian", "kubernetes", "vault"),
 	"bind_identity":             live(OpAuthenticate, "ldap"),
