@@ -21,6 +21,11 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(page).toHaveTitle(new RegExp(` · ${name}$`));
     const accent = await page.evaluate(() => document.documentElement.style.getPropertyValue("--accent"));
     expect(accent).toBe(colour);
+    // a second save, still without a reload: the route is cacheable, so this fails if the refresh trusts the cache
+    await page.getByLabel("Product name").fill(`${name} two`);
+    await page.getByRole("button", { name: "Save branding" }).click();
+    await expect(page.locator(".topbar .brand-name")).toHaveText(`${name} two`);
+    await expect(page).toHaveTitle(new RegExp(` · ${name} two$`));
     const found = await seriousViolations(page, `/admin/branding (${scheme})`);
     expect(found, report(found)).toEqual([]);
   });

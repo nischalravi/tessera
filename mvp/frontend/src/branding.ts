@@ -78,3 +78,11 @@ export function consoleBrandStyle(b: Brand | null | undefined, theme: "light" | 
 
 /** The product name to show: the saved one when branding is configured, else Tessera. */
 export const productName = (b: Brand | null | undefined) => (b?.configured && b.name.trim() ? b.name.trim() : DEFAULT_PRODUCT);
+
+/** A logo URL the console may put in an <img>: a same-origin path under /api/, never an absolute or scheme URL. */
+export const safeLogoUrl = (u: string | null | undefined): string | null => (u && /^\/api\/[^\s]*$/.test(u) && !u.startsWith("//") ? u : null);
+
+/** Keep only CSS variables whose values are #rrggbb colours (the console sets them on the root element). */
+export function safeBrandVars(v: Record<string, string> | undefined): Record<string, string> | undefined {
+  return v && Object.values(v).every(isHex) ? v : undefined;
+}

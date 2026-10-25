@@ -35,6 +35,7 @@ export function Page({ title, crumbs = [], sub, actions, badge, count, tabs, com
   commands?: ReactNode;
   children: ReactNode;
 }) {
+  // Reads only: `Shell` (which wraps every page) loads the branding for the signed-in tenant.
   const product = productName(useConsoleBranding());
   useEffect(() => {
     if (typeof title === "string") document.title = `${applyLabels(title)} · ${product}`;

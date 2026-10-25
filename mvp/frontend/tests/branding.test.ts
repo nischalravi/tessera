@@ -109,3 +109,65 @@ test("the product name is the saved one only when branding is configured", async
   assert.equal(cb.productName({ ...b, configured: false }), "Tessera");
   assert.equal(cb.productName(null), "Tessera");
 });
+
+test("safeLogoUrl accepts only same-origin /api/ paths; safeBrandVars only #rrggbb values", () => {
+  assert.equal(b.safeLogoUrl("/api/auth/branding/logo?tenant=a&v=1"), "/api/auth/branding/logo?tenant=a&v=1");
+  for (const u of ["https://evil.example/x.png", "//evil.example/api/x", "javascript:alert(1)", "data:image/png;base64,AA", "/other/x.png", "", null, undefined]) assert.equal(b.safeLogoUrl(u as any), null, String(u));
+  assert.ok(b.safeBrandVars({ "--accent": "#0f6cbd", "--on-accent": "#ffffff" }));
+  assert.equal(b.safeBrandVars({ "--accent": "red; background:url(x)" }), undefined);
+  assert.equal(b.safeBrandVars(undefined), undefined);
+});
+
+test("the branding store keeps state on a failed read, ignores a stale tenant, notifies subscribers, and revalidates on refresh", async () => {
+  const { createBrandingStore } = await import("../src/brandingStore.ts");
+  const mk = (name: string) => ({ name, configured: true, primary_color: "#0f6cbd", on_primary_color: "#ffffff", logo_url: null });
+  const calls: { slug: string; fresh: boolean }[] = [];
+  const pending = new Map<string, (v: any) => void>();
+  const store = createBrandingStore((slug, fresh) => {
+    calls.push({ slug, fresh });
+    return new Promise((res) => pending.set(slug + (fresh ? "!" : ""), res));
+  });
+  let notified = 0;
+  const off = store.subscribe(() => notified++);
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  store.use("a");
+  store.use("a"); // already on it: no second fetch
+  assert.equal(calls.length, 1);
+  // switch tenant while a's fetch is in flight: a's late answer is ignored
+  store.use("b");
+  pending.get("a")!(mk("A"));
+  await tick();
+  assert.equal(store.get(), null);
+  pending.get("b")!(mk("B"));
+  await tick();
+  assert.equal(store.get()?.name, "B");
+  // a failed read (null) keeps the previous state; refresh asks for a revalidated copy
+  const r = store.refresh();
+  assert.deepEqual(calls.at(-1), { slug: "b", fresh: true });
+  pending.get("b!")!(null);
+  await r;
+  assert.equal(store.get()?.name, "B");
+  const r2 = store.refresh();
+  pending.get("b!")!(mk("B2"));
+  await r2;
+  assert.equal(store.get()?.name, "B2");
+  // unsubscribe stops notifications
+  off();
+  const before = notified;
+  store.use("c");
+  assert.equal(notified, before);
+  assert.ok(before >= 3);
+});
+
+test("publicBranding revalidates (cache: no-cache) only when asked for a fresh copy", async () => {
+  reply = { ok: true, status: 200, body: { name: "X" } };
+  let init: any;
+  const orig = (globalThis as any).fetch;
+  (globalThis as any).fetch = async (_u: string, i: any) => { init = i; return { ok: true, status: 200, json: async () => ({}) }; };
+  await api.publicBranding("t");
+  assert.equal(init.cache, undefined);
+  await api.publicBranding("t", true);
+  assert.equal(init.cache, "no-cache");
+  (globalThis as any).fetch = orig;
+});

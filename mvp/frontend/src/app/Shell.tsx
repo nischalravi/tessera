@@ -18,6 +18,7 @@ import { store } from "./storage";
 import { useSession } from "./auth";
 import { ThemePref, useTheme } from "./theme";
 import { applyLabels } from "../labels";
+import { safeBrandVars, safeLogoUrl } from "../branding";
 import { consoleBrandStyle, productName, useConsoleBranding } from "./consoleBranding";
 
 
@@ -350,14 +351,16 @@ export function Shell({ children }: { children: ReactNode }) {
   const { resolved } = useTheme();
   const branding = useConsoleBranding(session.tenant.slug);
   const product = productName(branding);
-  const branded = !!branding?.configured;
-  const brandVars = consoleBrandStyle(branding, resolved);
+  const logoUrl = branding?.configured ? safeLogoUrl(branding.logo_url) : null;
+  const brandVars = safeBrandVars(consoleBrandStyle(branding, resolved));
   // On the root element so menus and dialogs rendered outside the shell take the button colour too.
   useEffect(() => {
     if (!brandVars) return;
     const el = document.documentElement;
     for (const [k, v] of Object.entries(brandVars)) el.style.setProperty(k, v);
     return () => { for (const k of Object.keys(brandVars)) el.style.removeProperty(k); };
+  // Only the two colours the user chose are listed: the hover colour is derived from them, and the object is new on every render.
+  // Only the two colours the user chose are listed: the hover colour derives from them, and `brandVars` is a new object on every render.
   }, [brandVars?.["--accent"], brandVars?.["--on-accent"]]); // eslint-disable-line react-hooks/exhaustive-deps
   const menuBtn = useRef<HTMLButtonElement>(null);
   const setCollapsed = (v: boolean) => {
@@ -392,8 +395,8 @@ export function Shell({ children }: { children: ReactNode }) {
             <MenuIcon size={18} strokeWidth={1.7} aria-hidden />
           </button>
           <Link to="/" className="brand" aria-label={`${product} home`}>
-            {branded && branding?.logo_url ? (
-              <img className="brand-logo" src={branding.logo_url} alt="" width={branding.logo_width} height={branding.logo_height} />
+            {logoUrl && branding ? (
+              <img className="brand-logo" src={logoUrl} alt="" width={branding.logo_width} height={branding.logo_height} />
             ) : (
               <span className="logo" aria-hidden><i /><i /><i /><i /></span>
             )}
