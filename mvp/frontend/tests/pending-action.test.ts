@@ -27,6 +27,7 @@ test("an empty-body write is stored from constants and resumes", async () => {
   assert.equal(a.label, "Approve JIT request #5");
   const taken = api.takePendingAction();
   assert.equal(taken?.path, "/jit/requests/5/approve");
+  assert.equal(api.lostForm(taken!), false); // an empty body needs no form
   status = 200;
   await api.runPendingAction(taken!);
   status = 401;
@@ -44,6 +45,9 @@ test("a body is kept in memory only: never in storage", async () => {
   store.set("tessera.pendingAction", raw);
   const reloaded = api.takePendingAction();
   assert.equal(reloaded?.body, undefined);
+  // so the app tells the user to submit again instead of offering a resume (issue #623)
+  assert.equal(api.lostForm(reloaded!), true);
+  assert.equal(api.lostForm(taken!), false);
   await assert.rejects(api.runPendingAction(reloaded!), /submit again/);
 });
 

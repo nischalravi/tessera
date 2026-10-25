@@ -123,7 +123,7 @@ function SourceSettings({ kind, id, heading }: { kind: DeletionSourceKind; id: s
           {looser.join(", ")} would be set looser than now. Loosening a safety setting needs a second admin to approve it, with a fresh passkey sign-in. Tightening needs only you.
         </Callout>
       )}
-      {needStepUp && <Callout tone="warn"><span role="alert">Saving this needs a fresh passkey sign-in. Confirm it in the dialog, then press Save again; your changes are kept.</span></Callout>}
+      {needStepUp && <Callout tone="warn"><span role="alert">Saving this needs a fresh passkey sign-in. Continue in the dialog to sign in again, then make this change again and press Save: the sign-in reloads the page, so the edits here are not kept.</span></Callout>}
       {!allowed && <p className="small muted" style={{ margin: 0 }}>Your role can read these settings but not request a change.</p>}
       <div className="row wrap" style={{ gap: 8 }}>
         <Button type="submit" variant="primary" disabled={!allowed || busy || changes.length === 0 || bad}>{looser.length > 0 ? "Request change" : "Save"}</Button>
