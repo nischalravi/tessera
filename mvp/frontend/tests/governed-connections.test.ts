@@ -66,3 +66,12 @@ test("SuccessFactors: API server, company and API user are required; the credent
   assert.equal(GOVERNED.successfactors.credential?.area, true); // a PEM bundle is multi-line
   assert.deepEqual(settingsPatch("successfactors", { "settings.company_id": "acme", "settings.username": "svc", "settings.password": "x" }, undefined), { company_id: "acme", username: "svc" });
 });
+
+test("OpenShift is a Yes/No flag that defaults to No and sends the server's string, left unset while untouched", () => {
+  assert.equal(GOVERNED.kubernetes.settings.find((f) => f.key === "openshift")?.flag, true);
+  assert.deepEqual(settingValues("kubernetes", undefined), { "settings.namespaces": "", "settings.openshift": "false" });
+  assert.deepEqual(settingValues("kubernetes", { openshift: "true" }), { "settings.namespaces": "", "settings.openshift": "true" });
+  assert.equal(settingsPatch("kubernetes", { "settings.namespaces": "", "settings.openshift": "false" }, undefined), null);
+  assert.deepEqual(settingsPatch("kubernetes", { "settings.openshift": "true" }, undefined), { openshift: "true" });
+  assert.deepEqual(settingsPatch("kubernetes", { "settings.openshift": "false" }, { openshift: "true" }), { openshift: "false" }); // turning it off is sent
+});

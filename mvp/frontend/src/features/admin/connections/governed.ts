@@ -3,7 +3,7 @@
 // AgentCore, SuccessFactors). Pure, so `npm test` covers it. The setting keys mirror internal/connectors/governed
 // (SettingSpecs); a Go test compares them with SETTING_KEYS below, so the two cannot drift.
 
-export interface GovField { key: string; label: string; hint?: string; required?: boolean; area?: boolean }
+export interface GovField { key: string; label: string; hint?: string; required?: boolean; area?: boolean; /** A Yes/No select; the server takes the string "true" or "false". */ flag?: boolean }
 export interface GovCredential { label: string; hint: string; area?: boolean }
 export interface GovType {
   /** The base URL field, when the type takes one (GitHub's is optional). */
@@ -155,7 +155,7 @@ export const GOVERNED: Record<string, GovType> = {
     baseUrl: { label: "API server URL", hint: "https://api.cluster.example.com:6443; HTTPS host name and port, no path. Its certificate must chain to a public CA.", required: true },
     settings: [
       { key: "namespaces", label: "Namespaces", hint: "Comma separated, at most 100. Optional: read the roles, role bindings and service accounts of these namespaces only." },
-      { key: "openshift", label: "OpenShift", hint: "true or false (default false). true also reads the groups of user.openshift.io." },
+      { key: "openshift", label: "OpenShift", flag: true, hint: "Yes also reads the groups of user.openshift.io (default No)." },
     ],
     credential: { label: "ServiceAccount token", hint: "The bearer token of a ServiceAccount that can only list RBAC objects, service accounts and (OpenShift) groups. Read-only: Tessera never writes to the cluster.", area: true },
   },
@@ -177,7 +177,7 @@ export const isGoverned = (connectorType: string) => connectorType in GOVERNED;
 /** Form values of a type's settings, from the saved config. */
 export function settingValues(connectorType: string, saved?: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const f of GOVERNED[connectorType]?.settings ?? []) out[`settings.${f.key}`] = saved?.[f.key] ?? "";
+  for (const f of GOVERNED[connectorType]?.settings ?? []) out[`settings.${f.key}`] = saved?.[f.key] ?? (f.flag ? "false" : "");
   return out;
 }
 
@@ -186,7 +186,7 @@ export function settingsPatch(connectorType: string, values: Record<string, stri
   const next: Record<string, string> = {};
   for (const f of GOVERNED[connectorType]?.settings ?? []) {
     const v = (values[`settings.${f.key}`] ?? "").trim();
-    if (v) next[f.key] = v;
+    if (v && !(f.flag && v === "false" && !saved?.[f.key])) next[f.key] = v; // an untouched No is left unset, as the server's default
   }
   const was = Object.fromEntries(Object.entries(saved ?? {}).filter(([, v]) => v));
   const same = Object.keys(next).length === Object.keys(was).length && Object.entries(next).every(([k, v]) => was[k] === v);
