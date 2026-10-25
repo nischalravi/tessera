@@ -5361,10 +5361,10 @@ jitter (honouring `Retry-After`); every `List*` follows its token to the last pa
 
   The issuer needs an https `TESSERA_PUBLIC_URL` that AWS can reach. **Stored-key mode** (a sealed
   access key that signs `sts:AssumeRole`, with an `external_id`) remains only behind
-  `TESSERA_AWS_ALLOW_STATIC_KEYS`: default on in dev and test, off in prod, and prod refuses the
-  variable being set (the server will not start). With it off, creating a keyed connector is refused
-  (`422 static_keys_disabled`), a stored one is not collected from, and governed AWS connections
-  (which hold a key) are not probed. Existing connectors without `config.auth` are stored-key ones.
+  `TESSERA_AWS_ALLOW_STATIC_KEYS`: default on in dev and test, off in prod, and prod refuses it
+  set to true (the server will not start). With it off, creating a keyed connector (directly or by a
+  governed connection's handover) is refused (`422 static_keys_disabled`) and a stored one is not
+  collected from; in prod, governed AWS connections (which hold a key) are not probed either. Existing connectors without `config.auth` are stored-key ones.
 - **Fail closed (design §3.3).** A stored policy that does not parse, a statement dropped as an
   ingest anomaly, and a read that fails (an account that refuses the role, a bucket policy that is
   denied, a list that fails) are never skipped: each is a *finding* with the scope of decisions it

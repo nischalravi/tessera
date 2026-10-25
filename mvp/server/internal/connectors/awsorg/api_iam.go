@@ -87,6 +87,9 @@ func redact(err error, secret string) error {
 		if strings.Contains(err.Error(), secret) {
 			cp.Message = "[redacted]"
 		}
+		if strings.Contains(cp.Error(), secret) { // in the code or the operation
+			return errors.New("aws: sts AssumeRoleWithWebIdentity failed (details withheld: they held the token)")
+		}
 		return &cp
 	}
 	if strings.Contains(err.Error(), secret) {
