@@ -108,7 +108,11 @@ type Config struct {
 	// step-up requirements with weaker ones (TESSERA_STEPUP_ALLOW_WEAKER; off by
 	// default, a dev convenience for an IdP that cannot do the stronger methods).
 	// Without it a policy can only add or strengthen step-up. Refused in prod.
-	StepUpAllowWeaker      bool
+	StepUpAllowWeaker bool
+	// StepUpBypass counts every step-up requirement as met for a signed-in
+	// session (TESSERA_STEPUP_BYPASS; off by default; dev and test only, so
+	// manual testing is not interrupted by passkey prompts).
+	StepUpBypass           bool
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
@@ -356,6 +360,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.OutboundAllowLoopback = boolean("TESSERA_OUTBOUND_ALLOW_LOOPBACK", true, false)
 	c.RotationFakeAdapters = boolean("TESSERA_ROTATION_FAKE_ADAPTERS", true, false)
 	c.StepUpAllowWeaker = boolean("TESSERA_STEPUP_ALLOW_WEAKER", false, false)
+	c.StepUpBypass = boolean("TESSERA_STEPUP_BYPASS", false, false)
 	// dev default: var/audit-anchors.jsonl next to the database (AnchorURL)
 	c.SafedialAllow = strings.TrimSpace(getenv("TESSERA_SAFEDIAL_ALLOW"))
 	c.AgentAddr = strings.TrimSpace(getenv("TESSERA_AGENT_ADDR"))
@@ -615,6 +620,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.StepUpAllowWeaker {
 			bad("TESSERA_STEPUP_ALLOW_WEAKER must be false with TESSERA_ENV=prod: a tenant policy could then weaken the step-up the code requires")
+		}
+		if c.StepUpBypass {
+			bad("TESSERA_STEPUP_BYPASS must be false with TESSERA_ENV=prod: it would let any signed-in session skip the fresh phishing-resistant sign-in that sensitive actions require")
 		}
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")

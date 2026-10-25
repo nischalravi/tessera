@@ -28,6 +28,7 @@
     "id": "string",
     "idle_expires_at": "string"
   },
+  "step_up_bypass": "boolean",
   "tenant": {
     "id": "string",
     "name": "string",

@@ -224,6 +224,9 @@ type Config struct {
 	// StepUpAllowWeaker lets a tenant step-up policy weaken the code's own
 	// requirements (config.StepUpAllowWeaker; never in prod).
 	StepUpAllowWeaker bool
+	// StepUpBypass counts every step-up requirement as met for a signed-in
+	// user (config.StepUpBypass; never in prod, re-checked at the use site).
+	StepUpBypass bool
 	// RotationNotifier tells secret owners about rotations; nil: the audit-event notifier.
 	RotationNotifier rotation.Notifier
 	// Containment runs the kill switch's provider calls (revoke sessions and

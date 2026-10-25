@@ -144,6 +144,35 @@ type Principal struct {
 
 	csrfSecret string
 	session    *store.Session
+	// stepUpBypass, when set, makes every step-up requirement count as met
+	// (TESSERA_STEPUP_BYPASS, dev and test only; see BypassStepUp).
+	stepUpBypass func()
+}
+
+// BypassStepUp makes every step-up requirement of this user principal count
+// as met: Check and StepUpMet then skip the recent-strong-authentication test
+// and call used each time that test would have failed (the API records it in
+// the audit trail). Nothing else is relaxed: permissions, roles and every
+// other check still apply. It is a dev and test switch; the API enables it
+// only when config allows it (never in prod).
+func (p *Principal) BypassStepUp(used func()) {
+	if p != nil && p.Kind == KindUser {
+		p.stepUpBypass = used
+	}
+}
+
+// StepUpMet is whether the principal's authentication meets req at now. It is
+// the one place the step-up decision is made: Check and the handlers that test
+// a requirement of their own (the device approval) go through it.
+func (p *Principal) StepUpMet(req AuthnRequirement, now time.Time) bool {
+	if p.Authn != nil && p.Authn.Satisfies(req, now) {
+		return true
+	}
+	if p.stepUpBypass != nil {
+		p.stepUpBypass()
+		return true
+	}
+	return false
 }
 
 // User returns the principal as a store.UserRef (who did something).

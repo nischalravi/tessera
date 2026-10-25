@@ -124,6 +124,7 @@ type reqState struct {
 	clientID  *string // the OAuth client of a token principal
 	authn     json.RawMessage
 	anonWhy   string
+	marks     ojson.Object // extra detail of the http.request event (Mark)
 	cfg       *MiddlewareConfig
 	r         *http.Request
 	bw        *bufferedWriter
@@ -178,6 +179,23 @@ func SetAnonymous(ctx context.Context, reason string) {
 		st.mu.Lock()
 		st.anonWhy = reason
 		st.mu.Unlock()
+	}
+}
+
+// Mark adds key=value to the detail of the request's http.request event (a
+// flag the request itself raised, such as step_up_bypassed). A key is kept once
+// however often it is marked. The caller names the key and value; nothing from
+// the request is recorded.
+func Mark(ctx context.Context, key string, value any) {
+	if st, ok := ctx.Value(stateKey{}).(*reqState); ok {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		for _, kv := range st.marks {
+			if kv.Key == key {
+				return
+			}
+		}
+		st.marks = append(st.marks, ojson.KV{Key: key, Value: value})
 	}
 }
 
@@ -334,6 +352,7 @@ func (st *reqState) appendLocked(status int) error {
 	if st.actor.Type == store.ActorAnonymous {
 		d = append(d, ojson.KV{Key: "anonymous_reason", Value: st.anonWhy})
 	}
+	d = append(d, st.marks...)
 	detail, err := canon.Detail(d)
 	if err != nil {
 		return err
