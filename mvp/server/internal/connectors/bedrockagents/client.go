@@ -106,11 +106,11 @@ func Open(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time
 	dec := json.NewDecoder(strings.NewReader(cfg.Secret.Reveal()))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cj); err != nil {
-		return nil, errors.New("bedrockagents: the credential is JSON with access_key_id and secret_access_key (and optionally session_token)")
+		return nil, connsync.CredentialFormat("bedrockagents: the credential is JSON with access_key_id and secret_access_key (and optionally session_token)")
 	}
 	if !keyIDRE.MatchString(cj.AccessKeyID) || len(cj.SecretAccessKey) < 16 || len(cj.SecretAccessKey) > 256 || strings.ContainsAny(cj.SecretAccessKey, " \t\r\n") ||
 		len(cj.SessionToken) > 4096 || strings.ContainsAny(cj.SessionToken, " \t\r\n") {
-		return nil, errors.New("bedrockagents: the credential's access key id or secret is malformed")
+		return nil, connsync.CredentialFormat("bedrockagents: the credential's access key id or secret is malformed")
 	}
 	base, err := endpoint(cfg, rt)
 	if err != nil {
