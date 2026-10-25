@@ -228,3 +228,9 @@ export function sourceLooksLooser(c: DeletionSourceCategory, i: DeletionSourceIn
   const nc = next ? next.max_count : i.max_count, np = next ? next.max_percent : i.max_percent;
   return rate(nc, w) > rate(cur.max_count, cur.window_minutes) || rate(np, w) > rate(cur.max_percent, cur.window_minutes);
 }
+
+/** Whether a failed save was refused for a fresh sign-in (401 step_up_required): the step-up dialog is the way forward. */
+export function isStepUpRefusal(e: unknown): boolean {
+  const x = e as { status?: number; body?: { error?: string } | null } | null;
+  return !!x && x.status === 401 && x.body?.error === "step_up_required";
+}
