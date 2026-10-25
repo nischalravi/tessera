@@ -32,12 +32,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 const (
@@ -46,6 +50,19 @@ const (
 	// MaxMounts bounds the auth methods whose roles are read.
 	MaxMounts = 100
 )
+
+// allowedPorts are the ports the base URL may name (none: 443); the connection's own port is the only one
+// the safehttp client is opened to.
+var allowedPorts = []string{"443", "8200", "8443"}
+
+// loopback reports the dev loopback exception: a test fake on an arbitrary local port.
+func loopback(u *url.URL, rt connsync.Runtime) bool {
+	if rt.Env == config.Prod || !rt.AllowLoopback {
+		return false
+	}
+	a, err := netip.ParseAddr(u.Hostname())
+	return err == nil && a.IsLoopback()
+}
 
 var (
 	nameRE      = regexp.MustCompile(`^[^\x00-\x1f\x7f/]{1,256}$`)
@@ -91,6 +108,9 @@ func Open(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time
 	if err != nil {
 		return nil, fmt.Errorf("vault: base URL: %w", err)
 	}
+	if port := base.Port(); port != "" && !slices.Contains(allowedPorts, port) && !loopback(base, rt) {
+		return nil, errors.New("vault: the base URL port is not one of the supported ports")
+	}
 	if base.Path != "" {
 		return nil, errors.New("vault: the base URL is a host without a path")
 	}
@@ -101,6 +121,7 @@ func Open(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time
 	if cfg.Namespace != "" {
 		hdr.Set("X-Vault-Namespace", cfg.Namespace)
 	}
+	hc = safehttp.WithConfiguredPorts(hc, base.String()) // the connection's own port, and no other
 	return &Client{base: base, cfg: cfg, api: &connsync.Client{HC: hc, Now: now, Header: hdr}}, nil
 }
 

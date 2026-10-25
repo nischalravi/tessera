@@ -197,6 +197,18 @@ func BaseURLUse(typ string) (required, takes bool) {
 	return false, false
 }
 
+// BasePorts are the ports a connection's base URL may name (none names 443): a cluster API server and a
+// Vault listener are not on a web port by default. Every other type takes no port.
+func BasePorts(typ string) []string {
+	switch typ {
+	case Kubernetes:
+		return []string{"443", "6443", "8443"}
+	case Vault:
+		return []string{"443", "8200", "8443"}
+	}
+	return nil
+}
+
 var (
 	pathRE    = regexp.MustCompile(`^/[A-Za-z0-9._~/-]{0,200}$`)
 	orgRE     = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)

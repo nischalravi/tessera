@@ -104,6 +104,35 @@ func TestGoverned_CreateEveryType(t *testing.T) {
 	}
 }
 
+// A cluster API server and a Vault listener name their port; every other governed type takes none, and these
+// two take a short list.
+func TestGoverned_BasePortsOnlyForKubernetesAndVault(t *testing.T) {
+	for _, c := range []struct {
+		typ, url string
+		ok       bool
+	}{
+		{"kubernetes", "https://api.k8s.example.com:6443", true},
+		{"kubernetes", "https://api.k8s.example.com", true},
+		{"kubernetes", "https://api.k8s.example.com:8200", false},
+		{"kubernetes", "https://api.k8s.example.com:9999", false},
+		{"kubernetes", "https://u:p@api.k8s.example.com:6443", false},
+		{"kubernetes", "http://api.k8s.example.com:6443", false},
+		{"kubernetes", "https://api.k8s.example.com:6443/x", false},
+		{"vault", "https://vault.example.com:8200", true},
+		{"vault", "https://vault.example.com:6443", false},
+		{"servicenow", "https://acme.service-now.com:8200", false},
+	} {
+		tmpl, _ := template.MustDefault().ForConnectorType(c.typ)
+		cfg := ConnConfig{BaseURL: c.url, CorrelationKey: "id", Settings: map[string]string{}}
+		if c.typ == "servicenow" {
+			cfg.Settings["username"] = "svc"
+		}
+		if errs := ValidateConn(cfg, tmpl, c.typ); (len(errs) == 0) != c.ok {
+			t.Errorf("%s %s: %v", c.typ, c.url, errs)
+		}
+	}
+}
+
 func TestGoverned_Validation(t *testing.T) {
 	tmpl, _ := template.MustDefault().ForConnectorType("cyberark")
 	ok := ConnConfig{BaseURL: "https://pvwa.example.com", Settings: map[string]string{"username": "svc"}, CorrelationKey: "id"}

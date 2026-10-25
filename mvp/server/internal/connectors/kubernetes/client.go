@@ -28,12 +28,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 const (
@@ -44,6 +48,19 @@ const (
 	rbacAPI       = "/apis/rbac.authorization.k8s.io/v1"
 	osGroupsAPI   = "/apis/user.openshift.io/v1/groups"
 )
+
+// allowedPorts are the ports the base URL may name (none: 443); the connection's own port is the only one
+// the safehttp client is opened to.
+var allowedPorts = []string{"443", "6443", "8443"}
+
+// loopback reports the dev loopback exception: a test fake on an arbitrary local port.
+func loopback(u *url.URL, rt connsync.Runtime) bool {
+	if rt.Env == config.Prod || !rt.AllowLoopback {
+		return false
+	}
+	a, err := netip.ParseAddr(u.Hostname())
+	return err == nil && a.IsLoopback()
+}
 
 var (
 	nsRE   = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
@@ -88,6 +105,9 @@ func Open(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes: base URL: %w", err)
 	}
+	if port := base.Port(); port != "" && !slices.Contains(allowedPorts, port) && !loopback(base, rt) {
+		return nil, errors.New("kubernetes: the base URL port is not one of the supported ports")
+	}
 	if base.Path != "" {
 		return nil, errors.New("kubernetes: the base URL is a host without a path")
 	}
@@ -101,6 +121,7 @@ func Open(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time
 	}
 	bearer := "Bearer " + tok
 	hdr := http.Header{"Accept": {"application/json"}, "User-Agent": {"tessera-connector/kubernetes"}}
+	hc = safehttp.WithConfiguredPorts(hc, base.String()) // the connection's own port, and no other
 	return &Client{base: base, cfg: cfg,
 		api: &connsync.Client{HC: hc, Now: now, Header: hdr, Authorize: func(context.Context) (string, error) { return bearer, nil }}}, nil
 }

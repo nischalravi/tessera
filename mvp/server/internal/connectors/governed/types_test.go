@@ -161,6 +161,14 @@ func TestValidateSettings(t *testing.T) {
 	}
 }
 
+func TestBasePorts(t *testing.T) {
+	for typ, want := range map[string]string{Kubernetes: "443,6443,8443", Vault: "443,8200,8443", Atlassian: "", CyberArk: ""} {
+		if got := strings.Join(BasePorts(typ), ","); got != want {
+			t.Errorf("%s: %q, want %q", typ, got, want)
+		}
+	}
+}
+
 func TestBaseURLUse(t *testing.T) {
 	for typ, want := range map[string][2]bool{CyberArk: {true, true}, SAP: {true, true}, Fieldglass: {true, true}, CSVFeed: {true, true}, SuccessFactors: {true, true},
 		GitHubScan: {false, true}, AWSOrg: {false, false}, AgentCore: {false, false}, ServiceNow: {true, true}, Atlassian: {true, true}, Kubernetes: {true, true}, Vault: {true, true}} {

@@ -380,6 +380,17 @@ func TestRulePrivileged(t *testing.T) {
 	}
 }
 
+func TestSupportedPortsOpen(t *testing.T) {
+	srv := connsynctest.New(t, newFake())
+	hc, _ := safehttp.NewForTest(t, srv.Options(0))
+	prod := connsync.Runtime{Env: config.Prod}
+	for _, u := range []string{"https://vault.example.com", "https://vault.example.com:8200", "https://vault.example.com:8443"} {
+		if _, err := vault.Open(vault.Config{BaseURL: u, Token: connsync.NewSecret("hvs.t")}, prod, hc, nil); err != nil {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+}
+
 func TestOpenValidationAndFromEnv(t *testing.T) {
 	srv := connsynctest.New(t, newFake())
 	hc, _ := safehttp.NewForTest(t, srv.Options(0))
@@ -397,6 +408,8 @@ func TestOpenValidationAndFromEnv(t *testing.T) {
 		{"path", vault.Config{BaseURL: srv.URL + "/v1", Token: ok}, connsynctest.Runtime, hc},
 		{"http in prod", vault.Config{BaseURL: "http://vault.example.com", Token: ok}, prod, hc},
 		{"loopback in prod", vault.Config{BaseURL: srv.URL, Token: ok}, prod, hc},
+		{"unsupported port", vault.Config{BaseURL: "https://vault.example.com:9999", Token: ok}, prod, hc},
+		{"kubernetes' port", vault.Config{BaseURL: "https://vault.example.com:6443", Token: ok}, prod, hc},
 		{"bad namespace", vault.Config{BaseURL: srv.URL, Token: ok, Namespace: "../x"}, connsynctest.Runtime, hc},
 	} {
 		if _, err := vault.Open(c.cfg, c.rt, c.hc, nil); err == nil {

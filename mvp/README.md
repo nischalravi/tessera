@@ -2772,8 +2772,9 @@ OpenShift** in Cloud & IaaS with the simple-icons Kubernetes mark, **HashiCorp V
 with the Vault mark; readiness templates `kubernetes` and `vault`, both inventory templates). Neither writes:
 only GET requests are sent, and the readiness write-scope item is attested as not applicable. Every call goes
 through `internal/safehttp`; the server address is the connection's `base_url` (https, a well-formed domain
-name, no path; private, loopback and link-local addresses are refused, and a port other than 443 or 8443 is
-allowed because it is the configured one). A response never chooses a URL: only fixed API paths are requested
+name, no path; private, loopback and link-local addresses are refused). A port may be named from a short list
+only: 443, 6443 or 8443 for Kubernetes and 443, 8200 or 8443 for Vault (the readiness config and the connector
+both enforce it, and the client is opened to that one port on that host). A response never chooses a URL: only fixed API paths are requested
 and a name from a response is escaped into one path segment (`.` and `..` are refused). Errors have fixed text
 and never repeat the token or a setting. The credential is sealed like every connection secret and never printed.
 

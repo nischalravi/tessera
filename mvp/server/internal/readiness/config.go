@@ -352,7 +352,20 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 			if typ == governed.SuccessFactors {
 				allow = t.HostAllowlist // the documented data-center domains; a look-alike host is refused
 			}
-			httpsURL("base_url", cfg.BaseURL, allow)
+			if ports := governed.BasePorts(typ); len(ports) > 0 && cfg.BaseURL != "" {
+				// a named port is allowed for these types, from a short list; the rest of the URL is checked as usual
+				if u, err := url.Parse(cfg.BaseURL); err == nil && u.Port() != "" {
+					if !slices.Contains(ports, u.Port()) {
+						bad("base_url", "the port must be one of %s", strings.Join(ports, ", "))
+					}
+					u.Host = u.Hostname()
+					httpsURL("base_url", u.String(), allow)
+				} else {
+					httpsURL("base_url", cfg.BaseURL, allow)
+				}
+			} else {
+				httpsURL("base_url", cfg.BaseURL, allow)
+			}
 			// The vault, ERP and feed readers take a host (paths are settings); GitHub
 			// Enterprise Server's API URL ends in /api/v3.
 			if u, err := url.Parse(cfg.BaseURL); err == nil && typ != governed.GitHubScan && u.Path != "" && u.Path != "/" {

@@ -336,6 +336,8 @@ func TestOpenValidation(t *testing.T) {
 		{"path in the base URL", kubernetes.Config{BaseURL: srv.URL + "/x", Token: connsync.NewSecret("t")}, connsynctest.Runtime, true},
 		{"http in prod", kubernetes.Config{BaseURL: "http://api.example.com", Token: connsync.NewSecret("t")}, prod, true},
 		{"loopback in prod", kubernetes.Config{BaseURL: srv.URL, Token: connsync.NewSecret("t")}, prod, true},
+		{"unsupported port", kubernetes.Config{BaseURL: "https://api.example.com:9999", Token: connsync.NewSecret("t")}, prod, true},
+		{"vault's port", kubernetes.Config{BaseURL: "https://api.example.com:8200", Token: connsync.NewSecret("t")}, prod, true},
 		{"bad namespace", kubernetes.Config{BaseURL: srv.URL, Token: connsync.NewSecret("t"), Namespaces: []string{"../x"}}, connsynctest.Runtime, true},
 		{"too many namespaces", kubernetes.Config{BaseURL: srv.URL, Token: connsync.NewSecret("t"), Namespaces: slices.Repeat([]string{"a"}, 101)}, connsynctest.Runtime, true},
 	} {
@@ -345,6 +347,17 @@ func TestOpenValidation(t *testing.T) {
 		}
 		if _, err := kubernetes.Open(c.cfg, c.rt, h, nil); err == nil {
 			t.Errorf("%s: accepted", c.name)
+		}
+	}
+}
+
+func TestSupportedPortsOpen(t *testing.T) {
+	srv := connsynctest.New(t, newFake())
+	hc, _ := safehttp.NewForTest(t, srv.Options(0))
+	prod := connsync.Runtime{Env: config.Prod}
+	for _, u := range []string{"https://api.example.com", "https://api.example.com:6443", "https://api.example.com:8443", "https://api.example.com:443"} {
+		if _, err := kubernetes.Open(kubernetes.Config{BaseURL: u, Token: connsync.NewSecret("t")}, prod, hc, nil); err != nil {
+			t.Errorf("%s: %v", u, err)
 		}
 	}
 }
