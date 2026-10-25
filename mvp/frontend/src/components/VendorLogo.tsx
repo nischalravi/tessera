@@ -56,6 +56,8 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   onelogin: { color: "#1d4ed8", glyph: <g {...stroke} stroke="#1d4ed8"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="10" r="2.5" /><path d="M7.5 17c.8-2.4 2.6-3.5 4.5-3.5s3.7 1.1 4.5 3.5" /></g> },
   // cloud with a lock (cloud directory)
   jumpcloud: { color: "#0f766e", glyph: <g {...stroke} stroke="#0f766e"><path d="M7 18a4 4 0 01-.6-7.95A5.5 5.5 0 0117 9.5a4.2 4.2 0 01.5 8.5z" /><rect x="9.5" y="12" width="5" height="4" rx=".8" /></g> },
+  // folder with an arrow dropping into it (file drop over SFTP; an original glyph, not vendor artwork)
+  sftp: { color: "#0b6b6b", glyph: <g {...stroke} stroke="#0b6b6b"><path d="M3 7.5a1.5 1.5 0 011.5-1.5h4l2 2.2h8.5A1.5 1.5 0 0120.5 9.7v8.8A1.5 1.5 0 0119 20H4.5A1.5 1.5 0 013 18.5z" /><path d="M12 10.5v6M9.5 14l2.5 2.5 2.5-2.5" /></g> },
   // database cylinder (no simple-icons mark for Oracle)
   oracle: { color: "#b3261e", glyph: <g {...stroke} stroke="#b3261e"><ellipse cx="12" cy="6" rx="7" ry="3" /><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3" /></g> },
   // vault door with a dial
@@ -93,7 +95,7 @@ export function VendorLogo({ vendor, label, size = 56 }: { vendor: string; label
 }
 
 // Connector type and system names that share another system's mark.
-const ALIAS: Record<string, string> = { awsorg: "aws", azurerbac: "azure", gcpiam: "gcp", unixssh: "linux", unix: "linux", githubscan: "github", "github-scan": "github", "aws-agentcore": "agentcore", csv: "csvfeed", successfactors: "sap" };
+const ALIAS: Record<string, string> = { awsorg: "aws", azurerbac: "azure", gcpiam: "gcp", unixssh: "linux", unix: "linux", sftpdrop: "sftp", githubscan: "github", "github-scan": "github", "aws-agentcore": "agentcore", csv: "csvfeed", successfactors: "sap" };
 
 /** The logo vendor for a connection: the first id that has a mark ("demo-okta" is Okta), else the generic protocol glyph. */
 export function vendorForType(...ids: string[]): string {

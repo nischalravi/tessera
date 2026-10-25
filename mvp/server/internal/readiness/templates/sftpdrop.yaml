@@ -1,0 +1,74 @@
+# Flat-file feeds dropped on an SFTP server (issue #563): an accounts CSV and optionally an
+# account-entitlement CSV for legacy systems that can only export files, read on each sync with the
+# flat-file column mapping, signed in with a key and a pinned host key. One connection per drop.
+# What the files hold depends on the mapping, so the staged account data checks do not apply
+# (inventory). The connector reads only; there is no write-back.
+template: sftpdrop
+version: 1.0.0
+extends: base@1
+display_name: SFTP file drop
+connector_types: [sftpdrop]
+role: account_source
+inventory: true
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id]
+items:
+  - id: sftpdrop.auth
+    title: The SSH key is accepted by the server, and the host key is the pinned one (the key stored sealed)
+    category: access
+    level: required
+    why: "Proves the key and the pinned host key before any read: a rotated key, a locked login or a host key that changed (a different server, or someone in the path) is found here, not in an empty sync. There is no trust on first use."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Check the host key with ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub on the server and store that fingerprint; add the connection's public key to the login's authorized_keys."
+    config_fields: [settings, credential]
+
+  - id: sftpdrop.files
+    title: The accounts file (and the entitlements file) is read from the directory and passes the column mapping
+    category: scope
+    level: required
+    why: "A drop that connects but holds a missing, oversized, linked or invalid file feeds nothing. The read refuses the whole file on any invalid row, so a half-written export never changes access data."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Check the directory is the real path on the server, the file names, and that the header has the mapped column names. Files are limited to 512 KiB, 5000 rows and 64 columns."
+    depends_on: [sftpdrop.auth]
+    config_fields: [settings]
+
+  - id: sftpdrop.login.readonly
+    title: The SFTP login can read only the drop directory (no write, no shell, no other directory)
+    category: access
+    level: required
+    why: "The connector only reads two files. A login that can write or reach other directories turns a leaked key into more than a read of one feed."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Chroot the login to the drop directory with ForceCommand internal-sftp, give it read permission only, and limit the key with from= and restrict in authorized_keys."
+    config_fields: [settings, credential]
+
+  - id: sftpdrop.export.schedule
+    title: The source system exports the files on a schedule that matches the sync, and a failed export is noticed
+    category: change_tracking
+    level: recommended
+    why: "The sync reads whatever file is there. A stalled export leaves the last file in place, so removals and disables arrive late without any error."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Have the export job overwrite the files atomically (write then rename) at least as often as the sync runs, and alert the application owner when it fails."
+    config_fields: [settings]
+
+  - id: sftpdrop.key.rotation
+    title: The SSH key is rotated on a schedule (90 days or less)
+    category: access
+    level: recommended
+    why: "An SSH key does not expire by itself; rotation bounds how long a leaked key reads the feed."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a new key pair, add the new public key to authorized_keys, store the private key here, then remove the old public key."
+    config_fields: [credential]
