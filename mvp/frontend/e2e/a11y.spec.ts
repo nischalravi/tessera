@@ -10,7 +10,7 @@ const STATIC_ROUTES = [
   "/directory/apps", "/directory/orgs", "/directory/groups",
   "/insights/risk", "/insights/graph", "/insights/least-privilege", "/insights/sod", "/insights/deployment-health",
   "/governance/policies", "/governance/reviews", "/governance/lifecycle", "/governance/workflows",
-  "/admin", "/admin/connections", "/admin/connections/new", "/admin/jobs", "/admin/audit", "/admin/authentication",
+  "/admin", "/admin/branding", "/admin/connections", "/admin/connections/new", "/admin/jobs", "/admin/audit", "/admin/authentication",
   // issue #420: OAuth apps, the settings pages, preferences and service-account requests
   "/security/oauth-apps", "/admin/request-settings", "/admin/step-up", "/admin/sod-page", "/governance/review-types",
   "/account/preferences", "/access/request/service-account",

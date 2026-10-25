@@ -136,6 +136,7 @@ export const CONNECTOR_TYPES: { id: string; label: string; template: string; dem
   { id: "gcpiam", label: "Google Cloud IAM", template: "gcpiam", demo: false, blurb: "IAM policies of an organization, folders and projects, their roles and service accounts, read-only." },
   { id: "kubernetes", label: "Kubernetes and OpenShift", template: "kubernetes", demo: false, blurb: "Roles, cluster roles, their bindings, service accounts and OpenShift groups, read-only." },
   { id: "unixssh", label: "Unix/Linux host (SSH)", template: "unixssh", demo: false, blurb: "Local accounts, groups and sudoers rules of one host over SSH with a pinned host key, read-only." },
+  { id: "sftpdrop", label: "SFTP file drop (CSV)", template: "sftpdrop", demo: false, blurb: "Accounts and entitlements CSV files that a legacy system exports to an SFTP directory, read with a pinned host key." },
   { id: "githubscan", label: "GitHub (code scan)", template: "githubscan", demo: false, blurb: "Reads MCP configuration and agent credentials from an organization's repositories, read-only." },
   { id: "sap", label: "SAP", template: "erp", demo: false, blurb: "Roles, transaction codes and authorization objects as fine-grained access." },
   { id: "oracle", label: "Oracle Fusion Applications", template: "erp", demo: false, blurb: "Roles and privileges of Oracle Fusion as fine-grained access." },

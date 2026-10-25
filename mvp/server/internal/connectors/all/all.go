@@ -37,6 +37,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sftpdrop"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
@@ -79,7 +80,10 @@ import (
 // users, identity entities and groups (TESSERA_VAULT_*). Both are read-only, take the server's address as
 // an https base URL and a sealed bearer token or Vault token.
 //
-// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, kubernetes, vault, azure, gcp, unix, github-scan and aws-agentcore factories. hc is the
+// SFTP file drop (issue #563): "sftp" reads an accounts CSV (and an entitlements CSV) from one directory of an
+// SFTP server (TESSERA_SFTPDROP_*) with the flat-file column mapping, a pinned host key and a key credential.
+//
+// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, kubernetes, vault, sftp, azure, gcp, unix, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -141,6 +145,9 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	}
 	connectors.Factories["unix"] = func(time.Time) (connectors.Connector, error) {
 		return unixssh.FromEnv(os.Getenv, rt)
+	}
+	connectors.Factories["sftp"] = func(time.Time) (connectors.Connector, error) {
+		return sftpdrop.FromEnv(os.Getenv, rt)
 	}
 	connectors.Factories["gcp"] = func(now time.Time) (connectors.Connector, error) {
 		return gcpiam.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
