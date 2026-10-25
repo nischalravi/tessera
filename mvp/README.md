@@ -2768,6 +2768,77 @@ with stored rows and generated ids only.
   `elevated_privilege` exist on the stock tables but are not in the public docs; a requested column that does not exist
   is ignored by the instance, so confirm them against a developer instance.
 
+### Kubernetes, OpenShift and HashiCorp Vault (issue #560)
+
+Two read-only connectors that bring cluster RBAC and Vault's access model into the access graph and the
+non-human identity inventory. Both are governed connector types (New connection gallery: **Kubernetes and
+OpenShift** in Cloud & IaaS with the simple-icons Kubernetes mark, **HashiCorp Vault** in Privileged access
+with the Vault mark; readiness templates `kubernetes` and `vault`, both inventory templates). Neither writes:
+only GET requests are sent, and the readiness write-scope item is attested as not applicable. Every call goes
+through `internal/safehttp`; the server address is the connection's `base_url` (https, a well-formed domain
+name, no path; private, loopback and link-local addresses are refused). A port may be named from a short list
+only: 443, 6443 or 8443 for Kubernetes and 443, 8200 or 8443 for Vault (the readiness config and the connector
+both enforce it, and the client is opened to that one port on that host). A response never chooses a URL: only fixed API paths are requested
+and a name from a response is escaped into one path segment (`.` and `..` are refused). Errors have fixed text
+and never repeat the token or a setting. The credential is sealed like every connection secret and never printed.
+
+**Kubernetes** (`internal/connectors/kubernetes`, system `kubernetes`, env `TESSERA_KUBERNETES_BASE_URL`,
+`_TOKEN`, `_NAMESPACES`, `_OPENSHIFT`). *Settings:* `namespaces` (comma separated, at most 100; empty reads all)
+and `openshift` (true also reads `groups.user.openshift.io`). *Credential:* a ServiceAccount bearer token. Give
+that account only `get` and `list` on `clusterroles`, `clusterrolebindings`, `roles`, `rolebindings` and
+`serviceaccounts` (and `groups` in `user.openshift.io`); the built-in `view` role does not cover RBAC objects and
+`edit` or `cluster-admin` must not be bound. *Limits:* the API server's certificate must chain to a public CA
+(the shared safehttp client has no per-connection trust store: use a public-CA proxy, or an OpenShift route with
+a public certificate, in front of a private CA), and a private API server address is refused by safehttp.
+*Mapping:* cluster and namespaces are resources; a Role or ClusterRole bound at a scope is a permission
+`scope|role`, privileged when its rules allow every verb on every resource, `escalate`, `bind` or
+`impersonate`, reading secrets, writing roles, bindings, service account tokens, or `pods/exec` and `pods/attach`.
+User subjects are accounts `user:NAME` (an e-mail in the name, after an OIDC prefix, correlates to the person),
+Group subjects are groups `group:NAME` (OIDC group claims; `openshift_group` when OpenShift lists them, with their
+members), ServiceAccounts are service accounts `sa:NAMESPACE/NAME` and members of the `system:serviceaccounts`
+groups a binding names. Aggregated ClusterRoles are read as the controller filled them.
+
+**HashiCorp Vault** (`internal/connectors/vault`, system `vault`, env `TESSERA_VAULT_BASE_URL`, `_TOKEN`,
+`_NAMESPACE`). *Settings:* `namespace` (Vault Enterprise; one connection reads one namespace). *Credential:* a
+periodic Vault token of a read-only policy, never a root token:
+
+```
+path "sys/policies/acl"      { capabilities = ["list"] }
+path "sys/policies/acl/*"    { capabilities = ["read"] }
+path "sys/auth"              { capabilities = ["read"] }
+path "auth/+/role"           { capabilities = ["list"] }
+path "auth/+/role/*"         { capabilities = ["read"] }
+path "auth/+/users"          { capabilities = ["list"] }
+path "auth/+/users/*"        { capabilities = ["read"] }
+path "auth/+/groups"         { capabilities = ["list"] }
+path "auth/+/groups/*"       { capabilities = ["read"] }
+path "auth/+/certs"          { capabilities = ["list"] }
+path "auth/+/certs/*"        { capabilities = ["read"] }
+path "auth/token/roles"      { capabilities = ["list"] }
+path "auth/token/roles/*"    { capabilities = ["read"] }
+path "identity/entity/id"    { capabilities = ["list"] }
+path "identity/entity/id/*"  { capabilities = ["read"] }
+path "identity/group/id"     { capabilities = ["list"] }
+path "identity/group/id/*"   { capabilities = ["read"] }
+path "auth/token/lookup-self" { capabilities = ["read"] }
+```
+
+Secret engines are never read and no secret value, secret id or token is requested. *Mapping:* an ACL policy is a
+group `policy:NAME` (privileged when a path block has `sudo`, or a write on `sys/`, `identity/`, `auth/token/` or
+every path; the unreadable `root` policy is privileged), each path block a resource `path:PATH` and a permission
+`policy:NAME|PATH` whose action is its capabilities (HCL and JSON policies are read; parameter constraints are
+not interpreted, and a policy that does not parse marks the result partial). Auth roles (AppRole, Kubernetes,
+JWT/OIDC, AWS, GCP, Azure, TLS certificate, token roles) are service accounts `role:MOUNT/NAME`; userpass and
+LDAP users are accounts `user:MOUNT/NAME`; LDAP groups are `ldapgroup:MOUNT/NAME`; each is `member_of` the
+policies it names. Entities are accounts `entity:ID` (service accounts when every alias is a machine auth method;
+`metadata.email` correlates a person) and identity groups `idgroup:ID`, with their policies, members and parent
+groups. A class the token cannot read (403) marks the result partial so the deletion guard holds removals; an
+unreadable policy list or auth method list fails the read.
+
+Tests: `go test ./internal/connectors/kubernetes ./internal/connectors/vault ./internal/connectors/governed/...`
+run each connector against an in-process fake API server (pagination, scoping, privileged rules, policy
+parsing, path escaping, wrong tokens, prod refusals).
+
 ### Azure RBAC and Google Cloud IAM (issue #557)
 
 Two read connectors bring cloud entitlements into the access graph for the effective-permission

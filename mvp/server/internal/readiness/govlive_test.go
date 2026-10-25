@@ -34,6 +34,8 @@ var govConfig = map[string]string{
 	"gcpiam":         `{"correlation_key":"id","settings":{"organization_id":"123456789012"}}`,
 	"successfactors": `{"base_url":"https://api4.successfactors.com","correlation_key":"person_id","settings":{"company_id":"acme","username":"tessera-api"}}`,
 	"servicenow":     `{"base_url":"https://acme.service-now.com","settings":{"username":"tessera.integration"}}`,
+	"kubernetes":     `{"base_url":"https://api.k8s.example.com:6443","correlation_key":"id","settings":{"namespaces":"payments, web","openshift":"false"}}`,
+	"vault":          `{"base_url":"https://vault.example.com:8200","correlation_key":"id","settings":{"namespace":"team-a/prod"}}`,
 	"atlassian":      `{"base_url":"https://acme.atlassian.net","settings":{"email":"tessera@acme.example","project_keys":"PROJ"}}`,
 	"unixssh":        `{"correlation_key":"id","settings":{"host":"host1.example.com","username":"tessera","host_key":"SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8"}}`,
 	"sftpdrop":       `{"correlation_key":"id","settings":{"host":"files.example.com","username":"tessera","host_key":"SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8","directory":"/drop/hr","accounts_file":"accounts.csv","accounts_account_id":"ID","accounts_username":"Login"}}`,
@@ -100,6 +102,35 @@ func TestGoverned_CreateEveryType(t *testing.T) {
 				t.Errorf("empty config: %d errors %v, want %d", len(errs), errs, required)
 			}
 		})
+	}
+}
+
+// A cluster API server and a Vault listener name their port; every other governed type takes none, and these
+// two take a short list.
+func TestGoverned_BasePortsOnlyForKubernetesAndVault(t *testing.T) {
+	for _, c := range []struct {
+		typ, url string
+		ok       bool
+	}{
+		{"kubernetes", "https://api.k8s.example.com:6443", true},
+		{"kubernetes", "https://api.k8s.example.com", true},
+		{"kubernetes", "https://api.k8s.example.com:8200", false},
+		{"kubernetes", "https://api.k8s.example.com:9999", false},
+		{"kubernetes", "https://u:p@api.k8s.example.com:6443", false},
+		{"kubernetes", "http://api.k8s.example.com:6443", false},
+		{"kubernetes", "https://api.k8s.example.com:6443/x", false},
+		{"vault", "https://vault.example.com:8200", true},
+		{"vault", "https://vault.example.com:6443", false},
+		{"servicenow", "https://acme.service-now.com:8200", false},
+	} {
+		tmpl, _ := template.MustDefault().ForConnectorType(c.typ)
+		cfg := ConnConfig{BaseURL: c.url, CorrelationKey: "id", Settings: map[string]string{}}
+		if c.typ == "servicenow" {
+			cfg.Settings["username"] = "svc"
+		}
+		if errs := ValidateConn(cfg, tmpl, c.typ); (len(errs) == 0) != c.ok {
+			t.Errorf("%s %s: %v", c.typ, c.url, errs)
+		}
 	}
 }
 
@@ -487,7 +518,7 @@ func TestGoverned_ERPWriteScopeAttestedWhenUnsupported(t *testing.T) {
 
 func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 	reg := template.MustDefault()
-	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "unixssh", "sftpdrop"} {
+	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "unixssh", "sftpdrop", "kubernetes", "vault"} {
 		r, ok := reg.Get(id)
 		if !ok {
 			t.Fatalf("no template %s", id)
@@ -495,7 +526,7 @@ func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 		if got := slices.Sorted(slices.Values(r.ConnectorTypes)); !slices.Equal(got, governedTypesOf(id)) {
 			t.Errorf("%s covers %v", id, r.ConnectorTypes)
 		}
-		wantInv := id == "awsorg" || id == "githubscan" || id == "vms" || id == "azurerbac" || id == "gcpiam" || id == "unixssh" || id == "sftpdrop"
+		wantInv := id == "awsorg" || id == "githubscan" || id == "vms" || id == "azurerbac" || id == "gcpiam" || id == "unixssh" || id == "sftpdrop" || id == "kubernetes" || id == "vault"
 		if r.Inventory != wantInv {
 			t.Errorf("%s inventory = %v", id, r.Inventory)
 		}

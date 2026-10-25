@@ -370,7 +370,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             {tid === "scim_app" && input("base_url", BASE_URL_FIELDS.scim_app.label, scimUrlHint(cfg.preset, presets))}
             {!gov && tid !== "scim_app" && BASE_URL_FIELDS[tid] && input("base_url", BASE_URL_FIELDS[tid].label, BASE_URL_FIELDS[tid].hint, { "aria-required": true })}
             {gov?.baseUrl && input("base_url", gov.baseUrl.label, gov.baseUrl.hint, { "aria-required": gov.baseUrl.required })}
-            {gov?.settings.map((f) => <Fragment key={f.key}>{input(`settings.${f.key}`, f.label, f.hint, { "aria-required": !!f.required })}</Fragment>)}
+            {gov?.settings.map((f) => <Fragment key={f.key}>{f.flag ? flag(`settings.${f.key}`, f.label, f.hint) : input(`settings.${f.key}`, f.label, f.hint, { "aria-required": !!f.required })}</Fragment>)}
             {tid === "rest_generic" && (
               <Field label="REST connector spec (JSON or YAML)"
                 hint="Base URL (https only), auth type, the resources to read with their pagination and JSONPath mapping, and optional write operations as request templates. No secret goes here: the credential below is sealed. Errors name the field.">

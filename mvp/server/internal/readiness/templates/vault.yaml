@@ -1,0 +1,96 @@
+# HashiCorp Vault (issue #560): read-only ACL policies and the paths they grant, the roles and users of
+# the auth methods (AppRole, Kubernetes, JWT/OIDC, cloud, certificate, userpass, LDAP, token roles), identity
+# entities and identity groups, over the Vault HTTP API with a token. Secret engines are never read. The
+# snapshot feeds the effective-permission analysis and the machine identity inventory, not the account
+# directory, so the staged account data checks do not apply (inventory). There is no write-back.
+template: vault
+version: 1.0.0
+extends: base@1
+display_name: HashiCorp Vault
+connector_types: [vault]
+role: account_source
+inventory: true
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id]
+items:
+  - id: vault.endpoint
+    title: Vault URL is HTTPS on a public host name and reachable through safehttp
+    category: transport
+    level: required
+    why: "Prevents SSRF and clear-text transport: the Vault token goes only to this host, and private, loopback and link-local addresses are refused."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the Vault address with its port (for example https://vault.example.com:8200), no path."
+    config_fields: [base_url]
+
+  - id: vault.auth
+    title: Vault token accepted (stored sealed)
+    category: access
+    level: required
+    why: "Proves the token before any read: an expired or revoked token is found here, not in an empty sync."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Create a new periodic token for the read-only policy (vault token create -policy=tessera-read -period=768h) and store it again."
+    config_fields: [credential]
+
+  - id: vault.token.readonly
+    title: The token carries a read-only policy (no root, no sudo, no write on sys/ or secret paths)
+    category: access
+    level: required
+    why: "Policies and identities are read with read and list only; a root or admin token turns a leak into control of Vault and every secret in it."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Grant read on sys/policies/acl/*, sys/auth and the auth/+ and identity/ collections, list on their parents, and nothing else; never a root token."
+    config_fields: [credential]
+
+  - id: vault.read
+    title: Policies, auth methods and identity entities are listed
+    category: scope
+    level: required
+    why: "A connector that authenticates but lists nothing leaves Vault access unanalysed without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Grant list and read where the probe reports nothing; with a namespace set, confirm the token belongs to it."
+    depends_on: [vault.auth]
+    config_fields: [settings, credential]
+
+  - id: vault.token.rotation
+    title: The token is periodic and rotated on a schedule
+    category: access
+    level: recommended
+    why: "A token that never expires reads the organization's Vault access for as long as it leaks; a period bounds that."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Use a periodic token (or an auth method login by an agent) and store its replacement before it lapses."
+    config_fields: [credential]
+
+  - id: vault.namespaces
+    title: Every namespace in use has its own connection (Vault Enterprise)
+    category: scope
+    level: recommended
+    why: "A namespace holds its own policies, auth methods and identities; one connection reads one namespace."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add a connection per namespace and set its Namespace."
+    config_fields: [settings]
+
+  - id: vault.entities
+    title: Entities are correlated to people through their aliases and metadata; roles are workload identities
+    category: identity_keys
+    level: optional
+    why: "An entity maps a person or workload across auth methods; AppRole and Kubernetes roles are machine identities and belong in the non-human inventory."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Put the work e-mail in the entity's metadata (email) so it resolves to the person; give each role an owner."

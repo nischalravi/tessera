@@ -41,6 +41,8 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   awsorg: { vendor: "aws", publisher: "Amazon Web Services", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
   azurerbac: { vendor: "azure", publisher: "Microsoft", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
   gcpiam: { vendor: "gcp", publisher: "Google Cloud", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
+  kubernetes: { vendor: "kubernetes", publisher: "Kubernetes and Red Hat OpenShift", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
+  vault: { vendor: "vault", publisher: "HashiCorp", category: "Privileged access", capabilities: ["Access inventory"] },
   unixssh: { vendor: "linux", publisher: "Linux, Unix and AIX hosts", category: "Servers & hosts", capabilities: ["Access inventory"] },
   sftpdrop: { vendor: "sftp", publisher: "Legacy systems that export files", category: "Servers & hosts", capabilities: ["Identity source"] },
   githubscan: { vendor: "github", publisher: "GitHub", category: "Source code", capabilities: ["Agent discovery"] },
