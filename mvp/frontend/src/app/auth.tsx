@@ -1,7 +1,7 @@
 import { FormEvent, ReactNode, Suspense, createContext, lazy, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   LoginConnection, PublicBranding, RateLimitedError, SIGNED_OUT, STEP_UP, SessionInfo, clearPendingAction, discover, getSession, logout,
-  runPendingAction, startLogin, stepUpHref, takePendingAction,
+  lostForm, runPendingAction, startLogin, stepUpHref, takePendingAction,
 } from "../api";
 import { useConfirm } from "../components/Dialog";
 import { useToast } from "../components/Toast";
@@ -315,6 +315,11 @@ function PendingActionResumer() {
     }
     if (!pending) {
       toast("Signed in again. You can retry the action now.", { kind: "info" });
+      return;
+    }
+    if (lostForm(pending)) {
+      // the form was not kept across the sign-in, so do not offer a resume that can only fail
+      toast("Signed in again. The page reloaded during the sign-in, so the form was not kept: fill it in and submit again.", { kind: "info" });
       return;
     }
     (async () => {

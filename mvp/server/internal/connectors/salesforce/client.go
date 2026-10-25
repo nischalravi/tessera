@@ -175,18 +175,18 @@ func CheckURL(raw string, rt connsync.Runtime) (*url.URL, error) {
 func parseKey(pemText string) (*rsa.PrivateKey, error) {
 	blk, _ := pem.Decode([]byte(pemText))
 	if blk == nil {
-		return nil, errors.New("salesforce: the private key is not PEM")
+		return nil, connsync.CredentialFormat("salesforce: the private key is not PEM")
 	}
 	if k, err := x509.ParsePKCS1PrivateKey(blk.Bytes); err == nil {
 		return k, nil
 	}
 	k, err := x509.ParsePKCS8PrivateKey(blk.Bytes)
 	if err != nil {
-		return nil, errors.New("salesforce: the private key is not a PKCS#1 or PKCS#8 RSA key")
+		return nil, connsync.CredentialFormat("salesforce: the private key is not a PKCS#1 or PKCS#8 RSA key")
 	}
 	rk, ok := k.(*rsa.PrivateKey)
 	if !ok {
-		return nil, errors.New("salesforce: the private key is not RSA")
+		return nil, connsync.CredentialFormat("salesforce: the private key is not RSA")
 	}
 	return rk, nil
 }

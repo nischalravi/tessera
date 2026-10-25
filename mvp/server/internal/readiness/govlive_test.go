@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -549,4 +550,50 @@ func governedTypesOf(tmpl string) []string {
 	// the template lists the types in its own order
 	slices.Sort(out)
 	return out
+}
+
+// A credential the connector cannot read fails the authentication check with the
+// connector's fixed hint and blocks the checks behind it; any other construction
+// failure keeps the generic "no prober" error. Neither shows the error text or
+// the credential.
+func TestGoverned_CredentialFormatFailure(t *testing.T) {
+	const hint = "bedrockagents: the credential is JSON with access_key_id and secret_access_key"
+	tests := []struct {
+		name       string
+		err        error
+		wantAuth   string
+		wantStatus string
+		wantMsg    string
+		wantCode   bool
+	}{
+		{name: "credential format", err: connsync.CredentialFormat(hint), wantAuth: "fail", wantStatus: "blocked", wantMsg: hint, wantCode: true},
+		{name: "wrapped", err: fmt.Errorf("open: %w (%s)", connsync.CredentialFormat(hint), govSecret), wantAuth: "fail", wantStatus: "blocked", wantMsg: hint, wantCode: true},
+		{name: "other failure", err: errors.New("base URL " + govSecret + " is refused"), wantAuth: "error", wantStatus: "error", wantMsg: "no prober is available for this connection"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var opened []governed.Params
+			s := govSvc(t, &opened, stubProber{})
+			s.Runner.Gov.Prober = func(governed.Params, governed.Net) (connectors.Prober, error) { return nil, tc.err }
+			st := newStore(t)
+			id := readyGov(t, s, st, "cyberark", true)
+			v, err := s.Validate(context.Background(), st, id, "admin", clockAt(t0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			auth := resultFor(v, "pam.auth", "auth_ok")
+			if auth == nil || auth.Status != tc.wantAuth || auth.Message != tc.wantMsg {
+				t.Fatalf("auth_ok: %+v", auth)
+			}
+			if code, _ := auth.Observed["code"].(string); (code == "credential_format") != tc.wantCode {
+				t.Errorf("code %q, want credential_format=%v", code, tc.wantCode)
+			}
+			if r := resultFor(v, "pam.endpoint", "endpoint_reachable"); r == nil || r.Status != tc.wantStatus {
+				t.Errorf("endpoint_reachable: %+v", r)
+			}
+			if b, _ := json.Marshal(v); strings.Contains(string(b), govSecret) {
+				t.Error("the secret is in the run view")
+			}
+		})
+	}
 }

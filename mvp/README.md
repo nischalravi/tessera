@@ -5421,7 +5421,7 @@ the right. Arrow keys move between items.
 | **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised, Breach response), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles (with a *Mining* tab), Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle*, *Questionnaires* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*, *Request settings*, *Step-up per action* and *SoD page*) |
+| **Settings** | Connections (governed connections and the setup wizard; a config save the server flags keeps the draft and marks each rejected field with its message), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*, *Request settings*, *Step-up per action* and *SoD page*) |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
@@ -5602,7 +5602,9 @@ When the sign-in is too old or too weak the API answers `401 step_up_required` w
 challenge (`WWW-Authenticate: Bearer error="insufficient_user_authentication", acr_values=…, max_age=…`)
 and a `step_up_url`. The UI explains why and, on **Continue**, re-authenticates at the IdP
 (`GET /api/auth/step-up?acr=&max_age=&return_to=`: `prompt=login`, `max_age=0`); back on the page it offers
-to resume the action (kept in `sessionStorage` for ten minutes: the request only, never a token).
+to resume the action (kept in `sessionStorage` for ten minutes: the request only, never a token). A form body
+is kept in memory only, so it does not survive the IdP's page load: for such an action the page says to fill the
+form in again instead of offering a resume.
 Tessera requires the same person (else `auth.step_up.subject_mismatch`), an `auth_time` after the step-up
 started (the IdP really re-authenticated) and the required ACR (else `auth.step_up.insufficient`); on
 success the session's authentication is replaced, its cookie and CSRF token rotate, and

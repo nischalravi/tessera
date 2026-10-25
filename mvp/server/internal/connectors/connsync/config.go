@@ -162,3 +162,29 @@ func ResolveSecret(ref string, getenv func(string) string) (Secret, error) {
 	}
 	return Secret{}, fmt.Errorf("secret reference kind %q is not supported (use env: or file:)", kind)
 }
+
+// ErrCredentialFormat marks a connection credential that is not in the shape the
+// connector reads (not JSON, not a PEM key, the wrong kind of key). Readiness
+// shows a failed credential check for it instead of "no prober".
+var ErrCredentialFormat = errors.New("the stored credential is not in the expected format")
+
+type credentialFormatError struct{ hint string }
+
+func (e credentialFormatError) Error() string        { return e.hint }
+func (e credentialFormatError) Is(target error) bool { return target == ErrCredentialFormat }
+
+// CredentialFormat returns an error that matches ErrCredentialFormat. hint is
+// fixed text naming the expected format; it is shown to the admin and logged, so
+// it must be a literal and never include a part of the credential or a parser
+// error (parsers can quote the input).
+func CredentialFormat(hint string) error { return credentialFormatError{hint} }
+
+// CredentialFormatHint returns the fixed hint of an ErrCredentialFormat error
+// (and only that: text a caller wrapped around it is dropped).
+func CredentialFormatHint(err error) (string, bool) {
+	var e credentialFormatError
+	if errors.As(err, &e) {
+		return e.hint, true
+	}
+	return "", false
+}

@@ -157,7 +157,7 @@ func New(cfg Config, rt connsync.Runtime, dial safehttp.DialFunc) (*Connector, e
 	}
 	signer, err := ssh.ParsePrivateKey([]byte(cfg.Key.Reveal()))
 	if err != nil { // never include err: it can quote the key's header
-		return nil, errors.New("unixssh: the credential must be an unencrypted SSH private key (PEM or OpenSSH)")
+		return nil, connsync.CredentialFormat("unixssh: the credential must be an unencrypted SSH private key (PEM or OpenSSH)")
 	}
 	if dial == nil {
 		dial, err = safehttp.NewDialer(safehttp.Options{Env: rt.Env, AllowLoopback: rt.AllowLoopback,

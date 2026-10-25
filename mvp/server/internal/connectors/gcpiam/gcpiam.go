@@ -199,19 +199,19 @@ func parseKey(raw string) (*serviceAccountKey, error) {
 		PrivateKeyID string `json:"private_key_id"`
 	}
 	if len(raw) > 64<<10 || json.Unmarshal([]byte(raw), &f) != nil {
-		return nil, errors.New("gcpiam: the credential must be a service account key (JSON)")
+		return nil, connsync.CredentialFormat("gcpiam: the credential must be a service account key (JSON)")
 	}
 	if f.Type != "service_account" || !emailRE.MatchString(f.ClientEmail) {
-		return nil, errors.New("gcpiam: the credential is not a service account key")
+		return nil, connsync.CredentialFormat("gcpiam: the credential is not a service account key")
 	}
 	b, _ := pem.Decode([]byte(f.PrivateKey))
 	if b == nil {
-		return nil, errors.New("gcpiam: the key has no private key")
+		return nil, connsync.CredentialFormat("gcpiam: the key has no private key")
 	}
 	k, err := x509.ParsePKCS8PrivateKey(b.Bytes)
 	rk, ok := k.(*rsa.PrivateKey)
 	if err != nil || !ok {
-		return nil, errors.New("gcpiam: the private key must be an RSA key in PKCS#8 form")
+		return nil, connsync.CredentialFormat("gcpiam: the private key must be an RSA key in PKCS#8 form")
 	}
 	return &serviceAccountKey{email: f.ClientEmail, keyID: f.PrivateKeyID, key: rk}, nil
 }
