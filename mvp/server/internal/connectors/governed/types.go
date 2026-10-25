@@ -45,6 +45,12 @@ const (
 	// Amazon Bedrock Agents in one region (issue #562).
 	MCP     = "mcp"
 	Bedrock = "bedrock"
+	// Vertex reads Google Vertex AI Agent Engine, Foundry the agents of an Azure AI Foundry project, Copilot the
+	// agents of a Microsoft Copilot Studio environment and Agentforce those of a Salesforce org (issue #562).
+	Vertex     = "vertex"
+	Foundry    = "foundry"
+	Copilot    = "copilot"
+	Agentforce = "agentforce"
 )
 
 // Type describes one governed connector type.
@@ -81,6 +87,10 @@ var Types = []Type{
 	{ID: UnixSSH, Template: "unixssh", System: "unix", Vendor: UnixSSH},
 	{ID: MCP, Template: "mcp", System: "mcp", Vendor: MCP},
 	{ID: Bedrock, Template: "bedrock", System: "aws-bedrock", Vendor: Bedrock},
+	{ID: Vertex, Template: "vertex", System: "gcp-vertex", Vendor: Vertex},
+	{ID: Foundry, Template: "foundry", System: "azure-foundry", Vendor: Foundry},
+	{ID: Copilot, Template: "copilot", System: "copilot-studio", Vendor: Copilot},
+	{ID: Agentforce, Template: "agentforce", System: "salesforce-agentforce", Vendor: Agentforce},
 }
 
 // Lookup returns the type with the id.
@@ -173,6 +183,23 @@ func SettingSpecs(typ string) []Setting {
 	case Bedrock:
 		return []Setting{
 			{"region", "Region", "The AWS region whose agents are read (one connection per region), for example us-east-1. The credential is JSON: access_key_id, secret_access_key and optionally session_token, of a principal with the list and get rights in the README.", true}}
+	case Vertex:
+		return []Setting{
+			{"project_id", "Project", "The project id (or number) whose agents are read. The credential is a service account key (JSON) with roles/aiplatform.viewer.", true},
+			{"location", "Location", "The region whose agents are read (one connection per location), for example us-central1.", true},
+			{"owner", "Owner", "Optional. The e-mail address of the person accountable for the project's agents (a Vertex agent carries no e-mail address of its own).", false}}
+	case Foundry:
+		return []Setting{
+			{"tenant_id", "Directory (tenant) id", "The Entra tenant GUID. The credential is the application's client secret, or a PEM with its certificate and RSA private key.", true},
+			{"client_id", "Application (client) id", "A service principal with the Azure AI User role on the project (read only).", true},
+			{"owner", "Owner", "Optional. The e-mail address of the person accountable for agents whose metadata names no sponsor.", false}}
+	case Copilot:
+		return []Setting{
+			{"tenant_id", "Directory (tenant) id", "The Entra tenant GUID. The credential is the application's client secret, or a PEM with its certificate and RSA private key.", true},
+			{"client_id", "Application (client) id", "An application user of the environment with a read-only Dataverse role (read on Chatbot, Chatbot Subcomponent and User).", true}}
+	case Agentforce:
+		return []Setting{
+			{"api_version", "API version", "Optional, v61.0 and the like. The credential is JSON: client_id (the connected app's consumer key), username (the integration user) and private_key.", false}}
 	case AWSOrg:
 		return []Setting{
 			{"role_name", "Reader role name", "The role assumed in each account. Default TesseraReader.", false},
@@ -190,7 +217,7 @@ func SettingSpecs(typ string) []Setting {
 // it is empty; AWS and AgentCore take none.
 func BaseURLUse(typ string) (required, takes bool) {
 	switch typ {
-	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed, SuccessFactors, ServiceNow, Atlassian, MCP:
+	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed, SuccessFactors, ServiceNow, Atlassian, MCP, Foundry, Copilot, Agentforce:
 		return true, true
 	case GitHubScan:
 		return false, true
@@ -199,29 +226,31 @@ func BaseURLUse(typ string) (required, takes bool) {
 }
 
 var (
-	pathRE    = regexp.MustCompile(`^/[A-Za-z0-9._~/-]{0,200}$`)
-	orgRE     = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
-	userRE    = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,256}$`)
-	clientRE  = regexp.MustCompile(`^[^\x00-\x1f\x7f\s]{1,256}$`)
-	fileRE    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$`)
-	roleRE    = regexp.MustCompile(`^[\w+=,.@-]{1,64}$`)
-	regionRE  = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d{1,2}$`)
-	accountRE = regexp.MustCompile(`^\d{12}$`)
-	extIDRE   = regexp.MustCompile(`^[\w+=,.@:/-]{2,1000}$`)
-	companyRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	sfUserRE  = regexp.MustCompile(`^[^\x00-\x1f\x7f:]{1,128}$`)
-	entityRE  = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,64}$`)
-	guidRE    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	mgRE      = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
-	numRE     = regexp.MustCompile(`^[0-9]{1,20}$`)
-	projectRE = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
-	emailRE   = regexp.MustCompile(`^[^\x00-\x1f\x7f\s@]{1,128}@[^\x00-\x1f\x7f\s@]{1,128}$`)
-	orgIDRE   = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
-	jiraKeyRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{1,99}$`)
-	headerRE  = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
-	nameRE    = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,128}$`)
-	sshUserRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
-	sshHostRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+	pathRE     = regexp.MustCompile(`^/[A-Za-z0-9._~/-]{0,200}$`)
+	orgRE      = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
+	userRE     = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,256}$`)
+	clientRE   = regexp.MustCompile(`^[^\x00-\x1f\x7f\s]{1,256}$`)
+	fileRE     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$`)
+	roleRE     = regexp.MustCompile(`^[\w+=,.@-]{1,64}$`)
+	regionRE   = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d{1,2}$`)
+	accountRE  = regexp.MustCompile(`^\d{12}$`)
+	extIDRE    = regexp.MustCompile(`^[\w+=,.@:/-]{2,1000}$`)
+	companyRE  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	sfUserRE   = regexp.MustCompile(`^[^\x00-\x1f\x7f:]{1,128}$`)
+	entityRE   = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,64}$`)
+	guidRE     = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	mgRE       = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
+	numRE      = regexp.MustCompile(`^[0-9]{1,20}$`)
+	projectRE  = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+	emailRE    = regexp.MustCompile(`^[^\x00-\x1f\x7f\s@]{1,128}@[^\x00-\x1f\x7f\s@]{1,128}$`)
+	orgIDRE    = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+	jiraKeyRE  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{1,99}$`)
+	headerRE   = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+	nameRE     = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,128}$`)
+	locationRE = regexp.MustCompile(`^[a-z]+-[a-z]+[0-9]{1,2}$`)
+	versionRE  = regexp.MustCompile(`^v[0-9]{2}\.0$`)
+	sshUserRE  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
+	sshHostRE  = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
 	// hostKeyRE is the shape only (the connector parses the key itself): a fingerprint, or a public key line.
 	hostKeyRE = regexp.MustCompile(`^(SHA256:[A-Za-z0-9+/]{43}|[^\s\x00-\x1f\x7f]{1,255} [^\x00-\x1f\x7f]{16,1000})$`)
 )
@@ -291,7 +320,7 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 				bad(s.Key, "must be 1 to 64 printable characters")
 			}
 		case "client_id":
-			if typ == AzureRBAC {
+			if typ == AzureRBAC || typ == Foundry || typ == Copilot {
 				if !guidRE.MatchString(v) {
 					bad(s.Key, "must be the application (client) GUID")
 				}
@@ -369,6 +398,18 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 		case "auth_header":
 			if !headerRE.MatchString(v) || strings.EqualFold(v, "host") || strings.EqualFold(v, "content-type") || strings.EqualFold(v, "accept") || strings.EqualFold(v, "content-length") {
 				bad(s.Key, "must be a header name (letters, digits and hyphens), not Host, Content-Type, Accept or Content-Length")
+			}
+		case "project_id":
+			if !projectRE.MatchString(v) && !numRE.MatchString(v) {
+				bad(s.Key, "must be a project id or number")
+			}
+		case "location":
+			if !locationRE.MatchString(v) {
+				bad(s.Key, "must be a Google Cloud region such as us-central1")
+			}
+		case "api_version":
+			if !versionRE.MatchString(v) {
+				bad(s.Key, "must look like v61.0")
 			}
 		case "region":
 			if !regionRE.MatchString(v) {

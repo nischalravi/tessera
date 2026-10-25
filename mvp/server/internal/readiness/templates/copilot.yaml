@@ -1,0 +1,84 @@
+# Microsoft Copilot Studio (issue #562): the agents of one Power Platform environment, read through its Dataverse
+# Web API with the Entra client-credentials flow of the Azure RBAC connector. Each agent is an ai_agent identity
+# linked to its Dataverse owner; its tool and knowledge components are its grants, and an agent that requires no
+# authentication of its callers is tagged anonymous_access. Read-only: GET requests only; the components' data
+# (topics, instructions, prompts) is never selected.
+template: copilot
+version: 1.0.0
+extends: base@1
+display_name: Microsoft Copilot Studio
+connector_types: [copilot]
+role: account_source
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id, username, status]
+items:
+  - id: copilot.auth
+    title: Application accepted by Entra (the secret or certificate stored sealed)
+    category: access
+    level: required
+    why: "Proves the credential before any read: an expired secret, a wrong tenant or an application that is no user of the environment is found here, not in an empty inventory."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Store the client secret (or the PEM with the certificate and its RSA key) again, and check the tenant and client ids in Settings."
+    config_fields: [base_url, settings, credential]
+
+  - id: copilot.reader
+    title: The application user holds a read-only Dataverse role (read on Chatbot, Chatbot Subcomponent and User)
+    category: access
+    level: required
+    why: "Agents, their components and their owners are read with GET requests; a broader role turns a leaked secret into a change path."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create the application user in the environment and give it a custom role with read on those three tables, and nothing else."
+    config_fields: [base_url, settings, credential]
+
+  - id: copilot.read
+    title: The environment's agents are listed
+    category: scope
+    level: required
+    why: "A connector that signs in but lists no agent leaves the environment's agents undiscovered without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Check the environment URL in Connection (https://<org>.crm.dynamics.com) and the application user's role."
+    depends_on: [copilot.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: copilot.sponsor
+    title: Every agent has an owner who is a person (not a team or a service account)
+    category: ownership
+    level: recommended
+    why: "An agent owned by a team or by an application has no accountable human (the nhi-ownership policy reports it)."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Assign each agent to a named maker as its owner."
+    config_fields: [settings]
+
+  - id: copilot.scope
+    title: One connection exists for every environment that runs agents
+    category: scope
+    level: recommended
+    why: "Agents belong to an environment: an environment without a connection is one whose agents are not inventoried."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add a connection per environment in use."
+    config_fields: [settings]
+
+  - id: copilot.key.rotation
+    title: The client secret is rotated on a schedule (90 days or less), or a certificate is used
+    category: access
+    level: recommended
+    why: "A client secret does not expire by itself in practice; rotation bounds how long a leaked secret lists the agents."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Rotate the secret and store the new one here, or switch to a certificate."
+    config_fields: [credential]

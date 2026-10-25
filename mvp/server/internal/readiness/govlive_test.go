@@ -37,6 +37,10 @@ var govConfig = map[string]string{
 	"atlassian":      `{"base_url":"https://acme.atlassian.net","settings":{"email":"tessera@acme.example","project_keys":"PROJ"}}`,
 	"mcp":            `{"base_url":"https://tools.acme.example/mcp","settings":{"owner":"olu@acme.example"}}`,
 	"bedrock":        `{"correlation_key":"id","settings":{"region":"us-east-1"}}`,
+	"vertex":         `{"correlation_key":"id","settings":{"project_id":"acme-agents-prod","location":"us-central1","owner":"olu@acme.example"}}`,
+	"foundry":        `{"base_url":"https://acme.services.ai.azure.com/api/projects/support","correlation_key":"id","settings":{"tenant_id":"11111111-2222-3333-4444-555555555555","client_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}}`,
+	"copilot":        `{"base_url":"https://acme.crm.dynamics.com","correlation_key":"id","settings":{"tenant_id":"11111111-2222-3333-4444-555555555555","client_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}}`,
+	"agentforce":     `{"base_url":"https://acme.my.salesforce.com","correlation_key":"id"}`,
 	"unixssh":        `{"correlation_key":"id","settings":{"host":"host1.example.com","username":"tessera","host_key":"SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8"}}`,
 }
 
@@ -488,7 +492,7 @@ func TestGoverned_ERPWriteScopeAttestedWhenUnsupported(t *testing.T) {
 
 func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 	reg := template.MustDefault()
-	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "unixssh", "mcp", "bedrock"} {
+	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "unixssh", "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce"} {
 		r, ok := reg.Get(id)
 		if !ok {
 			t.Fatalf("no template %s", id)

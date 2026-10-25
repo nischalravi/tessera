@@ -22,6 +22,8 @@ const T = [
   ["beeline", "Beeline", "Contractor assignments", false], ["csvfeed", "Contractor CSV feed", "A contractor file", false],
   ["agentcore", "AWS Bedrock AgentCore", "Agent runtimes", false],
   ["bedrock", "Amazon Bedrock Agents", "Agents of one region", false], ["mcp", "MCP server", "Tools a Model Context Protocol server exposes", false],
+  ["vertex", "Google Vertex AI Agent Engine", "Reasoning engines of one project", false], ["foundry", "Azure AI Foundry agents", "Agents of one Foundry project", false],
+  ["copilot", "Microsoft Copilot Studio", "Agents of one Power Platform environment", false], ["agentforce", "Salesforce Agentforce", "Agents of one Salesforce org", false],
   ["rest_generic", "Generic REST API", "Any HTTP/JSON system, mapped by a declarative spec", false],
   ["sql", "Database (SQL)", "PostgreSQL, MySQL, SQL Server or Oracle", false],
   ["successfactors", "SAP SuccessFactors", "Employee Central as an HR source", false],
@@ -56,19 +58,19 @@ test("chips filter by category and capability, and combine with search", () => {
 test("the connectors the server already had are in the gallery under their categories", () => {
   const want: Record<string, string[]> = {
     "Cloud & IaaS": ["awsorg", "azurerbac", "gcpiam"], "Servers & hosts": ["unixssh"], "Source code": ["githubscan"], ERP: ["sap", "oracle"], "Privileged access": ["cyberark", "beyondtrust", "delinea"],
-    "Contractor & VMS": ["fieldglass", "beeline", "csvfeed"], "AI agents": ["agentcore", "bedrock", "mcp"],
+    "Contractor & VMS": ["fieldglass", "beeline", "csvfeed"], "AI agents": ["agentcore", "bedrock", "mcp", "vertex", "foundry", "copilot", "agentforce"],
   };
   for (const [category, types] of Object.entries(want)) {
     assert.ok(CATEGORIES.includes(category as never), category);
     assert.deepEqual(ids({ category: category as never }), types, category);
   }
-  assert.deepEqual(ids({ capability: "Agent discovery" }), ["githubscan", "agentcore", "bedrock", "mcp"]);
+  assert.deepEqual(ids({ capability: "Agent discovery" }), ["githubscan", "agentcore", "bedrock", "mcp", "vertex", "foundry", "copilot", "agentforce"]);
   assert.deepEqual(ids({ capability: "Contractor source" }), ["fieldglass", "beeline", "csvfeed"]);
   assert.deepEqual(ids({ capability: "Access inventory", category: "Privileged access" }), ["cyberark", "beyondtrust", "delinea"]);
   assert.deepEqual(ids({ q: "fieldglass" }), ["fieldglass"]);
   assert.deepEqual(ids({ capability: "Access inventory", category: "Cloud & IaaS" }), ["awsorg", "azurerbac", "gcpiam"]);
-  assert.deepEqual(ids({ q: "azure" }), ["azurerbac"]);
-  assert.deepEqual(ids({ q: "google cloud" }), ["gcpiam"]);
+  assert.deepEqual(ids({ q: "azure" }), ["azurerbac", "foundry"]);
+  assert.deepEqual(ids({ q: "google cloud" }), ["gcpiam", "vertex"]);
   assert.deepEqual(ids({ q: "sudoers" }), ["unixssh"]);
   assert.deepEqual(ids({ capability: "Access inventory", category: "Servers & hosts" }), ["unixssh"]);
   assert.deepEqual(ids({ q: "  privileged " }), ["cyberark"]);
@@ -132,4 +134,19 @@ test("MCP servers and Bedrock agents are agent-discovery tiles in AI agents, eac
   for (const id of ["mcp", "bedrock"]) assert.match(picker, new RegExp(`id: "${id}", label: "[^"]+", template: "${id}"`), id);
   const gov = readFileSync(new URL("../src/features/admin/connections/governed.ts", import.meta.url), "utf8");
   for (const id of ["mcp", "bedrock"]) assert.match(gov, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a connect form`);
+});
+
+test("Vertex, Foundry, Copilot Studio and Agentforce are agent-discovery tiles in AI agents, each with a logo, a picker entry and a connect form", () => {
+  const types = ["vertex", "foundry", "copilot", "agentforce"];
+  for (const id of types) assert.deepEqual(GALLERY_META[id].capabilities, ["Agent discovery"], id);
+  assert.deepEqual(ids({ q: "reasoning engines" }), ["vertex"]);
+  assert.deepEqual(ids({ q: "power platform" }), ["copilot"]);
+  const picker = readFileSync(new URL("../src/features/admin/connections/shared.tsx", import.meta.url), "utf8");
+  const logos = readFileSync(new URL("../src/components/VendorLogo.tsx", import.meta.url), "utf8");
+  const gov = readFileSync(new URL("../src/features/admin/connections/governed.ts", import.meta.url), "utf8");
+  for (const id of types) {
+    assert.match(picker, new RegExp(`id: "${id}", label: "[^"]+", template: "${id}"`), id);
+    assert.match(logos, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a logo`);
+    assert.match(gov, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a connect form`);
+  }
 });

@@ -6086,6 +6086,44 @@ Tests use in-process fakes of both vendor APIs (`mcpserver/mcpfake`, `bedrockage
 re-signs every request it receives and counts bad signatures and unserved operations), covering paging, event
 streams, throttling, refused credentials, malformed answers and the host and override checks.
 
+### Vertex AI, Azure AI Foundry, Copilot Studio and Agentforce (issue #562, part 2)
+
+Four more read-only agent-platform connections in the **AI agents** category (capability Agent discovery,
+templates `vertex`, `foundry`, `copilot` and `agentforce`; each has a logo, a readiness checklist with live
+`auth_ok` and `read_probe` checks, and a prober). All four are governed types: the credential is sealed and never
+printed (the connectors' `%v` and `%+v` print only a project, host or location), every outbound call goes through
+`internal/safehttp`, and errors carry a status and a short provider code, never request input or a response body.
+They reuse the sign-in of the existing connectors (the Google service account JWT of `gcpiam`, the Entra
+client-credentials flow of `azurerbac`, the Salesforce JWT bearer flow of `salesforce`). The shared mapping is
+`internal/connectors/agentmap`: each agent is an `ai_agent` identity (`<prefix>:<id>`) with an `agent` account and
+an agent profile, linked to its owner when that is an e-mail address (anything else is kept as the sponsor or
+creator text), and everything it can reach is a permission granted to the account. A `pii=true` label, tag or
+metadata value marks all of that as PII (`ai-agents-no-pii`). **Prompts, instructions, descriptions, tool
+schemas, component data and environment values are never read into the result**; fakes serve them and tests
+assert they do not appear.
+
+| Connection | Package, system, env | Settings and credential | Agents and grants |
+| --- | --- | --- | --- |
+| Google Vertex AI Agent Engine | `vertexagents`, `gcp-vertex`, `TESSERA_VERTEX_*` | `project_id`, `location`, optional `owner` (a Vertex agent has no e-mail address, so the owner is the connection's); service account key (JSON) with `roles/aiplatform.viewer` | `reasoningEngines` list. The service account or agent identity it runs as (`run_as`) and each Secret Manager secret its deployment reads (`secretmanager.versions.access`). A `sponsor` or `creator` label is kept as text. |
+| Azure AI Foundry agents | `foundryagents`, `azure-foundry`, `TESSERA_FOUNDRY_*` | `base_url` (`https://<account>.services.ai.azure.com/api/projects/<project>`), `tenant_id`, `client_id`, optional `owner`; client secret or certificate PEM; scope `https://ai.azure.com/.default`, role Azure AI User | Agent Service `assistants` list. Owner from the `sponsor` (else `owner`) metadata, falling back to the `owner` setting; `creator` and `pii` metadata. Grants: functions, OpenAPI tools, MCP servers, connected agents, file-search vector stores, AI Search indexes, other tool types by name; the **code interpreter is privileged**. |
+| Microsoft Copilot Studio | `copilotstudio`, `copilot-studio`, `TESSERA_COPILOT_*` | `base_url` (the environment's Dataverse URL, no path), `tenant_id`, `client_id`; client secret or certificate; an application user with read on Chatbot, Chatbot Subcomponent and User | Dataverse `bots`, `botcomponents`, `systemusers` (GETs). Owner and creator resolved to the user's internal e-mail address (a team stays text). Components are classified by the schema-name segment: `action` and `skill` are tools (`invoke`), `knowledge` and `file` are knowledge sources (`retrieve`); topics are not read. A bot that requires no authentication of its callers carries `anonymous_access` on all it reaches. |
+| Salesforce Agentforce | `agentforce`, `salesforce-agentforce`, `TESSERA_AGENTFORCE_*` | `base_url` (My Domain), optional `api_version`; credential JSON `client_id`, `username`, `private_key` (and `login_url` for a sandbox), the JWT bearer flow | SOQL on `BotDefinition` (Agentforce `ExternalCopilot` and `InternalCopilot`), `User`, `GenAiPlannerDefinition`, `GenAiPlannerFunctionDef` and `GenAiFunctionDefinition`. Owner and creator by user e-mail address. Grants: the user the agent runs as (`run_as`; what that user may do is the Salesforce connection's job) and each action of its planner (`invoke` on the flow, Apex class or prompt template it targets). |
+
+The bearer token goes only to the vendor's own hosts: Vertex to the location's `aiplatform.googleapis.com`,
+Foundry to `*.services.ai.azure.com`, `*.cognitiveservices.azure.com` or `*.openai.azure.com`, Copilot Studio to a
+`*.dynamics.com` (or `.microsoftdynamics.us`, `.dynamics.cn`) host without port or path, Agentforce to a
+Salesforce domain, and a token endpoint of Google or Entra. The dev overrides (`TESSERA_VERTEX_API_URL`,
+`TESSERA_VERTEX_TOKEN_URL`, `TESSERA_FOUNDRY_AUTHORITY_URL`, `TESSERA_COPILOT_AUTHORITY_URL`) exist for tests
+only, go through the governed `Net.Endpoints`, and every non-dev runtime refuses them; a connection never carries
+one. A paging link that leaves the Web API (Dataverse, Salesforce) is refused. Tests use in-process fakes of each
+API (`vertexagents/vertexfake`, `foundryagents/foundryfake`, `copilotstudio/copilotfake`,
+`agentforce/agentforcefake`), covering paging, refused credentials, malformed answers, endless paging, the
+host and override checks, and that only GETs (and the token POST) are sent.
+
+Not checked against a live tenant: the Copilot Studio schema-name segments and `authenticationmode` values, and the
+Agentforce object and field names (`GenAiPlannerFunctionDef`, `InvocationTargetType` and the `Type` values of
+`BotDefinition`) follow the vendors' documentation; confirm them on a real environment before relying on them.
+
 **Entra Agent ID blueprints (issue #478).** With `TESSERA_ENTRA_DISCOVER_AGENTS=true` the connector also reads
 Graph **beta** `applications/microsoft.graph.agentIdentityBlueprint` and its `sponsors`, and, on each agent identity,
 `agentIdentityBlueprintId` (the blueprint's **appId**, not its object id) and `managerApplications` (application

@@ -172,7 +172,7 @@ var (
 	cloudNames   = []string{"global", "usgov", "china"}
 	interfaces   = []string{"get_workers", "raas"}
 	// governedTemplates are the templates of the connector types in internal/connectors/governed.
-	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "servicenow", "atlassian", "mcp", "bedrock"}
+	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "servicenow", "atlassian", "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce"}
 )
 
 // Validate checks a config for a template. It returns every problem rather
@@ -340,7 +340,7 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 		} else if cfg.Preset != "" {
 			bad("preset", "unknown SCIM preset %q", cfg.Preset)
 		}
-	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "servicenow", "atlassian", "mcp", "bedrock":
+	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "servicenow", "atlassian", "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce":
 		typ := connectorType
 		if typ == "" && len(t.ConnectorTypes) > 0 {
 			typ = t.ConnectorTypes[0]
@@ -355,7 +355,7 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 			httpsURL("base_url", cfg.BaseURL, allow)
 			// The vault, ERP and feed readers take a host (paths are settings); GitHub
 			// Enterprise Server's API URL ends in /api/v3.
-			if u, err := url.Parse(cfg.BaseURL); err == nil && typ != governed.GitHubScan && typ != governed.MCP && u.Path != "" && u.Path != "/" {
+			if u, err := url.Parse(cfg.BaseURL); err == nil && typ != governed.GitHubScan && typ != governed.MCP && typ != governed.Foundry && u.Path != "" && u.Path != "/" {
 				bad("base_url", "must be a host without a path (the paths are settings)")
 			}
 		case !takes && cfg.BaseURL != "":

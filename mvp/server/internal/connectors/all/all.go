@@ -23,12 +23,15 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/bedrockagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/copilotstudio"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/entra"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/foundryagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
@@ -41,6 +44,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vertexagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
@@ -78,7 +82,11 @@ import (
 // customer-hosted https endpoint reached through safehttp); "bedrock" reads the Amazon Bedrock Agents of one
 // region, their action groups and knowledge bases (TESSERA_BEDROCK_*, SigV4 with a key pair). Both are read-only.
 //
-// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, azure, gcp, unix, mcp, bedrock, github-scan and aws-agentcore factories. hc is the
+// Part 2 of issue #562 adds "vertex" (Google Vertex AI Agent Engine, TESSERA_VERTEX_*), "foundry" (Azure AI
+// Foundry agents, TESSERA_FOUNDRY_*), "copilot" (Microsoft Copilot Studio through Dataverse, TESSERA_COPILOT_*)
+// and "agentforce" (Salesforce Agentforce, TESSERA_AGENTFORCE_*), all read-only.
+//
+// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, azure, gcp, unix, mcp, bedrock, vertex, foundry, copilot, agentforce, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -143,6 +151,18 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	}
 	connectors.Factories["bedrock"] = func(now time.Time) (connectors.Connector, error) {
 		return bedrockagents.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["vertex"] = func(now time.Time) (connectors.Connector, error) {
+		return vertexagents.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["foundry"] = func(now time.Time) (connectors.Connector, error) {
+		return foundryagents.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["copilot"] = func(now time.Time) (connectors.Connector, error) {
+		return copilotstudio.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["agentforce"] = func(now time.Time) (connectors.Connector, error) {
+		return agentforce.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
 	}
 	connectors.Factories["aws-agentcore"] = func(now time.Time) (connectors.Connector, error) {
 		return agentcore.FromEnv(os.Getenv, now)

@@ -13,10 +13,13 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/bedrockagents"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/copilotstudio"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/foundryagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
@@ -25,6 +28,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vertexagents"
 )
 
 // Connector builds the connector of a connection by the connector's own
@@ -68,6 +72,20 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 			return nil, err
 		}
 		cn, err = bedrockagents.FromEnv(getenv, rt, hc, now)
+	case governed.Vertex, governed.Foundry, governed.Copilot, governed.Agentforce:
+		if getenv, err = n.Overrides(getenv); err != nil {
+			return nil, err
+		}
+		switch p.Type {
+		case governed.Vertex:
+			cn, err = vertexagents.FromEnv(getenv, rt, hc, now)
+		case governed.Foundry:
+			cn, err = foundryagents.FromEnv(getenv, rt, hc, now)
+		case governed.Copilot:
+			cn, err = copilotstudio.FromEnv(getenv, rt, hc, now)
+		default:
+			cn, err = agentforce.FromEnv(getenv, rt, hc, now)
+		}
 	case governed.AzureRBAC, governed.GCPIAM:
 		if getenv, err = n.Overrides(getenv); err != nil {
 			return nil, err

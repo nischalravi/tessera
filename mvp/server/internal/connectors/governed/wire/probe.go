@@ -15,11 +15,14 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/bedrockagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/copilotstudio"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/foundryagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
@@ -28,6 +31,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vertexagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vms"
 )
 
@@ -255,6 +259,8 @@ func Prober(p governed.Params, n governed.Net) (connectors.Prober, error) {
 			r, err := c.Probe(ctx)
 			return cloudProbe{mode: c.Mode(), counts: map[string]int{"agent": r.Agents}}, err
 		}, refused: bedrockagents.ErrCredential}, nil
+	case governed.Vertex, governed.Foundry, governed.Copilot, governed.Agentforce:
+		return agentProber(p, n)
 	case governed.AWSOrg:
 		if n.AWS == nil {
 			return nil, errors.New("awsorg: no AWS client")
@@ -816,4 +822,70 @@ func (p *vmsProber) Sample(ctx context.Context, _ connectors.SampleQuery) (conne
 		return connectors.SampleStats{}, err
 	}
 	return connectors.SampleStats{Objects: p.count, Available: true, PerClass: map[string]int{"assignment": p.count}}, nil
+}
+
+// agentProber probes an AI agent platform with one bounded read (the first page of agents). The Google,
+// Microsoft and Salesforce hosts are fixed by the connectors, so there is no transport check of the
+// connection's own: Connect reports nothing and the templates have no endpoint item.
+func agentProber(p governed.Params, n governed.Net) (connectors.Prober, error) {
+	getenv, err := p.Env()
+	if err == nil {
+		getenv, err = n.Overrides(getenv)
+	}
+	if err != nil {
+		return nil, err
+	}
+	switch p.Type {
+	case governed.Vertex:
+		cfg, err := vertexagents.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := vertexagents.Open(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		return &cloudProber{id: c.Identity(), probe: func(ctx context.Context) (cloudProbe, error) {
+			r, err := c.Probe(ctx)
+			return cloudProbe{mode: c.Mode(), counts: map[string]int{"agent": r.Agents}}, err
+		}, refused: vertexagents.ErrCredential}, nil
+	case governed.Foundry:
+		cfg, err := foundryagents.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := foundryagents.Open(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		return &cloudProber{id: c.Identity(), probe: func(ctx context.Context) (cloudProbe, error) {
+			r, err := c.Probe(ctx)
+			return cloudProbe{mode: c.Mode(), counts: map[string]int{"agent": r.Agents}}, err
+		}, refused: foundryagents.ErrCredential}, nil
+	case governed.Copilot:
+		cfg, err := copilotstudio.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := copilotstudio.Open(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		return &cloudProber{id: c.Identity(), probe: func(ctx context.Context) (cloudProbe, error) {
+			r, err := c.Probe(ctx)
+			return cloudProbe{mode: c.Mode(), counts: map[string]int{"agent": r.Agents}}, err
+		}, refused: copilotstudio.ErrCredential}, nil
+	}
+	cfg, err := agentforce.ConfigFromEnv(getenv)
+	if err != nil {
+		return nil, err
+	}
+	c, err := agentforce.Open(cfg, n.RT, n.HC, n.Clock)
+	if err != nil {
+		return nil, err
+	}
+	return &cloudProber{id: c.Identity(), probe: func(ctx context.Context) (cloudProbe, error) {
+		r, err := c.Probe(ctx)
+		return cloudProbe{mode: c.Mode(), counts: map[string]int{"agent": r.Agents}}, err
+	}, refused: agentforce.ErrCredential}, nil
 }

@@ -1,0 +1,83 @@
+# Azure AI Foundry agents (issue #562): the agents of one Foundry project, read through the Agent Service data
+# plane with the Entra client-credentials flow of the Azure RBAC connector. Each agent is an ai_agent identity
+# linked to its sponsor metadata; its tools and the data they reach are its grants. Read-only: the agents list
+# only. Instructions and tool definitions are never stored.
+template: foundry
+version: 1.0.0
+extends: base@1
+display_name: Azure AI Foundry agents
+connector_types: [foundry]
+role: account_source
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id, username, status]
+items:
+  - id: foundry.auth
+    title: Application accepted by Entra (the secret or certificate stored sealed)
+    category: access
+    level: required
+    why: "Proves the credential before any read: an expired secret, a wrong tenant or a deleted application is found here, not in an empty inventory."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Store the client secret (or the PEM with the certificate and its RSA key) again, and check the tenant and client ids in Settings."
+    config_fields: [base_url, settings, credential]
+
+  - id: foundry.reader
+    title: The application holds the Azure AI User role on the project, and nothing wider
+    category: access
+    level: required
+    why: "The agents list needs a data-plane read; a broader role turns a leaked secret into a change path."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Assign the application Azure AI User on the Foundry project only."
+    config_fields: [base_url, settings, credential]
+
+  - id: foundry.read
+    title: The project's agents are listed
+    category: scope
+    level: required
+    why: "A connector that signs in but lists no agent leaves the project's agents undiscovered without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Check the project endpoint in Connection (https://<account>.services.ai.azure.com/api/projects/<project>) and the role assignment."
+    depends_on: [foundry.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: foundry.sponsor
+    title: Each agent carries a sponsor metadata value (an e-mail address)
+    category: ownership
+    level: recommended
+    why: "An agent without a sponsor has no accountable human (the nhi-ownership policy reports it); the owner setting is the fallback."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set sponsor=<e-mail address> in each agent's metadata (optionally creator=<e-mail>, and pii=true for agents that handle personal data), or set Owner in Settings."
+    config_fields: [settings]
+
+  - id: foundry.scope
+    title: One connection exists for every Foundry project that runs agents
+    category: scope
+    level: recommended
+    why: "Agents belong to a project: a project without a connection is a project whose agents are not inventoried."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add a connection per project in use."
+    config_fields: [settings]
+
+  - id: foundry.key.rotation
+    title: The client secret is rotated on a schedule (90 days or less), or a certificate is used
+    category: access
+    level: recommended
+    why: "A client secret does not expire by itself in practice; rotation bounds how long a leaked secret lists the agents."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Rotate the secret and store the new one here, or switch to a certificate."
+    config_fields: [credential]

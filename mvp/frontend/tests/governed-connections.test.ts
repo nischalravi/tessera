@@ -69,3 +69,13 @@ test("MCP: the endpoint and an owner are required, the credential is a token; Be
   assert.deepEqual(missingRequired("bedrock", "", {}), ["Region"]);
   assert.equal(GOVERNED.bedrock.credential?.area, true);
 });
+
+test("Vertex: project and location are required; Foundry and Copilot: endpoint, tenant and client; Agentforce: only the My Domain URL", () => {
+  assert.deepEqual(missingRequired("vertex", "", {}), ["Project", "Location"]);
+  assert.equal(GOVERNED.vertex.baseUrl, undefined);
+  assert.deepEqual(missingRequired("foundry", "", {}), ["Project endpoint", "Directory (tenant) id", "Application (client) id"]);
+  assert.deepEqual(missingRequired("copilot", "", {}), ["Environment URL", "Directory (tenant) id", "Application (client) id"]);
+  assert.deepEqual(missingRequired("agentforce", "", {}), ["My Domain URL"]);
+  assert.deepEqual(missingRequired("agentforce", "https://acme.my.salesforce.com", {}), []);
+  for (const id of ["vertex", "foundry", "copilot", "agentforce"]) assert.equal(GOVERNED[id].credential?.area, true, id);
+});

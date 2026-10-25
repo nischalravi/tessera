@@ -1,0 +1,93 @@
+# Salesforce Agentforce (issue #562): the agents (BotDefinition) of one org, read through the REST API with the
+# JWT bearer flow of the Salesforce connector (no password). Each agent is an ai_agent identity linked to its
+# Salesforce owner; the user it runs as and the actions of its planner are its grants. Read-only: SOQL queries
+# only; instructions, topics and prompt templates are never queried.
+template: agentforce
+version: 1.0.0
+extends: base@1
+display_name: Salesforce Agentforce
+connector_types: [agentforce]
+role: account_source
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id, username, status]
+items:
+  - id: agentforce.auth
+    title: Connected app accepted by Salesforce (the credential JSON stored sealed)
+    category: access
+    level: required
+    why: "Proves the connected app, the integration user and the key before any read: a revoked certificate or an unauthorised user is found here, not in an empty inventory."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Store the credential JSON again (client_id, username, private_key) and check the connected app pre-authorises the user."
+    config_fields: [base_url, settings, credential]
+
+  - id: agentforce.reader
+    title: The integration user can read BotDefinition, the GenAi planner and function objects, and User, and nothing more
+    category: access
+    level: required
+    why: "Agents, their actions and their owners are read with queries; a broader profile turns a leaked key into a change path."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Give the integration user a permission set with read access to those objects only (no modify-all, no API write)."
+    config_fields: [base_url, settings, credential]
+
+  - id: agentforce.read
+    title: The org's agents are listed
+    category: scope
+    level: required
+    why: "A connector that signs in but lists no agent leaves the org's agents undiscovered without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Check the My Domain URL in Connection and that the user may read BotDefinition (Agentforce enabled in the org)."
+    depends_on: [agentforce.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: agentforce.sponsor
+    title: Every agent has an owner who is an active user
+    category: ownership
+    level: recommended
+    why: "An agent owned by an integration or inactive user has no accountable human (the nhi-ownership policy reports it)."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set the owner of each agent to the person accountable for it."
+    config_fields: [settings]
+
+  - id: agentforce.scope
+    title: One connection exists for every org (and sandbox) that runs agents
+    category: scope
+    level: recommended
+    why: "Agents belong to an org: an org without a connection is one whose agents are not inventoried."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add a connection per org in use."
+    config_fields: [settings]
+
+  - id: agentforce.key.rotation
+    title: The connected app's certificate is rotated before it expires
+    category: access
+    level: recommended
+    why: "The private key does not expire by itself; rotation bounds how long a leaked key signs in."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a new certificate, upload it to the connected app and store the new key here."
+    config_fields: [credential]
+
+  - id: agentforce.runas
+    title: The users that agents run as are reviewed with the Salesforce connection
+    category: identity_keys
+    level: optional
+    why: "The agent links to its run-as user by id; what that user's profile and permission sets allow is read by the Salesforce connector."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add a Salesforce connection for the org so the user's permissions are analysed."

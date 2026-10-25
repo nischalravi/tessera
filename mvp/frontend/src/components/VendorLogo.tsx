@@ -76,6 +76,14 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   mcp: { color: "#0f766e", glyph: <g {...stroke} stroke="#0f766e"><path d="M9 3v4M15 3v4M6.5 7h11v4a5.5 5.5 0 01-11 0zM12 16.5V21" /></g> },
   // a robot head over a cloud shelf: an agent on Amazon Bedrock
   bedrock: { color: "#c2410c", glyph: <g {...stroke} stroke="#c2410c"><rect x="6" y="4" width="12" height="9" rx="2.5" /><circle cx="10" cy="8.5" r="1.1" /><circle cx="14" cy="8.5" r="1.1" /><path d="M12 4V2M4 20h16M7 16.5h10" /></g> },
+  // a robot head over a diamond: an agent on Google Vertex AI
+  vertex: { color: "#1a73e8", glyph: <g {...stroke} stroke="#1a73e8"><rect x="6" y="3.5" width="12" height="8.5" rx="2.5" /><circle cx="10" cy="7.8" r="1.1" /><circle cx="14" cy="7.8" r="1.1" /><path d="M12 15l4 3.5-4 3-4-3z" /></g> },
+  // a robot head over a hexagon: an agent in Azure AI Foundry
+  foundry: { color: "#0078d4", glyph: <g {...stroke} stroke="#0078d4"><rect x="6" y="3.5" width="12" height="8.5" rx="2.5" /><circle cx="10" cy="7.8" r="1.1" /><circle cx="14" cy="7.8" r="1.1" /><path d="M9 15.5h6l2 3-2 3H9l-2-3z" /></g> },
+  // a speech bubble with a spark: a Copilot Studio agent
+  copilot: { color: "#117865", glyph: <g {...stroke} stroke="#117865"><path d="M5 5.5h14v10H11l-4 3.5v-3.5H5z" /><path d="M12 8v4M10 10h4" /></g> },
+  // a robot head with a halo: a Salesforce Agentforce agent
+  agentforce: { color: "#0b6fa8", glyph: <g {...stroke} stroke="#0b6fa8"><rect x="5.5" y="8.5" width="13" height="10" rx="2.5" /><circle cx="9.5" cy="13.5" r="1.1" /><circle cx="14.5" cy="13.5" r="1.1" /><path d="M8 5.5a5 2 0 018 0" /></g> },
   // curly braces around a request arrow: a JSON API described by a spec
   rest_generic: { color: "#7c3aed", glyph: <g {...stroke} stroke="#7c3aed"><path d="M8 3.5C6 3.5 5.5 4.6 5.5 6.2v2.1c0 1.2-.7 2.2-2 2.7 1.3.5 2 1.5 2 2.7v2.1c0 1.6.5 2.7 2.5 2.7M16 3.5c2 0 2.5 1.1 2.5 2.7v2.1c0 1.2.7 2.2 2 2.7-1.3.5-2 1.5-2 2.7v2.1c0 1.6-.5 2.7-2.5 2.7" /><path d="M9.5 12h5M12.5 9.5l2.5 2.5-2.5 2.5" /></g> },
   // protocol glyph: two-way arrows

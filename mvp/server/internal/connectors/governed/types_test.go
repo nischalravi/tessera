@@ -8,7 +8,8 @@ import (
 func TestLookup(t *testing.T) {
 	want := map[string]string{"awsorg": "awsorg", "githubscan": "githubscan", "sap": "erp", "oracle": "erp", "cyberark": "pam",
 		"beyondtrust": "pam", "delinea": "pam", "fieldglass": "vms", "beeline": "vms", "csvfeed": "vms", "agentcore": "agentcore", "azurerbac": "azurerbac", "gcpiam": "gcpiam", "successfactors": "successfactors", "unixssh": "unixssh",
-		"servicenow": "servicenow", "atlassian": "atlassian", "mcp": "mcp", "bedrock": "bedrock"}
+		"servicenow": "servicenow", "atlassian": "atlassian", "mcp": "mcp", "bedrock": "bedrock",
+		"vertex": "vertex", "foundry": "foundry", "copilot": "copilot", "agentforce": "agentforce"}
 	if len(Types) != len(want) {
 		t.Errorf("%d types, want %d", len(Types), len(want))
 	}
@@ -25,7 +26,7 @@ func TestLookup(t *testing.T) {
 		t.Error("ldap is not a governed type")
 	}
 	// the connectors that read straight into the graph, and the ones that hand over to a feature
-	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false, "azurerbac": false, "gcpiam": false, "successfactors": false, "unixssh": false, "servicenow": false, "atlassian": false, "mcp": false, "bedrock": false,
+	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false, "azurerbac": false, "gcpiam": false, "successfactors": false, "unixssh": false, "servicenow": false, "atlassian": false, "mcp": false, "bedrock": false, "vertex": false, "foundry": false, "copilot": false, "agentforce": false,
 		"awsorg": true, "fieldglass": true, "beeline": true, "csvfeed": true} {
 		if got, _ := Lookup(id); got.Feature != feature {
 			t.Errorf("%s feature = %v", id, got.Feature)
@@ -54,6 +55,10 @@ func TestValidateSettings(t *testing.T) {
 		Atlassian:      {"email": "tessera@acme.example", "org_id": "abc-123", "project_keys": "PROJ, OPS_1"},
 		MCP:            {"owner": "olu@acme.example", "server_name": "Acme tools", "auth_header": "X-Api-Key"},
 		Bedrock:        {"region": "eu-west-1"},
+		Vertex:         {"project_id": "acme-agents-prod", "location": "europe-west4", "owner": "olu@acme.example"},
+		Foundry:        {"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "owner": "olu@acme.example"},
+		Copilot:        {"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+		Agentforce:     {"api_version": "v61.0"},
 	}
 	for name, set := range map[string]map[string]string{"servicenow basic": {"auth_mode": "basic", "username": "svc"}, "servicenow oauth": {"auth_mode": "oauth", "client_id": "cid"}} {
 		if errs := ValidateSettings(ServiceNow, set); len(errs) != 0 {
@@ -130,6 +135,19 @@ func TestValidateSettings(t *testing.T) {
 		{Bedrock, map[string]string{}, "region"},
 		{Bedrock, map[string]string{"region": "us-east-1.evil.example"}, "region"},
 		{Bedrock, map[string]string{"region": "us-east-1", "agent_url": "https://x.example"}, "agent_url"},
+		{Vertex, map[string]string{"location": "us-central1"}, "project_id"},
+		{Vertex, map[string]string{"project_id": "A/B", "location": "us-central1"}, "project_id"},
+		{Vertex, map[string]string{"project_id": "acme-agents-prod"}, "location"},
+		{Vertex, map[string]string{"project_id": "acme-agents-prod", "location": "us-central1.evil.example"}, "location"},
+		{Vertex, map[string]string{"project_id": "acme-agents-prod", "location": "us-central1", "owner": "nope"}, "owner"},
+		{Vertex, map[string]string{"project_id": "acme-agents-prod", "location": "us-central1", "api_url": "https://x.example"}, "api_url"},
+		{Foundry, map[string]string{"client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}, "tenant_id"},
+		{Foundry, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "not-a-guid"}, "client_id"},
+		{Foundry, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "authority_url": "https://x.example"}, "authority_url"},
+		{Copilot, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555"}, "client_id"},
+		{Copilot, map[string]string{"tenant_id": "x", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}, "tenant_id"},
+		{Agentforce, map[string]string{"api_version": "61"}, "api_version"},
+		{Agentforce, map[string]string{"login_url": "https://evil.example"}, "login_url"},
 		{GCPIAM, map[string]string{}, "organization_id"},
 		{GCPIAM, map[string]string{"organization_id": "organizations/1"}, "organization_id"},
 		{GCPIAM, map[string]string{"folder_ids": "a"}, "folder_ids"},

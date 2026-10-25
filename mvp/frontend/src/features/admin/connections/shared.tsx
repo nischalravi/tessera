@@ -147,6 +147,10 @@ export const CONNECTOR_TYPES: { id: string; label: string; template: string; dem
   { id: "agentcore", label: "AWS Bedrock AgentCore", template: "agentcore", demo: false, blurb: "Agent runtimes from a recorded snapshot; no live client yet, refused in prod." },
   { id: "bedrock", label: "Amazon Bedrock Agents", template: "bedrock", demo: false, blurb: "Agents of one region with their action groups, knowledge bases and execution role, linked to the sponsor tag; read-only." },
   { id: "mcp", label: "MCP server", template: "mcp", demo: false, blurb: "Tools a Model Context Protocol server exposes and whether it accepts anonymous callers, linked to an owner; read-only." },
+  { id: "vertex", label: "Google Vertex AI Agent Engine", template: "vertex", demo: false, blurb: "Reasoning engines of one project and location with the service account and secrets each reaches, linked to an owner; read-only." },
+  { id: "foundry", label: "Azure AI Foundry agents", template: "foundry", demo: false, blurb: "Agents of one Foundry project with their tools and data, linked to the sponsor metadata; read-only." },
+  { id: "copilot", label: "Microsoft Copilot Studio", template: "copilot", demo: false, blurb: "Agents of one Power Platform environment with their actions and knowledge sources, linked to the Dataverse owner; read-only." },
+  { id: "agentforce", label: "Salesforce Agentforce", template: "agentforce", demo: false, blurb: "Agents of one Salesforce org with the user each runs as and its actions, linked to the owner; read-only." },
   { id: "successfactors", label: "SAP SuccessFactors", template: "successfactors", demo: false, blurb: "Employee Central as an HR source: people, employment dates, department and manager drive joiner, mover and leaver. Read-only." },
   { id: "rest_generic", label: "Generic REST API", template: "rest_generic", demo: false, blurb: "Any HTTP/JSON system, mapped by a declarative spec, no code (issue #552)." },
 ];
