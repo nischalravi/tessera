@@ -19,11 +19,15 @@ import (
 //
 //   - every /api/auth/* request (sign-in, session, logout) takes a token from
 //     the IP's auth bucket;
-//   - a request without a session cookie takes a token from the IP's
-//     anonymous bucket;
-//   - a request with a session cookie passes unless that bucket is empty, and
-//     takes a token from it afterwards if the cookie did not authenticate, so
-//     made-up cookies cannot bypass the limit.
+//   - a request without a session cookie or an Authorization header takes a
+//     token from the IP's anonymous bucket;
+//   - a request with a session cookie or an Authorization header (a machine
+//     client's or the CLI's token) passes unless that bucket is empty, and
+//     takes a token from it afterwards if it did not authenticate, so made-up
+//     cookies and tokens cannot bypass the limit. An authenticated machine
+//     client is limited by its own bucket instead (clientlimit.go), and its
+//     traffic never drains the bucket of the people signed in from the same
+//     address (issue #608).
 //
 // The key is the client address: the TCP peer, or, when the peer is one of
 // TrustedProxies (TESSERA_TRUSTED_PROXIES), the rightmost X-Forwarded-For
@@ -207,7 +211,7 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 			tooMany(w, s.limits.oauthEvery)
 			return
 		}
-		if _, err := r.Cookie(s.authn.Cookies.Name()); err != nil {
+		if _, err := r.Cookie(s.authn.Cookies.Name()); err != nil && r.Header.Get("Authorization") == "" {
 			if !s.limits.anon.Allow(key) {
 				tooMany(w, s.limits.anonEvery)
 				return
