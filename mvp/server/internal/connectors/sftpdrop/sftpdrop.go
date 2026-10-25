@@ -12,7 +12,9 @@
 //   - Only the two configured file names are read, from the configured absolute directory. A name
 //     is a plain file name (no separator, no ".."); the directory is compared with its real path on
 //     the server so a symbolic link in the directory path is refused, and each file must be a regular
-//     file, not a link (checked with lstat and again on the open handle).
+//     file, not a link. lstat, a real-path check after open and an fstat whose size, time and mode
+//     must match the lstat narrow a link-swap race but cannot close it (SFTP v3 has no O_NOFOLLOW):
+//     a read-only, chrooted login is the real control.
 //   - A file larger than flatfile.MaxBytes is refused, and reading stops one byte past the limit
 //     whatever the server claims. Row and column counts are capped by flatfile.Parse.
 //   - Errors have fixed text: no path, file content, server message or cell value is echoed.
@@ -234,7 +236,10 @@ func readFile(sc *sftp.Client, dir, name string) ([]byte, error) {
 	if real, err := sc.RealPath(full); err != nil || real != full { // swapped for a link after the lstat
 		return nil, ErrFile
 	}
-	if st, err = f.Stat(); err != nil || !st.Mode().IsRegular() {
+	// fstat follows nothing, so it cannot see a link; a file that differs from the one lstat
+	// saw (a swap and swap back) is refused
+	if fst, err := f.Stat(); err != nil || !fst.Mode().IsRegular() || fst.Mode() != st.Mode() ||
+		fst.Size() != st.Size() || !fst.ModTime().Equal(st.ModTime()) {
 		return nil, ErrFile
 	}
 	// the server's size is not trusted: stop one byte over the limit

@@ -100,7 +100,7 @@ func (s *fakeServer) serve(c net.Conn, conf *ssh.ServerConfig) {
 					continue
 				}
 				_ = r.Reply(true, nil)
-				srv, err := sftp.NewServer(ch)
+				srv, err := sftp.NewServer(ch, sftp.ReadOnly())
 				if err != nil {
 					return
 				}
