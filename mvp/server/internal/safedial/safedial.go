@@ -147,6 +147,10 @@ type Dialer struct {
 func New(o Options) (*Dialer, error) {
 	switch o.Env {
 	case config.Dev, config.Prod:
+	case config.Test:
+		// a test deployment gets production's address rules: no loopback or
+		// private-range exception (#634)
+		o.Env = config.Prod
 	default:
 		return nil, fmt.Errorf("safedial: Options.Env must be %q or %q (got %q)", config.Dev, config.Prod, o.Env)
 	}
