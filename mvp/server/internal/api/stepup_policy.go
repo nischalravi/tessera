@@ -8,6 +8,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/cfgerr"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/stepup"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -36,6 +37,13 @@ func (s *Server) registerStepUpPolicyRoutes() {
 // allowWeaker is whether this deployment lets a tenant policy go below the
 // floor: only outside production, and only when configured.
 func (s *Server) allowWeaker() bool { return s.cfg.StepUpAllowWeaker && s.cfg.Env != "prod" }
+
+// stepUpBypass is whether step-up is off for this deployment
+// (TESSERA_STEPUP_BYPASS): only when configured, and only with Env exactly dev
+// or test (an allow-list, so an empty, mistyped or prod Env keeps step-up).
+func (s *Server) stepUpBypass() bool {
+	return s.cfg.StepUpBypass && (s.cfg.Env == config.Dev || s.cfg.Env == config.Test)
+}
 
 // stepUpCatalog is the catalog of actions, built from the routes on first use.
 func (s *Server) stepUpCatalog() stepup.Catalog {

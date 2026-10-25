@@ -100,6 +100,12 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 			}
 		}
 	}
+	if s.stepUpBypass() {
+		// the recent-strong-authentication requirement counts as met (never a
+		// permission, role or other check); the audit trail records each use
+		ctx := r.Context()
+		p.BypassStepUp(func() { audit.Mark(ctx, "step_up_bypassed", true) })
+	}
 	authn := rt.spec.Authn
 	d := auth.Check(p, rt.spec.Perm, authn, now)
 	if (d == nil || d.Error == "step_up_required") && stepup.Applies(r.Method, rt.spec.Perm, rt.spec.NoTenantStepUp || rt.answersRead) &&
@@ -273,6 +279,7 @@ func (s *Server) authSession(_ http.ResponseWriter, r *http.Request, _ *params) 
 			{Key: "idle_expires_at", Value: rt3339(sess.IdleExpiresAt)},
 			{Key: "absolute_expires_at", Value: rt3339(sess.AbsoluteExpiresAt)}}},
 		{Key: "csrf_token", Value: p.CSRFToken()},
+		{Key: "step_up_bypass", Value: s.stepUpBypass()},
 	}, nil
 }
 

@@ -897,6 +897,8 @@ export interface SessionInfo {
   authn: { aal: number; phishing_resistant: boolean; phr_basis: string; acr: string; methods: string[]; auth_time: string };
   session: { id: string; idle_expires_at: string; absolute_expires_at: string };
   csrf_token: string;
+  /** TESSERA_STEPUP_BYPASS is on (dev and test only): step-up prompts are skipped. */
+  step_up_bypass?: boolean;
 }
 
 /** The current session, or null when signed out. Not cached. */

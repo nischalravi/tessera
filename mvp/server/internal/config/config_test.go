@@ -103,6 +103,7 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"safedial allowlist", []string{"TESSERA_SAFEDIAL_ALLOW", "192.168.1.10:636"}, "TESSERA_SAFEDIAL_ALLOW must not be set"},
 		{"simulated rotation adapter", []string{"TESSERA_ROTATION_FAKE_ADAPTERS", "true"}, "TESSERA_ROTATION_FAKE_ADAPTERS must be false"},
 		{"weaker step-up policy", []string{"TESSERA_STEPUP_ALLOW_WEAKER", "true"}, "TESSERA_STEPUP_ALLOW_WEAKER must be false"},
+		{"step-up bypass", []string{"TESSERA_STEPUP_BYPASS", "true"}, "TESSERA_STEPUP_BYPASS must be false"},
 		{"dev IdP URL set", []string{"TESSERA_DEV_IDP_URL", "http://127.0.0.1:8001"}, "TESSERA_DEV_IDP_URL must not be set"},
 		{"dev fake provisioning target", []string{"TESSERA_DEV_FAKE_TARGET", "1"}, "TESSERA_DEV_FAKE_TARGET must not be set"},
 		{"file audit anchor", []string{"TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl"}, "must not be file://"},
