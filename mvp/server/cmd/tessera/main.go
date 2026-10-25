@@ -69,6 +69,8 @@
 //	                      adapter, which the demo policies use; prod refuses it
 //	TESSERA_STEPUP_ALLOW_WEAKER  dev and test only, default false: lets a tenant's step-up policy replace the code's
 //	                      step-up requirements with weaker ones; prod refuses it
+//	TESSERA_STEPUP_BYPASS  dev and test only, default false: every step-up requirement counts as met for a signed-in
+//	                      session (no passkey prompts); permissions and every other check still apply; prod refuses it
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
@@ -638,6 +640,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	} else {
 		logger.Warn("archiving is off: no archive store is configured (TESSERA_ARCHIVE_DIR or TESSERA_ARCHIVE_URL); nothing is archived or deleted")
 	}
+	if cfg.StepUpBypass && !cfg.IsProd() {
+		logger.Warn("step-up is OFF (TESSERA_STEPUP_BYPASS): every signed-in session counts as freshly authenticated; dev and test only")
+	}
 	srv := api.New(api.Config{ExternalKinds: external, ConnectorSyncSchedule: cfg.ConnectorSyncSchedule, Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger, Archive: archiveSvc,
 		Secrets: secrets, Credential: authority,
 		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, Provisioning: provisioningSvc, LoaderDataDir: cfg.LoaderDataDir, LoaderHTTP: provHTTP, LoaderPGDial: loaderPGDial, LoaderDirectory: loaderDirectory, APIAudience: cfg.APIAudience,
@@ -653,7 +658,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		Siem: siemSvc, Alerts: alertSvc, AWSCatalog: awsCatalogLoader(cfg),
 		SoD:          sod.Settings{MaxDays: cfg.SoDMaxMitigationDays, WarnDays: cfg.SoDWarnDays},
 		ClientRate:   api.ClientRate{Burst: cfg.ClientRateBurst, PerMinute: cfg.ClientRatePerMinute},
-		RotationFake: cfg.RotationFakeAdapters, StepUpAllowWeaker: cfg.StepUpAllowWeaker})
+		RotationFake: cfg.RotationFakeAdapters, StepUpAllowWeaker: cfg.StepUpAllowWeaker,
+		StepUpBypass: cfg.StepUpBypass})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
 		return err

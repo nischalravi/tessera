@@ -519,7 +519,7 @@ func Check(p *Principal, perm Permission, authn *AuthnRequirement, now time.Time
 		if p.Kind == KindAPIClient {
 			return &Denial{Status: http.StatusForbidden, Error: "interactive_authentication_required", Permission: perm}
 		}
-		if p.Authn == nil || !p.Authn.Satisfies(*authn, now) {
+		if !p.StepUpMet(*authn, now) {
 			req := *authn
 			return &Denial{Status: http.StatusUnauthorized, Error: "step_up_required", Permission: perm, Requirement: &req}
 		}

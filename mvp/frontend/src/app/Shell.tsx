@@ -420,6 +420,9 @@ export function Shell({ children }: { children: ReactNode }) {
         <Rail id="rail" counts={{ inbox: count, users: people?.length ?? null }} onNavigate={() => setDrawer(false)} />
         {drawer && <div className="overlay" style={{ zIndex: 64, top: "var(--topbar-h)" }} onClick={() => setDrawer(false)} aria-hidden />}
         <main id="main" className="main" tabIndex={-1}>
+          {session.step_up_bypass && (
+            <div className="stepup-banner" role="status">Step-up is off (dev/test)</div>
+          )}
           {children}
         </main>
       </div>

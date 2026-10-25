@@ -431,7 +431,7 @@ func (s *Service) DeviceApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// the stronger requirement this particular device asked for
-	if need := requirementFor(g); !p.Authn.Satisfies(need, now) {
+	if need := requirementFor(g); !p.StepUpMet(need, now) {
 		auth.WriteDenial(w, &auth.Denial{Status: http.StatusUnauthorized, Error: "step_up_required",
 			Permission: auth.PermAuthenticated, Requirement: &need})
 		return

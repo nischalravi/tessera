@@ -37,6 +37,10 @@ func (s *Server) registerStepUpPolicyRoutes() {
 // floor: only outside production, and only when configured.
 func (s *Server) allowWeaker() bool { return s.cfg.StepUpAllowWeaker && s.cfg.Env != "prod" }
 
+// stepUpBypass is whether step-up is off for this deployment
+// (TESSERA_STEPUP_BYPASS): only outside production, and only when configured.
+func (s *Server) stepUpBypass() bool { return s.cfg.StepUpBypass && s.cfg.Env != "prod" }
+
 // stepUpCatalog is the catalog of actions, built from the routes on first use.
 func (s *Server) stepUpCatalog() stepup.Catalog {
 	s.stepUpsOnce.Do(func() {

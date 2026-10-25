@@ -261,6 +261,7 @@ th.num, td.num { text-align: right; }
 .shell { min-height: 100vh; }
 .body { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); min-height: calc(100vh - var(--topbar-h)); }
 .shell.collapsed .body { grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr); }
+.stepup-banner { margin-bottom: var(--s-3); padding: var(--s-2) var(--s-3); border: 1px solid var(--warning); border-radius: 4px; background: var(--warning-soft); color: var(--warning); font-size: 13px; font-weight: 600; }
 .main { padding: var(--s-4) var(--s-6) var(--s-8); min-width: 0; transition: padding-right 0.16s ease-out; }
 .main:focus { outline: none; }
 @media (min-width: 1200px) { :root.panel-open .main { padding-right: calc(var(--panel-w) + var(--s-6)); } }
