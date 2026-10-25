@@ -7,7 +7,7 @@ import (
 
 func TestLookup(t *testing.T) {
 	want := map[string]string{"awsorg": "awsorg", "githubscan": "githubscan", "sap": "erp", "oracle": "erp", "cyberark": "pam",
-		"beyondtrust": "pam", "delinea": "pam", "fieldglass": "vms", "beeline": "vms", "csvfeed": "vms", "agentcore": "agentcore", "azurerbac": "azurerbac", "gcpiam": "gcpiam", "successfactors": "successfactors", "unixssh": "unixssh",
+		"beyondtrust": "pam", "delinea": "pam", "fieldglass": "vms", "beeline": "vms", "csvfeed": "vms", "agentcore": "agentcore", "azurerbac": "azurerbac", "gcpiam": "gcpiam", "successfactors": "successfactors", "unixssh": "unixssh", "sftpdrop": "sftpdrop",
 		"servicenow": "servicenow", "atlassian": "atlassian", "mcp": "mcp", "bedrock": "bedrock",
 		"vertex": "vertex", "foundry": "foundry", "copilot": "copilot", "agentforce": "agentforce"}
 	if len(Types) != len(want) {
@@ -26,7 +26,7 @@ func TestLookup(t *testing.T) {
 		t.Error("ldap is not a governed type")
 	}
 	// the connectors that read straight into the graph, and the ones that hand over to a feature
-	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false, "azurerbac": false, "gcpiam": false, "successfactors": false, "unixssh": false, "servicenow": false, "atlassian": false, "mcp": false, "bedrock": false, "vertex": false, "foundry": false, "copilot": false, "agentforce": false,
+	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false, "azurerbac": false, "gcpiam": false, "successfactors": false, "unixssh": false, "sftpdrop": false, "servicenow": false, "atlassian": false, "mcp": false, "bedrock": false, "vertex": false, "foundry": false, "copilot": false, "agentforce": false,
 		"awsorg": true, "fieldglass": true, "beeline": true, "csvfeed": true} {
 		if got, _ := Lookup(id); got.Feature != feature {
 			t.Errorf("%s feature = %v", id, got.Feature)
@@ -148,6 +148,16 @@ func TestValidateSettings(t *testing.T) {
 		{Copilot, map[string]string{"tenant_id": "x", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}, "tenant_id"},
 		{Agentforce, map[string]string{"api_version": "61"}, "api_version"},
 		{Agentforce, map[string]string{"login_url": "https://evil.example"}, "login_url"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "directory": "/d/../etc"}, "directory"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "directory": "relative"}, "directory"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "directory": "/d//x"}, "directory"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_account_id": "ID", "accounts_username": "U", "accounts_file": "../a.csv"}, "accounts_file"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_account_id": "ID", "accounts_username": "U", "accounts_file": "sub/a.csv"}, "accounts_file"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "entitlements_file": "/etc/passwd"}, "entitlements_file"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "accounts_email": "bad\ncol"}, "accounts_email"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "command": "id"}, "command"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d"}, "accounts_file"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_file": "a.csv", "accounts_username": "U"}, "accounts_account_id"},
 		{GCPIAM, map[string]string{}, "organization_id"},
 		{GCPIAM, map[string]string{"organization_id": "organizations/1"}, "organization_id"},
 		{GCPIAM, map[string]string{"folder_ids": "a"}, "folder_ids"},

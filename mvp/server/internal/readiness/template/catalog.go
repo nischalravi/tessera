@@ -4,7 +4,7 @@ import "slices"
 
 // TemplateIDs are the connector templates that ship (base is extended, not used directly).
 var TemplateIDs = []string{"ad", "ldap", "entra", "okta", "google", "workday", "scim_app", "rest_generic",
-	"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "sql", "azurerbac", "gcpiam", "salesforce", "successfactors", "unixssh", "servicenow", "atlassian", "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce"}
+	"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "sql", "azurerbac", "gcpiam", "salesforce", "successfactors", "unixssh", "sftpdrop", "servicenow", "atlassian", "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce"}
 
 // Categories group checklist items in the UI (§10.2).
 var Categories = []string{"access", "ownership", "transport", "scope", "identity_keys", "account_status",
@@ -67,7 +67,7 @@ var Checks = map[string]CheckSpec{
 	"tls_chain":                 live(OpConnect, "ad", "ldap"),
 	"bind":                      live(OpAuthenticate, "ad", "ldap"),
 	"token_acquire":             live(OpAuthenticate, "entra", "okta", "google"),
-	"auth_ok":                   live(OpAuthenticate, "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce", "scim_app", "workday", "rest_generic", "awsorg", "githubscan", "erp", "pam", "vms", "azurerbac", "gcpiam", "salesforce", "successfactors", "unixssh", "servicenow", "atlassian"),
+	"auth_ok":                   live(OpAuthenticate, "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce", "scim_app", "workday", "rest_generic", "awsorg", "githubscan", "erp", "pam", "vms", "azurerbac", "gcpiam", "salesforce", "successfactors", "unixssh", "sftpdrop", "servicenow", "atlassian"),
 	"bind_identity":             live(OpAuthenticate, "ldap"),
 	"ad_svc_groups":             live(OpEffectiveRight, "ad"),
 	"ad_effective_rights":       live(OpEffectiveRight, "ad"),
@@ -110,7 +110,7 @@ var Checks = map[string]CheckSpec{
 	"mapping_applied":           live(OpSample, "rest_generic"),
 	"field_inventory":           live(OpSample, "workday", "successfactors"),
 	"endpoint_reachable":        live(OpConnect, "mcp", "workday", "scim_app", "rest_generic", "githubscan", "erp", "pam", "vms", "salesforce", "successfactors", "servicenow", "atlassian"),
-	"read_probe":                live(OpSample, "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce", "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "successfactors", "unixssh", "servicenow", "atlassian"),
+	"read_probe":                live(OpSample, "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce", "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "successfactors", "unixssh", "sftpdrop", "servicenow", "atlassian"),
 
 	// data checks over the staged snapshot
 	"key_unique":            data(),

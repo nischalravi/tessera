@@ -145,6 +145,14 @@ func (p Params) Env() (func(string) string, error) {
 		m[pre+"HOST"], m[pre+"PORT"], m[pre+"USER"] = set("host"), set("port"), set("username")
 		m[pre+"HOST_KEY"], m[pre+"SUDO"] = set("host_key"), set("use_sudo")
 		m[pre+"KEY"] = "env:" + secretVar
+	case SFTPDrop:
+		m[pre+"HOST"], m[pre+"PORT"], m[pre+"USER"], m[pre+"HOST_KEY"] = set("host"), set("port"), set("username"), set("host_key")
+		m[pre+"DIR"], m[pre+"ACCOUNTS_FILE"], m[pre+"ENTITLEMENTS_FILE"] = set("directory"), set("accounts_file"), set("entitlements_file")
+		m[pre+"COL_ACCOUNT_ID"], m[pre+"COL_USERNAME"], m[pre+"COL_EMAIL"] = set("accounts_account_id"), set("accounts_username"), set("accounts_email")
+		m[pre+"COL_IDENTITY_ID"], m[pre+"COL_STATUS"] = set("accounts_identity_id"), set("accounts_status")
+		m[pre+"COL_ENT_ACCOUNT_ID"], m[pre+"COL_ENT_ENTITLEMENT"] = set("entitlements_account_id"), set("entitlements_entitlement")
+		m[pre+"COL_ENT_NAME"], m[pre+"COL_ENT_PRIVILEGED"] = set("entitlements_name"), set("entitlements_privileged")
+		m[pre+"KEY"] = "env:" + secretVar
 	default:
 		return nil, fmt.Errorf("governed: %s is read by its own feature, not by the connector sync", p.Type)
 	}

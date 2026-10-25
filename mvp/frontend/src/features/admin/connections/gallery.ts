@@ -42,6 +42,7 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   azurerbac: { vendor: "azure", publisher: "Microsoft", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
   gcpiam: { vendor: "gcp", publisher: "Google Cloud", category: "Cloud & IaaS", capabilities: ["Access inventory"] },
   unixssh: { vendor: "linux", publisher: "Linux, Unix and AIX hosts", category: "Servers & hosts", capabilities: ["Access inventory"] },
+  sftpdrop: { vendor: "sftp", publisher: "Legacy systems that export files", category: "Servers & hosts", capabilities: ["Identity source"] },
   githubscan: { vendor: "github", publisher: "GitHub", category: "Source code", capabilities: ["Agent discovery"] },
   sap: { vendor: "sap", publisher: "SAP", category: "ERP", capabilities: ["Access inventory", "Provisioning target"] },
   oracle: { vendor: "oracle", publisher: "Oracle", category: "ERP", capabilities: ["Access inventory", "Provisioning target"] },

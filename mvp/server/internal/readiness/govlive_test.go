@@ -42,6 +42,7 @@ var govConfig = map[string]string{
 	"copilot":        `{"base_url":"https://acme.crm.dynamics.com","correlation_key":"id","settings":{"tenant_id":"11111111-2222-3333-4444-555555555555","client_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}}`,
 	"agentforce":     `{"base_url":"https://acme.my.salesforce.com","correlation_key":"id"}`,
 	"unixssh":        `{"correlation_key":"id","settings":{"host":"host1.example.com","username":"tessera","host_key":"SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8"}}`,
+	"sftpdrop":       `{"correlation_key":"id","settings":{"host":"files.example.com","username":"tessera","host_key":"SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8","directory":"/drop/hr","accounts_file":"accounts.csv","accounts_account_id":"ID","accounts_username":"Login"}}`,
 }
 
 func createGov(t *testing.T, s *Service, st Scope, typ, name, cfg string) string {
@@ -492,7 +493,7 @@ func TestGoverned_ERPWriteScopeAttestedWhenUnsupported(t *testing.T) {
 
 func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 	reg := template.MustDefault()
-	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "unixssh", "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce"} {
+	for _, id := range []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "azurerbac", "gcpiam", "unixssh", "sftpdrop", "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce"} {
 		r, ok := reg.Get(id)
 		if !ok {
 			t.Fatalf("no template %s", id)
@@ -500,7 +501,7 @@ func TestGoverned_EveryTemplateItemCheckAllowed(t *testing.T) {
 		if got := slices.Sorted(slices.Values(r.ConnectorTypes)); !slices.Equal(got, governedTypesOf(id)) {
 			t.Errorf("%s covers %v", id, r.ConnectorTypes)
 		}
-		wantInv := id == "awsorg" || id == "githubscan" || id == "vms" || id == "azurerbac" || id == "gcpiam" || id == "unixssh"
+		wantInv := id == "awsorg" || id == "githubscan" || id == "vms" || id == "azurerbac" || id == "gcpiam" || id == "unixssh" || id == "sftpdrop"
 		if r.Inventory != wantInv {
 			t.Errorf("%s inventory = %v", id, r.Inventory)
 		}

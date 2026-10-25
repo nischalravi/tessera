@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { BrandingSettings, LabelSettings, api, brandingApi, labelsApi, labelsPath, preferencesPath, relTime, useApi } from "../../api";
 import { useSession } from "../../app/auth";
+import { refreshConsoleBranding } from "../../app/consoleBranding";
 import { usePreferences } from "../../app/PrefsGate";
 import { PreferencesView } from "../../prefs";
 import { applyLabels } from "../../labels";
@@ -10,7 +11,7 @@ import { BrandMark } from "../../public/BrandMark";
 import { errText } from "./common";
 
 /**
- * Branding: the product name, button colours and logo the sign-in page, the guest claim pages and emails show.
+ * Branding: the product name, button colours and logo the console, the sign-in page, the guest claim pages and emails show.
  * The API enforces the same rules as the form: the colour pair must reach WCAG AA, the logo is a PNG or JPEG
  * (never SVG) within the size and dimension limits. Emails carry the name, and the logo when the switch below is on.
  */
@@ -99,6 +100,7 @@ function BrandingForm() {
       setRemoveLogo(false);
       toast("Branding saved");
       reload();
+      void refreshConsoleBranding();
     } catch (err) {
       setProblem(errText(err));
     } finally {
@@ -111,7 +113,7 @@ function BrandingForm() {
       <form className="stack" onSubmit={submit}>
         <label className="field">Product name
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} required disabled={!edit} aria-describedby="brand-name-help" />
-          <span id="brand-name-help" className="xs faint">Shown where “Tessera” would be: the sign-in and claim pages, and the subject and footer of emails. With “Show the logo in emails” on (below), emails carry the logo too.</span>
+          <span id="brand-name-help" className="xs faint">Shown where “Tessera” would be: the top bar and browser tab title of this console, the sign-in and claim pages, and the subject and footer of emails. The logo and button colour also appear in the top bar and on primary buttons here; a colour too faint against the light or dark theme is not used there. With “Show the logo in emails” on (below), emails carry the logo too.</span>
         </label>
         <div className="row" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
           <label className="field">Button colour

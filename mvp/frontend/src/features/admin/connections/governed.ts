@@ -38,6 +38,7 @@ export const SETTING_KEYS: Record<string, string[]> = {
   foundry: ["tenant_id", "client_id", "owner"],
   copilot: ["tenant_id", "client_id"],
   agentforce: ["api_version"],
+  sftpdrop: ["host", "port", "username", "host_key", "directory", "accounts_file", "entitlements_file", "accounts_account_id", "accounts_username", "accounts_email", "accounts_identity_id", "accounts_status", "entitlements_account_id", "entitlements_entitlement", "entitlements_name", "entitlements_privileged"],
 };
 
 const VAULT_URL = { label: "Vault URL", hint: "The vault's HTTPS host name, no path.", required: true };
@@ -197,6 +198,27 @@ export const GOVERNED: Record<string, GovType> = {
     baseUrl: { label: "My Domain URL", hint: "https://acme.my.salesforce.com: the org's My Domain URL, HTTPS only, no path.", required: true },
     settings: [{ key: "api_version", label: "API version", hint: "Optional, v61.0 and the like." }],
     credential: { label: "Connected app credential (JSON)", hint: "{\"client_id\": \"<consumer key>\", \"username\": \"<integration user>\", \"private_key\": \"-----BEGIN PRIVATE KEY-----...\"}: the JWT bearer flow; no password is kept.", area: true },
+  },
+  sftpdrop: {
+    settings: [
+      { key: "host", label: "Host", required: true, hint: "The SFTP server's host name or IP address. Private, loopback and link-local addresses are refused from the server." },
+      { key: "port", label: "SSH port", hint: "1 to 65535, default 22." },
+      { key: "username", label: "SFTP user", required: true, hint: "A dedicated account that can read the drop directory only." },
+      { key: "host_key", label: "Host key", required: true, hint: "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A server whose key differs is refused; there is no trust on first use." },
+      { key: "directory", label: "Directory", required: true, hint: "The absolute directory the files are read from, as the server reports it. A link, or a path through one, is refused." },
+      { key: "accounts_file", label: "Accounts file", required: true, hint: "The plain file name of the accounts CSV (at most 512 KiB and 5000 rows)." },
+      { key: "entitlements_file", label: "Entitlements file", hint: "Optional: the plain file name of the account-entitlement CSV, one row per account and entitlement." },
+      { key: "accounts_account_id", label: "Accounts: account id column", required: true, hint: "The column that identifies the account." },
+      { key: "accounts_username", label: "Accounts: username column", required: true, hint: "The column with the login name." },
+      { key: "accounts_email", label: "Accounts: email column", hint: "Optional: correlates the account to a person." },
+      { key: "accounts_identity_id", label: "Accounts: identity id column", hint: "Optional: the person's external id, tried before the email." },
+      { key: "accounts_status", label: "Accounts: status column", hint: "Optional: active or disabled. Without it every account is active." },
+      { key: "entitlements_account_id", label: "Entitlements: account id column", hint: "Required with an entitlements file." },
+      { key: "entitlements_entitlement", label: "Entitlements: entitlement column", hint: "Required with an entitlements file." },
+      { key: "entitlements_name", label: "Entitlements: name column", hint: "Optional: a display name for the entitlement." },
+      { key: "entitlements_privileged", label: "Entitlements: privileged column", hint: "Optional: yes or no." },
+    ],
+    credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
   },
   agentcore: {
     settings: [{ key: "snapshot", label: "Snapshot file", required: true, hint: "A recorded AgentCore snapshot (JSON) in this tenant's directory. There is no live AgentCore client; refused in prod." }],

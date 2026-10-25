@@ -3939,9 +3939,10 @@ export const labelsApi = {
 };
 
 /** The tenant's branding for the sign-in and claim pages; null if it cannot be read (the pages then show the default). */
-export async function publicBranding(tenant: string): Promise<PublicBranding | null> {
+export async function publicBranding(tenant: string, fresh = false): Promise<PublicBranding | null> {
   try {
-    const res = await fetch(`/api/auth/branding?${new URLSearchParams({ tenant })}`, { credentials: "same-origin" });
+    // The route is cacheable for five minutes; after a save, `fresh` revalidates (ETag) so the new branding shows at once.
+    const res = await fetch(`/api/auth/branding?${new URLSearchParams({ tenant })}`, { credentials: "same-origin", ...(fresh ? { cache: "no-cache" as const } : {}) });
     return res.ok ? ((await res.json()) as PublicBranding) : null;
   } catch {
     return null;

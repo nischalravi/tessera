@@ -41,6 +41,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sftpdrop"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
@@ -86,7 +87,10 @@ import (
 // Foundry agents, TESSERA_FOUNDRY_*), "copilot" (Microsoft Copilot Studio through Dataverse, TESSERA_COPILOT_*)
 // and "agentforce" (Salesforce Agentforce, TESSERA_AGENTFORCE_*), all read-only.
 //
-// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, azure, gcp, unix, mcp, bedrock, vertex, foundry, copilot, agentforce, github-scan and aws-agentcore factories. hc is the
+// SFTP file drop (issue #563): "sftp" reads an accounts CSV (and an entitlements CSV) from one directory of an
+// SFTP server (TESSERA_SFTPDROP_*) with the flat-file column mapping, a pinned host key and a key credential.
+//
+// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, azure, gcp, unix, sftp, mcp, bedrock, vertex, foundry, copilot, agentforce, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -142,6 +146,9 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	}
 	connectors.Factories["unix"] = func(time.Time) (connectors.Connector, error) {
 		return unixssh.FromEnv(os.Getenv, rt)
+	}
+	connectors.Factories["sftp"] = func(time.Time) (connectors.Connector, error) {
+		return sftpdrop.FromEnv(os.Getenv, rt)
 	}
 	connectors.Factories["gcp"] = func(now time.Time) (connectors.Connector, error) {
 		return gcpiam.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
