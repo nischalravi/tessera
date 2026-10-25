@@ -19,6 +19,10 @@ test("which types take a base URL and a credential", () => {
   assert.equal(GOVERNED.gcpiam.credential?.area, true); // the key JSON
   assert.equal(GOVERNED.unixssh.baseUrl, undefined); // the host is a setting, not a URL
   assert.equal(GOVERNED.unixssh.credential?.area, true); // the private key
+  for (const type of ["kubernetes", "vault"]) {
+    assert.equal(GOVERNED[type].baseUrl?.required, true, type); // the server's own address
+    assert.equal(GOVERNED[type].credential?.area, true, type);
+  }
   assert.equal(GOVERNED.sftpdrop.baseUrl, undefined); // the host is a setting, not a URL
   assert.equal(GOVERNED.sftpdrop.credential?.area, true); // the private key
   assert.equal(GOVERNED.agentcore.credential, null); // a recorded snapshot holds no secret
@@ -52,6 +56,8 @@ test("required fields are named until they are filled", () => {
   assert.deepEqual(missingRequired("agentcore", "", {}), ["Snapshot file"]);
   assert.deepEqual(missingRequired("azurerbac", "", {}), ["Directory (tenant) id", "Application (client) id"]); // no base URL: the public cloud
   assert.deepEqual(missingRequired("gcpiam", "", {}), []); // one of organization, folders or projects: the server checks
+  assert.deepEqual(missingRequired("kubernetes", "", {}), ["API server URL"]);
+  assert.deepEqual(missingRequired("vault", "", {}), ["Vault URL"]);
   assert.deepEqual(missingRequired("unixssh", "", {}), ["Host", "SSH user", "Host key"]);
   assert.deepEqual(missingRequired("sftpdrop", "", {}), ["Host", "SFTP user", "Host key", "Directory", "Accounts file", "Accounts: account id column", "Accounts: username column"]);
   assert.deepEqual(missingRequired("ldap", "", {}), []);
@@ -81,4 +87,13 @@ test("Vertex: project and location are required; Foundry and Copilot: endpoint, 
   assert.deepEqual(missingRequired("agentforce", "", {}), ["My Domain URL"]);
   assert.deepEqual(missingRequired("agentforce", "https://acme.my.salesforce.com", {}), []);
   for (const id of ["vertex", "foundry", "copilot", "agentforce"]) assert.equal(GOVERNED[id].credential?.area, true, id);
+});
+
+test("OpenShift is a Yes/No flag that defaults to No and sends the server's string, left unset while untouched", () => {
+  assert.equal(GOVERNED.kubernetes.settings.find((f) => f.key === "openshift")?.flag, true);
+  assert.deepEqual(settingValues("kubernetes", undefined), { "settings.namespaces": "", "settings.openshift": "false" });
+  assert.deepEqual(settingValues("kubernetes", { openshift: "true" }), { "settings.namespaces": "", "settings.openshift": "true" });
+  assert.equal(settingsPatch("kubernetes", { "settings.namespaces": "", "settings.openshift": "false" }, undefined), null);
+  assert.deepEqual(settingsPatch("kubernetes", { "settings.openshift": "true" }, undefined), { openshift: "true" });
+  assert.deepEqual(settingsPatch("kubernetes", { "settings.openshift": "false" }, { openshift: "true" }), { openshift: "false" }); // turning it off is sent
 });

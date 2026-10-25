@@ -3,7 +3,7 @@
 // AgentCore, SuccessFactors). Pure, so `npm test` covers it. The setting keys mirror internal/connectors/governed
 // (SettingSpecs); a Go test compares them with SETTING_KEYS below, so the two cannot drift.
 
-export interface GovField { key: string; label: string; hint?: string; required?: boolean; area?: boolean }
+export interface GovField { key: string; label: string; hint?: string; required?: boolean; area?: boolean; /** A Yes/No select; the server takes the string "true" or "false". */ flag?: boolean }
 export interface GovCredential { label: string; hint: string; area?: boolean }
 export interface GovType {
   /** The base URL field, when the type takes one (GitHub's is optional). */
@@ -38,6 +38,8 @@ export const SETTING_KEYS: Record<string, string[]> = {
   foundry: ["tenant_id", "client_id", "owner"],
   copilot: ["tenant_id", "client_id"],
   agentforce: ["api_version"],
+  kubernetes: ["namespaces", "openshift"],
+  vault: ["namespace"],
   sftpdrop: ["host", "port", "username", "host_key", "directory", "accounts_file", "entitlements_file", "accounts_account_id", "accounts_username", "accounts_email", "accounts_identity_id", "accounts_status", "entitlements_account_id", "entitlements_entitlement", "entitlements_name", "entitlements_privileged"],
 };
 
@@ -199,6 +201,21 @@ export const GOVERNED: Record<string, GovType> = {
     settings: [{ key: "api_version", label: "API version", hint: "Optional, v61.0 and the like." }],
     credential: { label: "Connected app credential (JSON)", hint: "{\"client_id\": \"<consumer key>\", \"username\": \"<integration user>\", \"private_key\": \"-----BEGIN PRIVATE KEY-----...\"}: the JWT bearer flow; no password is kept.", area: true },
   },
+  kubernetes: {
+    baseUrl: { label: "API server URL", hint: "https://api.cluster.example.com:6443; HTTPS host name and port, no path. Its certificate must chain to a public CA.", required: true },
+    settings: [
+      { key: "namespaces", label: "Namespaces", hint: "Comma separated, at most 100. Optional: read the roles, role bindings and service accounts of these namespaces only." },
+      { key: "openshift", label: "OpenShift", flag: true, hint: "Yes also reads the groups of user.openshift.io (default No)." },
+    ],
+    credential: { label: "ServiceAccount token", hint: "The bearer token of a ServiceAccount that can only list RBAC objects, service accounts and (OpenShift) groups. Read-only: Tessera never writes to the cluster.", area: true },
+  },
+  vault: {
+    baseUrl: { label: "Vault URL", hint: "https://vault.example.com:8200; HTTPS host name and port, no path.", required: true },
+    settings: [
+      { key: "namespace", label: "Namespace", hint: "Vault Enterprise namespace path. Optional: one connection reads one namespace." },
+    ],
+    credential: { label: "Vault token", hint: "A periodic token of a read-only policy (read sys/policies/acl and sys/auth, list and read the auth role, user, group and identity collections). Never a root token. Read-only: no secret is read.", area: true },
+  },
   sftpdrop: {
     settings: [
       { key: "host", label: "Host", required: true, hint: "The SFTP server's host name or IP address. Private, loopback and link-local addresses are refused from the server." },
@@ -231,7 +248,7 @@ export const isGoverned = (connectorType: string) => connectorType in GOVERNED;
 /** Form values of a type's settings, from the saved config. */
 export function settingValues(connectorType: string, saved?: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const f of GOVERNED[connectorType]?.settings ?? []) out[`settings.${f.key}`] = saved?.[f.key] ?? "";
+  for (const f of GOVERNED[connectorType]?.settings ?? []) out[`settings.${f.key}`] = saved?.[f.key] ?? (f.flag ? "false" : "");
   return out;
 }
 
@@ -240,7 +257,7 @@ export function settingsPatch(connectorType: string, values: Record<string, stri
   const next: Record<string, string> = {};
   for (const f of GOVERNED[connectorType]?.settings ?? []) {
     const v = (values[`settings.${f.key}`] ?? "").trim();
-    if (v) next[f.key] = v;
+    if (v && !(f.flag && v === "false" && !saved?.[f.key])) next[f.key] = v; // an untouched No is left unset, as the server's default
   }
   const was = Object.fromEntries(Object.entries(saved ?? {}).filter(([, v]) => v));
   const same = Object.keys(next).length === Object.keys(was).length && Object.entries(next).every(([k, v]) => was[k] === v);
