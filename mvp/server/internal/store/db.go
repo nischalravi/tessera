@@ -183,6 +183,8 @@ var tables = []string{
 	"aws_edge_evaluations", "aws_pr_comment_settings",
 	// AWS collection runs (schema/0914_aws_collection_runs.sql)
 	"aws_collection_runs",
+	// AWS usage (schema/0915_aws_usage.sql)
+	"aws_usage_daily", "aws_usage_state", "aws_usage_gaps",
 	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
 	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
 	// shared signals receiver (schema/0353_ssf.sql)

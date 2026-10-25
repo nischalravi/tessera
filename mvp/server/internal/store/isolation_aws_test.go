@@ -304,6 +304,9 @@ func awsCovered() map[string]bool {
 		"UpsertEvaluatorEdge": true, "AWSPRCommentSettings": true, "PutAWSPRCommentSettings": true,
 		"InsertAWSCollectionRun": true, "AWSCollectionRun": true, "AWSCollectionRuns": true, "ActiveAWSCollectionRun": true,
 		"StartAWSCollectionRun": true, "FinishAWSCollectionRun": true, "FailStaleAWSCollectionRuns": true,
+		// the usage tables: TestIsolation_AWSUsage
+		"AddAWSUsage": true, "SetAWSUsage": true, "AWSUsage": true, "PruneAWSUsage": true, "AWSUsageState": true, "AWSUsageStates": true,
+		"PutAWSUsageState": true, "SwapAWSUsageState": true, "PutAWSUsageGap": true, "ClearAWSUsageGap": true, "AWSUsageGaps": true, "PruneAWSUsageGaps": true,
 	}
 }
 
@@ -477,5 +480,120 @@ func TestIsolation_AWSCollectionRuns(t *testing.T) {
 		}
 		return c.InsertAWSCollectionRun(&store.AWSCollectionRun{ID: "run-a2", ConnectorID: conn, Trigger: store.AWSRunSchedule,
 			Status: store.AWSRunQueued, RequestedBy: "x", QueuedAt: later})
+	})
+}
+
+// The usage tables (issue #644; schema/0915): a tenant's usage rows, ingest
+// state and gaps are its own, even when both tenants have the same connector,
+// principal, action and day. Another tenant's writes never touch them.
+func TestIsolation_AWSUsage(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	const (
+		conn = "00000000-0000-4000-8000-0000000000c1" // the same connector id in both tenants
+		arn  = "arn:aws:iam::111122223333:role/deploy"
+		day  = "2026-10-20"
+	)
+	row := func(source string, n int64) *store.AWSUsageDay {
+		return &store.AWSUsageDay{ConnectorID: conn, PrincipalARN: arn, Action: "s3:GetObject", ResourceScope: "*", Day: day,
+			Source: source, Count: n, LastSeen: storetest.Now}
+	}
+	for i, tn := range []storetest.Tenant{f.A, f.B} {
+		n := int64(i + 1)
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			if err := c.AddAWSUsage(row(store.AWSUsageCloudTrail, n)); err != nil {
+				return err
+			}
+			if err := c.AddAWSUsage(row(store.AWSUsageCloudTrail, n)); err != nil { // adds: the day's count is a sum
+				return err
+			}
+			if err := c.SetAWSUsage(row(store.AWSUsageAccessAdvisor, 1)); err != nil {
+				return err
+			}
+			if err := c.PutAWSUsageState(&store.AWSUsageState{ConnectorID: conn, Source: store.AWSUsageCloudTrail,
+				Cursor: json.RawMessage(`{"owner":"` + tn.Slug + `"}`), CoveredFrom: day, CoveredTo: day,
+				S3DataEvents: store.AWSDataEventsEnabled, UpdatedAt: storetest.Now}); err != nil {
+				return err
+			}
+			return c.PutAWSUsageGap(&store.AWSUsageGap{ConnectorID: conn, Source: store.AWSUsageCloudTrail, Ref: "key-1", Code: "too_large",
+				Detail: tn.Slug, Day: day, RecordedAt: storetest.Now})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		rows, err := c.AWSUsage("", "", "2000-01-01", 0)
+		if err != nil || len(rows) != 2 {
+			t.Fatalf("AWSUsage = %d rows, %v; want B's two", len(rows), err)
+		}
+		for _, r := range rows {
+			if r.Source == store.AWSUsageCloudTrail && r.Count != 4 { // B added 2 twice
+				t.Errorf("B's cloudtrail count = %d, want 4", r.Count)
+			}
+		}
+		st, err := c.AWSUsageState(conn, store.AWSUsageCloudTrail)
+		if err != nil || string(st.Cursor) != `{"owner":"`+f.B.Slug+`"}` || st.S3DataEvents != store.AWSDataEventsEnabled {
+			t.Errorf("AWSUsageState = %+v, %v; want B's", st, err)
+		}
+		if _, err := c.AWSUsageState(conn, store.AWSUsageAccessAdvisor); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("AWSUsageState(advisor) = %v, want ErrNotFound", err)
+		}
+		if gs, err := c.AWSUsageGaps("", 0); err != nil || len(gs) != 1 || gs[0].Detail != f.B.Slug {
+			t.Errorf("AWSUsageGaps = %v, %v; want B's one", gs, err)
+		}
+		// a swap is against B's own state only: A's state (the same connector and source) is not a prior B can match
+		aPrior := &store.AWSUsageState{ConnectorID: conn, Source: store.AWSUsageCloudTrail,
+			Cursor: json.RawMessage(`{"owner":"` + f.A.Slug + `"}`), UpdatedAt: storetest.Now}
+		next := &store.AWSUsageState{ConnectorID: conn, Source: store.AWSUsageCloudTrail, Cursor: json.RawMessage(`{"owner":"b2"}`),
+			UpdatedAt: storetest.Now.Add(time.Minute)}
+		if err := c.SwapAWSUsageState(next, aPrior); !errors.Is(err, store.ErrAWSUsageStateMoved) {
+			t.Errorf("SwapAWSUsageState(A's prior) = %v, want ErrAWSUsageStateMoved", err)
+		}
+		if err := c.SwapAWSUsageState(next, nil); !errors.Is(err, store.ErrAWSUsageStateMoved) {
+			t.Errorf("SwapAWSUsageState(no prior) over B's state = %v, want ErrAWSUsageStateMoved", err)
+		}
+		if err := c.SwapAWSUsageState(next, st); err != nil {
+			t.Errorf("SwapAWSUsageState(B's prior) = %v", err)
+		}
+		if err := c.SwapAWSUsageState(next, st); !errors.Is(err, store.ErrAWSUsageStateMoved) {
+			t.Errorf("a second swap from the same prior = %v, want ErrAWSUsageStateMoved", err)
+		}
+		if err := c.SwapAWSUsageState(&store.AWSUsageState{ConnectorID: conn, Source: store.AWSUsageAccessAdvisor, UpdatedAt: storetest.Now}, nil); err != nil {
+			t.Errorf("SwapAWSUsageState creating B's advisor state = %v", err)
+		}
+		// B pruning and clearing touches only B
+		if n, err := c.PruneAWSUsage("2026-11-01"); err != nil || n != 2 {
+			t.Errorf("PruneAWSUsage = %d, %v; want B's two", n, err)
+		}
+		if err := c.ClearAWSUsageGap(conn, store.AWSUsageCloudTrail, "key-1"); err != nil {
+			t.Error(err)
+		}
+		if n, err := c.PruneAWSUsageGaps(storetest.Now.Add(time.Hour)); err != nil || n != 0 {
+			t.Errorf("PruneAWSUsageGaps = %d, %v; want 0 (B's gap was cleared)", n, err)
+		}
+		return nil
+	})
+	inA(t, f, func(c *store.TenantTx) error {
+		rows, err := c.AWSUsage(conn, arn, "2026-10-01", 0)
+		if err != nil || len(rows) != 2 {
+			t.Fatalf("A's usage = %d rows, %v; B's prune removed some", len(rows), err)
+		}
+		for _, r := range rows {
+			if r.Source == store.AWSUsageCloudTrail && r.Count != 2 {
+				t.Errorf("A's cloudtrail count = %d, want 2", r.Count)
+			}
+		}
+		if st, err := c.AWSUsageState(conn, store.AWSUsageCloudTrail); err != nil || string(st.Cursor) != `{"owner":"`+f.A.Slug+`"}` {
+			t.Errorf("A's state = %+v, %v", st, err)
+		}
+		if gs, err := c.AWSUsageGaps(conn, 0); err != nil || len(gs) != 1 {
+			t.Errorf("A's gaps = %v, %v; B's clear removed it", gs, err)
+		}
+		// the store refuses a malformed row
+		bad := row(store.AWSUsageCloudTrail, 1)
+		bad.Day = "yesterday"
+		if err := c.AddAWSUsage(bad); err == nil {
+			t.Error("a row with a bad day was accepted")
+		}
+		return nil
 	})
 }

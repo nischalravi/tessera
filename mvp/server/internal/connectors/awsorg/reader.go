@@ -17,10 +17,19 @@ import (
 // connector is the crown jewel of design risk R1: it can read every policy in
 // the organization, so it must not be able to change one).
 //
+// The usage ingest (issue #644) adds the two Access Advisor calls (Generate
+// is a Read action: it starts a report and changes nothing) and the trail's
+// event selectors. Reading the trail's log files needs s3:ListBucket and
+// s3:GetObject, which are not here: on "*" they would read every object, so
+// TrailReaderPolicy grants them on the log prefix of the one bucket.
+//
 // sts:AssumeRole is not here: it is the permission of the caller in the role's
 // trust policy, not of the role.
 var ReaderActions = []string{
 	"iam:GetAccountAuthorizationDetails",
+	"iam:GenerateServiceLastAccessedDetails",
+	"iam:GetServiceLastAccessedDetails",
+	"cloudtrail:GetEventSelectors",
 	"organizations:DescribeOrganization",
 	"organizations:ListRoots",
 	"organizations:ListOrganizationalUnitsForParent",
