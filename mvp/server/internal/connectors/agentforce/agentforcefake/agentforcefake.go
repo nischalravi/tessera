@@ -167,8 +167,15 @@ func (f *Fake) query(w http.ResponseWriter, q string, skip int) {
 		http.Error(w, `[{"errorCode":"INVALID_TYPE"}]`, http.StatusBadRequest)
 		return
 	case strings.Contains(q, "FROM GenAiPlannerDefinition"):
-		for id, d := range f.planners {
-			rows = append(rows, map[string]any{"Id": id, "DeveloperName": d})
+		// a fixed order, as Salesforce keeps across the pages of one query: ranging over the map would
+		// reorder every page and could repeat or skip a planner (issue #628)
+		ids := make([]string, 0, len(f.planners))
+		for id := range f.planners {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			rows = append(rows, map[string]any{"Id": id, "DeveloperName": f.planners[id]})
 		}
 	case strings.Contains(q, "FROM GenAiFunctionDefinition"):
 		for _, x := range f.funcs {
