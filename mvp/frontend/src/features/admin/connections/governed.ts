@@ -3,7 +3,7 @@
 // AgentCore, SuccessFactors). Pure, so `npm test` covers it. The setting keys mirror internal/connectors/governed
 // (SettingSpecs); a Go test compares them with SETTING_KEYS below, so the two cannot drift.
 
-export interface GovField { key: string; label: string; hint?: string; required?: boolean; area?: boolean }
+export interface GovField { key: string; label: string; hint?: string; required?: boolean; area?: boolean; /** A Yes/No select; the server takes the string "true" or "false". */ flag?: boolean }
 export interface GovCredential { label: string; hint: string; area?: boolean }
 export interface GovType {
   /** The base URL field, when the type takes one (GitHub's is optional). */
@@ -32,6 +32,9 @@ export const SETTING_KEYS: Record<string, string[]> = {
   servicenow: ["auth_mode", "username", "client_id"],
   atlassian: ["email", "org_id", "project_keys"],
   unixssh: ["host", "port", "username", "host_key", "use_sudo"],
+  kubernetes: ["namespaces", "openshift"],
+  vault: ["namespace"],
+  sftpdrop: ["host", "port", "username", "host_key", "directory", "accounts_file", "entitlements_file", "accounts_account_id", "accounts_username", "accounts_email", "accounts_identity_id", "accounts_status", "entitlements_account_id", "entitlements_entitlement", "entitlements_name", "entitlements_privileged"],
 };
 
 const VAULT_URL = { label: "Vault URL", hint: "The vault's HTTPS host name, no path.", required: true };
@@ -149,6 +152,42 @@ export const GOVERNED: Record<string, GovType> = {
     ],
     credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
   },
+  kubernetes: {
+    baseUrl: { label: "API server URL", hint: "https://api.cluster.example.com:6443; HTTPS host name and port, no path. Its certificate must chain to a public CA.", required: true },
+    settings: [
+      { key: "namespaces", label: "Namespaces", hint: "Comma separated, at most 100. Optional: read the roles, role bindings and service accounts of these namespaces only." },
+      { key: "openshift", label: "OpenShift", flag: true, hint: "Yes also reads the groups of user.openshift.io (default No)." },
+    ],
+    credential: { label: "ServiceAccount token", hint: "The bearer token of a ServiceAccount that can only list RBAC objects, service accounts and (OpenShift) groups. Read-only: Tessera never writes to the cluster.", area: true },
+  },
+  vault: {
+    baseUrl: { label: "Vault URL", hint: "https://vault.example.com:8200; HTTPS host name and port, no path.", required: true },
+    settings: [
+      { key: "namespace", label: "Namespace", hint: "Vault Enterprise namespace path. Optional: one connection reads one namespace." },
+    ],
+    credential: { label: "Vault token", hint: "A periodic token of a read-only policy (read sys/policies/acl and sys/auth, list and read the auth role, user, group and identity collections). Never a root token. Read-only: no secret is read.", area: true },
+  },
+  sftpdrop: {
+    settings: [
+      { key: "host", label: "Host", required: true, hint: "The SFTP server's host name or IP address. Private, loopback and link-local addresses are refused from the server." },
+      { key: "port", label: "SSH port", hint: "1 to 65535, default 22." },
+      { key: "username", label: "SFTP user", required: true, hint: "A dedicated account that can read the drop directory only." },
+      { key: "host_key", label: "Host key", required: true, hint: "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A server whose key differs is refused; there is no trust on first use." },
+      { key: "directory", label: "Directory", required: true, hint: "The absolute directory the files are read from, as the server reports it. A link, or a path through one, is refused." },
+      { key: "accounts_file", label: "Accounts file", required: true, hint: "The plain file name of the accounts CSV (at most 512 KiB and 5000 rows)." },
+      { key: "entitlements_file", label: "Entitlements file", hint: "Optional: the plain file name of the account-entitlement CSV, one row per account and entitlement." },
+      { key: "accounts_account_id", label: "Accounts: account id column", required: true, hint: "The column that identifies the account." },
+      { key: "accounts_username", label: "Accounts: username column", required: true, hint: "The column with the login name." },
+      { key: "accounts_email", label: "Accounts: email column", hint: "Optional: correlates the account to a person." },
+      { key: "accounts_identity_id", label: "Accounts: identity id column", hint: "Optional: the person's external id, tried before the email." },
+      { key: "accounts_status", label: "Accounts: status column", hint: "Optional: active or disabled. Without it every account is active." },
+      { key: "entitlements_account_id", label: "Entitlements: account id column", hint: "Required with an entitlements file." },
+      { key: "entitlements_entitlement", label: "Entitlements: entitlement column", hint: "Required with an entitlements file." },
+      { key: "entitlements_name", label: "Entitlements: name column", hint: "Optional: a display name for the entitlement." },
+      { key: "entitlements_privileged", label: "Entitlements: privileged column", hint: "Optional: yes or no." },
+    ],
+    credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
+  },
   agentcore: {
     settings: [{ key: "snapshot", label: "Snapshot file", required: true, hint: "A recorded AgentCore snapshot (JSON) in this tenant's directory. There is no live AgentCore client; refused in prod." }],
     credential: null,
@@ -160,7 +199,7 @@ export const isGoverned = (connectorType: string) => connectorType in GOVERNED;
 /** Form values of a type's settings, from the saved config. */
 export function settingValues(connectorType: string, saved?: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const f of GOVERNED[connectorType]?.settings ?? []) out[`settings.${f.key}`] = saved?.[f.key] ?? "";
+  for (const f of GOVERNED[connectorType]?.settings ?? []) out[`settings.${f.key}`] = saved?.[f.key] ?? (f.flag ? "false" : "");
   return out;
 }
 
@@ -169,7 +208,7 @@ export function settingsPatch(connectorType: string, values: Record<string, stri
   const next: Record<string, string> = {};
   for (const f of GOVERNED[connectorType]?.settings ?? []) {
     const v = (values[`settings.${f.key}`] ?? "").trim();
-    if (v) next[f.key] = v;
+    if (v && !(f.flag && v === "false" && !saved?.[f.key])) next[f.key] = v; // an untouched No is left unset, as the server's default
   }
   const was = Object.fromEntries(Object.entries(saved ?? {}).filter(([, v]) => v));
   const same = Object.keys(next).length === Object.keys(was).length && Object.entries(next).every(([k, v]) => was[k] === v);

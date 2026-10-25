@@ -22,10 +22,13 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/kubernetes"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sftpdrop"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vault"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vms"
 )
 
@@ -196,6 +199,45 @@ func Prober(p governed.Params, n governed.Net) (connectors.Prober, error) {
 			}
 			return counts, err
 		}}, nil
+	case governed.Kubernetes:
+		getenv, err := p.Env()
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := kubernetes.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := kubernetes.Open(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		return &saasProber{base: p.BaseURL, hc: n.HC, id: c.Identity(), mode: c.Mode(), probe: func(ctx context.Context) (map[string]int, error) {
+			r, err := c.Probe(ctx)
+			counts := map[string]int{"cluster_role": r.ClusterRoles, "cluster_role_binding": r.ClusterRoleBindings, "service_account": r.ServiceAccounts}
+			if c.OpenShift() {
+				counts["group"] = r.Groups
+			}
+			return counts, err
+		}}, nil
+	case governed.Vault:
+		getenv, err := p.Env()
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := vault.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := vault.Open(cfg, n.RT, n.HC, n.Clock)
+		if err != nil {
+			return nil, err
+		}
+		id := "token"
+		return &saasProber{base: p.BaseURL, hc: n.HC, id: id, mode: c.Mode(), probe: func(ctx context.Context) (map[string]int, error) {
+			r, err := c.Probe(ctx)
+			return map[string]int{"policy": r.Policies, "auth_method": r.AuthMethods, "entity": r.Entities}, err
+		}}, nil
 	case governed.UnixSSH:
 		getenv, err := p.Env()
 		if err != nil {
@@ -215,6 +257,30 @@ func Prober(p governed.Params, n governed.Net) (connectors.Prober, error) {
 				return cloudProbe{}, err
 			}
 			return cloudProbe{mode: "ssh_key", counts: map[string]int{"account": len(snap.Accounts), "group": len(snap.Groups), "sudo_rule": len(snap.Rules)}}, nil
+		}, refused: unixssh.ErrRefused}, nil
+	case governed.SFTPDrop:
+		getenv, err := p.Env()
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := sftpdrop.ConfigFromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		c, err := sftpdrop.New(cfg, n.RT, nil)
+		if err != nil {
+			return nil, err
+		}
+		return &cloudProber{id: c.Identity(), probe: func(ctx context.Context) (cloudProbe, error) {
+			snap, err := c.Read(ctx)
+			if err != nil {
+				return cloudProbe{}, err
+			}
+			counts := map[string]int{"account": len(snap.Accounts)}
+			if len(snap.Entitlements) > 0 {
+				counts["entitlement"] = len(snap.Entitlements)
+			}
+			return cloudProbe{mode: "ssh_key", counts: counts}, nil
 		}, refused: unixssh.ErrRefused}, nil
 	case governed.AWSOrg:
 		if n.AWS == nil {

@@ -383,6 +383,7 @@ builder can resolve (never the process environment).
 | Cloud & IaaS | `azurerbac` | `azurerbac` | client secret, or a PEM with a certificate and its RSA key | the connector sync |
 | Cloud & IaaS | `gcpiam` | `gcpiam` | service account key (JSON) | the connector sync |
 | Servers & hosts | `unixssh` | `unixssh` | SSH private key (no passphrase) | the connector sync |
+| Servers & hosts | `sftpdrop` | `sftpdrop` | SSH private key (no passphrase) | the connector sync |
 | Source code | `githubscan` | `githubscan` | read-only token | the connector sync |
 | ERP | `sap`, `oracle` | `erp` | OAuth client secret | the connector sync |
 | Privileged access | `cyberark`, `beyondtrust`, `delinea` | `pam` | password (BeyondTrust: API key) | the connector sync |
@@ -1169,6 +1170,9 @@ and is audited as `branding.updated`.
   ETag and `Cache-Control: public, max-age=300`.
 * Used by the sign-in page, the guest claim, register and renew pages (name, logo, button colours) and by email (subject
   prefix, link line and footer say the product name). Without branding everything says Tessera.
+* In the console (issue #611): the top bar shows the saved logo and name, the tab title ends with the name, and primary buttons use the
+  saved colour. The colour is used only if the button text reaches AA on it and it reaches 3:1 against the surface of the theme in
+  use (light or dark); otherwise the default accent stays. Save branding refreshes it without a reload (`src/app/consoleBranding.ts`).
 * **Show the logo in emails** (`PUT /api/admin/labels`, `email_logo`). On, and with a logo saved and `TESSERA_PUBLIC_URL` set,
   every email is `multipart/alternative`: the plain-text part first, then an HTML part with the logo (loaded from the public
   logo URL, shown at most 48 px high) above the message, which is HTML-escaped. Off, or without a logo or public address,
@@ -2808,6 +2812,77 @@ with stored rows and generated ids only.
   `elevated_privilege` exist on the stock tables but are not in the public docs; a requested column that does not exist
   is ignored by the instance, so confirm them against a developer instance.
 
+### Kubernetes, OpenShift and HashiCorp Vault (issue #560)
+
+Two read-only connectors that bring cluster RBAC and Vault's access model into the access graph and the
+non-human identity inventory. Both are governed connector types (New connection gallery: **Kubernetes and
+OpenShift** in Cloud & IaaS with the simple-icons Kubernetes mark, **HashiCorp Vault** in Privileged access
+with the Vault mark; readiness templates `kubernetes` and `vault`, both inventory templates). Neither writes:
+only GET requests are sent, and the readiness write-scope item is attested as not applicable. Every call goes
+through `internal/safehttp`; the server address is the connection's `base_url` (https, a well-formed domain
+name, no path; private, loopback and link-local addresses are refused). A port may be named from a short list
+only: 443, 6443 or 8443 for Kubernetes and 443, 8200 or 8443 for Vault (the readiness config and the connector
+both enforce it, and the client is opened to that one port on that host). A response never chooses a URL: only fixed API paths are requested
+and a name from a response is escaped into one path segment (`.` and `..` are refused). Errors have fixed text
+and never repeat the token or a setting. The credential is sealed like every connection secret and never printed.
+
+**Kubernetes** (`internal/connectors/kubernetes`, system `kubernetes`, env `TESSERA_KUBERNETES_BASE_URL`,
+`_TOKEN`, `_NAMESPACES`, `_OPENSHIFT`). *Settings:* `namespaces` (comma separated, at most 100; empty reads all)
+and `openshift` (true also reads `groups.user.openshift.io`). *Credential:* a ServiceAccount bearer token. Give
+that account only `get` and `list` on `clusterroles`, `clusterrolebindings`, `roles`, `rolebindings` and
+`serviceaccounts` (and `groups` in `user.openshift.io`); the built-in `view` role does not cover RBAC objects and
+`edit` or `cluster-admin` must not be bound. *Limits:* the API server's certificate must chain to a public CA
+(the shared safehttp client has no per-connection trust store: use a public-CA proxy, or an OpenShift route with
+a public certificate, in front of a private CA), and a private API server address is refused by safehttp.
+*Mapping:* cluster and namespaces are resources; a Role or ClusterRole bound at a scope is a permission
+`scope|role`, privileged when its rules allow every verb on every resource, `escalate`, `bind` or
+`impersonate`, reading secrets, writing roles, bindings, service account tokens, or `pods/exec` and `pods/attach`.
+User subjects are accounts `user:NAME` (an e-mail in the name, after an OIDC prefix, correlates to the person),
+Group subjects are groups `group:NAME` (OIDC group claims; `openshift_group` when OpenShift lists them, with their
+members), ServiceAccounts are service accounts `sa:NAMESPACE/NAME` and members of the `system:serviceaccounts`
+groups a binding names. Aggregated ClusterRoles are read as the controller filled them.
+
+**HashiCorp Vault** (`internal/connectors/vault`, system `vault`, env `TESSERA_VAULT_BASE_URL`, `_TOKEN`,
+`_NAMESPACE`). *Settings:* `namespace` (Vault Enterprise; one connection reads one namespace). *Credential:* a
+periodic Vault token of a read-only policy, never a root token:
+
+```
+path "sys/policies/acl"      { capabilities = ["list"] }
+path "sys/policies/acl/*"    { capabilities = ["read"] }
+path "sys/auth"              { capabilities = ["read"] }
+path "auth/+/role"           { capabilities = ["list"] }
+path "auth/+/role/*"         { capabilities = ["read"] }
+path "auth/+/users"          { capabilities = ["list"] }
+path "auth/+/users/*"        { capabilities = ["read"] }
+path "auth/+/groups"         { capabilities = ["list"] }
+path "auth/+/groups/*"       { capabilities = ["read"] }
+path "auth/+/certs"          { capabilities = ["list"] }
+path "auth/+/certs/*"        { capabilities = ["read"] }
+path "auth/token/roles"      { capabilities = ["list"] }
+path "auth/token/roles/*"    { capabilities = ["read"] }
+path "identity/entity/id"    { capabilities = ["list"] }
+path "identity/entity/id/*"  { capabilities = ["read"] }
+path "identity/group/id"     { capabilities = ["list"] }
+path "identity/group/id/*"   { capabilities = ["read"] }
+path "auth/token/lookup-self" { capabilities = ["read"] }
+```
+
+Secret engines are never read and no secret value, secret id or token is requested. *Mapping:* an ACL policy is a
+group `policy:NAME` (privileged when a path block has `sudo`, or a write on `sys/`, `identity/`, `auth/token/` or
+every path; the unreadable `root` policy is privileged), each path block a resource `path:PATH` and a permission
+`policy:NAME|PATH` whose action is its capabilities (HCL and JSON policies are read; parameter constraints are
+not interpreted, and a policy that does not parse marks the result partial). Auth roles (AppRole, Kubernetes,
+JWT/OIDC, AWS, GCP, Azure, TLS certificate, token roles) are service accounts `role:MOUNT/NAME`; userpass and
+LDAP users are accounts `user:MOUNT/NAME`; LDAP groups are `ldapgroup:MOUNT/NAME`; each is `member_of` the
+policies it names. Entities are accounts `entity:ID` (service accounts when every alias is a machine auth method;
+`metadata.email` correlates a person) and identity groups `idgroup:ID`, with their policies, members and parent
+groups. A class the token cannot read (403) marks the result partial so the deletion guard holds removals; an
+unreadable policy list or auth method list fails the read.
+
+Tests: `go test ./internal/connectors/kubernetes ./internal/connectors/vault ./internal/connectors/governed/...`
+run each connector against an in-process fake API server (pagination, scoping, privileged rules, policy
+parsing, path escaping, wrong tokens, prod refusals).
+
 ### Azure RBAC and Google Cloud IAM (issue #557)
 
 Two read connectors bring cloud entitlements into the access graph for the effective-permission
@@ -2922,6 +2997,45 @@ handshake (15 s) and each command (30 s) have timeouts.
 *Tests* run against an in-process SSH server (`fake_test.go`, in `_test.go` files only; it never echoes
 a command back): `go test -race ./internal/connectors/unixssh ./internal/connectors/governed/...`. The
 connector can also run without a connection: `TESSERA_CONNECTORS=unix`.
+
+### SFTP file drop for flat-file apps (issue #563)
+
+`internal/connectors/sftpdrop` (system `sftp`, env `TESSERA_SFTPDROP_*`) reads an accounts CSV, and optionally an
+account-entitlement CSV, that a legacy system exports to a directory of an SFTP server. The New connection gallery
+has an **SFTP file drop (CSV)** tile (category Servers & hosts, capability Identity source, an original folder glyph;
+template `sftpdrop`, an inventory template). It runs on the connection's sync schedule like every governed
+connection and is read-only: nothing is written, moved or deleted on the server.
+
+*Settings.* `host`, `port`, `username`, `host_key` (as for the Unix connector), `directory`, `accounts_file`,
+`entitlements_file` (optional) and the column mapping: `accounts_account_id` and `accounts_username` (required),
+`accounts_email`, `accounts_identity_id`, `accounts_status`, and with an entitlements file
+`entitlements_account_id` and `entitlements_entitlement` (required), `entitlements_name`, `entitlements_privileged`.
+The credential is the SSH private key, sealed like every connection secret (or a vault reference) and never printed.
+
+*Same pipeline as the flat-file apps.* Files are parsed, validated and normalised by `internal/flatfile`
+(`Parse`, `AccountRecords`, `EntitlementRecords`, then `flatfile.Discovery`), so a drop means what an upload means:
+the same mapping rules, formula-prefix and control-character checks, status words, correlation by identity id then
+email, one `application` resource and one permission per entitlement. A file with any invalid row fails the read
+as a whole and nothing is ingested. What the connector does not do is call `flatfile.Apply`: a connection sync has
+no per-upload history, delta or manual tasks, and removals are held by the connection's deletion guard.
+One drop per tenant (the system is `sftp`).
+
+*Network and host key.* The connection is opened by the Unix/SSH connector's code (`unixssh.Connector.Client`):
+the socket goes through `safehttp.NewDialer` (private, loopback, link-local and metadata addresses refused; the
+dev runtime may allow loopback), the host key is pinned (a fingerprint or the key line; no trust on first use, no
+callback that skips the check) and sign-in is by key. Only the `sftp` subsystem is requested; no command runs.
+
+*What is read.* Only `accounts_file` and `entitlements_file`, plain names (letters, digits, `. _ -`; no separator,
+no `..`) in `directory`, an absolute path with no `.` or `..` element. The directory must equal its real path on the
+server (a link, or a path through one, is refused) and each file must be a regular file, not a symbolic link
+(lstat, then the real path and fstat of the open handle). Files are limited to 512 KiB (reading stops one byte over
+the limit whatever the server says), 5000 rows and 64 columns. Errors have fixed text: no path, cell value or server
+message is echoed. Give the SFTP login read access to the drop directory only (chroot with `internal-sftp`).
+
+*Tests* run against an in-process SSH server with an SFTP subsystem over a temporary directory
+(`fake_test.go`): `go test -race ./internal/connectors/sftpdrop ./internal/connectors/governed/...`. The connector can also
+run without a connection: `TESSERA_CONNECTORS=sftp`. New dependency: `github.com/pkg/sftp` v1.13.12 (and its
+`github.com/kr/fs`).
 
 ### Database connector (PostgreSQL, MySQL, SQL Server, Oracle; issue #553)
 

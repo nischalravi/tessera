@@ -174,7 +174,7 @@ var (
 	cloudNames    = []string{"global", "usgov", "china"}
 	interfaces    = []string{"get_workers", "raas"}
 	// governedTemplates are the templates of the connector types in internal/connectors/governed.
-	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "servicenow", "atlassian"}
+	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "sftpdrop", "servicenow", "atlassian", "kubernetes", "vault"}
 )
 
 // Validate checks a config for a template. It returns every problem rather
@@ -352,7 +352,7 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 		} else if cfg.Preset != "" {
 			bad("preset", "unknown SCIM preset %q", cfg.Preset)
 		}
-	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "servicenow", "atlassian":
+	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "sftpdrop", "servicenow", "atlassian", "kubernetes", "vault":
 		typ := connectorType
 		if typ == "" && len(t.ConnectorTypes) > 0 {
 			typ = t.ConnectorTypes[0]
@@ -364,7 +364,20 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 			if typ == governed.SuccessFactors {
 				allow = t.HostAllowlist // the documented data-center domains; a look-alike host is refused
 			}
-			httpsURL("base_url", cfg.BaseURL, allow)
+			if ports := governed.BasePorts(typ); len(ports) > 0 && cfg.BaseURL != "" {
+				// a named port is allowed for these types, from a short list; the rest of the URL is checked as usual
+				if u, err := url.Parse(cfg.BaseURL); err == nil && u.Port() != "" {
+					if !slices.Contains(ports, u.Port()) {
+						bad("base_url", "the port must be one of %s", strings.Join(ports, ", "))
+					}
+					u.Host = u.Hostname()
+					httpsURL("base_url", u.String(), allow)
+				} else {
+					httpsURL("base_url", cfg.BaseURL, allow)
+				}
+			} else {
+				httpsURL("base_url", cfg.BaseURL, allow)
+			}
 			// The vault, ERP and feed readers take a host (paths are settings); GitHub
 			// Enterprise Server's API URL ends in /api/v3.
 			if u, err := url.Parse(cfg.BaseURL); err == nil && typ != governed.GitHubScan && u.Path != "" && u.Path != "/" {

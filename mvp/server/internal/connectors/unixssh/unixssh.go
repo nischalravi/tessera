@@ -221,6 +221,17 @@ func (p pin) matches(k ssh.PublicKey) bool {
 	return ssh.FingerprintSHA256(k) == p.fingerprint
 }
 
+// Client opens an authenticated SSH connection exactly as Read does (guarded dialer, pinned host
+// key, key sign-in, handshake deadline) and returns it for the caller to use and Close. The SFTP file
+// drop connector (issue #563) reuses it for its subsystem; no command is run here.
+func (c *Connector) Client(ctx context.Context) (*ssh.Client, error) {
+	s, err := c.open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.cl, nil
+}
+
 // session is one authenticated connection.
 type session struct{ cl *ssh.Client }
 

@@ -1,0 +1,95 @@
+# Kubernetes and OpenShift RBAC (issue #560): read-only Roles, ClusterRoles, their bindings, ServiceAccounts
+# and, on OpenShift, the groups of user.openshift.io, over the API server with a ServiceAccount bearer token.
+# The snapshot feeds the effective-permission analysis and the machine identity inventory, not the account
+# directory, so the staged account data checks do not apply (inventory). There is no write-back.
+template: kubernetes
+version: 1.0.0
+extends: base@1
+display_name: Kubernetes and OpenShift RBAC
+connector_types: [kubernetes]
+role: account_source
+inventory: true
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id]
+items:
+  - id: kubernetes.endpoint
+    title: API server URL is HTTPS on a public host name and reachable through safehttp
+    category: transport
+    level: required
+    why: "Prevents SSRF and clear-text transport: the bearer token goes only to this host, and private, loopback and link-local addresses are refused."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the API server's https host name and port (for example https://api.cluster.example.com:6443), no path. The server certificate must chain to a public CA; put a proxy or an OpenShift route with a public certificate in front of a private CA."
+    config_fields: [base_url]
+
+  - id: kubernetes.auth
+    title: ServiceAccount token accepted by the API server (stored sealed)
+    category: access
+    level: required
+    why: "Proves the token before any read: an expired, revoked or mistyped token is found here, not in an empty sync."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Create a long-lived token Secret for the ServiceAccount (kubernetes.io/service-account-token) and store its token again; a bound token expires."
+    config_fields: [credential]
+
+  - id: kubernetes.rbac.readonly
+    title: The ServiceAccount can list RBAC objects and service accounts and holds no write or secret-reading role
+    category: access
+    level: required
+    why: "RBAC is read with list rights only; binding view, edit or cluster-admin to the reader turns a leaked token into a change path or a secrets leak."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Bind a ClusterRole with only get and list on clusterroles, clusterrolebindings, roles, rolebindings and serviceaccounts (and groups.user.openshift.io on OpenShift)."
+    config_fields: [credential]
+
+  - id: kubernetes.read
+    title: Cluster roles, bindings and service accounts are listed
+    category: scope
+    level: required
+    why: "A connector that authenticates but lists nothing leaves cluster access unanalysed without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Grant list where the probe reports nothing; with namespaces set, confirm each exists and the token can list in it."
+    depends_on: [kubernetes.auth]
+    config_fields: [settings, credential]
+
+  - id: kubernetes.scope.coverage
+    title: Scope covers every namespace that runs workloads (all namespaces, or each one listed)
+    category: scope
+    level: recommended
+    why: "A namespace left out is a namespace whose role bindings and service accounts are not evaluated."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Leave Namespaces empty to read the whole cluster, or list every namespace of the application."
+    config_fields: [settings]
+
+  - id: kubernetes.openshift
+    title: OpenShift groups are read when the cluster is OpenShift
+    category: scope
+    level: recommended
+    why: "OpenShift binds roles to groups it holds itself; without them a group subject has no members."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set OpenShift to true and let the ServiceAccount list groups.user.openshift.io."
+    config_fields: [settings]
+
+  - id: kubernetes.subjects
+    title: User and group subjects are names from the identity provider; correlate them to people with the directory connection
+    category: identity_keys
+    level: optional
+    why: "Kubernetes holds no user objects: a User subject is whatever name the OIDC provider puts in the token, often prefixed."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add the identity provider's connection (Entra, Okta, Google) so subject names and group claims resolve to people."

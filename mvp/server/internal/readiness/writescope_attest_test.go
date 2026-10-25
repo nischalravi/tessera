@@ -12,7 +12,7 @@ import (
 // attested past the gate.
 func TestWriteScopeAttestationOnlyWhereRightsCannotBeRead(t *testing.T) {
 	reg := template.MustDefault()
-	attestable := map[string]bool{"erp": true, "awsorg": true, "githubscan": true, "vms": true, "agentcore": true, "azurerbac": true, "gcpiam": true, "unixssh": true, "servicenow": true, "atlassian": true}
+	attestable := map[string]bool{"erp": true, "awsorg": true, "githubscan": true, "vms": true, "agentcore": true, "azurerbac": true, "gcpiam": true, "unixssh": true, "sftpdrop": true, "servicenow": true, "atlassian": true, "kubernetes": true, "vault": true}
 	for _, id := range reg.IDs() {
 		r, _ := reg.Get(id)
 		it, ok := r.Item("base.writeback.scope")
