@@ -18,6 +18,7 @@ import {
   BlockerList, CONNECTOR_TYPES, GateCallout, STATE_LABEL, ScoreCell, SimulatedBadge, StateBadge, observedText, useAction,
 } from "./shared";
 import { CAPABILITIES, CATEGORIES, Capability, Category, filterGallery, groupGallery, metaOf, nextIndex } from "./gallery";
+import { fieldErrorsByKey, fieldErrorsSummary } from "./fieldErrors";
 import { GOVERNED, settingValues, settingsPatch } from "./governed";
 import { BASE_URL_FIELDS } from "./baseUrl";
 
@@ -203,8 +204,8 @@ const textToPriv = (s: string) => Object.fromEntries(lines(s).map((l) => {
   return [g.trim(), rest.join(":").split(",").map((x) => x.trim()).filter(Boolean)];
 }).filter(([g]) => g));
 
-function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
-  return <label className="field">{label}{children}{hint && <span className="hint">{hint}</span>}</label>;
+function Field({ label, hint, error, errorId, children }: { label: string; hint?: ReactNode; error?: string; errorId?: string; children: ReactNode }) {
+  return <label className="field">{label}{children}{hint && <span className="hint">{hint}</span>}{error && <span id={errorId} className="hint err" role="alert">{error}</span>}</label>;
 }
 
 /** Hint under the SCIM base URL: the vendor's documented URL shape and plan note when the connection came from a preset. */
@@ -250,18 +251,22 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
   }, [rev.id, JSON.stringify(cfg)]); // eslint-disable-line react-hooks/exhaustive-deps
   const [secret, setSecret] = useState("");
   const [ref, setRef] = useState("");
+  // the fields the last save was refused for (the draft is stored; issue #622), by input key
+  const [errs, setErrs] = useState<Record<string, string>>({});
   const { busy, run } = useAction();
   const set = (k: string) => (e: { target: { value: string } }) => setV((x) => ({ ...x, [k]: e.target.value }));
+  const errId = (k: string) => `cfg-err-${k.replace(/[^a-z0-9_-]/gi, "-")}`;
+  const marked = (k: string) => (errs[k] ? { "aria-invalid": true, "aria-describedby": errId(k) } : {});
   const input = (k: string, label: string, hint?: ReactNode, props: Record<string, unknown> = {}) => (
-    <Field label={label} hint={hint}><input className="input" value={v[k] ?? ""} onChange={set(k)} {...props} /></Field>
+    <Field label={label} hint={hint} error={errs[k]} errorId={errId(k)}><input className="input" value={v[k] ?? ""} onChange={set(k)} {...props} {...marked(k)} /></Field>
   );
   const flag = (k: string, label: string, hint?: ReactNode) => (
-    <Field label={label} hint={hint}>
-      <select className="input" value={v[k] ?? "false"} onChange={set(k)}><option value="false">No</option><option value="true">Yes</option></select>
+    <Field label={label} hint={hint} error={errs[k]} errorId={errId(k)}>
+      <select className="input" value={v[k] ?? "false"} onChange={set(k)} {...marked(k)}><option value="false">No</option><option value="true">Yes</option></select>
     </Field>
   );
   const area = (k: string, label: string, hint?: ReactNode) => (
-    <Field label={label} hint={hint}><textarea className="input" value={v[k] ?? ""} onChange={set(k)} rows={3} /></Field>
+    <Field label={label} hint={hint} error={errs[k]} errorId={errId(k)}><textarea className="input" value={v[k] ?? ""} onChange={set(k)} rows={3} {...marked(k)} /></Field>
   );
   const save = async (e: FormEvent) => {
     e.preventDefault();
@@ -329,7 +334,10 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
     }
     const r = await run("save", () => readiness.patchConfig(conn.id, next));
     if (r) {
-      toast(r.new_revision ? "Saved as a new draft revision; the active one keeps syncing" : r.invalidated.length
+      setErrs(fieldErrorsByKey(r.fields));
+      const refused = fieldErrorsSummary(r.fields);
+      if (refused) toast(refused, { kind: "error" });
+      else toast(r.new_revision ? "Saved as a new draft revision; the active one keeps syncing" : r.invalidated.length
         ? `Saved. ${r.invalidated.length} item${r.invalidated.length === 1 ? "" : "s"} need new evidence: ${r.invalidated.slice(0, 3).join(", ")}${r.invalidated.length > 3 ? "…" : ""}`
         : "Saved", { kind: r.invalidated.length ? "info" : "ok" });
       onSaved();
