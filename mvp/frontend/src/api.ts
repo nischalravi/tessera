@@ -342,9 +342,15 @@ export function stepUpHref(challenge: { step_up_url?: string; acr?: string; max_
   return `${base}${base.includes("?") ? "&" : "?"}return_to=${encodeURIComponent(here)}`;
 }
 
+/**
+ * True when a pending action had a form body that did not survive the step-up: the IdP round trip is a full page
+ * load and the body is kept in memory only, so there is nothing to resume (issue #623).
+ */
+export const lostForm = (a: PendingAction) => !!a.needsBody && a.body === undefined;
+
 /** Run a resumed action (after a successful step-up). */
 export const runPendingAction = (a: PendingAction) => {
-  if (a.needsBody && a.body === undefined) {
+  if (lostForm(a)) {
     return Promise.reject(new Error("The page reloaded during the sign-in, so the form was not kept. Fill it in and submit again."));
   }
   return api(a.path, a.body ?? (a.method === "DELETE" ? undefined : {}), a.method);

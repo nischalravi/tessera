@@ -5602,7 +5602,9 @@ When the sign-in is too old or too weak the API answers `401 step_up_required` w
 challenge (`WWW-Authenticate: Bearer error="insufficient_user_authentication", acr_values=…, max_age=…`)
 and a `step_up_url`. The UI explains why and, on **Continue**, re-authenticates at the IdP
 (`GET /api/auth/step-up?acr=&max_age=&return_to=`: `prompt=login`, `max_age=0`); back on the page it offers
-to resume the action (kept in `sessionStorage` for ten minutes: the request only, never a token).
+to resume the action (kept in `sessionStorage` for ten minutes: the request only, never a token). A form body
+is kept in memory only, so it does not survive the IdP's page load: for such an action the page says to fill the
+form in again instead of offering a resume.
 Tessera requires the same person (else `auth.step_up.subject_mismatch`), an `auth_time` after the step-up
 started (the IdP really re-authenticated) and the required ACR (else `auth.step_up.insufficient`); on
 success the session's authentication is replaced, its cookie and CSRF token rotate, and
