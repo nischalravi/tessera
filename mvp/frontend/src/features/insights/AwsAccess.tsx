@@ -1,14 +1,10 @@
 import { FormEvent, useState } from "react";
 import { AwsCan, AwsPolicyChange, AwsSimulation, awsCan, awsSimulate } from "../../api";
-import { Button, Callout, InsightsTabs, Page } from "../../components";
+import { Button, Callout, InsightsTabs, Page, useSelected } from "../../components";
+import { FidelityBadge, OutcomeBadge, ProfileChip, ReasonList, WhyPanel } from "./AwsWhy";
+import { isExplanationId } from "./awsTrace";
 
-/** Fidelity is always shown in words as well as colour (AA contrast, never colour alone). */
-function Fidelity({ f }: { f: string }) {
-  const tone = f === "exact" ? "ok" : f === "approximate" ? "warning" : "bad";
-  return <span className={`badge ${tone}`}>{f.toUpperCase()}</span>;
-}
-
-function CanCard() {
+function CanCard({ onWhy }: { onWhy: (id: string) => void }) {
   const [principal, setPrincipal] = useState("");
   const [action, setAction] = useState("s3:GetObject");
   const [resource, setResource] = useState("");
@@ -47,8 +43,14 @@ function CanCard() {
       {err && <Callout tone="bad">{err}</Callout>}
       {out && (
         <div className="stack-sm" role="status">
-          <div className="row"><b>{out.decision.outcome.toUpperCase()}</b><Fidelity f={out.decision.fidelity} /></div>
+          <div className="row">
+            <OutcomeBadge o={out.decision.outcome} />
+            <FidelityBadge f={out.decision.fidelity} />
+            <ProfileChip profile={out.profile} />
+            <Button type="button" size="sm" aria-label="Why? Show the evaluation trace" onClick={() => onWhy(out.explanation_id)}>Why?</Button>
+          </div>
           <div className="small">{out.summary}</div>
+          <ReasonList reasons={out.decision.fidelity_reasons ?? []} />
           {out.collection_gaps.length > 0 && <Callout tone="warn">{out.collection_gaps.length} policy could not be read and may change this answer.</Callout>}
           <pre className="sys small" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{out.narrative}</pre>
           <div className="xs faint">Snapshot {out.snapshot.id.slice(0, 8)}… · explanation {out.explanation_id.slice(0, 8)}…</div>
@@ -117,7 +119,7 @@ function SimulateCard() {
             <div key={i} className="card stack-sm">
               <div className="row">
                 <b>{c.principals.length} principal{c.principals.length === 1 ? "" : "s"} {VERB[c.kind]}</b>
-                {c.after && <Fidelity f={c.after.fidelity} />}
+                {c.after && <FidelityBadge f={c.after.fidelity} />}
                 {c.gap && <span className="badge bad">UNREAD POLICY</span>}
               </div>
               <div className="small sys" style={{ overflowWrap: "anywhere" }}>{c.actions.join(", ")}{c.action_count > c.actions.length ? ` (+${c.action_count - c.actions.length})` : ""} on {c.resources.join(", ")}{c.resource_count > c.resources.length ? ` (+${c.resource_count - c.resources.length})` : ""}</div>
@@ -134,13 +136,15 @@ function SimulateCard() {
 }
 
 export function AwsAccess() {
+  const [why, setWhy] = useSelected("why");
   return (
     <Page tabs={<InsightsTabs />} title="AWS access" crumbs={[["Protection"], ["Insights", "/insights"], ["AWS access"]]}
       sub="Ask the evaluator whether a principal can do something, and what a policy change would do, before it merges. Answers say how certain they are: approximate or unsupported results are never acted on.">
       <div className="grid g12">
-        <CanCard />
+        <CanCard onWhy={setWhy} />
         <SimulateCard />
       </div>
+      {isExplanationId(why) && <WhyPanel id={why} onClose={() => setWhy(null)} />}
     </Page>
   );
 }
