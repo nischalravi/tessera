@@ -63,6 +63,11 @@ func newRig(t *testing.T, token string, mut func(*bedrockfake.Fake)) *rig {
 	if mut != nil {
 		mut(fk)
 	}
+	return newRigWith(t, fk, token)
+}
+
+func newRigWith(t *testing.T, fk *bedrockfake.Fake, token string) *rig {
+	t.Helper()
 	srv := connsynctest.New(t, fk)
 	hc, err := safehttp.NewForTest(t, srv.Options(0))
 	if err != nil {
@@ -146,7 +151,7 @@ func TestDiscoverMapsAgentsToolsAndOwners(t *testing.T) {
 			if !slices.Equal(res.AgentSnapshotOf, []string{"aws-bedrock"}) {
 				t.Errorf("snapshot of = %v", res.AgentSnapshotOf)
 			}
-			if got := fmt.Sprintf("%+v", res); strings.Contains(got, "free text the connector must not keep") || strings.Contains(got, secret) {
+			if got := fmt.Sprintf("%+v", res); strings.Contains(got, "free text the connector must not keep") || strings.Contains(got, "Answers tickets") || strings.Contains(got, secret) {
 				t.Error("a description or the secret was kept")
 			}
 			if len(res.Identities) != len(res.Accounts) || res.Accounts[0].CreatedAt == nil || !res.Accounts[0].CreatedAt.Equal(time.Unix(1760000000, 0).UTC()) {
@@ -344,5 +349,44 @@ func TestFromEnv(t *testing.T) {
 	env["TESSERA_BEDROCK_CREDENTIAL"] = credJSON("") // a literal credential is refused
 	if _, err := bedrockagents.FromEnv(get, connsynctest.Runtime, hc, nil); err == nil {
 		t.Error("literal credential accepted")
+	}
+}
+
+// The ARN of ListTagsForResource goes on the wire as one strictly encoded segment (written out by hand here);
+// the sigv4 package's TestCanonicalPath_EncodedSlashSegment pins how that path signs.
+func TestTagsPathIsOneEncodedSegment(t *testing.T) {
+	r := newRig(t, "", nil)
+	r.discover(t)
+	const want = "/tags/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aagent%2FAGENT00001"
+	if !slices.Contains(r.fake.Paths(), want) {
+		t.Errorf("no request to %s in %v", want, r.fake.Paths())
+	}
+	if r.fake.BadSignatures() != 0 {
+		t.Errorf("%d bad signatures", r.fake.BadSignatures())
+	}
+}
+
+// A status that is not an AWS enum value is not kept, and an agent with too many enabled action groups fails
+// the read rather than costing one call each.
+func TestUntrustedShapesAreBounded(t *testing.T) {
+	r := newRigWith(t, bedrockfake.New(akid, secret, "", region, bedrockfake.Agent{ID: "AGENT00009", Name: "x", ARN: arn("AGENT00009"), Status: "PREPARED\nINJECTED"}), "")
+	res := r.discover(t)
+	if got := res.Accounts[0].Attributes["agent_status"]; got != "" {
+		t.Errorf("agent_status = %q", got)
+	}
+	var groups []bedrockfake.Group
+	for i := 0; i < 201; i++ {
+		groups = append(groups, bedrockfake.Group{ID: fmt.Sprintf("GRP%07d", i), Name: "g", State: "ENABLED"})
+	}
+	r3 := newRigWith(t, bedrockfake.New(akid, secret, "", region, bedrockfake.Agent{ID: "AGENT00010", Name: "y", ARN: arn("AGENT00010"), Status: "PREPARED", Groups: groups}), "")
+	c, err := r3.open(r3.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bedrockagents.NewConnector(c, nil).Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "more action groups") {
+		t.Errorf("201 action groups: %v", err)
+	}
+	if n := r3.fake.Ops()["GetAgentActionGroup"]; n != 0 {
+		t.Errorf("%d GetAgentActionGroup calls before the bound", n)
 	}
 }

@@ -219,6 +219,10 @@ var (
 	orgIDRE   = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 	jiraKeyRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{1,99}$`)
 	headerRE  = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+	// reservedHeaders mirrors mcpserver.ReservedHeader (Open refuses them too)
+	reservedHeaders = map[string]bool{"host": true, "content-type": true, "accept": true, "content-length": true, "transfer-encoding": true,
+		"connection": true, "keep-alive": true, "te": true, "trailer": true, "upgrade": true, "proxy-connection": true,
+		"proxy-authorization": true, "mcp-session-id": true, "mcp-protocol-version": true, "user-agent": true, "accept-encoding": true}
 	nameRE    = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,128}$`)
 	sshUserRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
 	sshHostRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
@@ -367,8 +371,8 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 				bad(s.Key, "must be 1 to 128 printable characters")
 			}
 		case "auth_header":
-			if !headerRE.MatchString(v) || strings.EqualFold(v, "host") || strings.EqualFold(v, "content-type") || strings.EqualFold(v, "accept") || strings.EqualFold(v, "content-length") {
-				bad(s.Key, "must be a header name (letters, digits and hyphens), not Host, Content-Type, Accept or Content-Length")
+			if !headerRE.MatchString(v) || reservedHeaders[strings.ToLower(v)] {
+				bad(s.Key, "must be a header name (letters, digits and hyphens), not one the transport or MCP owns (Host, Content-Type, Accept, Connection, Mcp-Session-Id ...)")
 			}
 		case "region":
 			if !regionRE.MatchString(v) {

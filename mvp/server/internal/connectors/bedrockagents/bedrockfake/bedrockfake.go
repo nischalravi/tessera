@@ -60,6 +60,7 @@ type Fake struct {
 	ops    map[string]int
 	writes int
 	bad    int
+	paths  []string
 }
 
 // New returns a fake that accepts one key pair (and session token, when not empty).
@@ -83,6 +84,13 @@ func (f *Fake) Ops() map[string]int {
 
 // Writes is how many requests asked for an operation that is not one of the served reads.
 func (f *Fake) Writes() int { f.mu.Lock(); defer f.mu.Unlock(); return f.writes }
+
+// Paths are the escaped request paths received, in order.
+func (f *Fake) Paths() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.paths...)
+}
 
 // BadSignatures is how many requests failed signature verification.
 func (f *Fake) BadSignatures() int { f.mu.Lock(); defer f.mu.Unlock(); return f.bad }
@@ -113,7 +121,7 @@ func (f *Fake) verify(r *http.Request, body []byte) bool {
 	if f.Token != "" && r.Header.Get("X-Amz-Security-Token") != f.Token {
 		return false
 	}
-	u := url.URL{Scheme: "https", Host: r.Host, Path: r.URL.EscapedPath(), RawQuery: r.URL.RawQuery}
+	u := url.URL{Scheme: "https", Host: r.Host, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
 	again, err := http.NewRequest(r.Method, u.String(), nil)
 	if err != nil {
 		return false
@@ -155,6 +163,7 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		deny(w, http.StatusInternalServerError, "InternalServerException")
 		return
 	}
+	f.paths = append(f.paths, r.URL.EscapedPath())
 	// the decoded path: AWS ARNs are one segment on the wire
 	segs := strings.Split(strings.Trim(r.URL.EscapedPath(), "/"), "/")
 	for i, s := range segs {

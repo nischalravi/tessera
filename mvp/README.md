@@ -6080,7 +6080,9 @@ when the caller runs it; the built-in **code interpreter** is privileged) and ev
 (`bedrock:Retrieve`). A tag `pii=true` marks all of that as PII so `ai-agents-no-pii` applies. What the execution
 role itself can do is read by the AWS Organizations connection: the agent links to the role by ARN. Agents
 missing from a read disappear (the result is a complete snapshot of the source), and a 404 on an agent deleted
-mid-read is skipped.
+mid-read is skipped. Agent and function descriptions are not stored (free text, a prompt-injection carrier); an
+agent with more than 200 enabled action groups or knowledge bases fails the read. The tags call puts the agent ARN
+in the path as one encoded segment, which SigV4 signs double-encoded (`%253A`, `%252F`) as AWS canonicalises it.
 
 Tests use in-process fakes of both vendor APIs (`mcpserver/mcpfake`, `bedrockagents/bedrockfake`, the latter
 re-signs every request it receives and counts bad signatures and unserved operations), covering paging, event
