@@ -286,6 +286,7 @@ th.num, td.num { text-align: right; }
   font-variant-numeric: tabular-nums;
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: var(--fs-xl); white-space: nowrap; color: var(--topbar-text); padding-right: var(--s-2); }
+.brand .brand-logo { max-height: 28px; max-width: 120px; }
 .brand:hover { text-decoration: none; color: var(--topbar-text); }
 .logo { width: 20px; height: 20px; flex: none; border-radius: 4px; background: rgba(255, 255, 255, 0.12); display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; }
 .logo i { background: #4cc2ff; border-radius: 1px; }

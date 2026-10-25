@@ -57,3 +57,32 @@ export function brandStyle(b: { configured: boolean; primary_color: string; on_p
   const away = b.on_primary_color.toLowerCase() === "#ffffff" || luminance(b.on_primary_color) > luminance(b.primary_color) ? "#000000" : "#ffffff";
   return { "--accent": b.primary_color, "--accent-hover": mix(b.primary_color, away, 0.14), "--on-accent": b.on_primary_color };
 }
+
+type Brand = { name: string; configured: boolean; primary_color: string; on_primary_color: string };
+
+export const DEFAULT_PRODUCT = "Tessera";
+/** A button must stand out from the page behind it by this much (WCAG 1.4.11, non-text contrast). */
+export const MIN_UI_CONTRAST = 3;
+const SURFACE = { light: "#ffffff", dark: "#292929" } as const;
+
+/**
+ * The CSS variables the console sets for the saved button colour, or undefined to keep the default accent.
+ * Beyond the AA check on the button text (`brandStyle`), the colour must also reach 3:1 against the theme's
+ * surface, in the theme in use, so a button never vanishes into the page.
+ */
+export function consoleBrandStyle(b: Brand | null | undefined, theme: "light" | "dark"): Record<string, string> | undefined {
+  const s = brandStyle(b);
+  if (!s || !b || contrast(b.primary_color, SURFACE[theme]) < MIN_UI_CONTRAST) return undefined;
+  return s;
+}
+
+/** The product name to show: the saved one when branding is configured, else Tessera. */
+export const productName = (b: Brand | null | undefined) => (b?.configured && b.name.trim() ? b.name.trim() : DEFAULT_PRODUCT);
+
+/** A logo URL the console may put in an <img>: a same-origin path under /api/, never an absolute or scheme URL. */
+export const safeLogoUrl = (u: string | null | undefined): string | null => (u && /^\/api\/[^\s]*$/.test(u) && !u.startsWith("//") ? u : null);
+
+/** Keep only CSS variables whose values are #rrggbb colours (the console sets them on the root element). */
+export function safeBrandVars(v: Record<string, string> | undefined): Record<string, string> | undefined {
+  return v && Object.values(v).every(isHex) ? v : undefined;
+}
