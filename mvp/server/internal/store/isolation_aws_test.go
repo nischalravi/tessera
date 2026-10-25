@@ -302,6 +302,8 @@ func awsCovered() map[string]bool {
 		"AddAWSFinding": true, "AWSFindings": true, "AddAWSTrustEdge": true, "AWSTrustEdges": true,
 		"AddAWSEffective": true, "ListAWSEffectiveByPrincipal": true, "PutAWSExplanation": true, "AWSExplanation": true,
 		"UpsertEvaluatorEdge": true, "AWSPRCommentSettings": true, "PutAWSPRCommentSettings": true,
+		"InsertAWSCollectionRun": true, "AWSCollectionRun": true, "AWSCollectionRuns": true, "ActiveAWSCollectionRun": true,
+		"StartAWSCollectionRun": true, "FinishAWSCollectionRun": true, "FailStaleAWSCollectionRuns": true,
 	}
 }
 
@@ -401,4 +403,79 @@ func TestAWSPRCommentSettingsDefaultOff(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// The collection runs (issue #637; schema/0914): a tenant's runs are its own,
+// another tenant's id looks nonexistent, writes that name it change nothing,
+// and the one-active-run rule is per tenant and connector.
+func TestIsolation_AWSCollectionRuns(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	const conn = "00000000-0000-4000-8000-0000000000c1" // the same connector id in both tenants
+	later := storetest.Now.Add(time.Hour)
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			return c.InsertAWSCollectionRun(&store.AWSCollectionRun{ID: "run-" + tn.Slug, ConnectorID: conn, Trigger: store.AWSRunManual,
+				Status: store.AWSRunQueued, RequestedBy: "u-" + tn.Slug, QueuedAt: storetest.Now})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if r, err := c.AWSCollectionRun("run-" + f.B.Slug); err != nil || r.RequestedBy != "u-"+f.B.Slug || r.Status != store.AWSRunQueued {
+			t.Errorf("AWSCollectionRun(B's) = %+v, %v", r, err)
+		}
+		if _, err := c.AWSCollectionRun("run-" + f.A.Slug); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("AWSCollectionRun(A's) = %v, want ErrNotFound", err)
+		}
+		if rs, err := c.AWSCollectionRuns("", 0); err != nil || len(rs) != 1 || rs[0].ID != "run-"+f.B.Slug {
+			t.Errorf("AWSCollectionRuns = %v, %v; want B's one", rs, err)
+		}
+		if r, err := c.ActiveAWSCollectionRun(conn); err != nil || r.ID != "run-"+f.B.Slug {
+			t.Errorf("ActiveAWSCollectionRun = %+v, %v; want B's", r, err)
+		}
+		// writes that name A's run change nothing
+		if err := c.StartAWSCollectionRun("run-"+f.A.Slug, later); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("StartAWSCollectionRun(A's) = %v, want ErrNotFound", err)
+		}
+		if err := c.FinishAWSCollectionRun("run-"+f.A.Slug, store.AWSRunFailed, "", false, nil, "x", later); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("FinishAWSCollectionRun(A's) = %v, want ErrNotFound", err)
+		}
+		// a second active run of the same connector is refused in this tenant
+		err := c.InsertAWSCollectionRun(&store.AWSCollectionRun{ID: "run-b2", ConnectorID: conn, Trigger: store.AWSRunSchedule,
+			Status: store.AWSRunQueued, RequestedBy: "x", QueuedAt: later})
+		if !errors.Is(err, store.ErrDuplicate) {
+			t.Errorf("second active run = %v, want ErrDuplicate", err)
+		}
+		return nil
+	})
+	// B failing stale runs leaves A's alone
+	inB(t, f, func(c *store.TenantTx) error {
+		n, err := c.FailStaleAWSCollectionRuns(later, later, "stale")
+		if err != nil || n != 1 {
+			t.Errorf("FailStaleAWSCollectionRuns = %d, %v; want B's one", n, err)
+		}
+		return nil
+	})
+	inA(t, f, func(c *store.TenantTx) error {
+		if r, err := c.AWSCollectionRun("run-" + f.A.Slug); err != nil || r.Status != store.AWSRunQueued || r.Error != "" {
+			t.Errorf("A's run = %+v, %v; B's writes changed it", r, err)
+		}
+		// the lifecycle in A: start, finish, then a new run may be queued
+		if err := c.StartAWSCollectionRun("run-"+f.A.Slug, later); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.FinishAWSCollectionRun("run-"+f.A.Slug, store.AWSRunSucceeded, "snap", true, json.RawMessage(`{"cells":3}`), "", later); err != nil {
+			t.Fatal(err)
+		}
+		r, err := c.AWSCollectionRun("run-" + f.A.Slug)
+		if err != nil || r.Status != store.AWSRunSucceeded || !r.Changed || r.SnapshotID != "snap" || string(r.Result) != `{"cells":3}` ||
+			r.StartedAt == nil || r.FinishedAt == nil {
+			t.Errorf("finished run = %+v, %v", r, err)
+		}
+		if _, err := c.ActiveAWSCollectionRun(conn); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("ActiveAWSCollectionRun after finish = %v, want ErrNotFound", err)
+		}
+		return c.InsertAWSCollectionRun(&store.AWSCollectionRun{ID: "run-a2", ConnectorID: conn, Trigger: store.AWSRunSchedule,
+			Status: store.AWSRunQueued, RequestedBy: "x", QueuedAt: later})
+	})
 }

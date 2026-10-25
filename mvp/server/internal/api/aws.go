@@ -27,8 +27,8 @@ import (
 //	GET    /api/aws/snapshots         newest first
 //	GET    /api/aws/snapshots/{id}    one snapshot with its collection findings
 //
-// Running a collection is not a route yet: a run can outlast the request
-// timeout, so it needs the background runner (awsorg.Service.Collect).
+// Collecting is a queued job (aws_collect.go): POST /api/aws/connectors/{id}/collect
+// and the scheduled collection, with their runs under /api/aws/collection-runs.
 func (s *Server) registerAWSRoutes() {
 	G, P, D := http.MethodGet, http.MethodPost, http.MethodDelete
 	s.handle(G, "/api/aws/connectors", read, need(auth.PermConnectionsRead), s.rd(s.listAWSConnectors))
@@ -36,6 +36,7 @@ func (s *Server) registerAWSRoutes() {
 	s.handle(D, "/api/aws/connectors/{id}", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.deleteAWSConnector))
 	s.handle(G, "/api/aws/snapshots", read, need(auth.PermConnectionsRead), s.rd(s.listAWSSnapshots))
 	s.handle(G, "/api/aws/snapshots/{id}", read, need(auth.PermConnectionsRead), s.rd(s.getAWSSnapshot))
+	s.registerAWSCollectRoutes()
 	s.registerAWSEvalRoutes()
 }
 

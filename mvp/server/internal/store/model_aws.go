@@ -165,3 +165,32 @@ type AWSExplanation struct {
 	ID    string
 	Trace json.RawMessage
 }
+
+// AWS collection run states and triggers (schema/0914_aws_collection_runs.sql).
+const (
+	AWSRunQueued    = "queued"
+	AWSRunRunning   = "running"
+	AWSRunSucceeded = "succeeded"
+	AWSRunUnchanged = "unchanged"
+	AWSRunFailed    = "failed"
+
+	AWSRunManual   = "manual"
+	AWSRunSchedule = "schedule"
+)
+
+// AWSCollectionRun is one collection of an AWS connector. Result is a JSON
+// summary (counts only); SnapshotID is the snapshot the run collected.
+type AWSCollectionRun struct {
+	ID          string
+	ConnectorID string
+	Trigger     string
+	Status      string
+	RequestedBy string
+	QueuedAt    time.Time
+	StartedAt   *time.Time
+	FinishedAt  *time.Time
+	SnapshotID  string
+	Changed     bool
+	Result      json.RawMessage
+	Error       string
+}

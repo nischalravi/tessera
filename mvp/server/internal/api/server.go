@@ -33,6 +33,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/condaccess"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/awsorg"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed/wire"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
@@ -279,6 +280,10 @@ type Config struct {
 	// (see CatalogFromDir). Nil: the /api/aws evaluator routes answer 503
 	// aws_catalog_unavailable; everything else is unaffected.
 	AWSCatalog func() (*AWSCatalog, error)
+	// AWSHTTP sends the AWS connector's API calls (awsorg.NewHTTPClient: the
+	// safehttp client with limits sized for IAM responses). Nil: collecting an
+	// AWS connector answers 503 aws_collector_unavailable.
+	AWSHTTP awsorg.Doer
 	// GitHubAPIBase is where the access-diff comment is posted (default
 	// https://api.github.com). Tests point it at a local server.
 	GitHubAPIBase string

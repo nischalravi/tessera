@@ -181,6 +181,8 @@ var tables = []string{
 	"aws_snapshot_entities", "aws_collection_findings", "aws_trust_edges", "aws_effective_permissions", "aws_explanations",
 	// AWS evaluator MVP integration (schema/0321_aws_integration.sql)
 	"aws_edge_evaluations", "aws_pr_comment_settings",
+	// AWS collection runs (schema/0914_aws_collection_runs.sql)
+	"aws_collection_runs",
 	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
 	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
 	// shared signals receiver (schema/0353_ssf.sql)
