@@ -1,0 +1,94 @@
+# Google Vertex AI Agent Engine (issue #562): the reasoning engines of one project and location, read through the
+# Vertex AI API with the service account key of the Google Cloud IAM connector. Each engine is an ai_agent identity
+# linked to the owner named in Settings; the service account it runs as and the secrets it reads are what it can
+# reach. Read-only: the reasoningEngines list only. What the service account can do is read by the Google Cloud
+# IAM connection.
+template: vertex
+version: 1.0.0
+extends: base@1
+display_name: Google Vertex AI Agent Engine
+connector_types: [vertex]
+role: account_source
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id, username, status]
+items:
+  - id: vertex.auth
+    title: Key accepted by Google (the service account key stored sealed)
+    category: access
+    level: required
+    why: "Proves the key before any read: a deleted key, a disabled service account or a mistyped JSON is found here, not in an empty inventory."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Store the service account key (JSON) again."
+    config_fields: [settings, credential]
+
+  - id: vertex.reader
+    title: The service account holds roles/aiplatform.viewer only
+    category: access
+    level: required
+    why: "Reasoning engines are read with a list call; a broader account turns a leaked key into a change path."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Grant the service account roles/aiplatform.viewer on the project and nothing else."
+    config_fields: [settings, credential]
+
+  - id: vertex.read
+    title: The location's agents are listed
+    category: scope
+    level: required
+    why: "A connector that signs in but lists no agent leaves the location's agents undiscovered without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Check the project and location in Settings (agents are per location) and that the account may list reasoning engines."
+    depends_on: [vertex.auth]
+    config_fields: [settings, credential]
+
+  - id: vertex.sponsor
+    title: An owner is set for the project's agents
+    category: ownership
+    level: recommended
+    why: "A Vertex agent carries no e-mail address of its own: without the owner setting it has no accountable human (the nhi-ownership policy reports it)."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set Owner in Settings to the person accountable for the project's agents; label engines with creator and pii=true where they apply."
+    config_fields: [settings]
+
+  - id: vertex.scope
+    title: One connection exists for every project and location that runs agents
+    category: scope
+    level: recommended
+    why: "Agents are regional: a location without a connection is a location whose agents are not inventoried."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add a connection per project and location in use."
+    config_fields: [settings]
+
+  - id: vertex.key.rotation
+    title: The service account key is rotated on a schedule (90 days or less)
+    category: access
+    level: recommended
+    why: "A user-managed key does not expire by itself; rotation bounds how long a leaked key lists the agents."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a new key, store it here and delete the old one."
+    config_fields: [credential]
+
+  - id: vertex.sa
+    title: Service accounts that agents run as are reviewed with the Google Cloud IAM connection
+    category: identity_keys
+    level: optional
+    why: "The agent links to its service account by e-mail address; the account's role bindings are read by the Google Cloud IAM connector."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add a Google Cloud IAM connection for the project so the roles' permissions are analysed."

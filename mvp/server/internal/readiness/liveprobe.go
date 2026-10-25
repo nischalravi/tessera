@@ -107,7 +107,9 @@ func (s *Service) bindAgent(c *store.TenantTx, b *Bundle) error {
 
 // liveCapable reports whether a revision's checks run against the real
 // system (a real LDAP connection) rather than a simulation.
-func liveCapable(b *Bundle) bool { return !b.Simulated() && b.Template.ID == "ldap" }
+func liveCapable(b *Bundle) bool {
+	return !b.Simulated() && (b.Template.ID == "ldap" || b.Template.ID == "racf")
+}
 
 // liveProber returns the real prober for a non-demo revision, or ok=false
 // for a type that has none yet (those keep their simulated prober, whose
@@ -133,6 +135,11 @@ func (o LiveOptions) liveProber(b *Bundle, now time.Time) (p connectors.Prober, 
 			agent.ProbeConfig{BindDN: cfg.BindDN, CredName: b.agentCred, BaseDNs: cfg.BaseDNs, UserFilter: cfg.UserFilter,
 				CABundle: cfg.CABundle})
 		return rp, true, err
+	}
+	if b.Template.ID != "ldap" {
+		// RACF is read only through a Directory Agent: never a direct dial from
+		// the server, whatever credential the revision holds.
+		return nil, true, errors.New("readiness: this connection is read only through a Directory Agent")
 	}
 	if cfg.BindDN == "" || b.cred == "" {
 		return nil, true, errors.New("readiness: no bind DN or stored credential for the LDAP connection")

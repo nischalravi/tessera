@@ -52,6 +52,10 @@ type Executor struct {
 	// NewSyncer builds the directory reader of pulled sync jobs (nil: the
 	// agent answers them "unsupported").
 	NewSyncer SyncerFactory
+	// Modules are the plug-ins this agent build carries, by module name
+	// (modules.go). A sync job that names another module is answered
+	// "unsupported" before anything is dialed.
+	Modules map[string]SyncerFactory
 	// AllowPush is the local allowlist of HTTPS provisioning targets
 	// (allowed_push_targets of the agent's own configuration file; ports 443
 	// and 8443). Empty means no push target at all.
@@ -185,14 +189,15 @@ func (e *Executor) ExecuteSync(ctx context.Context, j PulledJob) (res PullResult
 	if j.Kind != KindSync {
 		return fail(CodeUnknownOp, "not a Directory Agent job kind")
 	}
-	if e.NewSyncer == nil {
-		return fail(CodeUnsupported, "this agent build cannot run syncs")
-	}
 	if j.ID == "" || len(j.ID) > 64 {
 		return fail(CodeBadRequest, "job id is required")
 	}
 	if err := j.Spec.Validate(); err != nil {
 		return fail(CodeBadRequest, err.Error())
+	}
+	newSyncer, ok := e.syncerFor(j.Spec.Module)
+	if !ok {
+		return fail(CodeUnsupported, "this agent build cannot run that module")
 	}
 	if !safedial.Listed(e.Allow, j.Spec.Target.Host, j.Spec.Target.Port) {
 		return fail(CodeTargetNotAllowed, "target is not on this agent's local allowlist")
@@ -216,7 +221,7 @@ func (e *Executor) ExecuteSync(ctx context.Context, j PulledJob) (res PullResult
 	if err != nil {
 		return fail(CodeFailed, "dialer: "+err.Error())
 	}
-	sy, err := e.NewSyncer(ProberSpec{Target: j.Spec.Target, Config: j.Spec.Config, Password: pw, RootCAs: roots, Dialer: d})
+	sy, err := newSyncer(ProberSpec{Target: j.Spec.Target, Config: j.Spec.Config, Password: pw, RootCAs: roots, Dialer: d})
 	if err != nil {
 		return fail(CodeBadRequest, err.Error())
 	}

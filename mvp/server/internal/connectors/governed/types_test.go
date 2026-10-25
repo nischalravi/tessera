@@ -7,8 +7,9 @@ import (
 
 func TestLookup(t *testing.T) {
 	want := map[string]string{"awsorg": "awsorg", "githubscan": "githubscan", "sap": "erp", "oracle": "erp", "cyberark": "pam",
-		"beyondtrust": "pam", "delinea": "pam", "fieldglass": "vms", "beeline": "vms", "csvfeed": "vms", "agentcore": "agentcore", "azurerbac": "azurerbac", "gcpiam": "gcpiam", "successfactors": "successfactors", "unixssh": "unixssh",
-		"servicenow": "servicenow", "atlassian": "atlassian"}
+		"beyondtrust": "pam", "delinea": "pam", "fieldglass": "vms", "beeline": "vms", "csvfeed": "vms", "agentcore": "agentcore", "azurerbac": "azurerbac", "gcpiam": "gcpiam", "successfactors": "successfactors", "unixssh": "unixssh", "sftpdrop": "sftpdrop",
+		"servicenow": "servicenow", "atlassian": "atlassian", "kubernetes": "kubernetes", "vault": "vault", "mcp": "mcp", "bedrock": "bedrock",
+		"vertex": "vertex", "foundry": "foundry", "copilot": "copilot", "agentforce": "agentforce"}
 	if len(Types) != len(want) {
 		t.Errorf("%d types, want %d", len(Types), len(want))
 	}
@@ -25,7 +26,7 @@ func TestLookup(t *testing.T) {
 		t.Error("ldap is not a governed type")
 	}
 	// the connectors that read straight into the graph, and the ones that hand over to a feature
-	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false, "azurerbac": false, "gcpiam": false, "successfactors": false, "unixssh": false, "servicenow": false, "atlassian": false,
+	for id, feature := range map[string]bool{"sap": false, "cyberark": false, "githubscan": false, "agentcore": false, "azurerbac": false, "gcpiam": false, "successfactors": false, "unixssh": false, "sftpdrop": false, "servicenow": false, "atlassian": false, "mcp": false, "bedrock": false, "vertex": false, "foundry": false, "copilot": false, "agentforce": false,
 		"awsorg": true, "fieldglass": true, "beeline": true, "csvfeed": true} {
 		if got, _ := Lookup(id); got.Feature != feature {
 			t.Errorf("%s feature = %v", id, got.Feature)
@@ -51,7 +52,15 @@ func TestValidateSettings(t *testing.T) {
 		SuccessFactors: {"company_id": "ACME_prod", "username": "tessera-api"},
 		UnixSSH:        {"host": "host1.example.com", "port": "2222", "username": "tessera", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "use_sudo": "true"},
 		ServiceNow:     {"username": "tessera.integration"},
+		Kubernetes:     {"namespaces": "payments, web-1", "openshift": "true"},
+		Vault:          {"namespace": "team-a/prod"},
 		Atlassian:      {"email": "tessera@acme.example", "org_id": "abc-123", "project_keys": "PROJ, OPS_1"},
+		MCP:            {"owner": "olu@acme.example", "server_name": "Acme tools", "auth_header": "X-Api-Key"},
+		Bedrock:        {"region": "eu-west-1"},
+		Vertex:         {"project_id": "acme-agents-prod", "location": "europe-west4", "owner": "olu@acme.example"},
+		Foundry:        {"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "owner": "olu@acme.example"},
+		Copilot:        {"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+		Agentforce:     {"api_version": "v61.0"},
 	}
 	for name, set := range map[string]map[string]string{"servicenow basic": {"auth_mode": "basic", "username": "svc"}, "servicenow oauth": {"auth_mode": "oauth", "client_id": "cid"}} {
 		if errs := ValidateSettings(ServiceNow, set); len(errs) != 0 {
@@ -118,6 +127,41 @@ func TestValidateSettings(t *testing.T) {
 		{UnixSSH, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:short"}, "host_key"},
 		{UnixSSH, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "use_sudo": "yes"}, "use_sudo"},
 		{UnixSSH, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "command": "id"}, "command"},
+		{MCP, map[string]string{}, "owner"},
+		{MCP, map[string]string{"owner": "not-an-email"}, "owner"},
+		{MCP, map[string]string{"owner": "a@b.c", "server_name": "bad\nname"}, "server_name"},
+		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "X Bad"}, "auth_header"},
+		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "Host"}, "auth_header"},
+		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "Connection"}, "auth_header"},
+		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "mcp-session-id"}, "auth_header"},
+		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "x-api-key\r\nHost"}, "auth_header"},
+		{MCP, map[string]string{"owner": "a@b.c", "url": "https://x.example"}, "url"},
+		{Bedrock, map[string]string{}, "region"},
+		{Bedrock, map[string]string{"region": "us-east-1.evil.example"}, "region"},
+		{Bedrock, map[string]string{"region": "us-east-1", "agent_url": "https://x.example"}, "agent_url"},
+		{Vertex, map[string]string{"location": "us-central1"}, "project_id"},
+		{Vertex, map[string]string{"project_id": "A/B", "location": "us-central1"}, "project_id"},
+		{Vertex, map[string]string{"project_id": "acme-agents-prod"}, "location"},
+		{Vertex, map[string]string{"project_id": "acme-agents-prod", "location": "us-central1.evil.example"}, "location"},
+		{Vertex, map[string]string{"project_id": "acme-agents-prod", "location": "us-central1", "owner": "nope"}, "owner"},
+		{Vertex, map[string]string{"project_id": "acme-agents-prod", "location": "us-central1", "api_url": "https://x.example"}, "api_url"},
+		{Foundry, map[string]string{"client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}, "tenant_id"},
+		{Foundry, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "not-a-guid"}, "client_id"},
+		{Foundry, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "authority_url": "https://x.example"}, "authority_url"},
+		{Copilot, map[string]string{"tenant_id": "11111111-2222-3333-4444-555555555555"}, "client_id"},
+		{Copilot, map[string]string{"tenant_id": "x", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}, "tenant_id"},
+		{Agentforce, map[string]string{"api_version": "61"}, "api_version"},
+		{Agentforce, map[string]string{"login_url": "https://evil.example"}, "login_url"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "directory": "/d/../etc"}, "directory"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "directory": "relative"}, "directory"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "directory": "/d//x"}, "directory"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_account_id": "ID", "accounts_username": "U", "accounts_file": "../a.csv"}, "accounts_file"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_account_id": "ID", "accounts_username": "U", "accounts_file": "sub/a.csv"}, "accounts_file"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "entitlements_file": "/etc/passwd"}, "entitlements_file"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "accounts_email": "bad\ncol"}, "accounts_email"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_file": "a.csv", "accounts_account_id": "ID", "accounts_username": "U", "command": "id"}, "command"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d"}, "accounts_file"},
+		{SFTPDrop, map[string]string{"host": "h", "username": "u", "host_key": "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", "directory": "/d", "accounts_file": "a.csv", "accounts_username": "U"}, "accounts_account_id"},
 		{GCPIAM, map[string]string{}, "organization_id"},
 		{GCPIAM, map[string]string{"organization_id": "organizations/1"}, "organization_id"},
 		{GCPIAM, map[string]string{"folder_ids": "a"}, "folder_ids"},
@@ -130,6 +174,15 @@ func TestValidateSettings(t *testing.T) {
 		{ServiceNow, map[string]string{"auth_mode": "saml", "username": "u"}, "auth_mode"},
 		{ServiceNow, map[string]string{"username": "has space"}, "username"},
 		{ServiceNow, map[string]string{"username": "u", "login_url": "https://evil.example"}, "login_url"},
+		{Kubernetes, map[string]string{"namespaces": "Bad_NS"}, "namespaces"},
+		{Kubernetes, map[string]string{"namespaces": "../x"}, "namespaces"},
+		{Kubernetes, map[string]string{"namespaces": strings.TrimSuffix(strings.Repeat("ns,", 101), ",")}, "namespaces"},
+		{Kubernetes, map[string]string{"openshift": "yes"}, "openshift"},
+		{Kubernetes, map[string]string{"api_url": "https://evil.example"}, "api_url"},
+		{Vault, map[string]string{"namespace": "../x"}, "namespace"},
+		{Vault, map[string]string{"namespace": "a b"}, "namespace"},
+		{Vault, map[string]string{"namespace": "/abs"}, "namespace"},
+		{Vault, map[string]string{"address": "https://evil.example"}, "address"},
 		{Atlassian, map[string]string{}, "email"},
 		{Atlassian, map[string]string{"email": "not-an-email"}, "email"},
 		{Atlassian, map[string]string{"email": "a b@c.d"}, "email"},
@@ -150,9 +203,17 @@ func TestValidateSettings(t *testing.T) {
 	}
 }
 
+func TestBasePorts(t *testing.T) {
+	for typ, want := range map[string]string{Kubernetes: "443,6443,8443", Vault: "443,8200,8443", Atlassian: "", CyberArk: ""} {
+		if got := strings.Join(BasePorts(typ), ","); got != want {
+			t.Errorf("%s: %q, want %q", typ, got, want)
+		}
+	}
+}
+
 func TestBaseURLUse(t *testing.T) {
 	for typ, want := range map[string][2]bool{CyberArk: {true, true}, SAP: {true, true}, Fieldglass: {true, true}, CSVFeed: {true, true}, SuccessFactors: {true, true},
-		GitHubScan: {false, true}, AWSOrg: {false, false}, AgentCore: {false, false}, ServiceNow: {true, true}, Atlassian: {true, true}} {
+		GitHubScan: {false, true}, AWSOrg: {false, false}, AgentCore: {false, false}, ServiceNow: {true, true}, Atlassian: {true, true}, Kubernetes: {true, true}, Vault: {true, true}} {
 		if req, takes := BaseURLUse(typ); req != want[0] || takes != want[1] {
 			t.Errorf("%s: required %v takes %v", typ, req, takes)
 		}

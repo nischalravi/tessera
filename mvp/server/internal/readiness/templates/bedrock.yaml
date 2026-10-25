@@ -1,0 +1,93 @@
+# Amazon Bedrock Agents (issue #562): the agents of one region, read through the bedrock-agent control-plane
+# API with SigV4. Each agent is an ai_agent identity linked to its sponsor tag; its execution role, foundation
+# model, enabled action groups (tools) and knowledge bases are what it can reach. Read-only: list and get
+# operations only. What the execution role itself can do is read by the AWS Organizations connection.
+template: bedrock
+version: 1.0.0
+extends: base@1
+display_name: Amazon Bedrock Agents
+connector_types: [bedrock]
+role: account_source
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id, username, status]
+items:
+  - id: bedrock.auth
+    title: Keys accepted by AWS (the credential JSON stored sealed)
+    category: access
+    level: required
+    why: "Proves the keys before any read: a deleted key, a wrong secret or an expired session token is found here, not in an empty inventory."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Store the credential JSON again: access_key_id, secret_access_key and, for temporary credentials, session_token."
+    config_fields: [settings, credential]
+
+  - id: bedrock.reader
+    title: The principal holds list and get rights on agents only (the reader policy in the README)
+    category: access
+    level: required
+    why: "Agents, action groups, knowledge bases and tags are read with List and Get actions; a broader principal turns a leaked key into a change path."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Attach a policy with bedrock:ListAgents, GetAgent, ListAgentActionGroups, GetAgentActionGroup, ListAgentKnowledgeBases and ListTagsForResource, and nothing else."
+    config_fields: [settings, credential]
+
+  - id: bedrock.read
+    title: The region's agents are listed
+    category: scope
+    level: required
+    why: "A connector that signs in but lists no agent leaves the region's agents undiscovered without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Check the region in Settings (agents are per region) and that the principal may call bedrock:ListAgents."
+    depends_on: [bedrock.auth]
+    config_fields: [settings, credential]
+
+  - id: bedrock.sponsor
+    title: Each agent carries a sponsor tag (an e-mail address)
+    category: ownership
+    level: recommended
+    why: "An agent without a sponsor has no accountable human (the nhi-ownership policy reports it)."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Tag every agent sponsor=<e-mail address> (optionally creator=<e-mail>, and pii=true for agents that handle personal data)."
+    config_fields: [settings]
+
+  - id: bedrock.regions
+    title: One connection exists for every region that runs agents
+    category: scope
+    level: recommended
+    why: "Agents are regional: a region without a connection is a region whose agents are not inventoried."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add a connection per region in use, with the same credential."
+    config_fields: [settings]
+
+  - id: bedrock.key.rotation
+    title: The access key is rotated on a schedule (90 days or less), or temporary credentials are used
+    category: access
+    level: recommended
+    why: "A long-term key does not expire by itself; rotation bounds how long a leaked key lists the agents."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Rotate the key and store the new JSON here, or issue the session token from a role."
+    config_fields: [credential]
+
+  - id: bedrock.role
+    title: Execution roles are reviewed with the AWS connection (what each agent's role can do)
+    category: identity_keys
+    level: optional
+    why: "The agent links to its role by ARN; the role's policies are read by the AWS Organizations connector."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Add an AWS Organizations connection for the account so the roles' permissions are analysed."

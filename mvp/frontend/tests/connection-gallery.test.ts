@@ -15,12 +15,15 @@ const T = [
   ["servicenow", "ServiceNow", "Users, groups and roles through the Table API", false],
   ["atlassian", "Atlassian Jira and Confluence", "Groups, project roles and product access", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false], ["scim:auth0", "Auth0", "Enterprise connection", false],
   ["awsorg", "AWS Organizations and IAM", "Reader role in each account", false],
-  ["azurerbac", "Azure RBAC", "Role assignments of subscriptions", false], ["gcpiam", "Google Cloud IAM", "IAM policies of an organization", false], ["unixssh", "Unix/Linux host (SSH)", "Local accounts, groups and sudoers rules", false], ["githubscan", "GitHub (code scan)", "Reads MCP configuration", false],
+  ["azurerbac", "Azure RBAC", "Role assignments of subscriptions", false], ["gcpiam", "Google Cloud IAM", "IAM policies of an organization", false], ["kubernetes", "Kubernetes and OpenShift", "Roles, cluster roles, their bindings", false], ["unixssh", "Unix/Linux host (SSH)", "Local accounts, groups and sudoers rules", false], ["sftpdrop", "SFTP file drop (CSV)", "Accounts and entitlements CSV files", false], ["racf", "RACF (z/OS)", "Users, groups, connects and the SPECIAL attributes through the z/OS LDAP (SDBM) interface", false], ["ibmi", "IBM i", "User profiles, group profiles and special authorities", false], ["githubscan", "GitHub (code scan)", "Reads MCP configuration", false],
   ["sap", "SAP", "Roles and transaction codes", false], ["oracle", "Oracle Fusion Applications", "Roles of Oracle Fusion", false],
   ["cyberark", "CyberArk Privileged Access Manager", "Safes and vaulted accounts", false], ["beyondtrust", "BeyondTrust Password Safe", "Smart rules", false],
-  ["delinea", "Delinea Secret Server", "Folders and secrets", false], ["fieldglass", "SAP Fieldglass", "Contractor assignments", false],
+  ["delinea", "Delinea Secret Server", "Folders and secrets", false], ["vault", "HashiCorp Vault", "ACL policies, auth method roles", false], ["fieldglass", "SAP Fieldglass", "Contractor assignments", false],
   ["beeline", "Beeline", "Contractor assignments", false], ["csvfeed", "Contractor CSV feed", "A contractor file", false],
   ["agentcore", "AWS Bedrock AgentCore", "Agent runtimes", false],
+  ["bedrock", "Amazon Bedrock Agents", "Agents of one region", false], ["mcp", "MCP server", "Tools a Model Context Protocol server exposes", false],
+  ["vertex", "Google Vertex AI Agent Engine", "Reasoning engines of one project", false], ["foundry", "Azure AI Foundry agents", "Agents of one Foundry project", false],
+  ["copilot", "Microsoft Copilot Studio", "Agents of one Power Platform environment", false], ["agentforce", "Salesforce Agentforce", "Agents of one Salesforce org", false],
   ["rest_generic", "Generic REST API", "Any HTTP/JSON system, mapped by a declarative spec", false],
   ["sql", "Database (SQL)", "PostgreSQL, MySQL, SQL Server or Oracle", false],
   ["successfactors", "SAP SuccessFactors", "Employee Central as an HR source", false],
@@ -36,7 +39,7 @@ test("no filter shows everything", () => assert.equal(ids({}).length, T.length))
 
 test("search matches name, description and publisher, ignoring case and padding", () => {
   assert.deepEqual(ids({ q: "  OKTA " }), ["demo-okta", "okta"]);
-  assert.deepEqual(ids({ q: "ldap" }), ["ldap"]);
+  assert.deepEqual(ids({ q: "ldap" }), ["ldap", "racf"]); // RACF is read through z/OS LDAP
   assert.deepEqual(ids({ q: "graph" }), ["entra"]); // description
   assert.deepEqual(ids({ q: "7644" }), ["scim_app"]); // publisher
   assert.deepEqual(ids({ q: "oracle" }), ["oracle", "sql"]); // the Oracle ERP tile and the database tile
@@ -54,22 +57,26 @@ test("chips filter by category and capability, and combine with search", () => {
 
 test("the connectors the server already had are in the gallery under their categories", () => {
   const want: Record<string, string[]> = {
-    "Cloud & IaaS": ["awsorg", "azurerbac", "gcpiam"], "Servers & hosts": ["unixssh"], "Source code": ["githubscan"], ERP: ["sap", "oracle"], "Privileged access": ["cyberark", "beyondtrust", "delinea"],
-    "Contractor & VMS": ["fieldglass", "beeline", "csvfeed"], "AI agents": ["agentcore"],
+    "Cloud & IaaS": ["awsorg", "azurerbac", "gcpiam", "kubernetes"], "Servers & hosts": ["unixssh", "sftpdrop", "racf", "ibmi"], "Source code": ["githubscan"], ERP: ["sap", "oracle"], "Privileged access": ["cyberark", "beyondtrust", "delinea", "vault"],
+    "Contractor & VMS": ["fieldglass", "beeline", "csvfeed"], "AI agents": ["agentcore", "bedrock", "mcp", "vertex", "foundry", "copilot", "agentforce"],
   };
   for (const [category, types] of Object.entries(want)) {
     assert.ok(CATEGORIES.includes(category as never), category);
     assert.deepEqual(ids({ category: category as never }), types, category);
   }
-  assert.deepEqual(ids({ capability: "Agent discovery" }), ["githubscan", "agentcore"]);
+  assert.deepEqual(ids({ capability: "Agent discovery" }), ["githubscan", "agentcore", "bedrock", "mcp", "vertex", "foundry", "copilot", "agentforce"]);
   assert.deepEqual(ids({ capability: "Contractor source" }), ["fieldglass", "beeline", "csvfeed"]);
-  assert.deepEqual(ids({ capability: "Access inventory", category: "Privileged access" }), ["cyberark", "beyondtrust", "delinea"]);
+  assert.deepEqual(ids({ capability: "Access inventory", category: "Privileged access" }), ["cyberark", "beyondtrust", "delinea", "vault"]);
   assert.deepEqual(ids({ q: "fieldglass" }), ["fieldglass"]);
-  assert.deepEqual(ids({ capability: "Access inventory", category: "Cloud & IaaS" }), ["awsorg", "azurerbac", "gcpiam"]);
-  assert.deepEqual(ids({ q: "azure" }), ["azurerbac"]);
-  assert.deepEqual(ids({ q: "google cloud" }), ["gcpiam"]);
+  assert.deepEqual(ids({ capability: "Access inventory", category: "Cloud & IaaS" }), ["awsorg", "azurerbac", "gcpiam", "kubernetes"]);
+  assert.deepEqual(ids({ q: "azure" }), ["azurerbac", "foundry"]);
+  assert.deepEqual(ids({ q: "google cloud" }), ["gcpiam", "vertex"]);
   assert.deepEqual(ids({ q: "sudoers" }), ["unixssh"]);
+  assert.deepEqual(ids({ q: "sftp" }), ["sftpdrop"]);
   assert.deepEqual(ids({ capability: "Access inventory", category: "Servers & hosts" }), ["unixssh"]);
+  assert.deepEqual(ids({ q: "racf" }), ["racf"]);
+  assert.deepEqual(ids({ q: "special authorities" }), ["ibmi"]);
+  assert.deepEqual(ids({ capability: "Identity source", category: "Servers & hosts" }), ["sftpdrop", "racf", "ibmi"]);
   assert.deepEqual(ids({ q: "  privileged " }), ["cyberark"]);
 });
 
@@ -121,4 +128,52 @@ test("ServiceNow and Atlassian are identity sources and provisioning targets in 
   for (const id of ["servicenow", "atlassian"]) assert.match(picker, new RegExp(`id: "${id}", label: "[^"]+", template: "${id}"`), id);
   const gov = readFileSync(new URL("../src/features/admin/connections/governed.ts", import.meta.url), "utf8");
   for (const id of ["servicenow", "atlassian"]) assert.match(gov, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a connect form`);
+});
+
+test("MCP servers and Bedrock agents are agent-discovery tiles in AI agents, each with a logo, a picker entry and a connect form", () => {
+  for (const id of ["mcp", "bedrock"]) assert.deepEqual(GALLERY_META[id].capabilities, ["Agent discovery"], id);
+  assert.deepEqual(ids({ q: "model context protocol" }), ["mcp"]);
+  assert.deepEqual(ids({ q: "one region" }), ["bedrock"]);
+  const picker = readFileSync(new URL("../src/features/admin/connections/shared.tsx", import.meta.url), "utf8");
+  for (const id of ["mcp", "bedrock"]) assert.match(picker, new RegExp(`id: "${id}", label: "[^"]+", template: "${id}"`), id);
+  const gov = readFileSync(new URL("../src/features/admin/connections/governed.ts", import.meta.url), "utf8");
+  for (const id of ["mcp", "bedrock"]) assert.match(gov, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a connect form`);
+});
+
+test("Vertex, Foundry, Copilot Studio and Agentforce are agent-discovery tiles in AI agents, each with a logo, a picker entry and a connect form", () => {
+  const types = ["vertex", "foundry", "copilot", "agentforce"];
+  for (const id of types) assert.deepEqual(GALLERY_META[id].capabilities, ["Agent discovery"], id);
+  assert.deepEqual(ids({ q: "reasoning engines" }), ["vertex"]);
+  assert.deepEqual(ids({ q: "power platform" }), ["copilot"]);
+  const picker = readFileSync(new URL("../src/features/admin/connections/shared.tsx", import.meta.url), "utf8");
+  const logos = readFileSync(new URL("../src/components/VendorLogo.tsx", import.meta.url), "utf8");
+  const gov = readFileSync(new URL("../src/features/admin/connections/governed.ts", import.meta.url), "utf8");
+  for (const id of types) {
+    assert.match(picker, new RegExp(`id: "${id}", label: "[^"]+", template: "${id}"`), id);
+    assert.match(logos, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a logo`);
+    assert.match(gov, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a connect form`);
+  }
+});
+
+test("IBM i is marked as a preview that cannot sync yet, on its tile and in the wizard", () => {
+  const shared = readFileSync(new URL("../src/features/admin/connections/shared.tsx", import.meta.url), "utf8");
+  const ibmi = shared.split("\n").findIndex((l) => l.includes('{ id: "ibmi"'));
+  assert.ok(ibmi >= 0);
+  assert.match(shared.split("\n").slice(ibmi, ibmi + 2).join("\n"), /preview: "Preview: IBM i cannot sync yet/);
+  const wizard = readFileSync(new URL("../src/features/admin/connections/Wizard.tsx", import.meta.url), "utf8");
+  assert.match(wizard, /t\.preview && <Badge/);
+});
+
+test("Kubernetes and Vault are read-only access inventories with a logo, a picker entry and a connect form", () => {
+  assert.deepEqual(GALLERY_META.kubernetes, { vendor: "kubernetes", publisher: "Kubernetes and Red Hat OpenShift", category: "Cloud & IaaS", capabilities: ["Access inventory"] });
+  assert.deepEqual(GALLERY_META.vault, { vendor: "vault", publisher: "HashiCorp", category: "Privileged access", capabilities: ["Access inventory"] });
+  assert.deepEqual(ids({ q: "openshift" }), ["kubernetes"]);
+  assert.deepEqual(ids({ q: "hashicorp" }), ["vault"]);
+  const logo = readFileSync(new URL("../src/components/VendorLogo.tsx", import.meta.url), "utf8");
+  assert.match(logo, /siKubernetes\b/, "the Kubernetes mark");
+  assert.match(logo, /siVault\b/, "the Vault mark");
+  const picker = readFileSync(new URL("../src/features/admin/connections/shared.tsx", import.meta.url), "utf8");
+  for (const id of ["kubernetes", "vault"]) assert.match(picker, new RegExp(`id: "${id}", label: "[^"]+", template: "${id}"`), id);
+  const gov = readFileSync(new URL("../src/features/admin/connections/governed.ts", import.meta.url), "utf8");
+  for (const id of ["kubernetes", "vault"]) assert.match(gov, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a connect form`);
 });

@@ -3,7 +3,7 @@
 // AgentCore, SuccessFactors). Pure, so `npm test` covers it. The setting keys mirror internal/connectors/governed
 // (SettingSpecs); a Go test compares them with SETTING_KEYS below, so the two cannot drift.
 
-export interface GovField { key: string; label: string; hint?: string; required?: boolean; area?: boolean }
+export interface GovField { key: string; label: string; hint?: string; required?: boolean; area?: boolean; /** A Yes/No select; the server takes the string "true" or "false". */ flag?: boolean }
 export interface GovCredential { label: string; hint: string; area?: boolean }
 export interface GovType {
   /** The base URL field, when the type takes one (GitHub's is optional). */
@@ -32,6 +32,15 @@ export const SETTING_KEYS: Record<string, string[]> = {
   servicenow: ["auth_mode", "username", "client_id"],
   atlassian: ["email", "org_id", "project_keys"],
   unixssh: ["host", "port", "username", "host_key", "use_sudo"],
+  mcp: ["owner", "server_name", "auth_header"],
+  bedrock: ["region"],
+  vertex: ["project_id", "location", "owner"],
+  foundry: ["tenant_id", "client_id", "owner"],
+  copilot: ["tenant_id", "client_id"],
+  agentforce: ["api_version"],
+  kubernetes: ["namespaces", "openshift"],
+  vault: ["namespace"],
+  sftpdrop: ["host", "port", "username", "host_key", "directory", "accounts_file", "entitlements_file", "accounts_account_id", "accounts_username", "accounts_email", "accounts_identity_id", "accounts_status", "entitlements_account_id", "entitlements_entitlement", "entitlements_name", "entitlements_privileged"],
 };
 
 const VAULT_URL = { label: "Vault URL", hint: "The vault's HTTPS host name, no path.", required: true };
@@ -149,6 +158,85 @@ export const GOVERNED: Record<string, GovType> = {
     ],
     credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
   },
+  mcp: {
+    baseUrl: { label: "MCP endpoint", hint: "https://host/mcp: the server's Streamable HTTP endpoint, HTTPS only. Private, loopback and link-local addresses are refused from the server.", required: true },
+    settings: [
+      { key: "owner", label: "Owner", required: true, hint: "The e-mail address of the person accountable for the server. MCP carries no owner, so its tools are linked to this person." },
+      { key: "server_name", label: "Display name", hint: "Optional. Default: the name the server reports, then its host." },
+      { key: "auth_header", label: "Credential header", hint: "Optional. The header an API key goes in (X-Api-Key). Default: Authorization: Bearer." },
+    ],
+    credential: { label: "Bearer token or API key", hint: "A token that may list tools. Tessera never calls a tool. It also tries the server without it, to record whether it accepts anonymous callers." },
+  },
+  bedrock: {
+    settings: [{ key: "region", label: "Region", required: true, hint: "The AWS region whose agents are read, for example us-east-1. Agents are regional: add one connection per region." }],
+    credential: { label: "AWS keys (JSON)", hint: "{\"access_key_id\": \"...\", \"secret_access_key\": \"...\", \"session_token\": \"...\"} of a principal with the Bedrock agent list and get rights only; session_token is optional.", area: true },
+  },
+  vertex: {
+    settings: [
+      { key: "project_id", label: "Project", required: true, hint: "The project id (or number) whose agents are read." },
+      { key: "location", label: "Location", required: true, hint: "The region whose agents are read, for example us-central1. Agents are regional: add one connection per location." },
+      { key: "owner", label: "Owner", hint: "Optional. The e-mail address of the person accountable for the project's agents; a Vertex agent carries no e-mail address of its own." },
+    ],
+    credential: { label: "Service account key (JSON)", hint: "The key file of a service account with roles/aiplatform.viewer only.", area: true },
+  },
+  foundry: {
+    baseUrl: { label: "Project endpoint", hint: "https://<account>.services.ai.azure.com/api/projects/<project>: the Foundry project's endpoint, HTTPS only.", required: true },
+    settings: [
+      { key: "tenant_id", label: "Directory (tenant) id", required: true, hint: "The Entra tenant GUID." },
+      { key: "client_id", label: "Application (client) id", required: true, hint: "A service principal with the Azure AI User role on the project (read only)." },
+      { key: "owner", label: "Owner", hint: "Optional. The e-mail address of the person accountable for agents whose metadata names no sponsor." },
+    ],
+    credential: { label: "Client secret or certificate", hint: "The application's client secret, or a PEM with its certificate and RSA private key.", area: true },
+  },
+  copilot: {
+    baseUrl: { label: "Environment URL", hint: "https://<org>.crm.dynamics.com: the Power Platform environment's Dataverse URL, HTTPS only, no path.", required: true },
+    settings: [
+      { key: "tenant_id", label: "Directory (tenant) id", required: true, hint: "The Entra tenant GUID." },
+      { key: "client_id", label: "Application (client) id", required: true, hint: "An application user of the environment with a read-only Dataverse role (read on Chatbot, Chatbot Subcomponent and User)." },
+    ],
+    credential: { label: "Client secret or certificate", hint: "The application's client secret, or a PEM with its certificate and RSA private key.", area: true },
+  },
+  agentforce: {
+    baseUrl: { label: "My Domain URL", hint: "https://acme.my.salesforce.com: the org's My Domain URL, HTTPS only, no path.", required: true },
+    settings: [{ key: "api_version", label: "API version", hint: "Optional, v61.0 and the like." }],
+    credential: { label: "Connected app credential (JSON)", hint: "{\"client_id\": \"<consumer key>\", \"username\": \"<integration user>\", \"private_key\": \"-----BEGIN PRIVATE KEY-----...\"}: the JWT bearer flow; no password is kept.", area: true },
+  },
+  kubernetes: {
+    baseUrl: { label: "API server URL", hint: "https://api.cluster.example.com:6443; HTTPS host name and port, no path. Its certificate must chain to a public CA.", required: true },
+    settings: [
+      { key: "namespaces", label: "Namespaces", hint: "Comma separated, at most 100. Optional: read the roles, role bindings and service accounts of these namespaces only." },
+      { key: "openshift", label: "OpenShift", flag: true, hint: "Yes also reads the groups of user.openshift.io (default No)." },
+    ],
+    credential: { label: "ServiceAccount token", hint: "The bearer token of a ServiceAccount that can only list RBAC objects, service accounts and (OpenShift) groups. Read-only: Tessera never writes to the cluster.", area: true },
+  },
+  vault: {
+    baseUrl: { label: "Vault URL", hint: "https://vault.example.com:8200; HTTPS host name and port, no path.", required: true },
+    settings: [
+      { key: "namespace", label: "Namespace", hint: "Vault Enterprise namespace path. Optional: one connection reads one namespace." },
+    ],
+    credential: { label: "Vault token", hint: "A periodic token of a read-only policy (read sys/policies/acl and sys/auth, list and read the auth role, user, group and identity collections). Never a root token. Read-only: no secret is read.", area: true },
+  },
+  sftpdrop: {
+    settings: [
+      { key: "host", label: "Host", required: true, hint: "The SFTP server's host name or IP address. Private, loopback and link-local addresses are refused from the server." },
+      { key: "port", label: "SSH port", hint: "1 to 65535, default 22." },
+      { key: "username", label: "SFTP user", required: true, hint: "A dedicated account that can read the drop directory only." },
+      { key: "host_key", label: "Host key", required: true, hint: "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A server whose key differs is refused; there is no trust on first use." },
+      { key: "directory", label: "Directory", required: true, hint: "The absolute directory the files are read from, as the server reports it. A link, or a path through one, is refused." },
+      { key: "accounts_file", label: "Accounts file", required: true, hint: "The plain file name of the accounts CSV (at most 512 KiB and 5000 rows)." },
+      { key: "entitlements_file", label: "Entitlements file", hint: "Optional: the plain file name of the account-entitlement CSV, one row per account and entitlement." },
+      { key: "accounts_account_id", label: "Accounts: account id column", required: true, hint: "The column that identifies the account." },
+      { key: "accounts_username", label: "Accounts: username column", required: true, hint: "The column with the login name." },
+      { key: "accounts_email", label: "Accounts: email column", hint: "Optional: correlates the account to a person." },
+      { key: "accounts_identity_id", label: "Accounts: identity id column", hint: "Optional: the person's external id, tried before the email." },
+      { key: "accounts_status", label: "Accounts: status column", hint: "Optional: active or disabled. Without it every account is active." },
+      { key: "entitlements_account_id", label: "Entitlements: account id column", hint: "Required with an entitlements file." },
+      { key: "entitlements_entitlement", label: "Entitlements: entitlement column", hint: "Required with an entitlements file." },
+      { key: "entitlements_name", label: "Entitlements: name column", hint: "Optional: a display name for the entitlement." },
+      { key: "entitlements_privileged", label: "Entitlements: privileged column", hint: "Optional: yes or no." },
+    ],
+    credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
+  },
   agentcore: {
     settings: [{ key: "snapshot", label: "Snapshot file", required: true, hint: "A recorded AgentCore snapshot (JSON) in this tenant's directory. There is no live AgentCore client; refused in prod." }],
     credential: null,
@@ -160,7 +248,7 @@ export const isGoverned = (connectorType: string) => connectorType in GOVERNED;
 /** Form values of a type's settings, from the saved config. */
 export function settingValues(connectorType: string, saved?: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const f of GOVERNED[connectorType]?.settings ?? []) out[`settings.${f.key}`] = saved?.[f.key] ?? "";
+  for (const f of GOVERNED[connectorType]?.settings ?? []) out[`settings.${f.key}`] = saved?.[f.key] ?? (f.flag ? "false" : "");
   return out;
 }
 
@@ -169,7 +257,7 @@ export function settingsPatch(connectorType: string, values: Record<string, stri
   const next: Record<string, string> = {};
   for (const f of GOVERNED[connectorType]?.settings ?? []) {
     const v = (values[`settings.${f.key}`] ?? "").trim();
-    if (v) next[f.key] = v;
+    if (v && !(f.flag && v === "false" && !saved?.[f.key])) next[f.key] = v; // an untouched No is left unset, as the server's default
   }
   const was = Object.fromEntries(Object.entries(saved ?? {}).filter(([, v]) => v));
   const same = Object.keys(next).length === Object.keys(was).length && Object.entries(next).every(([k, v]) => was[k] === v);

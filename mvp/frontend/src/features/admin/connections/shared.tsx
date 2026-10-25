@@ -104,7 +104,8 @@ export function observedText(o: Record<string, unknown>) {
     .join(" · ");
 }
 
-export const CONNECTOR_TYPES: { id: string; label: string; template: string; demo: boolean; blurb: string }[] = [
+/** preview: the type can be configured but cannot sync yet; the text says why (shown on its tile and in the wizard). */
+export const CONNECTOR_TYPES: { id: string; label: string; template: string; demo: boolean; blurb: string; preview?: string }[] = [
   { id: "demo-ad", label: "Active Directory (demo)", template: "ad", demo: true, blurb: "Simulated forest built from the demo company, with planted gaps." },
   { id: "demo-okta", label: "Okta (demo)", template: "okta", demo: true, blurb: "The demo Okta org, including the leaver the legacy process missed." },
   { id: "demo-workday", label: "Workday (demo)", template: "workday", demo: true, blurb: "The demo HR source, as the authoritative connection." },
@@ -134,17 +135,29 @@ export const CONNECTOR_TYPES: { id: string; label: string; template: string; dem
   { id: "awsorg", label: "AWS Organizations and IAM", template: "awsorg", demo: false, blurb: "Reader role in each account through sts:AssumeRole; feeds the effective-permission analysis." },
   { id: "azurerbac", label: "Azure RBAC", template: "azurerbac", demo: false, blurb: "Role assignments, role definitions and PIM eligible assignments of subscriptions and management groups, read-only." },
   { id: "gcpiam", label: "Google Cloud IAM", template: "gcpiam", demo: false, blurb: "IAM policies of an organization, folders and projects, their roles and service accounts, read-only." },
+  { id: "kubernetes", label: "Kubernetes and OpenShift", template: "kubernetes", demo: false, blurb: "Roles, cluster roles, their bindings, service accounts and OpenShift groups, read-only." },
   { id: "unixssh", label: "Unix/Linux host (SSH)", template: "unixssh", demo: false, blurb: "Local accounts, groups and sudoers rules of one host over SSH with a pinned host key, read-only." },
+  { id: "racf", label: "RACF (z/OS)", template: "racf", demo: false, blurb: "Users, groups, connects and the SPECIAL, OPERATIONS, AUDITOR and ROAUDIT attributes through the z/OS LDAP (SDBM) interface, read by a Directory Agent." },
+  { id: "ibmi", label: "IBM i", template: "ibmi", demo: false, blurb: "User profiles, group profiles and special authorities, read by a Directory Agent. Preview: it cannot sync yet.",
+    preview: "Preview: IBM i cannot sync yet. The live IBM i transport is not built into the Directory Agent, so a sync answers unsupported and no profiles are read." },
+  { id: "sftpdrop", label: "SFTP file drop (CSV)", template: "sftpdrop", demo: false, blurb: "Accounts and entitlements CSV files that a legacy system exports to an SFTP directory, read with a pinned host key." },
   { id: "githubscan", label: "GitHub (code scan)", template: "githubscan", demo: false, blurb: "Reads MCP configuration and agent credentials from an organization's repositories, read-only." },
   { id: "sap", label: "SAP", template: "erp", demo: false, blurb: "Roles, transaction codes and authorization objects as fine-grained access." },
   { id: "oracle", label: "Oracle Fusion Applications", template: "erp", demo: false, blurb: "Roles and privileges of Oracle Fusion as fine-grained access." },
   { id: "cyberark", label: "CyberArk Privileged Access Manager", template: "pam", demo: false, blurb: "Safes, their members and vaulted accounts; safe membership through provisioning." },
   { id: "beyondtrust", label: "BeyondTrust Password Safe", template: "pam", demo: false, blurb: "Smart rules, user groups and managed accounts; membership through provisioning." },
   { id: "delinea", label: "Delinea Secret Server", template: "pam", demo: false, blurb: "Folders, their permissions and secrets; membership through provisioning." },
+  { id: "vault", label: "HashiCorp Vault", template: "vault", demo: false, blurb: "ACL policies, auth method roles, entities and identity groups, read-only. No secret is read." },
   { id: "fieldglass", label: "SAP Fieldglass", template: "vms", demo: false, blurb: "Contractor assignments with a sponsor and an end date." },
   { id: "beeline", label: "Beeline", template: "vms", demo: false, blurb: "Contractor assignments with a sponsor and an end date." },
   { id: "csvfeed", label: "Contractor CSV feed", template: "vms", demo: false, blurb: "A contractor file fetched over HTTPS (uploads stay on the Contractors page)." },
   { id: "agentcore", label: "AWS Bedrock AgentCore", template: "agentcore", demo: false, blurb: "Agent runtimes from a recorded snapshot; no live client yet, refused in prod." },
+  { id: "bedrock", label: "Amazon Bedrock Agents", template: "bedrock", demo: false, blurb: "Agents of one region with their action groups, knowledge bases and execution role, linked to the sponsor tag; read-only." },
+  { id: "mcp", label: "MCP server", template: "mcp", demo: false, blurb: "Tools a Model Context Protocol server exposes and whether it accepts anonymous callers, linked to an owner; read-only." },
+  { id: "vertex", label: "Google Vertex AI Agent Engine", template: "vertex", demo: false, blurb: "Reasoning engines of one project and location with the service account and secrets each reaches, linked to an owner; read-only." },
+  { id: "foundry", label: "Azure AI Foundry agents", template: "foundry", demo: false, blurb: "Agents of one Foundry project with their tools and data, linked to the sponsor metadata; read-only." },
+  { id: "copilot", label: "Microsoft Copilot Studio", template: "copilot", demo: false, blurb: "Agents of one Power Platform environment with their actions and knowledge sources, linked to the Dataverse owner; read-only." },
+  { id: "agentforce", label: "Salesforce Agentforce", template: "agentforce", demo: false, blurb: "Agents of one Salesforce org with the user each runs as and its actions, linked to the owner; read-only." },
   { id: "successfactors", label: "SAP SuccessFactors", template: "successfactors", demo: false, blurb: "Employee Central as an HR source: people, employment dates, department and manager drive joiner, mover and leaver. Read-only." },
   { id: "rest_generic", label: "Generic REST API", template: "rest_generic", demo: false, blurb: "Any HTTP/JSON system, mapped by a declarative spec, no code (issue #552)." },
 ];

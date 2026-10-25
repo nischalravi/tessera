@@ -23,22 +23,31 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/bedrockagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/copilotstudio"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/entra"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/foundryagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/kubernetes"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/mcpserver"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sftpdrop"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vault"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vertexagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
@@ -72,7 +81,23 @@ import (
 // Unix and Linux over SSH (issue #558): "unix" reads accounts, groups and sudoers rules of one host
 // (TESSERA_UNIXSSH_*) with a pinned host key and a key credential; it is read-only.
 //
-// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, azure, gcp, unix, github-scan and aws-agentcore factories. hc is the
+// AI agent platforms (issue #562): "mcp" inventories one MCP server's tools and auth mode (TESSERA_MCP_*, a
+// customer-hosted https endpoint reached through safehttp); "bedrock" reads the Amazon Bedrock Agents of one
+// region, their action groups and knowledge bases (TESSERA_BEDROCK_*, SigV4 with a key pair). Both are read-only.
+//
+// Part 2 of issue #562 adds "vertex" (Google Vertex AI Agent Engine, TESSERA_VERTEX_*), "foundry" (Azure AI
+// Foundry agents, TESSERA_FOUNDRY_*), "copilot" (Microsoft Copilot Studio through Dataverse, TESSERA_COPILOT_*)
+// and "agentforce" (Salesforce Agentforce, TESSERA_AGENTFORCE_*), all read-only.
+//
+// Kubernetes, OpenShift and Vault (issue #560): "kubernetes" reads Roles, ClusterRoles, their bindings,
+// ServiceAccounts and OpenShift groups (TESSERA_KUBERNETES_*); "vault" reads ACL policies, auth roles,
+// users, identity entities and groups (TESSERA_VAULT_*). Both are read-only, take the server's address as
+// an https base URL and a sealed bearer token or Vault token.
+//
+// SFTP file drop (issue #563): "sftp" reads an accounts CSV (and an entitlements CSV) from one directory of an
+// SFTP server (TESSERA_SFTPDROP_*) with the flat-file column mapping, a pinned host key and a key credential.
+//
+// Register adds the okta, entra, google, workday, successfactors, rest, sql, salesforce, servicenow, atlassian, kubernetes, vault, azure, gcp, unix, sftp, mcp, bedrock, vertex, foundry, copilot, agentforce, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -114,6 +139,12 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["atlassian"] = func(now time.Time) (connectors.Connector, error) {
 		return atlassian.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
 	}
+	connectors.Factories["kubernetes"] = func(now time.Time) (connectors.Connector, error) {
+		return kubernetes.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["vault"] = func(now time.Time) (connectors.Connector, error) {
+		return vault.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
 	connectors.Factories["rest"] = func(time.Time) (connectors.Connector, error) {
 		return restgen.FromEnv(os.Getenv, rt, hc)
 	}
@@ -129,8 +160,29 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["unix"] = func(time.Time) (connectors.Connector, error) {
 		return unixssh.FromEnv(os.Getenv, rt)
 	}
+	connectors.Factories["sftp"] = func(time.Time) (connectors.Connector, error) {
+		return sftpdrop.FromEnv(os.Getenv, rt)
+	}
 	connectors.Factories["gcp"] = func(now time.Time) (connectors.Connector, error) {
 		return gcpiam.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["mcp"] = func(now time.Time) (connectors.Connector, error) {
+		return mcpserver.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["bedrock"] = func(now time.Time) (connectors.Connector, error) {
+		return bedrockagents.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["vertex"] = func(now time.Time) (connectors.Connector, error) {
+		return vertexagents.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["foundry"] = func(now time.Time) (connectors.Connector, error) {
+		return foundryagents.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["copilot"] = func(now time.Time) (connectors.Connector, error) {
+		return copilotstudio.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
+	}
+	connectors.Factories["agentforce"] = func(now time.Time) (connectors.Connector, error) {
+		return agentforce.FromEnv(os.Getenv, rt, hc, func() time.Time { return now })
 	}
 	connectors.Factories["aws-agentcore"] = func(now time.Time) (connectors.Connector, error) {
 		return agentcore.FromEnv(os.Getenv, now)

@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -93,7 +94,7 @@ func Sign(req *http.Request, body []byte, c Credentials, region, service string,
 	}
 	signedHeaders := strings.Join(names, ";")
 
-	canonical := strings.Join([]string{req.Method, canonicalPath(req.URL.Path, service == "s3"), canonicalQuery(req),
+	canonical := strings.Join([]string{req.Method, canonicalURLPath(req.URL, service == "s3"), canonicalQuery(req),
 		ch.String(), signedHeaders, payloadHash}, "\n")
 	scope := day + "/" + region + "/" + service + "/aws4_request"
 	csum := sha256.Sum256([]byte(canonical))
@@ -121,13 +122,39 @@ func hmacSHA256(key []byte, data string) []byte {
 // header rules require.
 func collapse(s string) string { return strings.Join(strings.Fields(s), " ") }
 
+// canonicalURLPath is canonicalPath over the request's segments as they go
+// on the wire. A segment that carries an encoded "/" (an ARN in a REST path,
+// "agent%2FID") is one segment: AWS canonicalises the path it received, so
+// that "/" signs as "%252F" (non-S3), not as a separator. With no RawPath the
+// segments are those of u.Path, as before.
+func canonicalURLPath(u *url.URL, s3 bool) string {
+	if u.RawPath == "" || u.EscapedPath() != u.RawPath {
+		return canonicalPath(u.Path, s3)
+	}
+	segs := strings.Split(u.RawPath, "/")
+	for i, s := range segs {
+		d, err := url.PathUnescape(s)
+		if err != nil {
+			return canonicalPath(u.Path, s3)
+		}
+		segs[i] = d
+	}
+	return canonicalSegments(segs, s3)
+}
+
 // canonicalPath is the URI-encoded absolute path: each segment encoded once
 // for S3 and twice for every other service.
 func canonicalPath(p string, s3 bool) string {
 	if p == "" {
 		return "/"
 	}
-	segs := strings.Split(p, "/")
+	return canonicalSegments(strings.Split(p, "/"), s3)
+}
+
+func canonicalSegments(segs []string, s3 bool) string {
+	if len(segs) == 1 && segs[0] == "" {
+		return "/"
+	}
 	for i, s := range segs {
 		s = Encode(s)
 		if !s3 {

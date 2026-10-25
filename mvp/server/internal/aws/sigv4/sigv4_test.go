@@ -138,3 +138,27 @@ func TestCredentialsNeverPrint(t *testing.T) {
 		}
 	}
 }
+
+// An ARN in a REST path (bedrock-agent ListTagsForResource, GET /tags/{resourceArn}) is one segment on the
+// wire, strictly encoded ("%3A", "%2F"); AWS canonicalises the received path by encoding it once more, so
+// its ":" signs as "%253A" and its "/" as "%252F", not as a separator. This vector is written out by hand
+// from the SigV4 rules, independently of Encode.
+func TestCanonicalPath_EncodedSlashSegment(t *testing.T) {
+	req, err := http.NewRequest("GET", "https://bedrock-agent.us-east-1.amazonaws.com/tags/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aagent%2FAGENT00001", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "/tags/arn%253Aaws%253Abedrock%253Aus-east-1%253A123456789012%253Aagent%252FAGENT00001"
+	if got := canonicalURLPath(req.URL, false); got != want {
+		t.Errorf("canonical path = %q, want %q", got, want)
+	}
+	// a path with no RawPath signs as before
+	plain, _ := http.NewRequest("GET", "https://h/a/b c", nil)
+	if got := canonicalURLPath(plain.URL, false); got != "/a/b%2520c" {
+		t.Errorf("plain path = %q", got)
+	}
+	// S3 encodes once and keeps the encoded slash in the key
+	if got := canonicalURLPath(req.URL, true); got != "/tags/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aagent%2FAGENT00001" {
+		t.Errorf("s3 path = %q", got)
+	}
+}

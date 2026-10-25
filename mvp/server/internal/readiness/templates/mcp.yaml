@@ -1,0 +1,95 @@
+# MCP server inventory (issue #562): one Model Context Protocol server over the Streamable HTTP transport.
+# Read-only: initialize, the initialized notification and tools/list; no tool is ever called. The server and
+# its tools are mapped as a non-human identity linked to the owner named in Settings, and the auth mode is
+# observed (an anonymous initialize is tried, and answered or refused).
+template: mcp
+version: 1.0.0
+extends: base@1
+display_name: MCP server
+connector_types: [mcp]
+role: account_source
+attest_when_unsupported: [base.writeback.scope]
+default_correlation_key: id
+required_attributes:
+  user: [id, username, status]
+items:
+  - id: mcp.endpoint
+    title: Endpoint is HTTPS and reachable through safehttp
+    category: transport
+    level: required
+    why: "The credential goes only to this URL; plain http, a private address or a redirect off the host is refused."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the server's MCP endpoint (https://host/mcp). Private, loopback and link-local addresses are refused from the server."
+    config_fields: [base_url]
+
+  - id: mcp.auth
+    title: Credential accepted by the server (initialize succeeds)
+    category: access
+    level: required
+    why: "Proves the credential before any read: a revoked or mistyped token is found here, not in an empty inventory."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Store the bearer token (or API key and its header name in Settings) again."
+    depends_on: [mcp.endpoint]
+    config_fields: [base_url, settings, credential]
+
+  - id: mcp.read
+    title: The tool list is readable
+    category: scope
+    level: required
+    why: "A server that accepts the credential but lists no tools leaves what its agents can do unanalysed, without an error."
+    verify:
+      - kind: live
+        check: read_probe
+    remediation:
+      hint: "Give the credential the right to list tools; check that the server implements tools/list."
+    depends_on: [mcp.auth]
+    config_fields: [base_url, settings, credential]
+
+  - id: mcp.owner
+    title: An accountable owner is named in Settings
+    category: ownership
+    level: required
+    why: "MCP carries no owner; an unowned tool server is a non-human identity nobody answers for (the nhi-ownership policy reports it)."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set the owner to the e-mail address of the person or team lead who approves access to this server."
+    config_fields: [settings]
+
+  - id: mcp.no_anonymous
+    title: The server refuses callers without a credential
+    category: access
+    level: recommended
+    why: "A server that answers initialize anonymously lets any caller that can reach it list, and probably call, its tools; every tool is tagged anonymous_access when it does."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Require OAuth or a bearer token on the endpoint; the inventory shows the auth_mode it observed."
+    config_fields: [settings]
+
+  - id: mcp.credential.scope
+    title: The credential is dedicated to Tessera and limited to listing tools
+    category: access
+    level: recommended
+    why: "The connector never calls a tool, so a token that could is more than it needs."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Issue a separate read-only token for the inventory and rotate it on a schedule."
+    config_fields: [credential]
+
+  - id: mcp.tools.review
+    title: Destructive tools are reviewed (a tool that deletes or runs commands is privileged)
+    category: scope
+    level: optional
+    why: "Tools annotated destructiveHint, or named for commands and deletion, are marked privileged and enter access review."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Ask the server's owner to set annotations.destructiveHint and readOnlyHint on every tool."

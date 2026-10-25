@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { siAtlassian, siAuth0, siBox, siDatabricks, siDropbox, siGithub, siGooglecloud, siGoogle, siKeycloak, siLinux, siOkta, siSap, siSnowflake, siZendesk, siZoom } from "simple-icons";
+import { siAtlassian, siAuth0, siBox, siDatabricks, siDropbox, siGithub, siGooglecloud, siGoogle, siKeycloak, siKubernetes, siLinux, siOkta, siSap, siSnowflake, siVault, siZendesk, siZoom } from "simple-icons";
 
 /**
  * A recognizable mark per system on a fixed light "logo plate" (white, subtle border, both themes) so brand colours
@@ -23,6 +23,8 @@ const BRAND: Record<string, { path: string; hex: string }> = {
   sap: { path: siSap.path, hex: siSap.hex },
   gcp: { path: siGooglecloud.path, hex: siGooglecloud.hex },
   linux: { path: siLinux.path, hex: siLinux.hex },
+  kubernetes: { path: siKubernetes.path, hex: siKubernetes.hex },
+  vault: { path: siVault.path, hex: siVault.hex },
 };
 
 const stroke = { fill: "none", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" } as const;
@@ -47,6 +49,10 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   azure: { color: "#0f6cbd", glyph: <g {...stroke} stroke="#0f6cbd"><path d="M7 14a4 4 0 01-.6-7.95A5.5 5.5 0 0117 5.5a4.2 4.2 0 01.5 8.5" /><rect x="6" y="16" width="4" height="4" rx=".8" /><rect x="14" y="16" width="4" height="4" rx=".8" /><path d="M10 18h4M12 14v2" /></g> },
   // database cylinder (no single vendor: PostgreSQL, MySQL, SQL Server and Oracle share this tile)
   sql: { color: "#1d5f8a", glyph: <g {...stroke} stroke="#1d5f8a"><ellipse cx="12" cy="5.5" rx="7.5" ry="3" /><path d="M4.5 5.5v13c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-13M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3" /></g> },
+  // mainframe frame with a keyhole (RACF; no simple-icons mark for IBM, so an original glyph, not vendor artwork)
+  racf: { color: "#1f4e79", glyph: <g {...stroke} stroke="#1f4e79"><rect x="4" y="3" width="16" height="18" rx="1.5" /><path d="M4 8h16M4 13h16" /><circle cx="12" cy="17" r="1.2" /><path d="M8 5.5h2M8 10.5h2" /></g> },
+  // midrange server tower with drive slots (IBM i; an original glyph, not vendor artwork)
+  ibmi: { color: "#2d6a4f", glyph: <g {...stroke} stroke="#2d6a4f"><rect x="5" y="3" width="14" height="18" rx="1.5" /><path d="M8 8h8M8 12h8M8 16h3" /><circle cx="16" cy="16" r=".8" /></g> },
   // no simple-icons mark in 16.30.0 for these four: original glyphs, not vendor artwork
   // speech bubble (chat workspace)
   slack: { color: "#611f69", glyph: <g {...stroke} stroke="#611f69"><path d="M4 5.5h16v10H11l-4.5 4v-4H4z" /><path d="M8 9.5h8M8 12.5h5" /></g> },
@@ -56,6 +62,8 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   onelogin: { color: "#1d4ed8", glyph: <g {...stroke} stroke="#1d4ed8"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="10" r="2.5" /><path d="M7.5 17c.8-2.4 2.6-3.5 4.5-3.5s3.7 1.1 4.5 3.5" /></g> },
   // cloud with a lock (cloud directory)
   jumpcloud: { color: "#0f766e", glyph: <g {...stroke} stroke="#0f766e"><path d="M7 18a4 4 0 01-.6-7.95A5.5 5.5 0 0117 9.5a4.2 4.2 0 01.5 8.5z" /><rect x="9.5" y="12" width="5" height="4" rx=".8" /></g> },
+  // folder with an arrow dropping into it (file drop over SFTP; an original glyph, not vendor artwork)
+  sftp: { color: "#0b6b6b", glyph: <g {...stroke} stroke="#0b6b6b"><path d="M3 7.5a1.5 1.5 0 011.5-1.5h4l2 2.2h8.5A1.5 1.5 0 0120.5 9.7v8.8A1.5 1.5 0 0119 20H4.5A1.5 1.5 0 013 18.5z" /><path d="M12 10.5v6M9.5 14l2.5 2.5 2.5-2.5" /></g> },
   // database cylinder (no simple-icons mark for Oracle)
   oracle: { color: "#b3261e", glyph: <g {...stroke} stroke="#b3261e"><ellipse cx="12" cy="6" rx="7" ry="3" /><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3" /></g> },
   // vault door with a dial
@@ -72,6 +80,18 @@ const GENERIC: Record<string, { color: string; glyph: ReactNode }> = {
   csvfeed: { color: "#3f4a5a", glyph: <g {...stroke} stroke="#3f4a5a"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M3.5 9.5h17M3.5 14.5h17M9.5 4.5v15" /></g> },
   // agent: a robot head
   agentcore: { color: "#6d28d9", glyph: <g {...stroke} stroke="#6d28d9"><rect x="5" y="8" width="14" height="10" rx="2.5" /><circle cx="9.5" cy="13" r="1.2" /><circle cx="14.5" cy="13" r="1.2" /><path d="M12 8V5M10 5h4M3 12v2M21 12v2" /></g> },
+  // a plug into a socket: the Model Context Protocol connects tools to agents
+  mcp: { color: "#0f766e", glyph: <g {...stroke} stroke="#0f766e"><path d="M9 3v4M15 3v4M6.5 7h11v4a5.5 5.5 0 01-11 0zM12 16.5V21" /></g> },
+  // a robot head over a cloud shelf: an agent on Amazon Bedrock
+  bedrock: { color: "#c2410c", glyph: <g {...stroke} stroke="#c2410c"><rect x="6" y="4" width="12" height="9" rx="2.5" /><circle cx="10" cy="8.5" r="1.1" /><circle cx="14" cy="8.5" r="1.1" /><path d="M12 4V2M4 20h16M7 16.5h10" /></g> },
+  // a robot head over a diamond: an agent on Google Vertex AI
+  vertex: { color: "#1a73e8", glyph: <g {...stroke} stroke="#1a73e8"><rect x="6" y="3.5" width="12" height="8.5" rx="2.5" /><circle cx="10" cy="7.8" r="1.1" /><circle cx="14" cy="7.8" r="1.1" /><path d="M12 15l4 3.5-4 3-4-3z" /></g> },
+  // a robot head over a hexagon: an agent in Azure AI Foundry
+  foundry: { color: "#0078d4", glyph: <g {...stroke} stroke="#0078d4"><rect x="6" y="3.5" width="12" height="8.5" rx="2.5" /><circle cx="10" cy="7.8" r="1.1" /><circle cx="14" cy="7.8" r="1.1" /><path d="M9 15.5h6l2 3-2 3H9l-2-3z" /></g> },
+  // a speech bubble with a spark: a Copilot Studio agent
+  copilot: { color: "#117865", glyph: <g {...stroke} stroke="#117865"><path d="M5 5.5h14v10H11l-4 3.5v-3.5H5z" /><path d="M12 8v4M10 10h4" /></g> },
+  // a robot head with a halo: a Salesforce Agentforce agent
+  agentforce: { color: "#0b6fa8", glyph: <g {...stroke} stroke="#0b6fa8"><rect x="5.5" y="8.5" width="13" height="10" rx="2.5" /><circle cx="9.5" cy="13.5" r="1.1" /><circle cx="14.5" cy="13.5" r="1.1" /><path d="M8 5.5a5 2 0 018 0" /></g> },
   // curly braces around a request arrow: a JSON API described by a spec
   rest_generic: { color: "#7c3aed", glyph: <g {...stroke} stroke="#7c3aed"><path d="M8 3.5C6 3.5 5.5 4.6 5.5 6.2v2.1c0 1.2-.7 2.2-2 2.7 1.3.5 2 1.5 2 2.7v2.1c0 1.6.5 2.7 2.5 2.7M16 3.5c2 0 2.5 1.1 2.5 2.7v2.1c0 1.2.7 2.2 2 2.7-1.3.5-2 1.5-2 2.7v2.1c0 1.6-.5 2.7-2.5 2.7" /><path d="M9.5 12h5M12.5 9.5l2.5 2.5-2.5 2.5" /></g> },
   // protocol glyph: two-way arrows
@@ -93,7 +113,7 @@ export function VendorLogo({ vendor, label, size = 56 }: { vendor: string; label
 }
 
 // Connector type and system names that share another system's mark.
-const ALIAS: Record<string, string> = { awsorg: "aws", azurerbac: "azure", gcpiam: "gcp", unixssh: "linux", unix: "linux", githubscan: "github", "github-scan": "github", "aws-agentcore": "agentcore", csv: "csvfeed", successfactors: "sap" };
+const ALIAS: Record<string, string> = { awsorg: "aws", azurerbac: "azure", gcpiam: "gcp", unixssh: "linux", unix: "linux", sftpdrop: "sftp", githubscan: "github", "github-scan": "github", "aws-agentcore": "agentcore", csv: "csvfeed", successfactors: "sap" };
 
 /** The logo vendor for a connection: the first id that has a mark ("demo-okta" is Okta), else the generic protocol glyph. */
 export function vendorForType(...ids: string[]): string {
