@@ -105,9 +105,6 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 		sponsor, sponsorRef := person(a.Tags, "sponsor", "owner")
 		creator, creatorRef := person(a.Tags, "creator")
 		desc := "Amazon Bedrock agent"
-		if a.Description != "" {
-			desc += ": " + a.Description
-		}
 		res.Identities = append(res.Identities, connectors.IdentityRecord{ExternalID: xid, Name: name, Type: "ai_agent", Status: status,
 			Description: &desc, Owner: sponsor})
 		var created *time.Time

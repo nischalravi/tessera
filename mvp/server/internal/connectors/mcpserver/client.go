@@ -47,6 +47,15 @@ var (
 	nameRE   = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,128}$`)
 )
 
+// reserved are the headers the transport or the protocol own: a credential in one would be overwritten, break
+// framing (hop-by-hop headers) or replace the MCP session.
+var reserved = map[string]bool{"host": true, "content-type": true, "accept": true, "content-length": true, "transfer-encoding": true,
+	"connection": true, "keep-alive": true, "te": true, "trailer": true, "upgrade": true, "proxy-connection": true,
+	"proxy-authorization": true, "mcp-session-id": true, "mcp-protocol-version": true, "user-agent": true, "accept-encoding": true}
+
+// ReservedHeader reports whether name may not carry the credential.
+func ReservedHeader(name string) bool { return reserved[strings.ToLower(name)] }
+
 // ErrCredential: the server refused the credential (401 or 403 with it).
 var ErrCredential = errors.New("mcpserver: the credential was refused")
 
@@ -84,8 +93,7 @@ func Open(cfg Config, rt connsync.Runtime, hc *http.Client) (*Client, error) {
 	if cfg.Secret.Empty() {
 		return nil, errors.New("mcpserver: a credential is required")
 	}
-	if cfg.AuthHeader != "" && (!headerRE.MatchString(cfg.AuthHeader) || strings.EqualFold(cfg.AuthHeader, "host") || strings.EqualFold(cfg.AuthHeader, "content-type") ||
-		strings.EqualFold(cfg.AuthHeader, "accept") || strings.EqualFold(cfg.AuthHeader, "content-length")) {
+	if cfg.AuthHeader != "" && (!headerRE.MatchString(cfg.AuthHeader) || ReservedHeader(cfg.AuthHeader)) {
 		return nil, errors.New("mcpserver: the credential header is not a usable header name")
 	}
 	if cfg.Owner != "" && !ownerRE.MatchString(cfg.Owner) {

@@ -262,14 +262,11 @@ func (c *Client) once(ctx context.Context, method string, segs []string, payload
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	// the signer encodes each path segment of what it is given once more, so it signs the single-encoded
-	// path: an ARN segment ("%3A", "%2F") then signs as AWS canonicalises it
-	sreq := req.Clone(ctx)
-	sreq.URL.Path, sreq.URL.RawPath = req.URL.EscapedPath(), ""
-	if err := sigv4.Sign(sreq, payload, c.creds, c.cfg.Region, signingName, c.now()); err != nil {
+	// req.URL keeps the strictly encoded RawPath, and the signer canonicalises its segments: an ARN segment
+	// ("%3A", "%2F" on the wire) signs as "%253A", "%252F", as AWS canonicalises a non-S3 path
+	if err := sigv4.Sign(req, payload, c.creds, c.cfg.Region, signingName, c.now()); err != nil {
 		return 0, nil, nil, errors.New("bedrockagents: cannot sign the request")
 	}
-	req.Header = sreq.Header
 	resp, err := c.hc.Do(req) // #nosec G107 G704 -- hc is the SSRF-guarded safehttp client; the host is the region's Bedrock endpoint
 	if err != nil {
 		var ue *url.Error

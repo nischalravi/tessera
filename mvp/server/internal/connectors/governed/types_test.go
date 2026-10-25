@@ -130,6 +130,8 @@ func TestValidateSettings(t *testing.T) {
 		{MCP, map[string]string{"owner": "a@b.c", "server_name": "bad\nname"}, "server_name"},
 		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "X Bad"}, "auth_header"},
 		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "Host"}, "auth_header"},
+		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "Connection"}, "auth_header"},
+		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "mcp-session-id"}, "auth_header"},
 		{MCP, map[string]string{"owner": "a@b.c", "auth_header": "x-api-key\r\nHost"}, "auth_header"},
 		{MCP, map[string]string{"owner": "a@b.c", "url": "https://x.example"}, "url"},
 		{Bedrock, map[string]string{}, "region"},

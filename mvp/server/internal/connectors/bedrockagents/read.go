@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -13,12 +14,12 @@ import (
 
 // Agent is one Bedrock agent and what is known about it.
 type Agent struct {
-	ID, Name, ARN, Status, Description string
-	RoleARN, Model                     string
-	CreatedAt                          time.Time
-	Tags                               map[string]string
-	ActionGroups                       []ActionGroup
-	KnowledgeBases                     []string
+	ID, Name, ARN, Status string
+	RoleARN, Model        string
+	CreatedAt             time.Time
+	Tags                  map[string]string
+	ActionGroups          []ActionGroup
+	KnowledgeBases        []string
 }
 
 // ActionGroup is one enabled action group: a tool the agent can call.
@@ -30,6 +31,13 @@ type ActionGroup struct {
 	Signature string
 	Functions int
 }
+
+// maxPerAgent bounds the enabled action groups and knowledge bases read per agent (each action group costs a
+// GetAgentActionGroup call). AWS's default quotas are 20 action groups and 2 knowledge bases.
+const maxPerAgent = 200
+
+// statusRE is an agentStatus value (CREATING, PREPARED, NOT_PREPARED, ...).
+var statusRE = regexp.MustCompile(`^[A-Z_]{1,32}$`)
 
 type nextPage struct {
 	Next string `json:"nextToken"`
@@ -127,21 +135,24 @@ func clip(s string, n int) string {
 func (c *Client) agent(ctx context.Context, id string) (Agent, error) {
 	var got struct {
 		Agent struct {
-			ID          string      `json:"agentId"`
-			Name        string      `json:"agentName"`
-			ARN         string      `json:"agentArn"`
-			Status      string      `json:"agentStatus"`
-			Description string      `json:"description"`
-			RoleARN     string      `json:"agentResourceRoleArn"`
-			Model       string      `json:"foundationModel"`
-			CreatedAt   json.Number `json:"createdAt"`
+			ID        string      `json:"agentId"`
+			Name      string      `json:"agentName"`
+			ARN       string      `json:"agentArn"`
+			Status    string      `json:"agentStatus"`
+			RoleARN   string      `json:"agentResourceRoleArn"`
+			Model     string      `json:"foundationModel"`
+			CreatedAt json.Number `json:"createdAt"`
 		} `json:"agent"`
 	}
 	if err := c.do(ctx, "GetAgent", http.MethodGet, []string{"agents", id, ""}, nil, &got); err != nil {
 		return Agent{}, err
 	}
 	g := got.Agent
-	a := Agent{ID: id, Name: printable(g.Name, 128), Status: g.Status, Description: printable(g.Description, 200), Model: printable(g.Model, 256)}
+	// the description is free text (a prompt-injection carrier) and is not read; the status is an AWS enum
+	a := Agent{ID: id, Name: printable(g.Name, 128), Model: printable(g.Model, 256)}
+	if statusRE.MatchString(g.Status) {
+		a.Status = g.Status
+	}
 	if arnRE.MatchString(g.ARN) {
 		a.ARN = g.ARN
 	}
@@ -169,6 +180,9 @@ func (c *Client) agent(ctx context.Context, id string) (Agent, error) {
 	err := c.pages(ctx, "ListAgentActionGroups", []string{"agents", id, "agentversions", "DRAFT", "actiongroups", ""}, func(raw any) (bool, error) {
 		for _, x := range raw.(*groupsPage).Groups {
 			if idRE.MatchString(x.ID) && x.State == "ENABLED" {
+				if len(groupIDs) >= maxPerAgent {
+					return false, errors.New("bedrockagents: an agent lists more action groups than the connector reads")
+				}
 				groupIDs = append(groupIDs, x.ID)
 			}
 		}
@@ -204,6 +218,9 @@ func (c *Client) agent(ctx context.Context, id string) (Agent, error) {
 	err = c.pages(ctx, "ListAgentKnowledgeBases", []string{"agents", id, "agentversions", "DRAFT", "knowledgebases", ""}, func(raw any) (bool, error) {
 		for _, x := range raw.(*kbPage).KBs {
 			if idRE.MatchString(x.ID) && x.State == "ENABLED" {
+				if len(a.KnowledgeBases) >= maxPerAgent {
+					return false, errors.New("bedrockagents: an agent lists more knowledge bases than the connector reads")
+				}
 				a.KnowledgeBases = append(a.KnowledgeBases, x.ID)
 			}
 		}

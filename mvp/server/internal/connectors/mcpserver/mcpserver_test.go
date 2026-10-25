@@ -208,6 +208,8 @@ func TestOpenValidates(t *testing.T) {
 		{"query", func(c *mcpserver.Config) { c.URL = "https://tools.acme.example/mcp?x=1" }},
 		{"bad header", func(c *mcpserver.Config) { c.AuthHeader = "X Bad\r\nHost" }},
 		{"host header", func(c *mcpserver.Config) { c.AuthHeader = "Host" }},
+		{"hop-by-hop header", func(c *mcpserver.Config) { c.AuthHeader = "Transfer-Encoding" }},
+		{"session header", func(c *mcpserver.Config) { c.AuthHeader = "Mcp-Session-Id" }},
 		{"owner", func(c *mcpserver.Config) { c.Owner = "not-an-email" }},
 		{"name", func(c *mcpserver.Config) { c.Name = "a\nb" }},
 	} {
