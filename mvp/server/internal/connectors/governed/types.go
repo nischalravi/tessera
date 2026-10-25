@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -41,6 +42,8 @@ const (
 	ServiceNow     = "servicenow"
 	Atlassian      = "atlassian"
 	UnixSSH        = "unixssh"
+	// SFTPDrop reads flat-file feeds (CSV) dropped on an SFTP server (issue #563).
+	SFTPDrop = "sftpdrop"
 )
 
 // Type describes one governed connector type.
@@ -75,6 +78,7 @@ var Types = []Type{
 	{ID: ServiceNow, Template: "servicenow", System: "servicenow", Vendor: ServiceNow},
 	{ID: Atlassian, Template: "atlassian", System: "atlassian", Vendor: Atlassian},
 	{ID: UnixSSH, Template: "unixssh", System: "unix", Vendor: UnixSSH},
+	{ID: SFTPDrop, Template: "sftpdrop", System: "sftp", Vendor: SFTPDrop},
 }
 
 // Lookup returns the type with the id.
@@ -159,6 +163,24 @@ func SettingSpecs(typ string) []Setting {
 			{"username", "SSH user", "A dedicated account. Its private key is the credential. It runs only getent, lastlog and the sudoers read.", true},
 			{"host_key", "Host key", "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A host whose key differs is refused.", true},
 			{"use_sudo", "Read sudoers through sudo", "true or false (default false). Needs NOPASSWD sudo entries for exactly the two read commands (see the README).", false}}
+	case SFTPDrop:
+		return []Setting{
+			{"host", "Host", "The SFTP server's host name or IP address. Private, loopback and link-local addresses are refused from the server.", true},
+			{"port", "SSH port", "1 to 65535, default 22.", false},
+			{"username", "SFTP user", "A dedicated account with read access to the drop directory only. Its private key is the credential.", true},
+			{"host_key", "Host key", "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A server whose key differs is refused; there is no trust on first use.", true},
+			{"directory", "Directory", "The absolute directory the files are read from, as the server reports it (not a link, and not reached through one).", true},
+			{"accounts_file", "Accounts file", "The plain file name of the accounts CSV in the directory.", true},
+			{"entitlements_file", "Entitlements file", "Optional: the plain file name of the account-entitlement CSV (one row per account and entitlement).", false},
+			{"accounts_account_id", "Accounts: account id column", "The column that identifies the account.", true},
+			{"accounts_username", "Accounts: username column", "The column with the login name.", true},
+			{"accounts_email", "Accounts: email column", "Optional: correlates the account to a person.", false},
+			{"accounts_identity_id", "Accounts: identity id column", "Optional: the person's external id, tried before the email.", false},
+			{"accounts_status", "Accounts: status column", "Optional: active or disabled (and common synonyms). Without it every account is active.", false},
+			{"entitlements_account_id", "Entitlements: account id column", "Required with an entitlements file.", false},
+			{"entitlements_entitlement", "Entitlements: entitlement column", "Required with an entitlements file.", false},
+			{"entitlements_name", "Entitlements: name column", "Optional: a display name for the entitlement.", false},
+			{"entitlements_privileged", "Entitlements: privileged column", "Optional: yes or no.", false}}
 	case AWSOrg:
 		return []Setting{
 			{"role_name", "Reader role name", "The role assumed in each account. Default TesseraReader.", false},
@@ -185,27 +207,29 @@ func BaseURLUse(typ string) (required, takes bool) {
 }
 
 var (
-	pathRE    = regexp.MustCompile(`^/[A-Za-z0-9._~/-]{0,200}$`)
-	orgRE     = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
-	userRE    = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,256}$`)
-	clientRE  = regexp.MustCompile(`^[^\x00-\x1f\x7f\s]{1,256}$`)
-	fileRE    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$`)
-	roleRE    = regexp.MustCompile(`^[\w+=,.@-]{1,64}$`)
-	regionRE  = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d{1,2}$`)
-	accountRE = regexp.MustCompile(`^\d{12}$`)
-	extIDRE   = regexp.MustCompile(`^[\w+=,.@:/-]{2,1000}$`)
-	companyRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	sfUserRE  = regexp.MustCompile(`^[^\x00-\x1f\x7f:]{1,128}$`)
-	entityRE  = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,64}$`)
-	guidRE    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	mgRE      = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
-	numRE     = regexp.MustCompile(`^[0-9]{1,20}$`)
-	projectRE = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
-	emailRE   = regexp.MustCompile(`^[^\x00-\x1f\x7f\s@]{1,128}@[^\x00-\x1f\x7f\s@]{1,128}$`)
-	orgIDRE   = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
-	jiraKeyRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{1,99}$`)
-	sshUserRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
-	sshHostRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+	pathRE       = regexp.MustCompile(`^/[A-Za-z0-9._~/-]{0,200}$`)
+	orgRE        = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
+	userRE       = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,256}$`)
+	clientRE     = regexp.MustCompile(`^[^\x00-\x1f\x7f\s]{1,256}$`)
+	fileRE       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$`)
+	roleRE       = regexp.MustCompile(`^[\w+=,.@-]{1,64}$`)
+	regionRE     = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d{1,2}$`)
+	accountRE    = regexp.MustCompile(`^\d{12}$`)
+	extIDRE      = regexp.MustCompile(`^[\w+=,.@:/-]{2,1000}$`)
+	companyRE    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	sfUserRE     = regexp.MustCompile(`^[^\x00-\x1f\x7f:]{1,128}$`)
+	entityRE     = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,64}$`)
+	guidRE       = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	mgRE         = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
+	numRE        = regexp.MustCompile(`^[0-9]{1,20}$`)
+	projectRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+	emailRE      = regexp.MustCompile(`^[^\x00-\x1f\x7f\s@]{1,128}@[^\x00-\x1f\x7f\s@]{1,128}$`)
+	orgIDRE      = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+	jiraKeyRE    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{1,99}$`)
+	dirSettingRE = regexp.MustCompile(`^/[A-Za-z0-9._~@+/-]{0,500}$`)
+	columnRE     = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,100}$`)
+	sshUserRE    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
+	sshHostRE    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
 	// hostKeyRE is the shape only (the connector parses the key itself): a fingerprint, or a public key line.
 	hostKeyRE = regexp.MustCompile(`^(SHA256:[A-Za-z0-9+/]{43}|[^\s\x00-\x1f\x7f]{1,255} [^\x00-\x1f\x7f]{16,1000})$`)
 )
@@ -243,7 +267,7 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 		}
 		switch s.Key {
 		case "username":
-			if typ == UnixSSH {
+			if typ == UnixSSH || typ == SFTPDrop {
 				if !sshUserRE.MatchString(v) {
 					bad(s.Key, "must be an account name (letters, digits, _ . -, at most 32)")
 				}
@@ -363,6 +387,19 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 		case "host_key":
 			if !hostKeyRE.MatchString(v) {
 				bad(s.Key, "must be a SHA256:<fingerprint> or a public key line (ssh-ed25519 AAAA...)")
+			}
+		case "directory":
+			if !dirSettingRE.MatchString(v) || v != path.Clean(v) {
+				bad(s.Key, "must be an absolute path without . or .. elements")
+			}
+		case "accounts_file", "entitlements_file":
+			if !fileRE.MatchString(v) || strings.Contains(v, "..") {
+				bad(s.Key, "must be a plain file name (letters, digits, . _ -)")
+			}
+		case "accounts_account_id", "accounts_username", "accounts_email", "accounts_identity_id", "accounts_status",
+			"entitlements_account_id", "entitlements_entitlement", "entitlements_name", "entitlements_privileged":
+			if !columnRE.MatchString(v) {
+				bad(s.Key, "must be a column name of at most 100 characters without control characters")
 			}
 		case "include_eligible", "use_sudo":
 			if v != "true" && v != "false" {

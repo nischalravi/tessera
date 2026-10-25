@@ -383,6 +383,7 @@ builder can resolve (never the process environment).
 | Cloud & IaaS | `azurerbac` | `azurerbac` | client secret, or a PEM with a certificate and its RSA key | the connector sync |
 | Cloud & IaaS | `gcpiam` | `gcpiam` | service account key (JSON) | the connector sync |
 | Servers & hosts | `unixssh` | `unixssh` | SSH private key (no passphrase) | the connector sync |
+| Servers & hosts | `sftpdrop` | `sftpdrop` | SSH private key (no passphrase) | the connector sync |
 | Source code | `githubscan` | `githubscan` | read-only token | the connector sync |
 | ERP | `sap`, `oracle` | `erp` | OAuth client secret | the connector sync |
 | Privileged access | `cyberark`, `beyondtrust`, `delinea` | `pam` | password (BeyondTrust: API key) | the connector sync |
@@ -2881,6 +2882,45 @@ handshake (15 s) and each command (30 s) have timeouts.
 *Tests* run against an in-process SSH server (`fake_test.go`, in `_test.go` files only; it never echoes
 a command back): `go test -race ./internal/connectors/unixssh ./internal/connectors/governed/...`. The
 connector can also run without a connection: `TESSERA_CONNECTORS=unix`.
+
+### SFTP file drop for flat-file apps (issue #563)
+
+`internal/connectors/sftpdrop` (system `sftp`, env `TESSERA_SFTPDROP_*`) reads an accounts CSV, and optionally an
+account-entitlement CSV, that a legacy system exports to a directory of an SFTP server. The New connection gallery
+has an **SFTP file drop (CSV)** tile (category Servers & hosts, capability Identity source, an original folder glyph;
+template `sftpdrop`, an inventory template). It runs on the connection's sync schedule like every governed
+connection and is read-only: nothing is written, moved or deleted on the server.
+
+*Settings.* `host`, `port`, `username`, `host_key` (as for the Unix connector), `directory`, `accounts_file`,
+`entitlements_file` (optional) and the column mapping: `accounts_account_id` and `accounts_username` (required),
+`accounts_email`, `accounts_identity_id`, `accounts_status`, and with an entitlements file
+`entitlements_account_id` and `entitlements_entitlement` (required), `entitlements_name`, `entitlements_privileged`.
+The credential is the SSH private key, sealed like every connection secret (or a vault reference) and never printed.
+
+*Same pipeline as the flat-file apps.* Files are parsed, validated and normalised by `internal/flatfile`
+(`Parse`, `AccountRecords`, `EntitlementRecords`, then `flatfile.Discovery`), so a drop means what an upload means:
+the same mapping rules, formula-prefix and control-character checks, status words, correlation by identity id then
+email, one `application` resource and one permission per entitlement. A file with any invalid row fails the read
+as a whole and nothing is ingested. What the connector does not do is call `flatfile.Apply`: a connection sync has
+no per-upload history, delta or manual tasks, and removals are held by the connection's deletion guard.
+One drop per tenant (the system is `sftp`).
+
+*Network and host key.* The connection is opened by the Unix/SSH connector's code (`unixssh.Connector.Client`):
+the socket goes through `safehttp.NewDialer` (private, loopback, link-local and metadata addresses refused; the
+dev runtime may allow loopback), the host key is pinned (a fingerprint or the key line; no trust on first use, no
+callback that skips the check) and sign-in is by key. Only the `sftp` subsystem is requested; no command runs.
+
+*What is read.* Only `accounts_file` and `entitlements_file`, plain names (letters, digits, `. _ -`; no separator,
+no `..`) in `directory`, an absolute path with no `.` or `..` element. The directory must equal its real path on the
+server (a link, or a path through one, is refused) and each file must be a regular file, not a symbolic link
+(lstat, then the real path and fstat of the open handle). Files are limited to 512 KiB (reading stops one byte over
+the limit whatever the server says), 5000 rows and 64 columns. Errors have fixed text: no path, cell value or server
+message is echoed. Give the SFTP login read access to the drop directory only (chroot with `internal-sftp`).
+
+*Tests* run against an in-process SSH server with an SFTP subsystem over a temporary directory
+(`fake_test.go`): `go test -race ./internal/connectors/sftpdrop ./internal/connectors/governed/...`. The connector can also
+run without a connection: `TESSERA_CONNECTORS=sftp`. New dependency: `github.com/pkg/sftp` v1.13.12 (and its
+`github.com/kr/fs`).
 
 ### Database connector (PostgreSQL, MySQL, SQL Server, Oracle; issue #553)
 

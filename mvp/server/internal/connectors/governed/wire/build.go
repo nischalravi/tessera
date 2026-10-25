@@ -21,6 +21,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sftpdrop"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
 )
@@ -59,6 +60,8 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 		cn, err = atlassian.FromEnv(getenv, rt, hc, now)
 	case governed.UnixSSH:
 		cn, err = unixssh.FromEnv(getenv, rt)
+	case governed.SFTPDrop:
+		cn, err = sftpdrop.FromEnv(getenv, rt)
 	case governed.AzureRBAC, governed.GCPIAM:
 		if getenv, err = n.Overrides(getenv); err != nil {
 			return nil, err

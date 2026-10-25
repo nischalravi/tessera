@@ -379,6 +379,13 @@ func discovery(m *Mapping, accounts, ents []Record, held map[string]bool) *conne
 	return res
 }
 
+// Discovery is the graph snapshot of one pair of parsed files (ents may be nil), for a source that
+// feeds the ingest path itself, as the SFTP file drop connector does. The records come from
+// AccountRecords and EntitlementRecords, so they are validated and normalised.
+func Discovery(m *Mapping, accounts, ents []Record) *connectors.DiscoveryResult {
+	return discovery(m, accounts, ents, nil)
+}
+
 // feedCheck is what Apply knows about the file as a feed: record counts and why it looks broken.
 type feedCheck struct {
 	prev, now int
