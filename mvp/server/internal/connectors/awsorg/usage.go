@@ -204,6 +204,7 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 	root := t.logRoot()
 	var tracked []*trailPrefix
 	fails, listFailed := 0, 0
+	complete := map[string]bool{} // accounts whose region list was read in full
 	for _, acct := range accounts {
 		if err := ctx.Err(); err != nil {
 			return finish(err)
@@ -249,12 +250,14 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 		}
 		slices.Sort(regions)
 		regions = slices.Compact(regions)
+		complete[acct] = listed && tok == "" && len(regions) <= maxRegionPrefixes
 		if len(regions) > maxRegionPrefixes {
 			gap(store.AWSUsageCloudTrail, "regions:"+acct, "too_many_regions", fmt.Sprintf("more than %d regions in the log prefix", maxRegionPrefixes), "")
 			regions = regions[:maxRegionPrefixes]
 		}
 		for _, r := range regions {
 			if len(tracked) >= maxPrefixes {
+				complete[acct] = false
 				gap(store.AWSUsageCloudTrail, "prefixes", "too_many_prefixes", fmt.Sprintf("more than %d account and region prefixes", maxPrefixes), "")
 				break
 			}
@@ -412,6 +415,24 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 		}
 		if !progressed || full {
 			break
+		}
+	}
+
+	// a cursor entry that is no longer tracked is dropped, so the cursor cannot grow
+	// without bound: only when its account's regions were all listed (or the account
+	// is gone), never on a failed or cut-short listing, which would re-read its files
+	live := map[string]bool{}
+	for _, p := range tracked {
+		live[p.key] = true
+	}
+	inScope := map[string]bool{}
+	for _, a := range accounts {
+		inScope[a] = true
+	}
+	for k := range cur.Prefixes {
+		acct, _, _ := strings.Cut(k, "/")
+		if !live[k] && (!inScope[acct] || complete[acct]) {
+			delete(cur.Prefixes, k)
 		}
 	}
 

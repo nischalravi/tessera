@@ -1092,3 +1092,100 @@ func TestCollectUsage_AccessAdvisorRunBudget(t *testing.T) {
 		t.Errorf("advisor = %+v: the time budget did not stop the run", st.Advisor)
 	}
 }
+
+// One record larger than the cap is refused before it is buffered whole.
+func TestParseLogFileRecordCap(t *testing.T) {
+	defer func(a int) { maxLogRecordBytes = a }(maxLogRecordBytes)
+	maxLogRecordBytes = 8 << 10
+	rec := userCall("2026-10-15T10:00:00Z", "s3.amazonaws.com", "GetObject")
+	big := `{"eventName":"` + strings.Repeat("a", 1<<20) + `"}`
+	for name, body := range map[string]string{"big record": logBody(rec, big), "big first": logBody(big, rec)} {
+		_, err := parseLogFile(gz(t, body), func(*ctEvent) {})
+		if err == nil || !strings.Contains(err.Error(), "record_too_large") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// many small records in a file far over the cap are fine
+	many := make([]string, 400)
+	for i := range many {
+		many[i] = rec
+	}
+	if n, err := parseLogFile(gz(t, logBody(many...)), func(*ctEvent) {}); err != nil || n != 400 {
+		t.Errorf("many small records: %d, %v", n, err)
+	}
+}
+
+func TestTrailReaderPolicyPartition(t *testing.T) {
+	for _, c := range []struct{ arn, part string }{
+		{"", "aws"},
+		{"arn:aws:cloudtrail:us-east-1:111111111111:trail/org-trail", "aws"},
+		{"arn:aws-cn:cloudtrail:cn-north-1:111111111111:trail/org-trail", "aws-cn"},
+		{"arn:aws-us-gov:cloudtrail:us-gov-west-1:111111111111:trail/org-trail", "aws-us-gov"},
+	} {
+		cfg := *trailConfig()
+		cfg.TrailARN = c.arn
+		raw := string(TrailReaderPolicy(cfg))
+		if !strings.Contains(raw, "arn:"+c.part+":s3:::"+trailBucket+`"`) || !strings.Contains(raw, "arn:"+c.part+":s3:::"+trailBucket+"/") || (c.part != "aws" && strings.Contains(raw, "arn:aws:")) {
+			t.Errorf("%q: policy = %s", c.arn, raw)
+		}
+	}
+}
+
+// Cursor entries for prefixes that are no longer tracked are dropped.
+func TestCollectUsage_CursorPrunesUntrackedPrefixes(t *testing.T) {
+	e := newUsageEnv(t, trailOnly())
+	e.bucket.put(trailKey("222222222222", "us-east-1", "2026-10-15", "20261015T0100Z"),
+		gz(t, logBody(roleCall("2026-10-15T01:00:00Z", "ec2.amazonaws.com", "RunInstances", roleDE, ""))))
+	e.mustRun(t)
+	prior := e.state(t, store.AWSUsageCloudTrail)
+	var cur trailCursor
+	if err := json.Unmarshal(prior.Cursor, &cur); err != nil || len(cur.Prefixes) == 0 {
+		t.Fatalf("cursor = %s, %v", prior.Cursor, err)
+	}
+	tail := "2026/10/15/x_CloudTrail_ap-gone-1_20261015T0100Z_ab.json.gz"
+	cur.Prefixes["222222222222/ap-gone-1"] = tail // a region that no longer has a prefix
+	cur.Prefixes["999999999999/us-east-1"] = tail // an account that is no longer read
+	raw, _ := json.Marshal(cur)
+	b := &usageBatch{state: *prior}
+	b.state.Cursor = raw
+	if err := e.s.persistUsage(context.Background(), e.f.DB, e.f.A.ID, "worker", b, prior, map[string]*store.AWSUsageGap{}, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	e.mustRun(t)
+	var after trailCursor
+	if err := json.Unmarshal(e.state(t, store.AWSUsageCloudTrail).Cursor, &after); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := after.Prefixes["222222222222/us-east-1"]; !ok || len(after.Prefixes) != 1 {
+		t.Errorf("cursor = %v", after.Prefixes)
+	}
+}
+
+// Reports that stay in progress end the run after advisorMaxNotReady of them,
+// with a gap for each and the place kept.
+func TestCollectUsage_AccessAdvisorNotReadyStops(t *testing.T) {
+	e := newUsageEnv(t, &UsageConfig{AccessAdvisor: true, AdvisorPerRun: 10})
+	e.collected(t)
+	inProgress := awsreplay.Response{Body: `<GetServiceLastAccessedDetailsResponse><GetServiceLastAccessedDetailsResult><JobStatus>IN_PROGRESS</JobStatus></GetServiceLastAccessedDetailsResult></GetServiceLastAccessedDetailsResponse>`}
+	re := newReplay(t)
+	var resp []awsreplay.Response
+	for i := 0; i < advisorMaxNotReady*(advisorMaxPolls+2); i++ {
+		resp = append(resp, inProgress)
+	}
+	re.Enqueue("iam/GetServiceLastAccessedDetails", resp...)
+	e.bucket.re = re
+	*e.sleeps = nil
+	st := e.mustRun(t)
+	if st.Advisor == nil || st.Advisor.Principals != advisorMaxNotReady || st.Advisor.Rows != 0 || st.Advisor.Remaining < 1 {
+		t.Fatalf("advisor = %+v", st.Advisor)
+	}
+	n := 0
+	for k, g := range e.gaps(t) {
+		if strings.HasPrefix(k, "access_advisor ") && g.Code == "not_ready" {
+			n++
+		}
+	}
+	if n != advisorMaxNotReady {
+		t.Errorf("not_ready gaps = %d, want %d: %v", n, advisorMaxNotReady, e.gaps(t))
+	}
+}
