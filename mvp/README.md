@@ -5401,7 +5401,11 @@ jitter (honouring `Retry-After`); every `List*` follows its token to the last pa
     `max_objects_per_run` files (a backlog continues next run); the first run reads back
     `backfill_days`. Limits: 16 MiB per file, 128 MiB inflated, 200,000 records; a file over a bound,
     not gzip, or not a CloudTrail log is refused whole (no partial counts), recorded as a gap, and
-    passed over. Denied or errored calls are not usage. Role sessions are filed under their role;
+    passed over. A run holds at most 200,000 rows (it stops after the file that reaches them; the
+    next run goes on). A log key dated after tomorrow stops its prefix with an `implausible_key` gap
+    (the cursor never moves past it), and records dated after tomorrow or before the 400-day
+    retention are skipped. The state is written compare-and-swap with the rows, so two overlapping
+    runs of a connector cannot count the same files twice. Denied or errored calls are not usage. Role sessions are filed under their role;
     services and federated users are not filed. A file delivered later than a later key (more than a
     5-minute window late) is not read. For a trail encrypted with a KMS key the reader role needs
     `kms:Decrypt` in the **key policy** (it is not a read action, so it is not in `ReaderPolicy`); a
@@ -5409,7 +5413,8 @@ jitter (honouring `Retry-After`); every `List*` follows its token to the last pa
   - **Access Advisor** (`GenerateServiceLastAccessedDetails` at `ACTION_LEVEL`, then
     `GetServiceLastAccessedDetails`): for each user and role of the latest snapshot, up to
     `advisor_per_run` per run, 0.5 s apart, with the client's backoff on throttling (a throttle that
-    outlasts it ends the run; the next run resumes at that principal). A finished round rests a day.
+    outlasts it ends the run; the next run resumes at that principal). A run spends at most 30
+    minutes on Advisor, and three reports in a row that do not finish end it. A finished round rests a day.
     Action-level rows are `service:Action`; where AWS tracks only the service the row is `service:*`.
     Advisor rows have count 1 (last used that day): Advisor has no call counts.
   - **Table** `aws_usage_daily` (`schema/0915`, Postgres `0933`): key (connector, principal ARN,

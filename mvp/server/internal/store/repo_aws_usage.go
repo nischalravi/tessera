@@ -47,6 +47,18 @@ var (
 		ON CONFLICT (tenant_id, connector_id, source)
 		DO UPDATE SET cursor = excluded.cursor, covered_from = excluded.covered_from, covered_to = excluded.covered_to,
 			s3_data_events = excluded.s3_data_events, updated_at = excluded.updated_at`)
+	// the compare-and-swap pair (SwapAWSUsageState): a create that does nothing
+	// when a state exists, and a replace that does nothing when it is not the
+	// state the run started from
+	awsUsageStateCreate = tq("aws_usage_state.create", `
+		INSERT INTO aws_usage_state (tenant_id, connector_id, source, cursor, covered_from, covered_to, s3_data_events, updated_at)
+		VALUES (@tenant, @connector_id, @source, @cursor, @covered_from, @covered_to, @s3_data_events, @updated_at)
+		ON CONFLICT (tenant_id, connector_id, source) DO NOTHING`)
+	awsUsageStateSwap = tq("aws_usage_state.swap", `
+		UPDATE aws_usage_state SET cursor = @cursor, covered_from = @covered_from, covered_to = @covered_to,
+			s3_data_events = @s3_data_events, updated_at = @updated_at
+		WHERE tenant_id = @tenant AND connector_id = @connector_id AND source = @source
+			AND cursor = @prior_cursor AND updated_at = @prior_updated_at`)
 
 	awsUsageGapPut = tq("aws_usage_gaps.put", `
 		INSERT INTO aws_usage_gaps (tenant_id, connector_id, source, ref, code, detail, day, recorded_at)
@@ -147,26 +159,78 @@ func (tx *TenantTx) AWSUsageStates(connectorID string) ([]*AWSUsageState, error)
 	return collect(tx, scanAWSUsageState, awsUsageStateList, sql.Named("connector_id", connectorID))
 }
 
+// ErrAWSUsageStateMoved: the usage state is not the one a run started from (another
+// run of the same connector wrote it first). The run's rows must not be written.
+var ErrAWSUsageStateMoved = errors.New("store: aws usage state was changed by another run")
+
 // PutAWSUsageState creates or replaces a connector's state for a source.
 func (tx *TenantTx) PutAWSUsageState(st *AWSUsageState) error {
+	cur, err := st.check()
+	if err != nil {
+		return err
+	}
+	_, err = tx.exec(awsUsageStatePut, sql.Named("connector_id", st.ConnectorID), sql.Named("source", st.Source),
+		sql.Named("cursor", string(cur)), sql.Named("covered_from", st.CoveredFrom), sql.Named("covered_to", st.CoveredTo),
+		sql.Named("s3_data_events", st.S3DataEvents), sql.Named("updated_at", RT(st.UpdatedAt)))
+	return err
+}
+
+// SwapAWSUsageState writes st only if the stored state is still prior (nil: no
+// state yet), and returns ErrAWSUsageStateMoved otherwise. Rows and their
+// cursor are written in one transaction, so two runs that read the same cursor
+// would each add the same files' counts; with the swap the second one fails
+// and its transaction (rows included) rolls back.
+func (tx *TenantTx) SwapAWSUsageState(st, prior *AWSUsageState) error {
+	cur, err := st.check()
+	if err != nil {
+		return err
+	}
+	args := []sql.NamedArg{sql.Named("connector_id", st.ConnectorID), sql.Named("source", st.Source),
+		sql.Named("cursor", string(cur)), sql.Named("covered_from", st.CoveredFrom), sql.Named("covered_to", st.CoveredTo),
+		sql.Named("s3_data_events", st.S3DataEvents), sql.Named("updated_at", RT(st.UpdatedAt))}
+	stmt := awsUsageStateCreate
+	if prior != nil {
+		if prior.ConnectorID != st.ConnectorID || prior.Source != st.Source {
+			return errors.New("store: aws usage state swap of another connector or source")
+		}
+		pc := prior.Cursor
+		if len(pc) == 0 {
+			pc = json.RawMessage("{}")
+		}
+		stmt = awsUsageStateSwap
+		args = append(args, sql.Named("prior_cursor", string(pc)), sql.Named("prior_updated_at", RT(prior.UpdatedAt)))
+	}
+	res, err := tx.exec(stmt, args...)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrAWSUsageStateMoved
+	}
+	return nil
+}
+
+// check validates and normalizes st, returning the cursor to store.
+func (st *AWSUsageState) check() (json.RawMessage, error) {
 	cur := st.Cursor
 	if len(cur) == 0 {
 		cur = json.RawMessage("{}")
 	}
 	if len(cur) > MaxAWSUsageCursorBytes {
-		return errors.New("store: aws usage cursor is too large")
+		return nil, errors.New("store: aws usage cursor is too large")
 	}
 	switch st.S3DataEvents {
 	case "":
 		st.S3DataEvents = AWSDataEventsUnknown
 	case AWSDataEventsEnabled, AWSDataEventsDisabled, AWSDataEventsUnknown:
 	default:
-		return fmt.Errorf("store: unknown s3 data events state %q", st.S3DataEvents)
+		return nil, fmt.Errorf("store: unknown s3 data events state %q", st.S3DataEvents)
 	}
-	_, err := tx.exec(awsUsageStatePut, sql.Named("connector_id", st.ConnectorID), sql.Named("source", st.Source),
-		sql.Named("cursor", string(cur)), sql.Named("covered_from", st.CoveredFrom), sql.Named("covered_to", st.CoveredTo),
-		sql.Named("s3_data_events", st.S3DataEvents), sql.Named("updated_at", RT(st.UpdatedAt)))
-	return err
+	return cur, nil
 }
 
 // PutAWSUsageGap records a gap (one row per connector, source and ref; recording it again refreshes it).

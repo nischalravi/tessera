@@ -36,14 +36,15 @@ func trailConfig() *CloudTrailConfig {
 type fakeBucket struct {
 	re *awsreplay.Replay
 
-	mu      sync.Mutex
-	objects map[string][]byte
-	sizes   map[string]int64 // a listed size different from the object's
-	status  map[string]int   // key -> status of its GET (403 ...)
-	listErr int              // status of every list when set
-	gets    []string
-	lists   []string
-	bad     []string
+	mu       sync.Mutex
+	objects  map[string][]byte
+	sizes    map[string]int64 // a listed size different from the object's
+	status   map[string]int   // key -> status of its GET (403 ...)
+	listErr  int              // status of every list when set
+	listDeny map[string]int   // prefix substring -> status of the lists under it
+	gets     []string
+	lists    []string
+	bad      []string
 }
 
 func newFakeBucket(re *awsreplay.Replay) *fakeBucket {
@@ -79,6 +80,11 @@ func (f *fakeBucket) Do(req *http.Request) (*http.Response, error) {
 	q := req.URL.Query()
 	if q.Get("list-type") == "2" {
 		f.lists = append(f.lists, q.Get("prefix")+"|"+q.Get("start-after")+"|"+q.Get("delimiter"))
+		for sub, st := range f.listDeny {
+			if strings.Contains(q.Get("prefix"), sub) {
+				return respond(st, []byte("<Error><Code>AccessDenied</Code><Message>denied</Message></Error>"))
+			}
+		}
 		if f.listErr != 0 {
 			return respond(f.listErr, []byte("<Error><Code>AccessDenied</Code><Message>denied</Message></Error>"))
 		}

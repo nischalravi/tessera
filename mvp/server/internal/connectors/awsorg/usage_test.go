@@ -3,6 +3,7 @@ package awsorg
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -951,5 +952,143 @@ func TestCollectUsage_UsesOnlyReaderActions(t *testing.T) {
 	defer e.bucket.mu.Unlock()
 	if len(e.bucket.gets) == 0 || len(e.bucket.lists) == 0 {
 		t.Error("the bucket was not read")
+	}
+}
+
+// ---------------------------------------------------------------- security review (PR #673)
+
+// A file that inflates to exactly the limit is read; one byte more is refused.
+func TestParseLogFileInflateBoundary(t *testing.T) {
+	defer func(a int) { maxLogInflatedBytes = a }(maxLogInflatedBytes)
+	body := logBody(userCall("2026-10-15T10:00:00Z", "s3.amazonaws.com", "GetObject"))
+	maxLogInflatedBytes = len(body)
+	if n, err := parseLogFile(gz(t, body), func(*ctEvent) {}); err != nil || n != 1 {
+		t.Errorf("a file of exactly the limit: %d, %v", n, err)
+	}
+	maxLogInflatedBytes = len(body) - 1
+	if _, err := parseLogFile(gz(t, body), func(*ctEvent) {}); err == nil || !strings.Contains(err.Error(), "inflated_too_large") {
+		t.Errorf("a file one byte over the limit: %v", err)
+	}
+}
+
+// An account whose log prefix cannot be listed keeps its gap on every run: it
+// was cleared on the run after it was recorded, so the account looked covered.
+func TestCollectUsage_ListingGapDoesNotFlap(t *testing.T) {
+	e := newUsageEnv(t, trailOnly())
+	e.bucket.put(trailKey("222222222222", "us-east-1", "2026-10-15", "20261015T0100Z"),
+		gz(t, logBody(roleCall("2026-10-15T01:00:00Z", "ec2.amazonaws.com", "RunInstances", roleDE, ""))))
+	e.bucket.listDeny = map[string]int{"/111111111111/": 403}
+	for run := 1; run <= 3; run++ {
+		if _, err := e.run(t); err != nil {
+			t.Fatalf("run %d: %v", run, err)
+		}
+		if g := e.gaps(t)["cloudtrail list:111111111111"]; g == nil || g.Code != "AccessDenied" {
+			t.Fatalf("run %d: the listing gap is gone: %v", run, e.gaps(t))
+		}
+	}
+	e.bucket.listDeny = nil
+	e.mustRun(t)
+	if e.gaps(t)["cloudtrail list:111111111111"] != nil {
+		t.Error("the listing gap was not cleared once the listing worked")
+	}
+}
+
+// A key dated in the future does not move the cursor past the files delivered
+// after it, and a record dated in the future is not filed.
+func TestCollectUsage_FutureKeyAndEventTime(t *testing.T) {
+	e := newUsageEnv(t, trailOnly())
+	k1 := trailKey("222222222222", "us-east-1", "2026-10-15", "20261015T0100Z")
+	e.bucket.put(k1, gz(t, logBody(
+		roleCall("2026-10-15T01:00:00Z", "ec2.amazonaws.com", "RunInstances", roleDE, ""),
+		roleCall("2999-01-01T00:00:00Z", "ec2.amazonaws.com", "RunInstances", roleDE, ""),
+		roleCall("2001-01-01T00:00:00Z", "ec2.amazonaws.com", "RunInstances", roleDE, ""))))
+	future := trailKey("222222222222", "us-east-1", "2099-12-31", "20991231T0000Z")
+	e.bucket.put(future, gz(t, logBody(roleCall("2099-12-31T00:00:00Z", "ec2.amazonaws.com", "RunInstances", roleDE, ""))))
+	st := e.mustRun(t)
+	if st.CloudTrail.Objects != 1 || st.CloudTrail.Counted != 1 || st.CloudTrail.Skipped != 2 {
+		t.Fatalf("stats = %+v", st.CloudTrail)
+	}
+	if countOf(e.bucket.gets, future) != 0 {
+		t.Error("the future-dated file was read")
+	}
+	if g := e.gaps(t)["cloudtrail s3:222222222222/us-east-1"]; g == nil || g.Code != "implausible_key" {
+		t.Errorf("gaps = %v", e.gaps(t))
+	}
+	for k := range e.rows(t) {
+		if !strings.Contains(k, " 2026-10-15 ") {
+			t.Errorf("row %q", k)
+		}
+	}
+	// a file delivered later, with a key before the future one, is still read
+	k2 := trailKey("222222222222", "us-east-1", "2026-10-16", "20261016T0100Z")
+	e.bucket.put(k2, gz(t, logBody(roleCall("2026-10-16T01:00:00Z", "ec2.amazonaws.com", "RunInstances", roleDE, ""))))
+	e.mustRun(t)
+	if countOf(e.bucket.gets, k2) != 1 {
+		t.Errorf("a file after a future-dated key was skipped: gets %v", e.bucket.gets)
+	}
+}
+
+// A run holds at most maxUsageRows rows: it stops after the file that reached
+// them, and later runs count the rest exactly once.
+func TestCollectUsage_RowCapStopsTheRun(t *testing.T) {
+	defer func(n int) { maxUsageRows = n }(maxUsageRows)
+	maxUsageRows = 2
+	e := newUsageEnv(t, trailOnly())
+	for i := 0; i < 3; i++ {
+		e.bucket.put(trailKey("222222222222", "us-east-1", "2026-10-15", fmt.Sprintf("20261015T%02d00Z", i)), gz(t, logBody(
+			roleCall(fmt.Sprintf("2026-10-1%dT01:00:00Z", 2*i), "ec2.amazonaws.com", "RunInstances", roleDE, ""),
+			roleCall(fmt.Sprintf("2026-10-1%dT01:00:00Z", 2*i+1), "ec2.amazonaws.com", "RunInstances", roleDE, ""))))
+	}
+	first := e.mustRun(t)
+	if first.CloudTrail.Objects != 1 || !first.CloudTrail.Backlog || first.CloudTrail.Rows != 2 {
+		t.Fatalf("first = %+v", first.CloudTrail)
+	}
+	for i := 0; i < 5 && e.mustRun(t).CloudTrail.Backlog; i++ {
+	}
+	var sum int64
+	for _, c := range e.rows(t) {
+		sum += c
+	}
+	if sum != 6 {
+		t.Errorf("counted %d events, want 6: %v", sum, e.rows(t))
+	}
+}
+
+// Two runs that start from the same state cannot both write: the second would
+// count the same files again.
+func TestCollectUsage_StaleStateIsRefused(t *testing.T) {
+	e := newUsageEnv(t, trailOnly())
+	e.bucket.put(trailKey("222222222222", "us-east-1", "2026-10-15", "20261015T0100Z"),
+		gz(t, logBody(roleCall("2026-10-15T01:00:00Z", "ec2.amazonaws.com", "RunInstances", roleDE, ""))))
+	e.mustRun(t)
+	stale := e.state(t, store.AWSUsageCloudTrail)
+	e.bucket.put(trailKey("222222222222", "us-east-1", "2026-10-15", "20261015T0200Z"),
+		gz(t, logBody(roleCall("2026-10-15T02:00:00Z", "ec2.amazonaws.com", "RunInstances", roleDE, ""))))
+	e.mustRun(t)
+	before := fmt.Sprint(e.rows(t))
+	row := &store.AWSUsageDay{ConnectorID: e.k.ID, PrincipalARN: roleDE, Action: "ec2:RunInstances", ResourceScope: "*", Day: "2026-10-15",
+		Source: store.AWSUsageCloudTrail, Count: 1, LastSeen: testNow}
+	for name, prior := range map[string]*store.AWSUsageState{"stale": stale, "none": nil} {
+		b := &usageBatch{rows: []*store.AWSUsageDay{row}, state: store.AWSUsageState{ConnectorID: e.k.ID, Source: store.AWSUsageCloudTrail,
+			Cursor: json.RawMessage(`{"prefixes":{}}`), UpdatedAt: testNow}}
+		err := e.s.persistUsage(context.Background(), e.f.DB, e.f.A.ID, "worker", b, prior, map[string]*store.AWSUsageGap{}, 1, 0)
+		if !errors.Is(err, store.ErrAWSUsageStateMoved) {
+			t.Errorf("%s prior: err = %v", name, err)
+		}
+	}
+	if got := fmt.Sprint(e.rows(t)); got != before {
+		t.Errorf("rows changed by a refused write: %s, was %s", got, before)
+	}
+}
+
+// One run's Access Advisor time is bounded: the rest of the round waits.
+func TestCollectUsage_AccessAdvisorRunBudget(t *testing.T) {
+	defer func(d time.Duration) { advisorRunBudget = d }(advisorRunBudget)
+	advisorRunBudget = 0
+	e := newUsageEnv(t, &UsageConfig{AccessAdvisor: true, AdvisorPerRun: 1000})
+	e.collected(t)
+	st := e.mustRun(t)
+	if st.Advisor.Principals != 1 || st.Advisor.Remaining < 1 {
+		t.Errorf("advisor = %+v: the time budget did not stop the run", st.Advisor)
 	}
 }

@@ -129,6 +129,14 @@ func (s *Service) persistUsage(ctx context.Context, db *store.DB, tenant tenancy
 	}
 	return db.InTenant(context.WithoutCancel(ctx), tenant, func(c *store.TenantTx) error {
 		now := s.now()
+		// first, the state: if another run of the connector wrote it since this one
+		// read it, the rows are the same files counted again, and the whole
+		// transaction is refused
+		st := b.state
+		st.UpdatedAt = now
+		if err := c.SwapAWSUsageState(&st, prior); err != nil {
+			return err
+		}
 		for _, r := range b.rows {
 			var err error
 			if b.set {
@@ -149,11 +157,6 @@ func (s *Service) persistUsage(ctx context.Context, db *store.DB, tenant tenancy
 			if err := c.ClearAWSUsageGap(b.state.ConnectorID, b.state.Source, ref); err != nil {
 				return err
 			}
-		}
-		st := b.state
-		st.UpdatedAt = now
-		if err := c.PutAWSUsageState(&st); err != nil {
-			return err
 		}
 		if _, err := c.PruneAWSUsage(now.Add(-usageRetention).UTC().Format(dayLayout)); err != nil {
 			return err

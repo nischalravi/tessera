@@ -41,14 +41,28 @@ const (
 	// usageRetention is how long usage rows are kept (Access Advisor looks back 400 days).
 	usageRetention = 400 * 24 * time.Hour
 	gapRetention   = 180 * 24 * time.Hour
-	maxUsageRows   = 200000
 	maxPrefixes    = 2000
 	maxUnmapped    = 20
 	// advisorEvery is how long a finished Access Advisor round rests.
 	advisorEvery = 24 * time.Hour
 	// advisorPace is the wait between principals, under IAM's request rate.
 	advisorPace = 500 * time.Millisecond
-	dayLayout   = "2006-01-02"
+	// advisorMaxNotReady consecutive reports that do not finish end the run.
+	advisorMaxNotReady = 3
+	dayLayout          = "2006-01-02"
+)
+
+// Run bounds. They are variables of the package only so tests can lower them.
+var (
+	// maxUsageRows bounds the distinct rows one CloudTrail run holds: past it,
+	// new rows are filed at scope "*", and the run stops after the file that
+	// reached it (the rest is read by the next run).
+	maxUsageRows = 200000
+	// advisorRunBudget bounds one run's Access Advisor time. A report can take a
+	// minute of polling and a throttled call the client's backoff, so 1000
+	// principals could hold the worker for hours, past awsRunStaleAfter (when the
+	// run is failed as stale and another may start). The rest wait for a later run.
+	advisorRunBudget = 30 * time.Minute
 )
 
 // UsageCollector reads usage for one connector.
@@ -201,7 +215,7 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 		}
 		base := root + acct + "/CloudTrail/"
 		var regions []string
-		tok := ""
+		tok, listed := "", true
 		for pages := 0; pages < 10; pages++ {
 			_, prefixes, next, err := s.listObjects(ctx, t, base, "", "/", tok, 1000)
 			if err != nil {
@@ -209,6 +223,7 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 					return finish(ctx.Err())
 				}
 				fails++
+				listed = false
 				gap(store.AWSUsageCloudTrail, "list:"+acct, errCode(err), "listing the trail's log prefix: "+u.accessHint(err, t), "")
 				break
 			}
@@ -225,10 +240,13 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 		if fails >= 3 {
 			return finish(errors.New("awsorg: usage: the trail's log prefix cannot be listed (3 accounts in a row failed)"))
 		}
-		if fails > 0 {
+		if !listed {
 			listFailed++
+		} else {
+			// only a listing that worked clears its gap: clearing it on a failure deleted the gap
+			// recorded the run before, so an unreadable account looked covered every other run
+			b.clear = append(b.clear, "list:"+acct)
 		}
-		b.clear = append(b.clear, "list:"+acct)
 		slices.Sort(regions)
 		regions = slices.Compact(regions)
 		if len(regions) > maxRegionPrefixes {
@@ -255,6 +273,10 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 	}
 	agg := map[usageKey]*usageVal{}
 	unmapped := map[string]bool{}
+	// a record's time is the customer's data: one far in the future would be a row
+	// that never ages out, and one older than the retention is pruned at once
+	evFrom, evTo := now.Add(-usageRetention), now.Add(24*time.Hour)
+	full := false // the run holds maxUsageRows keys: it stops after the file that reached them
 	merge := func(local map[usageKey]*usageVal) {
 		for k, v := range local {
 			if g := agg[k]; g != nil {
@@ -297,7 +319,7 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 		}
 		local := map[usageKey]*usageVal{}
 		n, perr := parseLogFile(body, func(ev *ctEvent) {
-			u.fileEvent(ev, local, len(agg)+len(local) >= maxUsageRows, st, unmapped)
+			u.fileEvent(ev, local, len(agg)+len(local) >= maxUsageRows, evFrom, evTo, st, unmapped)
 		})
 		var rf *refusal
 		if errors.As(perr, &rf) {
@@ -310,6 +332,9 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 		st.Objects++
 		st.Records += n
 		merge(local)
+		if len(agg) >= maxUsageRows {
+			full = true
+		}
 		return true, nil
 	}
 
@@ -351,8 +376,15 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 			}
 			consumed := true
 			for _, o := range objs {
-				if budget <= 0 {
+				if budget <= 0 || full {
 					consumed = false
+					break
+				}
+				if tail := strings.TrimPrefix(o.Key, p.dir); strings.HasPrefix(o.Key, p.dir) && logKeyTailRE.MatchString(tail) && !plausibleKeyDay(tail, now) {
+					// keys sort by day, so the cursor would rest past every file delivered after it: stop
+					// before it, and read up to it again next run
+					p.blocked = true
+					gap(store.AWSUsageCloudTrail, "s3:"+p.key, "implausible_key", "a log file key is dated in the future or is not a date: "+clip(tail, 220), "")
 					break
 				}
 				budget--
@@ -378,7 +410,7 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 				p.drained = true
 			}
 		}
-		if !progressed {
+		if !progressed || full {
 			break
 		}
 	}
@@ -433,7 +465,7 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 }
 
 // fileEvent files one record into local, or counts why it is not usage.
-func (u *UsageCollector) fileEvent(ev *ctEvent, local map[usageKey]*usageVal, widen bool, st *TrailStats, unmapped map[string]bool) {
+func (u *UsageCollector) fileEvent(ev *ctEvent, local map[usageKey]*usageVal, widen bool, from, to time.Time, st *TrailStats, unmapped map[string]bool) {
 	if ev.EventType != "AwsApiCall" || ev.EventCategory == "Insight" {
 		st.Skipped++
 		return
@@ -448,7 +480,7 @@ func (u *UsageCollector) fileEvent(ev *ctEvent, local map[usageKey]*usageVal, wi
 		return
 	}
 	at, ok := parseEventTime(ev.EventTime)
-	if !ok {
+	if !ok || at.Before(from) || at.After(to) {
 		st.Skipped++
 		return
 	}
@@ -471,6 +503,13 @@ func (u *UsageCollector) fileEvent(ev *ctEvent, local map[usageKey]*usageVal, wi
 		v.last = at
 	}
 	st.Counted++
+}
+
+// plausibleKeyDay says whether a log key tail (yyyy/mm/dd/...) names a real
+// day no later than tomorrow (UTC).
+func plausibleKeyDay(tail string, now time.Time) bool {
+	d, err := time.Parse("2006/01/02", tail[:10])
+	return err == nil && !d.After(now.UTC().Add(24*time.Hour))
 }
 
 // accessHint adds to an access error what the customer must grant.
@@ -572,9 +611,10 @@ func (u *UsageCollector) collectAdvisor(ctx context.Context, connectorID string,
 		per = DefaultAdvisorPerRun
 	}
 	col, cache := u.collector()
-	fails := 0
+	fails, notReady := 0, 0
+	assumeErr := map[string]error{} // an account whose role cannot be assumed is not asked again for each principal
 	for i, arn := range todo {
-		if st.Principals >= per {
+		if st.Principals >= per || (st.Principals > 0 && u.now().Sub(now) >= advisorRunBudget) {
 			st.Remaining = len(todo) - i
 			return finish(nil)
 		}
@@ -591,11 +631,16 @@ func (u *UsageCollector) collectAdvisor(ctx context.Context, connectorID string,
 			cur.After = arn
 			continue
 		}
-		s, err := col.assume(ctx, cache, parts[4])
+		err := assumeErr[parts[4]]
+		var s *accountSession
+		if err == nil {
+			s, err = col.assume(ctx, cache, parts[4])
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return finish(ctx.Err())
 			}
+			assumeErr[parts[4]] = err
 			gap(arn, errCode(err), "cannot assume the reader role: "+errDetail(err))
 			cur.After = arn
 			continue
@@ -604,7 +649,7 @@ func (u *UsageCollector) collectAdvisor(ctx context.Context, connectorID string,
 		rep, err := s.session.serviceLastAccessed(ctx, arn)
 		switch {
 		case err == nil:
-			fails = 0
+			fails, notReady = 0, 0
 			u.advisorRows(connectorID, arn, rep, b, now)
 			b.clear = append(b.clear, arn)
 		case ctx.Err() != nil:
@@ -618,6 +663,11 @@ func (u *UsageCollector) collectAdvisor(ctx context.Context, connectorID string,
 			return finish(nil) // the cursor stays before this principal
 		case errors.Is(err, errAdvisorNotReady):
 			gap(arn, "not_ready", "the Access Advisor report did not finish in time")
+			if notReady++; notReady >= advisorMaxNotReady {
+				cur.After = arn
+				st.Remaining = len(todo) - i - 1
+				return finish(nil) // IAM is slow: the next run goes on from here
+			}
 		default:
 			fails++
 			gap(arn, errCode(err), errDetail(err))

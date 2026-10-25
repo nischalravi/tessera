@@ -154,6 +154,17 @@ type inflateLimit struct {
 
 func (l *inflateLimit) Read(p []byte) (int, error) {
 	if l.n <= 0 {
+		// a file of exactly the limit is accepted: only a byte past it refuses
+		var one [1]byte
+		for i := 0; i < 100; i++ {
+			k, err := l.r.Read(one[:])
+			if k > 0 {
+				break
+			}
+			if err != nil {
+				return 0, err
+			}
+		}
 		return 0, &refusal{"inflated_too_large", fmt.Sprintf("the log file inflates to more than %d bytes", maxLogInflatedBytes)}
 	}
 	if len(p) > l.n {

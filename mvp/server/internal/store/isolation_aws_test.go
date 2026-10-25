@@ -306,7 +306,7 @@ func awsCovered() map[string]bool {
 		"StartAWSCollectionRun": true, "FinishAWSCollectionRun": true, "FailStaleAWSCollectionRuns": true,
 		// the usage tables: TestIsolation_AWSUsage
 		"AddAWSUsage": true, "SetAWSUsage": true, "AWSUsage": true, "PruneAWSUsage": true, "AWSUsageState": true, "AWSUsageStates": true,
-		"PutAWSUsageState": true, "PutAWSUsageGap": true, "ClearAWSUsageGap": true, "AWSUsageGaps": true, "PruneAWSUsageGaps": true,
+		"PutAWSUsageState": true, "SwapAWSUsageState": true, "PutAWSUsageGap": true, "ClearAWSUsageGap": true, "AWSUsageGaps": true, "PruneAWSUsageGaps": true,
 	}
 }
 
@@ -539,6 +539,26 @@ func TestIsolation_AWSUsage(t *testing.T) {
 		}
 		if gs, err := c.AWSUsageGaps("", 0); err != nil || len(gs) != 1 || gs[0].Detail != f.B.Slug {
 			t.Errorf("AWSUsageGaps = %v, %v; want B's one", gs, err)
+		}
+		// a swap is against B's own state only: A's state (the same connector and source) is not a prior B can match
+		aPrior := &store.AWSUsageState{ConnectorID: conn, Source: store.AWSUsageCloudTrail,
+			Cursor: json.RawMessage(`{"owner":"` + f.A.Slug + `"}`), UpdatedAt: storetest.Now}
+		next := &store.AWSUsageState{ConnectorID: conn, Source: store.AWSUsageCloudTrail, Cursor: json.RawMessage(`{"owner":"b2"}`),
+			UpdatedAt: storetest.Now.Add(time.Minute)}
+		if err := c.SwapAWSUsageState(next, aPrior); !errors.Is(err, store.ErrAWSUsageStateMoved) {
+			t.Errorf("SwapAWSUsageState(A's prior) = %v, want ErrAWSUsageStateMoved", err)
+		}
+		if err := c.SwapAWSUsageState(next, nil); !errors.Is(err, store.ErrAWSUsageStateMoved) {
+			t.Errorf("SwapAWSUsageState(no prior) over B's state = %v, want ErrAWSUsageStateMoved", err)
+		}
+		if err := c.SwapAWSUsageState(next, st); err != nil {
+			t.Errorf("SwapAWSUsageState(B's prior) = %v", err)
+		}
+		if err := c.SwapAWSUsageState(next, st); !errors.Is(err, store.ErrAWSUsageStateMoved) {
+			t.Errorf("a second swap from the same prior = %v, want ErrAWSUsageStateMoved", err)
+		}
+		if err := c.SwapAWSUsageState(&store.AWSUsageState{ConnectorID: conn, Source: store.AWSUsageAccessAdvisor, UpdatedAt: storetest.Now}, nil); err != nil {
+			t.Errorf("SwapAWSUsageState creating B's advisor state = %v", err)
 		}
 		// B pruning and clearing touches only B
 		if n, err := c.PruneAWSUsage("2026-11-01"); err != nil || n != 2 {
