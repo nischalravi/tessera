@@ -21,6 +21,8 @@ POST /t/{slug}/mcp/oauth/token
 POST /t/{slug}/mcp/oauth/introspect
 POST /t/{slug}/mcp/oauth/revoke
 POST /t/{slug}/mcp/oauth/decisions
+GET /t/{slug}/aws/.well-known/openid-configuration
+GET /t/{slug}/aws/.well-known/jwks.json
 POST /public/t/{slug}/ssf/{transmitter_id}/events
 GET /api/auth/discover
 GET /api/auth/login

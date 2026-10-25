@@ -151,11 +151,16 @@ func (r *Replay) Do(req *http.Request) (*http.Response, error) {
 		}
 		_ = req.Body.Close()
 	}
-	m := credentialRE.FindStringSubmatch(req.Header.Get("Authorization"))
-	if m == nil {
+	var accessKey, region, service string
+	if m := credentialRE.FindStringSubmatch(req.Header.Get("Authorization")); m != nil {
+		accessKey, region, service = m[1], m[3], m[4]
+	} else if rg, ok := unsignedSTS(req, body); ok {
+		// sts:AssumeRoleWithWebIdentity is the one call that carries no
+		// signature: it is recorded with an empty AccessKeyID
+		region, service = rg, "sts"
+	} else {
 		return nil, errors.New("awsreplay: request is not signed")
 	}
-	accessKey, region, service := m[1], m[3], m[4]
 	op := Operation(req, body)
 	key := service + "/" + op
 
@@ -201,6 +206,17 @@ func (r *Replay) Do(req *http.Request) (*http.Response, error) {
 		return respond(req, Response{Status: http.StatusBadRequest, Body: errorXML("UnrecordedCall", key+" #"+strconv.Itoa(n))}), nil
 	}
 	return respond(req, resp), nil
+}
+
+// unsignedSTS reports an unsigned AssumeRoleWithWebIdentity call and the region
+// of its sts.<region>.amazonaws.com host. Nothing else may go unsigned.
+func unsignedSTS(req *http.Request, body []byte) (region string, ok bool) {
+	host := req.URL.Hostname()
+	if req.Method != http.MethodPost || !strings.HasPrefix(host, "sts.") || Operation(req, body) != "AssumeRoleWithWebIdentity" {
+		return "", false
+	}
+	region = strings.TrimSuffix(strings.TrimPrefix(host, "sts."), ".amazonaws.com")
+	return region, region != "" && !strings.Contains(region, ".")
 }
 
 func errorXML(code, msg string) string {

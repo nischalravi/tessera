@@ -391,6 +391,8 @@ PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_
 GET    /t/{slug}/mcp/.well-known/oauth-authorization-server public  # issue #115
 GET    /t/{slug}/mcp/.well-known/oauth-protected-resource/{resource_id} public  # issue #115
 GET    /t/{slug}/mcp/.well-known/jwks.json           public  # issue #115
+GET    /t/{slug}/aws/.well-known/openid-configuration public  # EP-2 (#638)
+GET    /t/{slug}/aws/.well-known/jwks.json           public  # EP-2 (#638)
 POST   /t/{slug}/mcp/oauth/token                     public  # issue #115
 POST   /t/{slug}/mcp/oauth/introspect                public  # issue #115
 POST   /t/{slug}/mcp/oauth/revoke                    public  # issue #115

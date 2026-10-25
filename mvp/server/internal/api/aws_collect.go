@@ -74,7 +74,8 @@ func (s *Server) awsCollector() (*awsorg.Service, error) {
 		cfg.Privileged = func(action string) bool { return v.C.AccessLevel(action) == catalog.AccessPermissionsManagement }
 	}
 	return &awsorg.Service{Sealer: s.cfg.Sealer, Client: &awsorg.Client{HTTP: s.cfg.AWSHTTP, Now: s.clock}, Clock: s.clock,
-		CatalogVersion: cat.Cat.Version(), Eval: cfg}, nil
+		CatalogVersion: cat.Cat.Version(), Eval: cfg, AllowStaticKeys: s.cfg.AWSAllowStaticKeys,
+		Federation: &awsorg.Federation{DB: s.store, Sealer: s.cfg.Sealer, PublicURL: s.cfg.PublicURL, Clock: s.clock}}, nil
 }
 
 type awsCollectPayload struct {

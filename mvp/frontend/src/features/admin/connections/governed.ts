@@ -79,7 +79,7 @@ export const GOVERNED: Record<string, GovType> = {
       { key: "account_ids", label: "Account ids", hint: "Comma separated. Empty with a management account: every active account." },
       { key: "management_account_id", label: "Management account id", hint: "Set for an organization-wide read." },
       { key: "identity_center_region", label: "Identity Center region", hint: "Empty skips IAM Identity Center." },
-      { key: "external_id", label: "External id", required: true, hint: "The sts:ExternalId in the reader role's trust policy." },
+      { key: "external_id", label: "External id", required: true, hint: "The sts:ExternalId in the reader role's trust policy. Stored-key connections only (not allowed in production); prefer a federated connector (docs: AWS connector)." },
     ],
     credential: { label: "Access keys (JSON)", hint: '{"access_key_id": "...", "secret_access_key": "..."}. The keys may only assume the reader role.', area: true },
   },

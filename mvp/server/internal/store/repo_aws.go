@@ -167,9 +167,13 @@ func (tx *TenantTx) InsertAWSConnector(c *AWSConnector) error {
 	if err := tx.own(c.TenantID); err != nil {
 		return err
 	}
+	enc := c.CredentialsEnc
+	if enc == nil {
+		enc = []byte{} // federated connector: nothing secret to store; the column is NOT NULL
+	}
 	_, err := tx.exec(awsConnInsert, sql.Named("id", c.ID), sql.Named("name", c.Name),
 		sql.Named("config", awsJSONOrEmptyObject(c.Config)), sql.Named("external_id", c.ExternalID),
-		sql.Named("credentials_enc", c.CredentialsEnc), sql.Named("created_by", c.CreatedBy),
+		sql.Named("credentials_enc", enc), sql.Named("created_by", c.CreatedBy),
 		sql.Named("created_at", RT(c.CreatedAt)), sql.Named("updated_at", RT(c.UpdatedAt)))
 	if isUnique(err) {
 		return ErrDuplicate

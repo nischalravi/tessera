@@ -45,6 +45,13 @@ type Service struct {
 	// the MVP's graph up to date with the result (Materialize, PR-11). Nil:
 	// a collection only stores the snapshot.
 	Eval *EvalConfig
+	// Federation mints the web identity tokens of federated connectors
+	// (required to collect from one).
+	Federation *Federation
+	// AllowStaticKeys lets a connector hold a sealed access key
+	// (TESSERA_AWS_ALLOW_STATIC_KEYS; prod refuses it on). Off, creating one is
+	// refused and a stored one is not collected from.
+	AllowStaticKeys bool
 }
 
 func (s *Service) now() time.Time {
@@ -56,8 +63,11 @@ func (s *Service) now() time.Time {
 
 // CreateInput is the body of a connector create.
 type CreateInput struct {
-	Name        string
-	Config      Config
+	Name   string
+	Config Config
+	// Credentials are the access keys of a static-key connector. Leave them
+	// empty (and Config.Auth empty or federated) for the default: a federated
+	// connector, which stores no secret.
 	Credentials Credentials
 	// ExternalID, when set, is the sts:ExternalId the reader role already
 	// trusts (a governed connection's probe used it); empty generates one.
@@ -92,20 +102,44 @@ func (s *Service) CreateConnector(c *store.TenantTx, in CreateInput, actor strin
 	if err := cfg.Validate(); err != nil {
 		return nil, invalid("invalid_config", "%v", err)
 	}
-	if err := in.Credentials.Validate(); err != nil {
-		return nil, invalid("invalid_credentials", "%v", err)
-	}
-	if in.ExternalID != "" && !externalIDRE.MatchString(in.ExternalID) {
-		return nil, invalid("invalid_external_id", "external_id is not a valid sts:ExternalId")
-	}
-	ext := in.ExternalID
-	if ext == "" {
-		ext = "tessera-" + seal.RandomString(32, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	hasKeys := in.Credentials != Credentials{}
+	if cfg.Auth == "" {
+		cfg.Auth = AuthFederated
+		if hasKeys {
+			cfg.Auth = AuthStaticKey
+		}
 	}
 	id := uuid.NewString()
-	sealed, err := SealCredentials(s.Sealer, c.Tenant(), id, in.Credentials)
-	if err != nil {
-		return nil, err
+	var sealed []byte
+	var ext string
+	switch cfg.Auth {
+	case AuthFederated:
+		if hasKeys {
+			return nil, invalid("invalid_credentials", "a federated connector takes no credentials")
+		}
+		if in.ExternalID != "" {
+			return nil, invalid("invalid_external_id", "a federated connector takes no external_id: the role trusts the token's aud and sub")
+		}
+		// the column is NOT NULL: nothing secret is stored, so the blob is empty
+		sealed = []byte{}
+	case AuthStaticKey:
+		if !s.AllowStaticKeys {
+			return nil, invalid("static_keys_disabled", "stored AWS access keys are disabled on this server; create a federated connector (omit credentials)")
+		}
+		if err := in.Credentials.Validate(); err != nil {
+			return nil, invalid("invalid_credentials", "%v", err)
+		}
+		if in.ExternalID != "" && !externalIDRE.MatchString(in.ExternalID) {
+			return nil, invalid("invalid_external_id", "external_id is not a valid sts:ExternalId")
+		}
+		ext = in.ExternalID
+		if ext == "" {
+			ext = "tessera-" + seal.RandomString(32, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+		}
+		var err error
+		if sealed, err = SealCredentials(s.Sealer, c.Tenant(), id, in.Credentials); err != nil {
+			return nil, err
+		}
 	}
 	cb, err := jsonMarshal(cfg)
 	if err != nil {
@@ -121,7 +155,7 @@ func (s *Service) CreateConnector(c *store.TenantTx, in CreateInput, actor strin
 		return nil, err
 	}
 	if err := c.Audit(now, actor, "aws.connector.created", ojson.Object{{Key: "connector_id", Value: id}, {Key: "name", Value: in.Name},
-		{Key: "regions", Value: len(cfg.Regions)}, {Key: "organization", Value: cfg.ManagementAccountID != ""}}); err != nil {
+		{Key: "regions", Value: len(cfg.Regions)}, {Key: "organization", Value: cfg.ManagementAccountID != ""}, {Key: "auth", Value: cfg.Auth}}); err != nil {
 		return nil, err
 	}
 	k.TenantID = c.Tenant()
@@ -187,12 +221,25 @@ func (s *Service) collect(ctx context.Context, db *store.DB, tenant tenancy.ID, 
 	if err != nil {
 		return nil, false, s.fail(ctx, db, tenant, k, actor, "bad_config", err)
 	}
-	creds, err := OpenCredentials(s.Sealer, tenant, k.ID, k.CredentialsEnc)
-	if err != nil {
-		return nil, false, s.fail(ctx, db, tenant, k, actor, "credentials_unreadable", err)
+	coll := &Collector{Client: s.Client, Config: cfg, ExternalID: k.ExternalID, Now: s.Clock}
+	switch cfg.Mode() {
+	case AuthFederated:
+		if s.Federation == nil {
+			return nil, false, s.fail(ctx, db, tenant, k, actor, "federation_unavailable", errors.New("awsorg: this server cannot issue federation tokens"))
+		}
+		coll.WebIdentity = s.Federation.Source(tenant, k.ID)
+	default:
+		if !s.AllowStaticKeys {
+			return nil, false, s.fail(ctx, db, tenant, k, actor, "static_keys_disabled",
+				errors.New("awsorg: stored AWS access keys are disabled on this server; recreate the connector as a federated one"))
+		}
+		creds, err := OpenCredentials(s.Sealer, tenant, k.ID, k.CredentialsEnc)
+		if err != nil {
+			return nil, false, s.fail(ctx, db, tenant, k, actor, "credentials_unreadable", err)
+		}
+		coll.Base = toSigV4(creds)
 	}
-	col, err := (&Collector{Client: s.Client, Config: cfg, ExternalID: k.ExternalID, Now: s.Clock,
-		Base: toSigV4(creds)}).Collect(ctx)
+	col, err := coll.Collect(ctx)
 	if err != nil {
 		return nil, false, s.fail(ctx, db, tenant, k, actor, "collection_failed", err)
 	}

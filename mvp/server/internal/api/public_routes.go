@@ -112,6 +112,11 @@ var publicRoutes = []string{
 	"POST /t/{slug}/mcp/oauth/introspect",
 	"POST /t/{slug}/mcp/oauth/revoke",
 	"POST /t/{slug}/mcp/oauth/decisions",
+	// AWS federation (EP-2): the discovery document and JWKS of the issuer
+	// {PUBLIC_URL}/t/{slug}/aws that the customer's IAM OIDC provider trusts.
+	// The connector's token is never served.
+	"GET /t/{slug}/aws/.well-known/openid-configuration",
+	"GET /t/{slug}/aws/.well-known/jwks.json",
 }
 
 // PublicRoutes returns the allow-list.

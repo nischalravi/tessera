@@ -284,6 +284,11 @@ type Config struct {
 	// safehttp client with limits sized for IAM responses). Nil: collecting an
 	// AWS connector answers 503 aws_collector_unavailable.
 	AWSHTTP awsorg.Doer
+	// AWSAllowStaticKeys lets a connector hold a sealed AWS access key
+	// (config.Config.AWSAllowStaticKeys; prod refuses it). False: connectors
+	// are federated (AssumeRoleWithWebIdentity) and creating a static one is
+	// refused.
+	AWSAllowStaticKeys bool
 	// GitHubAPIBase is where the access-diff comment is posted (default
 	// https://api.github.com). Tests point it at a local server.
 	GitHubAPIBase string
@@ -588,6 +593,7 @@ func New(cfg Config) *Server {
 	s.registerGroupsAttrRoutes()
 	s.registerGroupsPermRoutes() // literal /api/groups/permissions/... before the {id} routes
 	s.registerMCPRoutes()
+	s.registerAWSFederationRoutes()
 	s.registerSSFRoutes()
 	s.registerFlatfileRoutes()
 	s.registerEvidenceRoutes()
