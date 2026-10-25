@@ -87,8 +87,10 @@ test("branding calls", async () => {
 test("console branding keeps the default accent when the colour fails contrast in the theme in use", async () => {
   const cb = await import("../src/branding.ts");
   const mk = (primary: string, on: string, configured = true) => ({ name: "Acme", configured, primary_color: primary, on_primary_color: on, logo_url: null });
-  // a strong blue passes in both themes
-  for (const t of ["light", "dark"] as const) assert.equal(cb.consoleBrandStyle(mk("#0f6cbd", "#ffffff"), t)?.["--accent"], "#0f6cbd");
+  // the default-style blue passes on the light surface but is too close to the dark one; a lighter blue passes there
+  assert.equal(cb.consoleBrandStyle(mk("#0f6cbd", "#ffffff"), "light")?.["--accent"], "#0f6cbd");
+  assert.equal(cb.consoleBrandStyle(mk("#0f6cbd", "#ffffff"), "dark"), undefined);
+  assert.equal(cb.consoleBrandStyle(mk("#5aa0f0", "#000000"), "dark")?.["--accent"], "#5aa0f0");
   // near-white fails against the light surface, passes on dark; near-black the reverse
   assert.equal(cb.consoleBrandStyle(mk("#fff3b0", "#000000"), "light"), undefined);
   assert.ok(cb.consoleBrandStyle(mk("#fff3b0", "#000000"), "dark"));
