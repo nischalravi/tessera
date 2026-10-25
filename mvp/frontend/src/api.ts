@@ -3673,8 +3673,32 @@ export const agents = {
 export interface AwsReason { code: string; outcome_sensitive: boolean; detail?: string }
 export interface AwsCell { outcome: string; deny_kind?: string; fidelity: string; fidelity_reasons: AwsReason[]; residual: string | null }
 export interface AwsGap { kind: string; source_arn: string; policy_kind: string; code: string; detail: string; scope: string }
+/** A condition atom of a residual (authz.Atom). */
+export interface AwsAtom { op: string; key: string; raw_key: string; values: string[] | null; qualifier: string; if_exists: boolean; negated: boolean }
+/** authz.Residual on the wire: a bool, {and}, {or}, {not} or an atom. null when there is none. */
+export type AwsResidual = boolean | { and: AwsResidual[] | null } | { or: AwsResidual[] | null } | { not: AwsResidual } | AwsAtom | null;
+export interface AwsSpan { start_line: number; start_col: number; end_line: number; end_col: number }
+/** authz.StmtRef: where a statement lives. */
+export interface AwsStmtRef {
+  policy_id: string; policy_kind: string; source_arn: string; version_id: string; statement_index: number; sid: string;
+  span: AwsSpan | null; attachment_path: string[] | null; org_level: string;
+}
+export interface AwsCondTrace { atom: AwsAtom; request_state: string; request_values: string[] | null; result: string }
+/** authz.ExplanationStep: one line of the why trace. Go nil slices and maps arrive as null. */
+export interface AwsStep {
+  stage: string; result: string; statement: AwsStmtRef | null; matched_on: Record<string, string> | null;
+  condition_trace: AwsCondTrace[] | null; residual: AwsResidual; note: string; decisive: boolean;
+}
+/** authz.Decision (the trace behind a can answer and /api/aws/explanations/{id}). */
+export interface AwsDecision {
+  outcome: string; deny_kind: string; residual: AwsResidual; fidelity: string; fidelity_reasons: AwsReason[] | null;
+  steps: AwsStep[] | null; decisive: AwsStmtRef[] | null;
+  request: { principal_arn?: string; action?: string; resource_arn?: string; mode?: string } | null;
+  engine_version: string; catalog_version: string; snapshot_id: string;
+}
+export interface AwsExplanation { id: string; decision: AwsDecision }
 export interface AwsCan {
-  decision: { outcome: string; fidelity: string; steps: unknown[] };
+  decision: AwsDecision;
   explanation_id: string;
   summary: string;
   narrative: string;
@@ -3698,6 +3722,9 @@ export interface AwsSimulation {
 
 export const awsCan = (principal: string, action: string, resource: string, profile = "default") =>
   api<AwsCan>(`/aws/can?${new URLSearchParams({ principal, action, resource, profile })}`);
+
+/** A decision's trace by id (from /api/aws/can). An id the server no longer holds answers 404. */
+export const awsExplanation = (id: string) => api<AwsExplanation>(`/aws/explanations/${encodeURIComponent(id)}`);
 
 export const awsSimulate = (changes: AwsPolicyChange[], head?: string, pullNumber?: number) =>
   api<AwsSimulation>("/aws/simulate-policy-change", {
