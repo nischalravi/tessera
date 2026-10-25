@@ -5407,7 +5407,7 @@ ingests what it confirms: accounts, role groups, permissions (action atom by res
 `can_assume` trust edges and the NHI trust flags `wildcard_oidc_trust`, `missing_external_id`,
 `public_trust`. Least privilege never recommends or applies a conditional, approximate or
 unsupported grant (`leastpriv.VerifyAWS` checks a candidate keeps the used calls and adds nothing).
-UI: Insights, AWS access.
+UI: Insights, AWS access (`/insights/aws`). Each answer shows an outcome badge, a fidelity badge (`EXACT`, `APPROXIMATE`, `UNSUPPORTED`, with the reasons) and a profile chip. **Why?** opens a side panel (`?why=<explanation_id>`) that loads `GET /api/aws/explanations/{id}` and lists each evaluation step: stage, result, policy, statement, matched values and condition results. A trace the server no longer holds answers 404; run the query again.
 
 ## Web UI
 
