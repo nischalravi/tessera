@@ -304,6 +304,9 @@ func awsCovered() map[string]bool {
 		"UpsertEvaluatorEdge": true, "AWSPRCommentSettings": true, "PutAWSPRCommentSettings": true,
 		"InsertAWSCollectionRun": true, "AWSCollectionRun": true, "AWSCollectionRuns": true, "ActiveAWSCollectionRun": true,
 		"StartAWSCollectionRun": true, "FinishAWSCollectionRun": true, "FailStaleAWSCollectionRuns": true,
+		// the usage tables: TestIsolation_AWSUsage
+		"AddAWSUsage": true, "SetAWSUsage": true, "AWSUsage": true, "PruneAWSUsage": true, "AWSUsageState": true, "AWSUsageStates": true,
+		"PutAWSUsageState": true, "PutAWSUsageGap": true, "ClearAWSUsageGap": true, "AWSUsageGaps": true, "PruneAWSUsageGaps": true,
 	}
 }
 
