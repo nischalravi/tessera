@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/agent"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 )
 
 func writeConfig(t *testing.T, mutate func(map[string]any)) string {
@@ -107,4 +109,31 @@ func TestLDAPProberFactoryIsReadOnlyProber(t *testing.T) {
 	// the factory is the only place the agent builds a directory client; it
 	// returns the read-only Prober (a compile-time property, pinned here)
 	var _ agent.ProberFactory = ldapProber
+}
+
+// TestExecutor_CarriesTheModules: the agent registers the RACF and IBM i
+// modules next to the built-in LDAP reader (the plug-in host, issue #561), and
+// the IBM i module answers "unsupported" in this build.
+func TestExecutor_CarriesTheModules(t *testing.T) {
+	cfg, err := agent.LoadConfig(writeConfig(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex, err := executor(cfg, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ex.ModuleList(), ","); got != "ibmi,racf" {
+		t.Errorf("modules = %s", got)
+	}
+	if ex.NewSyncer == nil || ex.New == nil {
+		t.Error("the built-in LDAP reader is missing")
+	}
+	sy, err := ex.Modules[agent.ModuleIBMi](agent.ProberSpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sy.Discover(t.Context(), agent.SyncLimits{Accounts: 1, Groups: 1, Members: 1}); !errors.Is(err, connectors.ErrUnsupported) {
+		t.Errorf("ibmi: %v", err)
+	}
 }

@@ -163,14 +163,16 @@ type FieldError struct {
 }
 
 var (
-	hostRE       = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
-	guidRE       = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	dnRE         = regexp.MustCompile(`(?i)^([a-z][a-z0-9-]*=[^,]+)(,\s*[a-z][a-z0-9-]*=[^,]+)*$`)
-	attrRE       = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,63}$`)
-	apiVersionRE = regexp.MustCompile(`^v[0-9]{1,3}(\.[0-9]{1,2})?$`)
-	printable    = regexp.MustCompile(`^[^\x00-\x1f\x7f]*$`)
-	cloudNames   = []string{"global", "usgov", "china"}
-	interfaces   = []string{"get_workers", "raas"}
+	hostRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+	guidRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	// ibmiProfileRE is an IBM i user profile name (A-Z, 0-9, # $ @ _, at most 10, not starting with a digit or _; no period)
+	ibmiProfileRE = regexp.MustCompile(`^[A-Za-z#$@][A-Za-z0-9#$@_]{0,9}$`)
+	dnRE          = regexp.MustCompile(`(?i)^([a-z][a-z0-9-]*=[^,]+)(,\s*[a-z][a-z0-9-]*=[^,]+)*$`)
+	attrRE        = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,63}$`)
+	apiVersionRE  = regexp.MustCompile(`^v[0-9]{1,3}(\.[0-9]{1,2})?$`)
+	printable     = regexp.MustCompile(`^[^\x00-\x1f\x7f]*$`)
+	cloudNames    = []string{"global", "usgov", "china"}
+	interfaces    = []string{"get_workers", "raas"}
 	// governedTemplates are the templates of the connector types in internal/connectors/governed.
 	governedTemplates = []string{"awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "sftpdrop", "servicenow", "atlassian", "kubernetes", "vault", "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce"}
 )
@@ -243,7 +245,7 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 		}
 	}
 	switch t.ID {
-	case "ad", "ldap":
+	case "ad", "ldap", "racf", "ibmi":
 		if m := ldapHost(cfg.Host); m != "" {
 			bad("host", "%s", m)
 		}
@@ -279,18 +281,28 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 			}
 			seen[[2]string{m.Scope, strings.ToLower(m.Target)}] = true
 		}
-		if len(cfg.BaseDNs) == 0 {
-			bad("base_dns", "at least one base DN is required")
-		}
-		for _, dn := range append(slices.Clone(cfg.BaseDNs), cfg.ServiceAccountOUs...) {
-			if len(dn) > 512 || !dnRE.MatchString(dn) {
-				bad("base_dns", "%q is not a distinguished name", dn)
+		if t.ID == "ibmi" {
+			// IBM i has no directory tree: the bind field is the user profile name
+			if !ibmiProfileRE.MatchString(cfg.BindDN) {
+				bad("bind_dn", "must be an IBM i user profile name (1 to 10 characters)")
 			}
-		}
-		text("user_filter", cfg.UserFilter, 1024)
-		text("group_filter", cfg.GroupFilter, 1024)
-		if cfg.BindDN != "" && (len(cfg.BindDN) > 512 || !dnRE.MatchString(cfg.BindDN)) {
-			bad("bind_dn", "must be a distinguished name")
+			if len(cfg.BaseDNs) > 0 {
+				bad("base_dns", "IBM i has no base DN")
+			}
+		} else {
+			if len(cfg.BaseDNs) == 0 {
+				bad("base_dns", "at least one base DN is required")
+			}
+			for _, dn := range append(slices.Clone(cfg.BaseDNs), cfg.ServiceAccountOUs...) {
+				if len(dn) > 512 || !dnRE.MatchString(dn) {
+					bad("base_dns", "%q is not a distinguished name", dn)
+				}
+			}
+			text("user_filter", cfg.UserFilter, 1024)
+			text("group_filter", cfg.GroupFilter, 1024)
+			if cfg.BindDN != "" && (len(cfg.BindDN) > 512 || !dnRE.MatchString(cfg.BindDN)) {
+				bad("bind_dn", "must be a distinguished name")
+			}
 		}
 		if cfg.CABundle != "" {
 			if len(cfg.CABundle) > 64<<10 {
@@ -481,8 +493,10 @@ func DefaultConfig(connectorType string, t *template.Resolved) ConnConfig {
 	cfg := ConnConfig{CorrelationKey: t.DefaultCorrelationKey, HRIDAttribute: t.DefaultHRIDAttribute,
 		StaleDays: 90, WriteMode: "off"}
 	switch t.ID {
-	case "ad", "ldap":
+	case "ad", "ldap", "racf":
 		cfg.Port = 636
+	case "ibmi":
+		cfg.Port = 9471 // the TLS-protected IBM i host server (database)
 	case "entra":
 		cfg.Cloud = "global"
 	case "google":

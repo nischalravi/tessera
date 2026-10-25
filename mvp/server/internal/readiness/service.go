@@ -450,7 +450,7 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 	// again: an edit can never point a credential that was given for one place at another.
 	credCleared := rev.SecretRef != nil && ((b.Template.ID == "rest_generic" && restDestination(b.Config.Rest) != restDestination(cfg.Rest)) ||
 		(b.Template.ID == "sql" && sqlConfigChanged(b.Config, cfg)) ||
-		((b.Template.ID == "ldap" || b.Template.ID == "ad") && ldapDestinationChanged(b.Config, cfg)))
+		((b.Template.ID == "ldap" || b.Template.ID == "ad" || b.Template.ID == "racf" || b.Template.ID == "ibmi") && ldapDestinationChanged(b.Config, cfg)))
 	if credCleared {
 		rev.SecretRef, rev.SecretVersion = nil, nil
 	}
@@ -467,7 +467,7 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 		switch b.Template.ID {
 		case "sql":
 			changed = append(changed, "credential (cleared: the database settings changed)")
-		case "ldap", "ad":
+		case "ldap", "ad", "racf", "ibmi":
 			changed = append(changed, "credential (cleared: the directory destination changed)")
 		default:
 			changed = append(changed, "credential (cleared: the REST destination changed)")
@@ -598,6 +598,11 @@ func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialI
 	b, _, err := s.pendingBundle(c, connID, actor, now)
 	if err != nil {
 		return nil, err
+	}
+	// RACF and IBM i are read by a Directory Agent module only, so their
+	// credential is the one on the agent.
+	if (b.Template.ID == "racf" || b.Template.ID == "ibmi") && !strings.HasPrefix(ref, "agent:") {
+		return nil, unprocessable("agent_required", "this connector is read by a Directory Agent: reference the credential stored on the agent as agent:<agent id>/<credential name>")
 	}
 	rev := *b.Rev
 	version := store.NewID()

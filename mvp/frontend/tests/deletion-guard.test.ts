@@ -161,3 +161,27 @@ test("each kind of source links to its own settings page", () => {
   assert.equal(m.sourceLink("vms_source", "v"), "/admin/contractor-feeds");
   assert.equal(m.sourceLink("loader", "l"), "/directory/groups/loaders");
 });
+
+test("a deletion-guard save refused for step-up opens the step-up dialog and reads as a step-up refusal (#619)", async () => {
+  const real = (globalThis as any).fetch;
+  const events: unknown[] = [];
+  const on = (e: Event) => events.push((e as CustomEvent).detail);
+  (globalThis as any).window.addEventListener("tessera:step-up", on);
+  (globalThis as any).fetch = async (url: string, init: any) => {
+    calls.push({ url, method: init.method, headers: init.headers, body: init.body ? JSON.parse(init.body) : undefined });
+    return { ok: false, status: 401, statusText: "", json: async () => ({ error: "step_up_required", acr: "urn:tessera:acr:phr", max_age: 900 }) };
+  };
+  try {
+    const input: any = { kind: "connection", source_id: "c1", category: "groups", mode: "hold_excess", window_minutes: 60, max_count: 5 };
+    const err: any = await deletionGuard.change([], undefined, [input]).then(() => null, (e) => e);
+    assert.equal(calls[0].url, "/api/admin/change-requests");
+    assert.equal(calls[0].method, "POST");
+    assert.equal(events.length, 1, "the STEP_UP event that opens the dialog fires");
+    assert.equal(m.isStepUpRefusal(err), true);
+    assert.equal(m.isStepUpRefusal(new Error("boom")), false);
+    assert.equal(m.isStepUpRefusal(null), false);
+  } finally {
+    (globalThis as any).window.removeEventListener("tessera:step-up", on);
+    (globalThis as any).fetch = real;
+  }
+});

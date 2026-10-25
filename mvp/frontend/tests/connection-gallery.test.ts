@@ -15,7 +15,7 @@ const T = [
   ["servicenow", "ServiceNow", "Users, groups and roles through the Table API", false],
   ["atlassian", "Atlassian Jira and Confluence", "Groups, project roles and product access", false], ["scim_app", "SCIM 2.0 application", "Any SCIM service", false], ["scim:auth0", "Auth0", "Enterprise connection", false],
   ["awsorg", "AWS Organizations and IAM", "Reader role in each account", false],
-  ["azurerbac", "Azure RBAC", "Role assignments of subscriptions", false], ["gcpiam", "Google Cloud IAM", "IAM policies of an organization", false], ["kubernetes", "Kubernetes and OpenShift", "Roles, cluster roles, their bindings", false], ["unixssh", "Unix/Linux host (SSH)", "Local accounts, groups and sudoers rules", false], ["sftpdrop", "SFTP file drop (CSV)", "Accounts and entitlements CSV files", false], ["githubscan", "GitHub (code scan)", "Reads MCP configuration", false],
+  ["azurerbac", "Azure RBAC", "Role assignments of subscriptions", false], ["gcpiam", "Google Cloud IAM", "IAM policies of an organization", false], ["kubernetes", "Kubernetes and OpenShift", "Roles, cluster roles, their bindings", false], ["unixssh", "Unix/Linux host (SSH)", "Local accounts, groups and sudoers rules", false], ["sftpdrop", "SFTP file drop (CSV)", "Accounts and entitlements CSV files", false], ["racf", "RACF (z/OS)", "Users, groups, connects and the SPECIAL attributes through the z/OS LDAP (SDBM) interface", false], ["ibmi", "IBM i", "User profiles, group profiles and special authorities", false], ["githubscan", "GitHub (code scan)", "Reads MCP configuration", false],
   ["sap", "SAP", "Roles and transaction codes", false], ["oracle", "Oracle Fusion Applications", "Roles of Oracle Fusion", false],
   ["cyberark", "CyberArk Privileged Access Manager", "Safes and vaulted accounts", false], ["beyondtrust", "BeyondTrust Password Safe", "Smart rules", false],
   ["delinea", "Delinea Secret Server", "Folders and secrets", false], ["vault", "HashiCorp Vault", "ACL policies, auth method roles", false], ["fieldglass", "SAP Fieldglass", "Contractor assignments", false],
@@ -39,7 +39,7 @@ test("no filter shows everything", () => assert.equal(ids({}).length, T.length))
 
 test("search matches name, description and publisher, ignoring case and padding", () => {
   assert.deepEqual(ids({ q: "  OKTA " }), ["demo-okta", "okta"]);
-  assert.deepEqual(ids({ q: "ldap" }), ["ldap"]);
+  assert.deepEqual(ids({ q: "ldap" }), ["ldap", "racf"]); // RACF is read through z/OS LDAP
   assert.deepEqual(ids({ q: "graph" }), ["entra"]); // description
   assert.deepEqual(ids({ q: "7644" }), ["scim_app"]); // publisher
   assert.deepEqual(ids({ q: "oracle" }), ["oracle", "sql"]); // the Oracle ERP tile and the database tile
@@ -57,7 +57,7 @@ test("chips filter by category and capability, and combine with search", () => {
 
 test("the connectors the server already had are in the gallery under their categories", () => {
   const want: Record<string, string[]> = {
-    "Cloud & IaaS": ["awsorg", "azurerbac", "gcpiam", "kubernetes"], "Servers & hosts": ["unixssh", "sftpdrop"], "Source code": ["githubscan"], ERP: ["sap", "oracle"], "Privileged access": ["cyberark", "beyondtrust", "delinea", "vault"],
+    "Cloud & IaaS": ["awsorg", "azurerbac", "gcpiam", "kubernetes"], "Servers & hosts": ["unixssh", "sftpdrop", "racf", "ibmi"], "Source code": ["githubscan"], ERP: ["sap", "oracle"], "Privileged access": ["cyberark", "beyondtrust", "delinea", "vault"],
     "Contractor & VMS": ["fieldglass", "beeline", "csvfeed"], "AI agents": ["agentcore", "bedrock", "mcp", "vertex", "foundry", "copilot", "agentforce"],
   };
   for (const [category, types] of Object.entries(want)) {
@@ -74,6 +74,9 @@ test("the connectors the server already had are in the gallery under their categ
   assert.deepEqual(ids({ q: "sudoers" }), ["unixssh"]);
   assert.deepEqual(ids({ q: "sftp" }), ["sftpdrop"]);
   assert.deepEqual(ids({ capability: "Access inventory", category: "Servers & hosts" }), ["unixssh"]);
+  assert.deepEqual(ids({ q: "racf" }), ["racf"]);
+  assert.deepEqual(ids({ q: "special authorities" }), ["ibmi"]);
+  assert.deepEqual(ids({ capability: "Identity source", category: "Servers & hosts" }), ["sftpdrop", "racf", "ibmi"]);
   assert.deepEqual(ids({ q: "  privileged " }), ["cyberark"]);
 });
 
@@ -150,6 +153,15 @@ test("Vertex, Foundry, Copilot Studio and Agentforce are agent-discovery tiles i
     assert.match(logos, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a logo`);
     assert.match(gov, new RegExp(`^  ${id}: \\{`, "m"), `${id} has a connect form`);
   }
+});
+
+test("IBM i is marked as a preview that cannot sync yet, on its tile and in the wizard", () => {
+  const shared = readFileSync(new URL("../src/features/admin/connections/shared.tsx", import.meta.url), "utf8");
+  const ibmi = shared.split("\n").findIndex((l) => l.includes('{ id: "ibmi"'));
+  assert.ok(ibmi >= 0);
+  assert.match(shared.split("\n").slice(ibmi, ibmi + 2).join("\n"), /preview: "Preview: IBM i cannot sync yet/);
+  const wizard = readFileSync(new URL("../src/features/admin/connections/Wizard.tsx", import.meta.url), "utf8");
+  assert.match(wizard, /t\.preview && <Badge/);
 });
 
 test("Kubernetes and Vault are read-only access inventories with a logo, a picker entry and a connect form", () => {

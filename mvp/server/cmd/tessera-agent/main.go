@@ -32,6 +32,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/ecdh"
 	"crypto/x509"
 	"errors"
 	"flag"
@@ -47,7 +48,9 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ibmi"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/racf"
 )
 
 func main() {
@@ -202,11 +205,29 @@ func runAgent(cfg *agent.Config, stderr io.Writer) error {
 	if len(cfg.AllowPush()) == 0 {
 		log.Info("allowed_push_targets is empty: provisioning pushes will be refused")
 	}
-	r := &agent.Runner{Client: c, Telemetry: telemetry(cfg), Log: log, SealKey: sealKey,
-		Exec: &agent.Executor{Allow: cfg.Allow(), Creds: creds, New: ldapProber, NewSyncer: ldapSync,
-			AllowPush: cfg.AllowPush(), PushRoots: pushRoots, SealKey: sealKey}}
-	log.Info("tessera-agent started", "version", agent.Version, "server", cfg.ServerURL, "allowlist_hash", cfg.AllowlistHash())
+	ex, err := executor(cfg, creds, sealKey, pushRoots)
+	if err != nil {
+		return err
+	}
+	r := &agent.Runner{Client: c, Telemetry: telemetry(cfg), Log: log, SealKey: sealKey, Exec: ex}
+	log.Info("tessera-agent started", "version", agent.Version, "server", cfg.ServerURL, "allowlist_hash", cfg.AllowlistHash(),
+		"modules", ex.ModuleList())
 	return r.Run(ctx)
+}
+
+// executor builds the agent's Executor: the built-in LDAP reader and the
+// plug-in modules this build carries (the plug-in host, issue #561). RACF reads
+// z/OS LDAP (SDBM); IBM i has no live transport in this build yet and answers
+// "unsupported".
+func executor(cfg *agent.Config, creds agent.CredentialStore, sealKey *ecdh.PrivateKey, pushRoots *x509.CertPool) (*agent.Executor, error) {
+	ex := &agent.Executor{Allow: cfg.Allow(), Creds: creds, New: ldapProber, NewSyncer: ldapSync,
+		AllowPush: cfg.AllowPush(), PushRoots: pushRoots, SealKey: sealKey}
+	for _, m := range []agent.Module{racf.Module(racf.OpenLDAP), ibmi.Module(ibmi.NoTransport)} {
+		if err := ex.Register(m); err != nil {
+			return nil, err
+		}
+	}
+	return ex, nil
 }
 
 func enrol(cfg *agent.Config, stdin io.Reader, stdout io.Writer) error {

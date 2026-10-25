@@ -104,7 +104,8 @@ export function observedText(o: Record<string, unknown>) {
     .join(" · ");
 }
 
-export const CONNECTOR_TYPES: { id: string; label: string; template: string; demo: boolean; blurb: string }[] = [
+/** preview: the type can be configured but cannot sync yet; the text says why (shown on its tile and in the wizard). */
+export const CONNECTOR_TYPES: { id: string; label: string; template: string; demo: boolean; blurb: string; preview?: string }[] = [
   { id: "demo-ad", label: "Active Directory (demo)", template: "ad", demo: true, blurb: "Simulated forest built from the demo company, with planted gaps." },
   { id: "demo-okta", label: "Okta (demo)", template: "okta", demo: true, blurb: "The demo Okta org, including the leaver the legacy process missed." },
   { id: "demo-workday", label: "Workday (demo)", template: "workday", demo: true, blurb: "The demo HR source, as the authoritative connection." },
@@ -136,6 +137,9 @@ export const CONNECTOR_TYPES: { id: string; label: string; template: string; dem
   { id: "gcpiam", label: "Google Cloud IAM", template: "gcpiam", demo: false, blurb: "IAM policies of an organization, folders and projects, their roles and service accounts, read-only." },
   { id: "kubernetes", label: "Kubernetes and OpenShift", template: "kubernetes", demo: false, blurb: "Roles, cluster roles, their bindings, service accounts and OpenShift groups, read-only." },
   { id: "unixssh", label: "Unix/Linux host (SSH)", template: "unixssh", demo: false, blurb: "Local accounts, groups and sudoers rules of one host over SSH with a pinned host key, read-only." },
+  { id: "racf", label: "RACF (z/OS)", template: "racf", demo: false, blurb: "Users, groups, connects and the SPECIAL, OPERATIONS, AUDITOR and ROAUDIT attributes through the z/OS LDAP (SDBM) interface, read by a Directory Agent." },
+  { id: "ibmi", label: "IBM i", template: "ibmi", demo: false, blurb: "User profiles, group profiles and special authorities, read by a Directory Agent. Preview: it cannot sync yet.",
+    preview: "Preview: IBM i cannot sync yet. The live IBM i transport is not built into the Directory Agent, so a sync answers unsupported and no profiles are read." },
   { id: "sftpdrop", label: "SFTP file drop (CSV)", template: "sftpdrop", demo: false, blurb: "Accounts and entitlements CSV files that a legacy system exports to an SFTP directory, read with a pinned host key." },
   { id: "githubscan", label: "GitHub (code scan)", template: "githubscan", demo: false, blurb: "Reads MCP configuration and agent credentials from an organization's repositories, read-only." },
   { id: "sap", label: "SAP", template: "erp", demo: false, blurb: "Roles, transaction codes and authorization objects as fine-grained access." },
