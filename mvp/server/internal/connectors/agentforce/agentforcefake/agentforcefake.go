@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"net/http"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -150,10 +152,15 @@ func (f *Fake) query(w http.ResponseWriter, q string, skip int) {
 		}
 	case strings.Contains(q, "FROM User WHERE Id IN ("):
 		in := q[strings.Index(q, "IN (")+4:]
-		for _, id := range strings.Split(strings.TrimSuffix(in, ")"), ",") {
-			id = strings.Trim(id, "'")
-			if e, ok := f.users[id]; ok {
-				rows = append(rows, map[string]any{"Id": id, "Email": e})
+		asked := strings.Split(strings.TrimSuffix(in, ")"), ",")
+		ids := make([]string, 0, len(f.users))
+		for id := range f.users {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids { // the stored id is answered, never the text of the query
+			if slices.Contains(asked, "'"+id+"'") {
+				rows = append(rows, map[string]any{"Id": id, "Email": f.users[id]})
 			}
 		}
 	case strings.Contains(q, "GenAi") && f.NoGenAi:

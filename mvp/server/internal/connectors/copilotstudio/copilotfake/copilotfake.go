@@ -6,6 +6,7 @@ package copilotfake
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -32,6 +33,8 @@ type Fake struct {
 	Deny, NotJSON, LeakLink bool
 	// Description is served on every bot, and Data on every component, so a test can prove they are not selected.
 	Description string
+	// Base is the server URL the next links point at (set it to the test server's URL).
+	Base string
 
 	tenant, client, secret string
 	mu                     sync.Mutex
@@ -40,6 +43,7 @@ type Fake struct {
 	users                  map[string]string // systemuser id -> e-mail address
 	writes                 int
 	selects                []string
+	cursors                map[string]cursor
 	scopes                 []string
 }
 
@@ -109,13 +113,13 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			rows = append(rows, map[string]any{"botid": b.ID, "name": b.Name, "schemaname": b.Schema, "statecode": b.State, "authenticationmode": b.AuthMode,
 				"createdon": b.Created, "_ownerid_value": b.Owner, "_createdby_value": b.Creator, "description": f.Description})
 		}
-		f.page(w, r, rows)
+		f.page(w, r, "bots", rows)
 	case r.URL.Path == api+"botcomponents":
 		var rows []map[string]any
 		for _, c := range f.comps {
 			rows = append(rows, map[string]any{"botcomponentid": c.ID, "name": c.Name, "schemaname": c.Schema, "_parentbotid_value": c.Bot, "data": f.Description})
 		}
-		f.page(w, r, rows)
+		f.page(w, r, "botcomponents", rows)
 	case strings.HasPrefix(r.URL.Path, api+"systemusers(") && strings.HasSuffix(r.URL.Path, ")"):
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, api+"systemusers("), ")")
 		if e, ok := f.users[id]; ok {
@@ -128,41 +132,51 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (f *Fake) page(w http.ResponseWriter, r *http.Request, rows []map[string]any) {
+// page answers one page of rows of the entity set. The next link is built from the stored base URL, the
+// constant set name and a server-side cursor: nothing the request carried is echoed.
+func (f *Fake) page(w http.ResponseWriter, r *http.Request, set string, rows []map[string]any) {
 	start := 0
-	if s := r.URL.Query().Get("skip"); s != "" {
-		for _, c := range s {
-			start = start*10 + int(c-'0')
-		}
+	if c, ok := f.cursor(r.URL.Query().Get("cursor")); ok && c.set == set {
+		start = c.skip
 	}
 	size := f.PageSize
 	if size <= 0 {
 		size = len(rows)
 	}
 	end := min(start+size, len(rows))
-	body := map[string]any{"value": rows[start:end]}
-	if rows == nil {
-		body["value"] = []any{}
+	if start > end {
+		start = end
 	}
+	body := map[string]any{"value": append([]map[string]any{}, rows[start:end]...)}
 	if end < len(rows) {
-		host := "https://" + r.Host
+		base := f.Base
 		if f.LeakLink {
-			host = "https://evil.example"
+			base = "https://evil.example"
 		}
-		q := r.URL.Query()
-		q.Set("skip", itoa(end))
-		body["@odata.nextLink"] = host + r.URL.Path + "?" + q.Encode()
+		body["@odata.nextLink"] = base + api + set + "?cursor=" + f.newCursor(set, end)
 	}
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+type cursor struct {
+	set  string
+	skip int
+}
+
+func (f *Fake) cursor(id string) (cursor, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.cursors[id]
+	return c, ok
+}
+
+func (f *Fake) newCursor(set string, skip int) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cursors == nil {
+		f.cursors = map[string]cursor{}
 	}
-	var b []byte
-	for ; n > 0; n /= 10 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-	}
-	return string(b)
+	id := "cur" + strconv.Itoa(len(f.cursors))
+	f.cursors[id] = cursor{set, skip}
+	return id
 }

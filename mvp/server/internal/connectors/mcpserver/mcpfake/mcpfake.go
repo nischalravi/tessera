@@ -179,7 +179,9 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *Fake) reply(w http.ResponseWriter, id *json.Number, result any, rpcErr any) {
-	msg := map[string]any{"jsonrpc": "2.0", "id": id}
+	// the id is answered as the integer it parses to, never as the text the request carried
+	n, _ := id.Int64()
+	msg := map[string]any{"jsonrpc": "2.0", "id": n}
 	if rpcErr != nil {
 		msg["error"] = rpcErr
 	} else {

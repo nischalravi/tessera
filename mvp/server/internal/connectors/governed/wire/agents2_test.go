@@ -61,6 +61,7 @@ func copilotRig(t *testing.T) agentRig {
 			{ID: "b0000000-0000-0000-0000-00000000000b", Name: "FAQ", Schema: "cr1_faq", AuthMode: 1}},
 		[]copilotfake.Component{{ID: "c0000000-0000-0000-0000-000000000001", Name: "Mail", Schema: "cr1_hr.action.Mail", Bot: "b0000000-0000-0000-0000-00000000000a"}})
 	srv, n := serve(t, fk)
+	fk.Base = srv.URL
 	n.Endpoints = map[string]string{"TESSERA_COPILOT_AUTHORITY_URL": srv.URL}
 	return agentRig{governed.Params{Type: governed.Copilot, BaseURL: srv.URL, Secret: azSecret,
 		Settings: map[string]string{"tenant_id": azTenant, "client_id": azClient}}, n, "copilot-studio", "copilot", 2}

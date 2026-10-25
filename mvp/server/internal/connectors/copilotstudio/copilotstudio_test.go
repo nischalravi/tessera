@@ -63,6 +63,7 @@ func newRig(t *testing.T, mut func(*copilotfake.Fake)) *rig {
 		mut(fk)
 	}
 	srv := connsynctest.New(t, fk)
+	fk.Base = srv.URL
 	hc, err := safehttp.NewForTest(t, srv.Options(0))
 	if err != nil {
 		t.Fatal(err)
