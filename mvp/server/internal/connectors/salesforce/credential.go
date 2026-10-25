@@ -27,16 +27,16 @@ type Credential struct {
 // ParseCredential reads and checks a target credential. Its errors never repeat the key.
 func ParseCredential(s string) (*Credential, error) {
 	if len(s) > 16<<10 {
-		return nil, errors.New("the Salesforce credential is too long")
+		return nil, connsync.CredentialFormat("the Salesforce credential is too long")
 	}
 	var c Credential
 	dec := json.NewDecoder(bytes.NewReader([]byte(s)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
-		return nil, errors.New("the Salesforce credential is JSON with client_id, username and private_key")
+		return nil, connsync.CredentialFormat("the Salesforce credential is JSON with client_id, username and private_key")
 	}
 	if c.ClientID == "" || c.Username == "" || c.PrivateKey == "" {
-		return nil, errors.New("the Salesforce credential needs client_id, username and private_key")
+		return nil, connsync.CredentialFormat("the Salesforce credential needs client_id, username and private_key")
 	}
 	if _, err := parseKey(c.PrivateKey); err != nil {
 		return nil, err

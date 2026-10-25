@@ -49,7 +49,7 @@ func parseCredential(cred string) (*assertionSigner, error) {
 			if cert == nil {
 				c, err := x509.ParseCertificate(b.Bytes)
 				if err != nil {
-					return nil, errors.New("azurerbac: the certificate in the credential cannot be parsed")
+					return nil, connsync.CredentialFormat("azurerbac: the certificate in the credential cannot be parsed")
 				}
 				cert = c
 			}
@@ -57,23 +57,23 @@ func parseCredential(cred string) (*assertionSigner, error) {
 			k, err := x509.ParsePKCS8PrivateKey(b.Bytes)
 			rk, ok := k.(*rsa.PrivateKey)
 			if err != nil || !ok {
-				return nil, errors.New("azurerbac: the private key must be an RSA key")
+				return nil, connsync.CredentialFormat("azurerbac: the private key must be an RSA key")
 			}
 			key = rk
 		case "RSA PRIVATE KEY":
 			k, err := x509.ParsePKCS1PrivateKey(b.Bytes)
 			if err != nil {
-				return nil, errors.New("azurerbac: the private key cannot be parsed")
+				return nil, connsync.CredentialFormat("azurerbac: the private key cannot be parsed")
 			}
 			key = k
 		}
 	}
 	if key == nil || cert == nil {
-		return nil, errors.New("azurerbac: the credential PEM must hold a certificate and its RSA private key")
+		return nil, connsync.CredentialFormat("azurerbac: the credential PEM must hold a certificate and its RSA private key")
 	}
 	pub, ok := cert.PublicKey.(*rsa.PublicKey)
 	if !ok || pub.N.Cmp(key.N) != 0 || pub.E != key.E {
-		return nil, errors.New("azurerbac: the private key does not belong to the certificate")
+		return nil, connsync.CredentialFormat("azurerbac: the private key does not belong to the certificate")
 	}
 	sum := sha256.Sum256(cert.Raw)
 	return &assertionSigner{key: key, thumb: base64.RawURLEncoding.EncodeToString(sum[:]), expire: cert.NotAfter}, nil

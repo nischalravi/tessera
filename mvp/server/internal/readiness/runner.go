@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/checks"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
@@ -256,6 +257,9 @@ func (s *Service) execute(ctx context.Context, b *Bundle, opts RunnerOptions, no
 	runCtx, cancel := context.WithTimeout(ctx, opts.RunTimeout)
 	defer cancel()
 	prober, err := opts.ProberFor(b, now)
+	// A credential the connector cannot read is a credential finding, with the
+	// connector's fixed hint (never the credential or a parser error).
+	credHint, credErr := connsync.CredentialFormatHint(err)
 	status := "completed"
 	sim, _ := prober.(connectors.Simulator)
 	env := checkEnv(b, prober, now)
@@ -299,6 +303,11 @@ func (s *Service) execute(ctx context.Context, b *Bundle, opts RunnerOptions, no
 			}
 			r := runResult{item: ie.ID, check: v.Check, simulated: sim != nil, observed: map[string]any{}}
 			switch {
+			case credErr && v.Check == "auth_ok":
+				r.status, r.message = checks.Fail, credHint
+				r.observed["code"] = "credential_format"
+			case credErr:
+				r.status, r.message = checks.Blocked, "blocked by auth_ok: the stored credential is not in the expected format"
 			case err != nil:
 				r.status, r.message = checks.Error, "no prober is available for this connection"
 			case status != "completed":

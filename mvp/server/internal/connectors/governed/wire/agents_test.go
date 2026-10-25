@@ -2,6 +2,7 @@ package wire_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -189,6 +190,23 @@ func TestAgentPlatformParamsNeverPrintTheSecret(t *testing.T) {
 		}
 		if v := env("TESSERA_BEDROCK_AGENT_URL"); v != "" {
 			t.Errorf("a connection carries an endpoint override: %q", v)
+		}
+	}
+}
+
+// A malformed credential is reported as a credential format failure (fixed text,
+// never the credential) for every connector that parses one.
+func TestProber_MalformedCredential(t *testing.T) {
+	const marker = "marker-credential-5521"
+	p, n, _ := brRig(t)
+	for _, bad := range []string{"{bad json " + marker, `{"access_key_id":"x"}`, marker} {
+		p.Secret = bad
+		_, err := wire.Prober(p, n)
+		if !errors.Is(err, connsync.ErrCredentialFormat) {
+			t.Fatalf("%q: %v", bad, err)
+		}
+		if h, ok := connsync.CredentialFormatHint(err); !ok || strings.Contains(h, marker) {
+			t.Errorf("hint %q", h)
 		}
 	}
 }
