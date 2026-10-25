@@ -1,3 +1,4 @@
+import { productName, useConsoleBranding } from "../app/consoleBranding";
 import { KeyboardEvent, ReactNode, useEffect, useRef } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
@@ -34,9 +35,10 @@ export function Page({ title, crumbs = [], sub, actions, badge, count, tabs, com
   commands?: ReactNode;
   children: ReactNode;
 }) {
+  const product = productName(useConsoleBranding());
   useEffect(() => {
-    if (typeof title === "string") document.title = `${applyLabels(title)} · Tessera`;
-  }, [title]);
+    if (typeof title === "string") document.title = `${applyLabels(title)} · ${product}`;
+  }, [title, product]);
   return (
     <div>
       {crumbs !== false && <Breadcrumbs items={[["Home", "/"], ...(crumbs.length || typeof title !== "string" ? crumbs : [[title] as Crumb])]} />}

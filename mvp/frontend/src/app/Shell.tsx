@@ -18,6 +18,7 @@ import { store } from "./storage";
 import { useSession } from "./auth";
 import { ThemePref, useTheme } from "./theme";
 import { applyLabels } from "../labels";
+import { consoleBrandStyle, productName, useConsoleBranding } from "./consoleBranding";
 
 
 function useInboxCount() {
@@ -345,6 +346,19 @@ export function Shell({ children }: { children: ReactNode }) {
   const count = useInboxCount();
   const { data: people } = useApi<IdentityRow[]>("/identities?type=human");
   const nav = useNavigate();
+  const { session } = useSession();
+  const { resolved } = useTheme();
+  const branding = useConsoleBranding(session.tenant.slug);
+  const product = productName(branding);
+  const branded = !!branding?.configured;
+  const brandVars = consoleBrandStyle(branding, resolved);
+  // On the root element so menus and dialogs rendered outside the shell take the button colour too.
+  useEffect(() => {
+    if (!brandVars) return;
+    const el = document.documentElement;
+    for (const [k, v] of Object.entries(brandVars)) el.style.setProperty(k, v);
+    return () => { for (const k of Object.keys(brandVars)) el.style.removeProperty(k); };
+  }, [brandVars?.["--accent"], brandVars?.["--on-accent"]]); // eslint-disable-line react-hooks/exhaustive-deps
   const menuBtn = useRef<HTMLButtonElement>(null);
   const setCollapsed = (v: boolean) => {
     setCollapsedState(v);
@@ -377,9 +391,13 @@ export function Shell({ children }: { children: ReactNode }) {
           <button ref={menuBtn} type="button" className="tb-btn" onClick={toggleRail} aria-label={railLabel} title={railLabel} aria-controls="rail" aria-expanded={narrow ? drawer : !collapsed}>
             <MenuIcon size={18} strokeWidth={1.7} aria-hidden />
           </button>
-          <Link to="/" className="brand" aria-label="Tessera home">
-            <span className="logo" aria-hidden><i /><i /><i /><i /></span>
-            <span className="brand-name">Tessera</span>
+          <Link to="/" className="brand" aria-label={`${product} home`}>
+            {branded && branding?.logo_url ? (
+              <img className="brand-logo" src={branding.logo_url} alt="" width={branding.logo_width} height={branding.logo_height} />
+            ) : (
+              <span className="logo" aria-hidden><i /><i /><i /><i /></span>
+            )}
+            <span className="brand-name">{product}</span>
           </Link>
         </div>
         <GlobalSearch />

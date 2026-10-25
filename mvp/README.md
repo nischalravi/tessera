@@ -1125,6 +1125,9 @@ and is audited as `branding.updated`.
   ETag and `Cache-Control: public, max-age=300`.
 * Used by the sign-in page, the guest claim, register and renew pages (name, logo, button colours) and by email (subject
   prefix, link line and footer say the product name). Without branding everything says Tessera.
+* In the console (issue #611): the top bar shows the saved logo and name, the tab title ends with the name, and primary buttons use the
+  saved colour. The colour is used only if the button text reaches AA on it and it reaches 3:1 against the surface of the theme in
+  use (light or dark); otherwise the default accent stays. Save branding refreshes it without a reload (`src/app/consoleBranding.ts`).
 * **Show the logo in emails** (`PUT /api/admin/labels`, `email_logo`). On, and with a logo saved and `TESSERA_PUBLIC_URL` set,
   every email is `multipart/alternative`: the plain-text part first, then an HTML part with the logo (loaded from the public
   logo URL, shown at most 48 px high) above the message, which is HTML-escaped. Off, or without a logo or public address,

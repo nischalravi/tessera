@@ -83,3 +83,27 @@ test("branding calls", async () => {
   assert.equal(await api.publicBranding("larkspur"), null, "a failure falls back to the default page");
   reply = { ok: true, status: 200, body: {} };
 });
+
+test("console branding keeps the default accent when the colour fails contrast in the theme in use", async () => {
+  const cb = await import("../src/branding.ts");
+  const mk = (primary: string, on: string, configured = true) => ({ name: "Acme", configured, primary_color: primary, on_primary_color: on, logo_url: null });
+  // a strong blue passes in both themes
+  for (const t of ["light", "dark"] as const) assert.equal(cb.consoleBrandStyle(mk("#0f6cbd", "#ffffff"), t)?.["--accent"], "#0f6cbd");
+  // near-white fails against the light surface, passes on dark; near-black the reverse
+  assert.equal(cb.consoleBrandStyle(mk("#fff3b0", "#000000"), "light"), undefined);
+  assert.ok(cb.consoleBrandStyle(mk("#fff3b0", "#000000"), "dark"));
+  assert.ok(cb.consoleBrandStyle(mk("#111111", "#ffffff"), "light"));
+  assert.equal(cb.consoleBrandStyle(mk("#111111", "#ffffff"), "dark"), undefined);
+  // a failing text pair, an unconfigured tenant and no branding all keep the default
+  assert.equal(cb.consoleBrandStyle(mk("#0f6cbd", "#0f6cbe"), "light"), undefined);
+  assert.equal(cb.consoleBrandStyle(mk("#0f6cbd", "#ffffff", false), "light"), undefined);
+  assert.equal(cb.consoleBrandStyle(null, "light"), undefined);
+});
+
+test("the product name is the saved one only when branding is configured", async () => {
+  const cb = await import("../src/branding.ts");
+  const b = { name: " Acme ", configured: true, primary_color: "#0f6cbd", on_primary_color: "#ffffff", logo_url: null };
+  assert.equal(cb.productName(b), "Acme");
+  assert.equal(cb.productName({ ...b, configured: false }), "Tessera");
+  assert.equal(cb.productName(null), "Tessera");
+});
