@@ -57,6 +57,9 @@ var (
 	ErrInvalid = errors.New("sftpdrop: a file is not a valid flat file for the column mapping")
 	// ErrProtocol: the SFTP session failed.
 	ErrProtocol = errors.New("sftpdrop: the SFTP session failed")
+	// ErrEmpty: the accounts file has a header but no rows. A stuck or failed
+	// export is refused rather than read as "every account was removed".
+	ErrEmpty = errors.New("sftpdrop: the accounts file has no rows")
 
 	dirRE  = regexp.MustCompile(`^/[A-Za-z0-9._~@+/-]{0,500}$`)
 	fileRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$`)
@@ -181,6 +184,9 @@ func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 	}
 	if snap.Accounts, errs = c.cfg.Mapping.AccountRecords(tbl); len(errs) > 0 {
 		return nil, ErrInvalid
+	}
+	if len(snap.Accounts) == 0 {
+		return nil, ErrEmpty
 	}
 	if c.cfg.EntitlementsFile != "" {
 		if raw, err = readFile(sc, dir, c.cfg.EntitlementsFile); err != nil {

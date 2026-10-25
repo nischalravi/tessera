@@ -226,6 +226,11 @@ func TestInvalidFileFailsWholeWithFixedText(t *testing.T) {
 			t.Errorf("%s: the error echoes input: %q", name, msg)
 		}
 	}
+	// a header-only accounts file (a failed export) is refused, not read as "all removed"
+	f.srv.write(t, "accounts.csv", "ID,Login,Mail,Status\n")
+	if res, err := f.discover(t); !errors.Is(err, ErrEmpty) || res != nil {
+		t.Errorf("header only: res %v err %v", res, err)
+	}
 	// an entitlement of an account the accounts file lacks is invalid too
 	f.srv.write(t, "accounts.csv", accountsCSV)
 	f.srv.write(t, "ents.csv", "ID,Role,Admin\nu9,viewer,no\n")
