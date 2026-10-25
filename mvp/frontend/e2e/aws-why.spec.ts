@@ -47,7 +47,7 @@ test("the Why? panel shows the trace, passes axe, and keeps focus with the keybo
   await page.keyboard.press("Enter");
   const panel = page.getByRole("dialog", { name: "Why this answer?" });
   await expect(panel.getByRole("heading", { name: "Evaluation, step by step" })).toBeVisible();
-  await expect(panel.getByRole("listitem").filter({ hasText: "Explicit deny" })).toContainText("DECISIVE");
+  await expect(panel.getByRole("listitem").filter({ hasText: /Explicit deny/ })).toContainText("DECISIVE");
   await expect(panel.getByText("scp p-1234, statement 1 (DenyS3), at ou-ab12, lines 3 to 9").first()).toBeVisible();
   const found = await seriousViolations(page, "/insights/aws?why");
   expect(found, report(found)).toEqual([]);
