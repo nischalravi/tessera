@@ -51,10 +51,10 @@ Status of the current MVP (`mvp/`): **Have** = working against demo data, **Part
 | Capability | MVP | Build / integrate | Phase | Source |
 |---|---|---|---|---|
 | Canonical entitlement graph across cloud, SaaS and data | Partial (generic paths, demo data) | Build | 1 | D3·M3 |
-| Exact AWS effective-permission evaluator with explanations (SCP per OU level, RCP, boundary, session, resource, trust, KMS) | None | Build | 1 | D3·M1, D5·M2 |
-| Differential test harness against AWS Policy Simulator / Access Analyzer | None | Build | 1 | D3·M2 |
+| Exact AWS effective-permission evaluator with explanations (SCP per OU level, RCP, boundary, session, resource, trust, KMS) | Partial (engine, `/api/aws/*` and traces built in `internal/aws/*`; no scheduled collection; agreement with real AWS never measured; no fidelity or trace UI yet) | Build | 1 | D3·M1, D5·M2 |
+| Differential test harness against AWS Policy Simulator / Access Analyzer | Partial (`cmd/tessera-harness replay` and `gate`, Wilson gate, oracles; corpus is 12 synthetic cassettes; no sandbox or nightly run, #28) | Build | 1 | D3·M2 |
 | Cedar schema and policy repo in Git, validated in CI | None (YAML policies) | Build on Cedar | 1 | D3·M5 |
-| Formal diff and blast-radius simulation on every PR | Partial (what-if over the graph) | Build, using Cedar symbolic analysis | 1 | D3·M6 |
+| Formal diff and blast-radius simulation on every PR | Partial (what-if over the graph; AWS policy-change diff and PR comment via `/api/aws/simulate-policy-change`) | Build, using Cedar symbolic analysis | 1 | D3·M6 |
 | Drift detection and "adopt or revert" reconciliation | None | Build | 1 | D3·M7, D4·M9 |
 | Usage-based least privilege, delivered as PRs | Partial (recommendations, dry run) | Build; ingest Access Analyzer and GCP Recommender | 1 | D3·M8, D5·M15 |
 | Privilege-escalation and attack-path analysis | None | Build; seed from pathfinding.cloud; import BloodHound for AD | 2 | D3·M4, D5·S5 |
