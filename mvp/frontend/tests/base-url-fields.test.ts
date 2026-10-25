@@ -11,7 +11,7 @@ const dir = new URL("../../server/internal/readiness/templates/", import.meta.ur
 // the governed connector types of each template (mirrors CONNECTOR_TYPES in shared.tsx)
 const GOVERNED_TYPES: Record<string, string[]> = {
   erp: ["sap", "oracle"], pam: ["cyberark", "beyondtrust", "delinea"], vms: ["fieldglass", "beeline", "csvfeed"],
-  githubscan: ["githubscan"], successfactors: ["successfactors"], servicenow: ["servicenow"], atlassian: ["atlassian"], kubernetes: ["kubernetes"], vault: ["vault"],
+  githubscan: ["githubscan"], successfactors: ["successfactors"], servicenow: ["servicenow"], atlassian: ["atlassian"], kubernetes: ["kubernetes"], vault: ["vault"], mcp: ["mcp"], foundry: ["foundry"], copilot: ["copilot"], agentforce: ["agentforce"],
 };
 
 test("every template with a base_url config field has an input", () => {

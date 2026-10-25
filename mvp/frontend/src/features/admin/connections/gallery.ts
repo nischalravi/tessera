@@ -57,6 +57,12 @@ export const GALLERY_META: Record<string, GalleryMeta> = {
   beeline: { vendor: "beeline", publisher: "Beeline", category: "Contractor & VMS", capabilities: ["Contractor source"] },
   csvfeed: { vendor: "csvfeed", publisher: "CSV over HTTPS", category: "Contractor & VMS", capabilities: ["Contractor source"] },
   agentcore: { vendor: "agentcore", publisher: "Amazon Web Services", category: "AI agents", capabilities: ["Agent discovery"] },
+  mcp: { vendor: "mcp", publisher: "Model Context Protocol", category: "AI agents", capabilities: ["Agent discovery"] },
+  bedrock: { vendor: "bedrock", publisher: "Amazon Web Services", category: "AI agents", capabilities: ["Agent discovery"] },
+  vertex: { vendor: "vertex", publisher: "Google Cloud", category: "AI agents", capabilities: ["Agent discovery"] },
+  foundry: { vendor: "foundry", publisher: "Microsoft", category: "AI agents", capabilities: ["Agent discovery"] },
+  copilot: { vendor: "copilot", publisher: "Microsoft", category: "AI agents", capabilities: ["Agent discovery"] },
+  agentforce: { vendor: "agentforce", publisher: "Salesforce", category: "AI agents", capabilities: ["Agent discovery"] },
   successfactors: { vendor: "sap", publisher: "SAP", category: "Directories & HR", capabilities: ["HR source"] },
   rest_generic: { vendor: "rest_generic", publisher: "Declarative JSON or YAML spec", category: "Cloud & SaaS", capabilities: ["Identity source", "Provisioning target"] },
 };

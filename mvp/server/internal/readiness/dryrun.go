@@ -29,7 +29,8 @@ var hrItems = map[string]string{"ad": "ad.key.employeeid", "ldap": "ldap.key.hr_
 	"okta": "okta.key.employee_number", "google": "gws.key.employee", "scim_app": "scim.key.correlate", "salesforce": "salesforce.key.employee",
 	// the governed types have no HR attribute of their own: the generic correlation item holds the mapping
 	"racf": "racf.key.hr_id", "ibmi": "base.correlation.rule",
-	"pam": "base.correlation.rule", "erp": "base.correlation.rule", "agentcore": "base.correlation.rule", "servicenow": "base.correlation.rule", "atlassian": "base.correlation.rule"}
+	"pam": "base.correlation.rule", "erp": "base.correlation.rule", "agentcore": "base.correlation.rule", "servicenow": "base.correlation.rule", "atlassian": "base.correlation.rule", "mcp": "base.correlation.rule", "bedrock": "base.correlation.rule",
+	"vertex": "base.correlation.rule", "foundry": "base.correlation.rule", "copilot": "base.correlation.rule", "agentforce": "base.correlation.rule"}
 
 // meta describes a revision for reconciliation.
 func meta(b *Bundle, now time.Time) reconcile.Meta {

@@ -32,7 +32,8 @@ type Net struct {
 
 // endpointKeys are the overrides Net.Endpoints may hold.
 var endpointKeys = map[string]bool{"TESSERA_AZURE_MANAGEMENT_URL": true, "TESSERA_AZURE_AUTHORITY_URL": true,
-	"TESSERA_GCP_CRM_URL": true, "TESSERA_GCP_IAM_URL": true, "TESSERA_GCP_TOKEN_URL": true, "TESSERA_ATLASSIAN_ADMIN_URL": true}
+	"TESSERA_GCP_CRM_URL": true, "TESSERA_GCP_IAM_URL": true, "TESSERA_GCP_TOKEN_URL": true, "TESSERA_ATLASSIAN_ADMIN_URL": true, "TESSERA_BEDROCK_AGENT_URL": true,
+	"TESSERA_VERTEX_API_URL": true, "TESSERA_VERTEX_TOKEN_URL": true, "TESSERA_FOUNDRY_AUTHORITY_URL": true, "TESSERA_COPILOT_AUTHORITY_URL": true}
 
 // Overrides layers n.Endpoints over getenv. It refuses them outside the dev runtime, and refuses an
 // unknown key, so a production connection can only reach the public cloud endpoints.
@@ -128,6 +129,24 @@ func (p Params) Env() (func(string) string, error) {
 	case GCPIAM:
 		m["TESSERA_GCP_ORG_ID"], m["TESSERA_GCP_FOLDER_IDS"], m["TESSERA_GCP_PROJECT_IDS"] = set("organization_id"), set("folder_ids"), set("project_ids")
 		m["TESSERA_GCP_KEY"] = "env:" + secretVar // likewise no endpoint override
+	case MCP:
+		m[pre+"URL"], m[pre+"OWNER"], m[pre+"NAME"], m[pre+"AUTH_HEADER"] = p.BaseURL, set("owner"), set("server_name"), set("auth_header")
+		m[pre+"TOKEN"] = "env:" + secretVar
+	case Bedrock:
+		m[pre+"REGION"] = set("region")
+		m[pre+"CREDENTIAL"] = "env:" + secretVar // no endpoint override is ever set: a connection reaches the region's public endpoint only
+	case Vertex:
+		m[pre+"PROJECT"], m[pre+"LOCATION"], m[pre+"OWNER"] = set("project_id"), set("location"), set("owner")
+		m[pre+"KEY"] = "env:" + secretVar // no endpoint override is ever set: a connection reaches Google's public endpoints only
+	case Foundry:
+		m[pre+"ENDPOINT"], m[pre+"TENANT_ID"], m[pre+"CLIENT_ID"], m[pre+"OWNER"] = p.BaseURL, set("tenant_id"), set("client_id"), set("owner")
+		m[pre+"CREDENTIAL"] = "env:" + secretVar // likewise no authority override
+	case Copilot:
+		m[pre+"URL"], m[pre+"TENANT_ID"], m[pre+"CLIENT_ID"] = p.BaseURL, set("tenant_id"), set("client_id")
+		m[pre+"CREDENTIAL"] = "env:" + secretVar
+	case Agentforce:
+		m[pre+"BASE_URL"], m[pre+"API_VERSION"] = p.BaseURL, set("api_version")
+		m[pre+"CREDENTIAL"] = "env:" + secretVar
 	case UnixSSH:
 		m[pre+"HOST"], m[pre+"PORT"], m[pre+"USER"] = set("host"), set("port"), set("username")
 		m[pre+"HOST_KEY"], m[pre+"SUDO"] = set("host_key"), set("use_sudo")

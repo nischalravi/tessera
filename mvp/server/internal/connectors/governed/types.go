@@ -46,6 +46,16 @@ const (
 	Kubernetes = "kubernetes"
 	Vault      = "vault"
 	UnixSSH    = "unixssh"
+	// MCP inventories one Model Context Protocol server (tools exposed, auth mode); Bedrock reads the agents of
+	// Amazon Bedrock Agents in one region (issue #562).
+	MCP     = "mcp"
+	Bedrock = "bedrock"
+	// Vertex reads Google Vertex AI Agent Engine, Foundry the agents of an Azure AI Foundry project, Copilot the
+	// agents of a Microsoft Copilot Studio environment and Agentforce those of a Salesforce org (issue #562).
+	Vertex     = "vertex"
+	Foundry    = "foundry"
+	Copilot    = "copilot"
+	Agentforce = "agentforce"
 	// SFTPDrop reads flat-file feeds (CSV) dropped on an SFTP server (issue #563).
 	SFTPDrop = "sftpdrop"
 )
@@ -84,6 +94,12 @@ var Types = []Type{
 	{ID: Kubernetes, Template: "kubernetes", System: "kubernetes", Vendor: Kubernetes},
 	{ID: Vault, Template: "vault", System: "vault", Vendor: Vault},
 	{ID: UnixSSH, Template: "unixssh", System: "unix", Vendor: UnixSSH},
+	{ID: MCP, Template: "mcp", System: "mcp", Vendor: MCP},
+	{ID: Bedrock, Template: "bedrock", System: "aws-bedrock", Vendor: Bedrock},
+	{ID: Vertex, Template: "vertex", System: "gcp-vertex", Vendor: Vertex},
+	{ID: Foundry, Template: "foundry", System: "azure-foundry", Vendor: Foundry},
+	{ID: Copilot, Template: "copilot", System: "copilot-studio", Vendor: Copilot},
+	{ID: Agentforce, Template: "agentforce", System: "salesforce-agentforce", Vendor: Agentforce},
 	{ID: SFTPDrop, Template: "sftpdrop", System: "sftp", Vendor: SFTPDrop},
 }
 
@@ -176,6 +192,31 @@ func SettingSpecs(typ string) []Setting {
 			{"username", "SSH user", "A dedicated account. Its private key is the credential. It runs only getent, lastlog and the sudoers read.", true},
 			{"host_key", "Host key", "The pinned host key: a SHA256 fingerprint (ssh-keygen -lf) or the public key line. A host whose key differs is refused.", true},
 			{"use_sudo", "Read sudoers through sudo", "true or false (default false). Needs NOPASSWD sudo entries for exactly the two read commands (see the README).", false}}
+	case MCP:
+		return []Setting{
+			{"owner", "Owner", "The e-mail address of the person accountable for the server. MCP carries no owner, so the agent and its tools are linked to this person.", true},
+			{"server_name", "Display name", "Optional. Default: the name the server reports, then its host.", false},
+			{"auth_header", "Credential header", "Optional. The header an API key goes in (X-Api-Key). Default: Authorization: Bearer <credential>.", false}}
+	case Bedrock:
+		return []Setting{
+			{"region", "Region", "The AWS region whose agents are read (one connection per region), for example us-east-1. The credential is JSON: access_key_id, secret_access_key and optionally session_token, of a principal with the list and get rights in the README.", true}}
+	case Vertex:
+		return []Setting{
+			{"project_id", "Project", "The project id (or number) whose agents are read. The credential is a service account key (JSON) with roles/aiplatform.viewer.", true},
+			{"location", "Location", "The region whose agents are read (one connection per location), for example us-central1.", true},
+			{"owner", "Owner", "Optional. The e-mail address of the person accountable for the project's agents (a Vertex agent carries no e-mail address of its own).", false}}
+	case Foundry:
+		return []Setting{
+			{"tenant_id", "Directory (tenant) id", "The Entra tenant GUID. The credential is the application's client secret, or a PEM with its certificate and RSA private key.", true},
+			{"client_id", "Application (client) id", "A service principal with the Azure AI User role on the project (read only).", true},
+			{"owner", "Owner", "Optional. The e-mail address of the person accountable for agents whose metadata names no sponsor.", false}}
+	case Copilot:
+		return []Setting{
+			{"tenant_id", "Directory (tenant) id", "The Entra tenant GUID. The credential is the application's client secret, or a PEM with its certificate and RSA private key.", true},
+			{"client_id", "Application (client) id", "An application user of the environment with a read-only Dataverse role (read on Chatbot, Chatbot Subcomponent and User).", true}}
+	case Agentforce:
+		return []Setting{
+			{"api_version", "API version", "Optional, v61.0 and the like. The credential is JSON: client_id (the connected app's consumer key), username (the integration user) and private_key.", false}}
 	case SFTPDrop:
 		return []Setting{
 			{"host", "Host", "The SFTP server's host name or IP address. Private, loopback and link-local addresses are refused from the server.", true},
@@ -211,7 +252,7 @@ func SettingSpecs(typ string) []Setting {
 // it is empty; AWS and AgentCore take none.
 func BaseURLUse(typ string) (required, takes bool) {
 	switch typ {
-	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed, SuccessFactors, ServiceNow, Atlassian, Kubernetes, Vault:
+	case CyberArk, Delinea, BeyondTrust, SAP, Oracle, Fieldglass, Beeline, CSVFeed, SuccessFactors, ServiceNow, Atlassian, Kubernetes, Vault, MCP, Foundry, Copilot, Agentforce:
 		return true, true
 	case GitHubScan:
 		return false, true
@@ -255,8 +296,16 @@ var (
 	jiraKeyRE    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{1,99}$`)
 	dirSettingRE = regexp.MustCompile(`^/[A-Za-z0-9._~@+/-]{0,500}$`)
 	columnRE     = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,100}$`)
-	sshUserRE    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
-	sshHostRE    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+	headerRE     = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+	// reservedHeaders mirrors mcpserver.ReservedHeader (Open refuses them too)
+	reservedHeaders = map[string]bool{"host": true, "content-type": true, "accept": true, "content-length": true, "transfer-encoding": true,
+		"connection": true, "keep-alive": true, "te": true, "trailer": true, "upgrade": true, "proxy-connection": true,
+		"proxy-authorization": true, "mcp-session-id": true, "mcp-protocol-version": true, "user-agent": true, "accept-encoding": true}
+	nameRE     = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,128}$`)
+	locationRE = regexp.MustCompile(`^[a-z]+-[a-z]+[0-9]{1,2}$`)
+	versionRE  = regexp.MustCompile(`^v[0-9]{2}\.0$`)
+	sshUserRE  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,31}$`)
+	sshHostRE  = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
 	// hostKeyRE is the shape only (the connector parses the key itself): a fingerprint, or a public key line.
 	hostKeyRE = regexp.MustCompile(`^(SHA256:[A-Za-z0-9+/]{43}|[^\s\x00-\x1f\x7f]{1,255} [^\x00-\x1f\x7f]{16,1000})$`)
 )
@@ -326,7 +375,7 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 				bad(s.Key, "must be 1 to 64 printable characters")
 			}
 		case "client_id":
-			if typ == AzureRBAC {
+			if typ == AzureRBAC || typ == Foundry || typ == Copilot {
 				if !guidRE.MatchString(v) {
 					bad(s.Key, "must be the application (client) GUID")
 				}
@@ -392,6 +441,34 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 		case "auth_mode":
 			if v != "basic" && v != "oauth" {
 				bad(s.Key, "must be basic or oauth")
+			}
+		case "owner":
+			if !emailRE.MatchString(v) {
+				bad(s.Key, "must be an e-mail address")
+			}
+		case "server_name":
+			if !nameRE.MatchString(v) {
+				bad(s.Key, "must be 1 to 128 printable characters")
+			}
+		case "auth_header":
+			if !headerRE.MatchString(v) || reservedHeaders[strings.ToLower(v)] {
+				bad(s.Key, "must be a header name (letters, digits and hyphens), not one the transport or MCP owns (Host, Content-Type, Accept, Connection, Mcp-Session-Id ...)")
+			}
+		case "project_id":
+			if !projectRE.MatchString(v) && !numRE.MatchString(v) {
+				bad(s.Key, "must be a project id or number")
+			}
+		case "location":
+			if !locationRE.MatchString(v) {
+				bad(s.Key, "must be a Google Cloud region such as us-central1")
+			}
+		case "api_version":
+			if !versionRE.MatchString(v) {
+				bad(s.Key, "must look like v61.0")
+			}
+		case "region":
+			if !regionRE.MatchString(v) {
+				bad(s.Key, "must be an AWS region such as us-east-1")
 			}
 		case "email":
 			if !emailRE.MatchString(v) {

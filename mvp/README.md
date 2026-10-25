@@ -6197,6 +6197,93 @@ identities) and `mcp_findings`, both tenant-scoped with cross-tenant guard trigg
 creator, sponsor status and violating policy ids; `GET /api/nhi` is unchanged. The demo company
 supplies Okta-sourced agents and five sample findings, so the screens work without any connector.
 
+### MCP servers and Amazon Bedrock Agents (issue #562)
+
+Two read-only agent-platform connections in the New connection gallery (category **AI agents**, capability
+Agent discovery, templates `mcp` and `bedrock`; both have a logo, readiness checklist and live prober).
+Both are governed types, so the credential is sealed like every connection secret and is never printed
+(the connectors' own `%v` and `%+v` print only a host or region), and every outbound call goes through
+`internal/safehttp`. Errors carry a status and a short provider code, never request input or a response body.
+
+**MCP server** (`internal/connectors/mcpserver`, system `mcp`, env `TESSERA_MCP_*`). One connection per server.
+`base_url` is the server's MCP endpoint (Streamable HTTP, https only, a path is allowed; private, loopback and
+link-local addresses are refused by safehttp at connect time, and plain http only to loopback in dev). Settings:
+`owner` (required, the e-mail address of the accountable person, since MCP carries no owner), `server_name` and
+`auth_header` (an API key header instead of `Authorization: Bearer`). The credential is the token or key.
+The connector sends `initialize`, the `initialized` notification and a paged `tools/list`, and **never calls a
+tool** (a test asserts the methods seen). Mapping: the server is a `service` identity `mcp:<host-path>` owned by
+the configured owner; each tool is a resource (`mcp_tool`) with a `call` permission granted to the server's
+account, **privileged** when `annotations.destructiveHint` is true or, with no annotation, the name says it
+runs commands or deletes (`exec`, `shell`, `delete`, `drop`, `admin` ...); `readOnlyHint` tools are not. It also
+records an `mcp_server` finding (the MCP config findings tab). The **auth mode is observed**: with a credential
+set, an `initialize` is also sent without it; a server that answers accepts anonymous callers, which is the
+`auth_mode=anonymous` account attribute and an `anonymous_access` tag on every tool (otherwise `required`).
+Tool descriptions and input schemas are not stored (free text from the server's operator, a known
+prompt-injection carrier); only the name and the hints are.
+
+**Amazon Bedrock Agents** (`internal/connectors/bedrockagents`, system `aws-bedrock`, env `TESSERA_BEDROCK_*`).
+Unlike the fixture-only AgentCore snapshot above, this is a live client of the `bedrock-agent` control-plane API
+(SigV4 service `bedrock`, no AWS SDK). One connection per region (`region` setting; agents are regional); the
+endpoint is the region's public `bedrock-agent.<region>.amazonaws.com` and a different host is refused (an
+override exists for tests only, through the governed `Net.Endpoints`, and any non-dev runtime refuses it). The
+credential is JSON, `{"access_key_id","secret_access_key","session_token"}` (the token optional), of a principal
+that holds only `bedrock:ListAgents`, `GetAgent`, `ListAgentActionGroups`, `GetAgentActionGroup`,
+`ListAgentKnowledgeBases` and `ListTagsForResource` (`bedrockagents.ReaderPolicy`; a test checks it is all
+List/Get). Only those operations are sent (the list operations of this API are POSTs and are reads). Mapping, per
+agent: an `ai_agent` identity `bedrock:<agent id>` owned by its `sponsor` (else `owner`) tag when that is an
+e-mail address, `creator` kept as the creator reference, an `agent` account and an agent profile of kind
+`bedrock_agent`; access (each a direct grant) to the execution role (`assume_role`), the foundation model
+(`bedrock:InvokeModel`), every ENABLED action group (`lambda:InvokeFunction` on its Lambda, or `return_control`
+when the caller runs it; the built-in **code interpreter** is privileged) and every ENABLED knowledge base
+(`bedrock:Retrieve`). A tag `pii=true` marks all of that as PII so `ai-agents-no-pii` applies. What the execution
+role itself can do is read by the AWS Organizations connection: the agent links to the role by ARN. Agents
+missing from a read disappear (the result is a complete snapshot of the source), and a 404 on an agent deleted
+mid-read is skipped. Agent and function descriptions are not stored (free text, a prompt-injection carrier); an
+agent with more than 200 enabled action groups or knowledge bases fails the read. The tags call puts the agent ARN
+in the path as one encoded segment, which SigV4 signs double-encoded (`%253A`, `%252F`) as AWS canonicalises it.
+
+Tests use in-process fakes of both vendor APIs (`mcpserver/mcpfake`, `bedrockagents/bedrockfake`, the latter
+re-signs every request it receives and counts bad signatures and unserved operations), covering paging, event
+streams, throttling, refused credentials, malformed answers and the host and override checks.
+
+### Vertex AI, Azure AI Foundry, Copilot Studio and Agentforce (issue #562, part 2)
+
+Four more read-only agent-platform connections in the **AI agents** category (capability Agent discovery,
+templates `vertex`, `foundry`, `copilot` and `agentforce`; each has a logo, a readiness checklist with live
+`auth_ok` and `read_probe` checks, and a prober). All four are governed types: the credential is sealed and never
+printed (the connectors' `%v` and `%+v` print only a project, host or location), every outbound call goes through
+`internal/safehttp`, and errors carry a status and a short provider code, never request input or a response body.
+They reuse the sign-in of the existing connectors (the Google service account JWT of `gcpiam`, the Entra
+client-credentials flow of `azurerbac`, the Salesforce JWT bearer flow of `salesforce`). The shared mapping is
+`internal/connectors/agentmap`: each agent is an `ai_agent` identity (`<prefix>:<id>`) with an `agent` account and
+an agent profile, linked to its owner when that is an e-mail address (anything else is kept as the sponsor or
+creator text), and everything it can reach is a permission granted to the account. A `pii=true` label, tag or
+metadata value marks all of that as PII (`ai-agents-no-pii`). **Prompts, instructions, descriptions, tool
+schemas, component data and environment values are never read into the result**; fakes serve them and tests
+assert they do not appear.
+
+| Connection | Package, system, env | Settings and credential | Agents and grants |
+| --- | --- | --- | --- |
+| Google Vertex AI Agent Engine | `vertexagents`, `gcp-vertex`, `TESSERA_VERTEX_*` | `project_id`, `location`, optional `owner` (a Vertex agent has no e-mail address, so the owner is the connection's); service account key (JSON) with `roles/aiplatform.viewer` | `reasoningEngines` list. The service account or agent identity it runs as (`run_as`) and each Secret Manager secret its deployment reads (`secretmanager.versions.access`). A `sponsor` or `creator` label is kept as text. |
+| Azure AI Foundry agents | `foundryagents`, `azure-foundry`, `TESSERA_FOUNDRY_*` | `base_url` (`https://<account>.services.ai.azure.com/api/projects/<project>`), `tenant_id`, `client_id`, optional `owner`; client secret or certificate PEM; scope `https://ai.azure.com/.default`, role Azure AI User | Agent Service `assistants` list. Owner from the `sponsor` (else `owner`) metadata, falling back to the `owner` setting; `creator` and `pii` metadata. Grants: functions, OpenAPI tools, MCP servers, connected agents, file-search vector stores, AI Search indexes, other tool types by name; the **code interpreter is privileged**. |
+| Microsoft Copilot Studio | `copilotstudio`, `copilot-studio`, `TESSERA_COPILOT_*` | `base_url` (the environment's Dataverse URL, no path), `tenant_id`, `client_id`; client secret or certificate; an application user with read on Chatbot, Chatbot Subcomponent and User | Dataverse `bots`, `botcomponents`, `systemusers` (GETs). Owner and creator resolved to the user's internal e-mail address (a team stays text). Components are classified by the schema-name segment: `action` and `skill` are tools (`invoke`), `knowledge` and `file` are knowledge sources (`retrieve`); topics are not read. A bot that requires no authentication of its callers carries `anonymous_access` on all it reaches. |
+| Salesforce Agentforce | `agentforce`, `salesforce-agentforce`, `TESSERA_AGENTFORCE_*` | `base_url` (My Domain), optional `api_version`; credential JSON `client_id`, `username`, `private_key` (and `login_url` for a sandbox), the JWT bearer flow | SOQL on `BotDefinition` (Agentforce `ExternalCopilot` and `InternalCopilot`), `User`, `GenAiPlannerDefinition`, `GenAiPlannerFunctionDef` and `GenAiFunctionDefinition`. Owner and creator by user e-mail address. Grants: the user the agent runs as (`run_as`; what that user may do is the Salesforce connection's job) and each action of its planner (`invoke` on the flow, Apex class or prompt template it targets). |
+
+The bearer token goes only to the vendor's own hosts: Vertex to the location's `aiplatform.googleapis.com`,
+Foundry to `*.services.ai.azure.com`, `*.cognitiveservices.azure.com` or `*.openai.azure.com`, Copilot Studio to a
+`*.dynamics.com` (or `.microsoftdynamics.us`, `.dynamics.cn`) host without port or path, Agentforce to a
+Salesforce domain, and a token endpoint of Google or Entra. The dev overrides (`TESSERA_VERTEX_API_URL`,
+`TESSERA_VERTEX_TOKEN_URL`, `TESSERA_FOUNDRY_AUTHORITY_URL`, `TESSERA_COPILOT_AUTHORITY_URL`) exist for tests
+only, go through the governed `Net.Endpoints`, and every non-dev runtime refuses them; a connection never carries
+one. A paging link that leaves the Web API (Dataverse, Salesforce) is refused. Tests use in-process fakes of each
+API (`vertexagents/vertexfake`, `foundryagents/foundryfake`, `copilotstudio/copilotfake`,
+`agentforce/agentforcefake`), covering paging, refused credentials, malformed answers, endless paging, the
+host and override checks, and that only GETs (and the token POST) are sent.
+
+Not checked against a live tenant: the Copilot Studio schema-name segments and `authenticationmode` values, and the
+Agentforce object and field names (`GenAiPlannerFunctionDef`, `InvocationTargetType` and the `Type` values of
+`BotDefinition`) follow the vendors' documentation; confirm them on a real environment before relying on them.
+
 **Entra Agent ID blueprints (issue #478).** With `TESSERA_ENTRA_DISCOVER_AGENTS=true` the connector also reads
 Graph **beta** `applications/microsoft.graph.agentIdentityBlueprint` and its `sponsors`, and, on each agent identity,
 `agentIdentityBlueprintId` (the blueprint's **appId**, not its object id) and `managerApplications` (application

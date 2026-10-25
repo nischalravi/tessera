@@ -32,6 +32,12 @@ export const SETTING_KEYS: Record<string, string[]> = {
   servicenow: ["auth_mode", "username", "client_id"],
   atlassian: ["email", "org_id", "project_keys"],
   unixssh: ["host", "port", "username", "host_key", "use_sudo"],
+  mcp: ["owner", "server_name", "auth_header"],
+  bedrock: ["region"],
+  vertex: ["project_id", "location", "owner"],
+  foundry: ["tenant_id", "client_id", "owner"],
+  copilot: ["tenant_id", "client_id"],
+  agentforce: ["api_version"],
   kubernetes: ["namespaces", "openshift"],
   vault: ["namespace"],
   sftpdrop: ["host", "port", "username", "host_key", "directory", "accounts_file", "entitlements_file", "accounts_account_id", "accounts_username", "accounts_email", "accounts_identity_id", "accounts_status", "entitlements_account_id", "entitlements_entitlement", "entitlements_name", "entitlements_privileged"],
@@ -151,6 +157,49 @@ export const GOVERNED: Record<string, GovType> = {
       { key: "use_sudo", label: "Read sudoers through sudo", hint: "true or false (default false). Needs NOPASSWD sudo entries for exactly the two read commands (see the README)." },
     ],
     credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
+  },
+  mcp: {
+    baseUrl: { label: "MCP endpoint", hint: "https://host/mcp: the server's Streamable HTTP endpoint, HTTPS only. Private, loopback and link-local addresses are refused from the server.", required: true },
+    settings: [
+      { key: "owner", label: "Owner", required: true, hint: "The e-mail address of the person accountable for the server. MCP carries no owner, so its tools are linked to this person." },
+      { key: "server_name", label: "Display name", hint: "Optional. Default: the name the server reports, then its host." },
+      { key: "auth_header", label: "Credential header", hint: "Optional. The header an API key goes in (X-Api-Key). Default: Authorization: Bearer." },
+    ],
+    credential: { label: "Bearer token or API key", hint: "A token that may list tools. Tessera never calls a tool. It also tries the server without it, to record whether it accepts anonymous callers." },
+  },
+  bedrock: {
+    settings: [{ key: "region", label: "Region", required: true, hint: "The AWS region whose agents are read, for example us-east-1. Agents are regional: add one connection per region." }],
+    credential: { label: "AWS keys (JSON)", hint: "{\"access_key_id\": \"...\", \"secret_access_key\": \"...\", \"session_token\": \"...\"} of a principal with the Bedrock agent list and get rights only; session_token is optional.", area: true },
+  },
+  vertex: {
+    settings: [
+      { key: "project_id", label: "Project", required: true, hint: "The project id (or number) whose agents are read." },
+      { key: "location", label: "Location", required: true, hint: "The region whose agents are read, for example us-central1. Agents are regional: add one connection per location." },
+      { key: "owner", label: "Owner", hint: "Optional. The e-mail address of the person accountable for the project's agents; a Vertex agent carries no e-mail address of its own." },
+    ],
+    credential: { label: "Service account key (JSON)", hint: "The key file of a service account with roles/aiplatform.viewer only.", area: true },
+  },
+  foundry: {
+    baseUrl: { label: "Project endpoint", hint: "https://<account>.services.ai.azure.com/api/projects/<project>: the Foundry project's endpoint, HTTPS only.", required: true },
+    settings: [
+      { key: "tenant_id", label: "Directory (tenant) id", required: true, hint: "The Entra tenant GUID." },
+      { key: "client_id", label: "Application (client) id", required: true, hint: "A service principal with the Azure AI User role on the project (read only)." },
+      { key: "owner", label: "Owner", hint: "Optional. The e-mail address of the person accountable for agents whose metadata names no sponsor." },
+    ],
+    credential: { label: "Client secret or certificate", hint: "The application's client secret, or a PEM with its certificate and RSA private key.", area: true },
+  },
+  copilot: {
+    baseUrl: { label: "Environment URL", hint: "https://<org>.crm.dynamics.com: the Power Platform environment's Dataverse URL, HTTPS only, no path.", required: true },
+    settings: [
+      { key: "tenant_id", label: "Directory (tenant) id", required: true, hint: "The Entra tenant GUID." },
+      { key: "client_id", label: "Application (client) id", required: true, hint: "An application user of the environment with a read-only Dataverse role (read on Chatbot, Chatbot Subcomponent and User)." },
+    ],
+    credential: { label: "Client secret or certificate", hint: "The application's client secret, or a PEM with its certificate and RSA private key.", area: true },
+  },
+  agentforce: {
+    baseUrl: { label: "My Domain URL", hint: "https://acme.my.salesforce.com: the org's My Domain URL, HTTPS only, no path.", required: true },
+    settings: [{ key: "api_version", label: "API version", hint: "Optional, v61.0 and the like." }],
+    credential: { label: "Connected app credential (JSON)", hint: "{\"client_id\": \"<consumer key>\", \"username\": \"<integration user>\", \"private_key\": \"-----BEGIN PRIVATE KEY-----...\"}: the JWT bearer flow; no password is kept.", area: true },
   },
   kubernetes: {
     baseUrl: { label: "API server URL", hint: "https://api.cluster.example.com:6443; HTTPS host name and port, no path. Its certificate must chain to a public CA.", required: true },

@@ -29,7 +29,7 @@ var now = time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
 
 func TestLoadRegistersTheProductionConnectors(t *testing.T) {
 	register(t)
-	for _, name := range []string{"okta", "entra", "google", "workday", "successfactors", "github-scan", "aws-agentcore", "cyberark", "delinea", "beyondtrust", "sap", "oracle", "azure", "gcp", "salesforce", "unix", "servicenow", "atlassian", "kubernetes", "vault"} {
+	for _, name := range []string{"okta", "entra", "google", "workday", "successfactors", "github-scan", "aws-agentcore", "cyberark", "delinea", "beyondtrust", "sap", "oracle", "azure", "gcp", "salesforce", "unix", "servicenow", "atlassian", "kubernetes", "vault", "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce"} {
 		if _, ok := connectors.Factories[name]; !ok {
 			t.Errorf("connector %q is not registered", name)
 		}
