@@ -5360,8 +5360,28 @@ jitter (honouring `Retry-After`); every `List*` follows its token to the last pa
 - **API** (connections permissions; writes need step-up): `GET|POST /api/aws/connectors`,
   `DELETE /api/aws/connectors/{id}`, `GET /api/aws/snapshots`, `GET /api/aws/snapshots/{id}`.
   `POST /api/aws/connectors` takes `{name, config: {regions, account_ids, management_account_id,
-  role_name, identity_center_region}, credentials: {access_key_id, secret_access_key}}`. Running a
-  collection (`awsorg.Service.Collect`) is not a route yet: a run can outlast the request timeout.
+  role_name, identity_center_region}, credentials: {access_key_id, secret_access_key}}`.
+- **Collection job** (issue #637). A collection reads every account, so it is a job of the durable
+  queue (kind `aws_collect`, shown under Jobs), not a request:
+
+  | Route | Permission | |
+  |---|---|---|
+  | `POST /api/aws/connectors/{id}/collect` | `connections.manage` + step-up | queues a run; `202 {run_id, connector_id, status: "queued"}`; `409 collection_in_progress` (with the active `run_id`) while one is queued or running; `503` without the AWS client or the catalog |
+  | `GET /api/aws/collection-runs?connector_id=&limit=` | `connections.read` | runs, newest first |
+  | `GET /api/aws/collection-runs/{id}` | `connections.read` | one run: poll it (`queued`, `running`, `succeeded`, `unchanged`, `failed`; `snapshot_id`, `changed`, counts in `result`, `error`) |
+
+  A worker runs `awsorg.Service.CollectAndMaterialize`: collect, then, when the estate changed,
+  `Materialize`. A schedule (`aws_collect`, every 6 hours, fires at once on a new tenant; pause it
+  under Admin > Jobs like any built-in schedule) does the same for every connector of the tenant.
+  AWS has no change feed for `GetAccountAuthorizationDetails`, so each run reads the estate; what is
+  incremental is the write. The snapshot id is the content hash, so an estate the connector already
+  collected *and evaluated* writes no snapshot rows, no audit event, runs no evaluation, and a
+  scheduled run leaves no run row or job run (the connector's `last_run_at` moves, nothing else). An
+  estate that returns to an earlier state, or whose evaluation failed (the connector is then
+  `failed`), is evaluated again. Runs are in `aws_collection_runs` (`schema/0914`, Postgres
+  `0932`); a run left queued or running for 2 hours (its worker stopped) is failed so it stops
+  blocking the connector. Audit events: `aws.collection.queued`, `aws.snapshot.collected`,
+  `aws.snapshot.materialized`, `aws.collection.failed`.
 - **Tests** use `internal/aws/awstest` (test-only): `Replay` serves recorded responses from
   `internal/connectors/awsorg/testdata/http/<service>/<operation>/<n>.<ext>`, verifies every
   signature and reports calls with no recording. It does not enforce IAM; these are collection
@@ -5400,7 +5420,7 @@ request with `comment.pull_number` posts, needs `connections.manage` and a fresh
 sign-in, goes through `internal/safehttp` to `api.github.com`, and is audited
 (`aws.pr_comment.posted` / `.failed`).
 
-`awsorg.Service.Materialize` (run by `Collect` when `Service.Eval` is set) evaluates a snapshot and
+`awsorg.Service.Materialize` (run by `Collect` when `Service.Eval` is set, and by the collection job) evaluates a snapshot and
 ingests what it confirms: accounts, role groups, permissions (action atom by resource atom) and
 `grants` edges with source `evaluator`, carrying explanation, outcome and fidelity
 (`schema/0321_aws_integration.sql`, a side table because there is no column migration), plus

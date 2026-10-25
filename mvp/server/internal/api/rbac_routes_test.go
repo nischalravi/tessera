@@ -174,6 +174,9 @@ POST   /api/connections/{id}/retire                  connections.manage STEP_UP_
 GET    /api/aws/connectors                           connections.read   -  # issue #26
 POST   /api/aws/connectors                           connections.manage STEP_UP_POLICY  # issue #26
 DELETE /api/aws/connectors/{id}                      connections.manage STEP_UP_POLICY  # issue #26
+POST   /api/aws/connectors/{id}/collect              connections.manage STEP_UP_POLICY  # issue #637
+GET    /api/aws/collection-runs                      connections.read   -  # issue #637
+GET    /api/aws/collection-runs/{id}                 connections.read   -  # issue #637
 GET    /api/aws/snapshots                            connections.read   -  # issue #26
 GET    /api/aws/snapshots/{id}                       connections.read   -  # issue #26
 GET    /api/aws/can                                  graph.read         -  # issue #30
