@@ -96,12 +96,14 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("<html>not json</html>"))
 		return
 	}
-	start, _ := strconv.Atoi(r.URL.Query().Get("pageToken"))
+	// the page token and size are matched against the values the fake can issue, so the answer is built
+	// from the fake's own numbers and nothing the request carried reaches it
+	start := matchIndex(r.URL.Query().Get("pageToken"), len(f.engines))
 	size := f.PageSize
 	if size <= 0 || size > len(f.engines) {
 		size = len(f.engines)
 	}
-	if q, _ := strconv.Atoi(r.URL.Query().Get("pageSize")); q > 0 && f.PageSize == 0 && q < size {
+	if q := matchIndex(r.URL.Query().Get("pageSize"), size); q > 0 && f.PageSize == 0 {
 		size = q
 	}
 	end := min(start+size, len(f.engines))
@@ -150,4 +152,14 @@ func (f *Fake) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"access_token": Token, "token_type": "Bearer", "expires_in": 3600})
+}
+
+// matchIndex returns the i in [0, n) whose decimal form is s, or 0.
+func matchIndex(s string, n int) int {
+	for i := range n {
+		if strconv.Itoa(i) == s {
+			return i
+		}
+	}
+	return 0
 }

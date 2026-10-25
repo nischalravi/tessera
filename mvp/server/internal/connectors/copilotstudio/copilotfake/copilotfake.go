@@ -121,10 +121,12 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.page(w, r, "botcomponents", rows)
 	case strings.HasPrefix(r.URL.Path, api+"systemusers(") && strings.HasSuffix(r.URL.Path, ")"):
-		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, api+"systemusers("), ")")
-		if e, ok := f.users[id]; ok {
-			_ = json.NewEncoder(w).Encode(map[string]any{"systemuserid": id, "internalemailaddress": e})
-			return
+		asked := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, api+"systemusers("), ")")
+		for id, e := range f.users { // the stored id is answered, never the text of the path
+			if id == asked {
+				_ = json.NewEncoder(w).Encode(map[string]any{"systemuserid": id, "internalemailaddress": e})
+				return
+			}
 		}
 		http.Error(w, `{"error":{"code":"0x80040217"}}`, http.StatusNotFound)
 	default:
