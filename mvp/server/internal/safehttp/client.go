@@ -269,6 +269,10 @@ func portAllowed(o Options, configured ports, host, port string) bool {
 func newClient(o Options) (*http.Client, error) {
 	switch o.Env {
 	case config.Dev, config.Prod:
+	case config.Test:
+		// a test deployment gets production's address rules: no loopback or
+		// private-range exception (#634)
+		o.Env = config.Prod
 	default:
 		return nil, fmt.Errorf("safehttp: Options.Env must be %q or %q (got %q)", config.Dev, config.Prod, o.Env)
 	}
@@ -331,6 +335,10 @@ type DialFunc func(ctx context.Context, network, address string) (net.Conn, erro
 func NewDialer(o Options) (DialFunc, error) {
 	switch o.Env {
 	case config.Dev, config.Prod:
+	case config.Test:
+		// a test deployment gets production's address rules: no loopback or
+		// private-range exception (#634)
+		o.Env = config.Prod
 	default:
 		return nil, fmt.Errorf("safehttp: Options.Env must be %q or %q (got %q)", config.Dev, config.Prod, o.Env)
 	}

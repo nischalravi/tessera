@@ -542,3 +542,17 @@ func TestSafedial_ModeNone(t *testing.T) {
 		t.Error("InferMode")
 	}
 }
+
+// A test deployment gets production's rules (#634): accepted, and an
+// allowlist of private targets is refused outside dev.
+func TestSafedial_TestEnvIsStrict(t *testing.T) {
+	if _, err := New(Options{Env: config.Test}); err != nil {
+		t.Fatalf("test environment refused: %v", err)
+	}
+	if _, err := New(Options{Env: config.Test, Allow: mustAllow(t, "10.0.0.0/24:389")}); err == nil {
+		t.Error("a private allowlist was accepted in test")
+	}
+	if _, err := New(Options{Env: "staging"}); err == nil {
+		t.Error("an unknown environment was accepted")
+	}
+}
