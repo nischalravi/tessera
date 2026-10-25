@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -216,5 +217,40 @@ func TestAdminClientLimitRoutes(t *testing.T) {
 	}
 	if fmt.Sprint(kinds) != "[oauth.client.rate_limit.cleared oauth.client.rate_limit.set]" {
 		t.Errorf("audit events (newest first) = %v", kinds)
+	}
+}
+
+// TestClientRateLimit_NotChargedAsAnonymous: an authenticated machine client is
+// limited by its own bucket only. Its requests carry no session cookie but do
+// not spend the IP's anonymous bucket, so a client allowed more than that
+// bucket gets its full limit and the people signed in from the same address
+// are not refused because of it; made-up tokens still drain the bucket
+// (issue #608).
+func TestClientRateLimit_NotChargedAsAnonymous(t *testing.T) {
+	e, _, tok := limitedEnv(t, ClientRate{Burst: 10, PerMinute: 60})
+	big := RateLimit{Every: time.Nanosecond, Burst: 1 << 20}
+	e.srv.limits = newLimiters(RateLimits{Anonymous: RateLimit{Every: time.Hour, Burst: 3}, Auth: big, OAuth: big})
+	const ip = "198.51.100.20:1000"
+	from := func(r *http.Request) { r.RemoteAddr = ip }
+	for i := 0; i < 10; i++ {
+		rec := e.call(tok, "GET", "/api/summary", "", from)
+		if rec.Code != 200 || rec.Header().Get("RateLimit-Limit") != "10" {
+			t.Fatalf("client request %d: %d %v %s", i+1, rec.Code, rec.Header(), rec.Body)
+		}
+	}
+	// the 11th is the client's own refusal, with its RateLimit-* fields
+	rec := e.call(tok, "GET", "/api/summary", "", from)
+	if rec.Code != 429 || rec.Header().Get("RateLimit-Policy") != "60;w=60" {
+		t.Fatalf("over the client's limit: %d %v", rec.Code, rec.Header())
+	}
+	// the address's anonymous budget is untouched: three made-up tokens are
+	// answered 401 and spend it, the fourth is refused before authentication
+	for i := 0; i < 4; i++ {
+		r := httptest.NewRequest("GET", "/api/summary", nil)
+		r.RemoteAddr = ip
+		r.Header.Set("Authorization", "Bearer made-up-"+strconv.Itoa(i))
+		if code := serve(e.h, r).Code; (i < 3 && code != 401) || (i == 3 && code != 429) {
+			t.Errorf("made-up token %d: %d", i, code)
+		}
 	}
 }

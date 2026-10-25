@@ -49,7 +49,10 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
   a change applies within 30 seconds). Answers carry `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` and
   `RateLimit-Policy`; a refused request is `429 rate_limited` with `Retry-After`, is audited (`http.request`, status 429,
   the client as actor) and counted in `tessera_api_client_rate_limited_total`. Buckets are per process. Users with a
-  session are not limited by it.
+  session are not limited by it. An authenticated machine client's requests do not spend the per-IP anonymous budget (`TESSERA_ANON_RATE_BURST`;
+  a request with an `Authorization` header is counted like one with a session cookie, so only a token that fails to
+  authenticate costs it), so its own bucket is the limit that applies and its bursts never refuse people signed in from the
+  same address (issue #608).
 * Dev IdP: http://127.0.0.1:8001 (see [Signing in](#signing-in))
 
 Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`
