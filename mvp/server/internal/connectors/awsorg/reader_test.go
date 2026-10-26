@@ -19,7 +19,7 @@ func readerCatalog(t *testing.T, extra map[string]catalog.AccessLevel) *catalog.
 	levels := map[string]catalog.AccessLevel{
 		"iam:GetAccountAuthorizationDetails":     catalog.AccessRead,
 		"iam:GenerateServiceLastAccessedDetails": catalog.AccessRead, "iam:GetServiceLastAccessedDetails": catalog.AccessRead,
-		"cloudtrail:GetEventSelectors": catalog.AccessRead, "s3:ListBucket": catalog.AccessList,
+		"cloudtrail:GetEventSelectors": catalog.AccessRead, "cloudtrail:ListPublicKeys": catalog.AccessList, "cloudtrail:GetTrail": catalog.AccessRead, "s3:ListBucket": catalog.AccessList,
 		"iam:SimulatePrincipalPolicy":        catalog.AccessRead,
 		"organizations:DescribeOrganization": catalog.AccessRead, "organizations:ListRoots": catalog.AccessList,
 		"organizations:ListOrganizationalUnitsForParent": catalog.AccessList, "organizations:ListAccountsForParent": catalog.AccessList,

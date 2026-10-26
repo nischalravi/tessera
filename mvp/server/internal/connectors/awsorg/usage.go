@@ -276,6 +276,19 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 	}
 	agg := map[usageKey]*usageVal{}
 	unmapped := map[string]bool{}
+	trailValidation := func(ctx context.Context) (bool, error) {
+		region, account := t.trailParts()
+		if region == "" {
+			return false, errors.New("no trail_arn is configured, so it is not known whether log file validation is on")
+		}
+		s, err := col.assume(ctx, cache, account)
+		if err != nil {
+			return false, err
+		}
+		return s.session.getTrailValidation(ctx, region, t.TrailARN)
+	}
+	dv := newDigestVerifier(t, sess, trailValidation, now, floor)
+	unverified, verified := map[string]bool{}, map[string]bool{} // prefixes with a digest_disabled gap, or with a file a digest confirmed
 	// a record's time is the customer's data: one far in the future would be a row
 	// that never ages out, and one older than the retention is pruned at once
 	evFrom, evTo := now.Add(-usageRetention), now.Add(24*time.Hour)
@@ -319,6 +332,33 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 				return true, nil
 			}
 			return false, err
+		}
+		// a file is counted only when a signed digest lists it with the hash it has (issue #680)
+		hash, herr := inflatedSHA256(body)
+		var hrf *refusal
+		if errors.As(herr, &hrf) {
+			refuse(hrf.Code, hrf.Msg)
+			return true, nil
+		}
+		vd, derr := dv.check(ctx, p, tail, hash)
+		if derr != nil {
+			return false, derr
+		}
+		switch vd.Code {
+		case "":
+			if !verified[p.key] {
+				verified[p.key] = true
+				b.clear = append(b.clear, "digest:"+p.key)
+			}
+		case "digest_disabled":
+			// validation is off for the trail: the file is counted as before, and the gap says it is unverified
+			if !unverified[p.key] {
+				unverified[p.key] = true
+				gap(store.AWSUsageCloudTrail, "digest:"+p.key, vd.Code, vd.Detail, "")
+			}
+		default:
+			refuse(vd.Code, vd.Detail)
+			return true, nil
 		}
 		local := map[usageKey]*usageVal{}
 		n, perr := parseLogFile(body, func(ev *ctEvent) {
@@ -398,6 +438,14 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 						return finish(ctx.Err())
 					}
 					p.blocked = true
+					if errors.Is(err, errDigestPending) {
+						break // the digest is not out yet: read again next run, no gap
+					}
+					var de *digestError
+					if errors.As(err, &de) {
+						gap(store.AWSUsageCloudTrail, "digest:"+p.key, "digest_unreadable", "reading the CloudTrail digests: "+u.accessHint(de.err, t)+"; the reader role also needs cloudtrail:GetTrail and cloudtrail:ListPublicKeys; set trail_arn", "")
+						break
+					}
 					gap(store.AWSUsageCloudTrail, "s3:"+p.key, errCode(err), "reading "+p.key+"/"+strings.TrimPrefix(o.Key, p.dir)+": "+u.accessHint(err, t), "")
 					break
 				}

@@ -5481,6 +5481,18 @@ jitter (honouring `Retry-After`); every `List*` follows its token to the last pa
     passes). `s3:ListBucket` and `s3:GetObject` on `*` would read every bucket, so they are not in it:
     `awsorg.TrailReaderPolicy(cfg)` is the second policy for the bucket's account, scoped to that bucket's
     log prefix, and `CheckReadOnly` accepts it too.
+  - **Digest validation (#680).** A log file is counted only when a signed CloudTrail digest lists it
+    with its SHA-256 (digests under `CloudTrail-Digest/<region>/`, SHA256withRSA signature in
+    `x-amz-meta-signature`, key from `cloudtrail:ListPublicKeys` by fingerprint, hash chain checked per
+    day). Gaps: `digest_invalid` and `digest_missing` refuse the file (not counted); `digest_disabled`
+    (only when `cloudtrail:GetTrail` says `LogFileValidationEnabled` is false) counts the files as before and
+    records one gap per prefix; missing or deleted digests of a trail with validation on are `digest_missing`
+    (refused), never "disabled"; `digest_unreadable` (digests, key or trail setting unreadable, or no
+    `trail_arn`) holds the prefix. A file under 3 hours old waits for its
+    digest (no gap). Gaps with the `digest_` prefix make LP-2 confidence low. **Action for customers:**
+    add `cloudtrail:GetTrail` and `cloudtrail:ListPublicKeys` to the reader role (`ReaderPolicy` regenerates with it); the digest
+    objects are under the log prefix `TrailReaderPolicy` already grants. A trail must keep log file
+    validation on (and `trail_arn` set) for its files to count at full confidence.
   - **Not here.** CloudTrail Lake and EventBridge (near-real-time denials) are not ingested yet;
     how much a gap weighs is #645.
 - **Tests** use `internal/aws/awstest` (test-only): `Replay` serves recorded responses from

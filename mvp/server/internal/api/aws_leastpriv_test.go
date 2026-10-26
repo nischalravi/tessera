@@ -44,6 +44,12 @@ func seedUsage(t *testing.T, c awsClient, s3 string, gaps ...*store.AWSUsageGap)
 // newAWSEvalDated is newAWSEval with the estate's alice created on the given date.
 func newAWSEvalDated(t *testing.T, create string) awsClient {
 	t.Helper()
+	return newAWSEvalFor(t, create, "")
+}
+
+// newAWSEvalFor is newAWSEvalDated with the snapshot collected by the given connector ("": none).
+func newAWSEvalFor(t *testing.T, create, connector string) awsClient {
+	t.Helper()
 	c := newRD(t, withAWSCatalog)
 	snap, err := awstest.Estate()
 	if err != nil {
@@ -55,7 +61,7 @@ func newAWSEvalDated(t *testing.T, create string) awsClient {
 		t.Fatal(err)
 	}
 	err = c.st.DB.InTenant(context.Background(), c.st.Tenant, func(tx *store.TenantTx) error {
-		_, err := awsorg.Persist(tx, col, awsorg.PersistInput{Source: store.AWSSourceConnector, CatalogVersion: "awstest-1"})
+		_, err := awsorg.Persist(tx, col, awsorg.PersistInput{Source: store.AWSSourceConnector, ConnectorID: connector, CatalogVersion: "awstest-1"})
 		return err
 	})
 	if err != nil {
@@ -155,5 +161,43 @@ func TestAWSLeastPrivRefusesBadInput(t *testing.T) {
 		if rec := c.do("GET", tc.path, ""); rec.Code != tc.want {
 			t.Errorf("%s: %d, want %d: %.200s", name, rec.Code, tc.want, rec.Body.String())
 		}
+	}
+}
+
+// The usage evidence is the snapshot's own connector's (issue #688). Another connector of the tenant whose logs
+// cover the window and hold no rows for the principal must not be able to rate a used permission as high-confidence
+// unused: asking for it is refused, and the snapshot's own connector (named or implied) answers as before.
+func TestAWSLeastPrivEvidenceIsTheSnapshotsConnector(t *testing.T) {
+	c := newAWSEvalFor(t, "2020-01-01T00:00:00Z", "conn-1")
+	seedUsage(t, c, store.AWSDataEventsEnabled) // conn-1: alice used s3:ListBucket every third day
+	now := testkit.Now.UTC()
+	if err := c.st.DB.InTenant(context.Background(), c.st.Tenant, func(tx *store.TenantTx) error {
+		return tx.PutAWSUsageState(&store.AWSUsageState{ConnectorID: "conn-2", Source: store.AWSUsageCloudTrail,
+			CoveredFrom: now.AddDate(0, 0, -120).Format("2006-01-02"), CoveredTo: now.Format("2006-01-02"),
+			S3DataEvents: store.AWSDataEventsEnabled, UpdatedAt: now})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	base := "/api/aws/principals/" + awstest.EstateAlice + "/least-privilege?limit=500"
+	for name, tc := range map[string]struct {
+		query string
+		want  int
+	}{
+		"the snapshot's connector, implied": {"", 200},
+		"the snapshot's connector, named":   {"&connector=conn-1", 200},
+		"another connector of the tenant":   {"&connector=conn-2", 422},
+		"a connector that does not exist":   {"&connector=conn-9", 422},
+	} {
+		rec := c.do("GET", base+tc.query, "")
+		if rec.Code != tc.want {
+			t.Errorf("%s: %d, want %d: %.200s", name, rec.Code, tc.want, rec.Body.String())
+		}
+		if tc.want == 422 && !strings.Contains(rec.Body.String(), "connector_mismatch") {
+			t.Errorf("%s: %.200s", name, rec.Body.String())
+		}
+	}
+	items := lpItems(t, c.get(base, 200))
+	if lb := items["s3:ListBucket"]; lb != nil && lb["used"] != true {
+		t.Errorf("ListBucket under the snapshot's connector = %v", lb)
 	}
 }

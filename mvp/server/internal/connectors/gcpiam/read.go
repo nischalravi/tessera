@@ -299,8 +299,8 @@ func unreadable(err error) bool {
 
 // Read lists the resources, reads each policy, the bound roles and the service accounts of the
 // projects. A resource whose policy cannot be read (403, 404) is skipped and the snapshot is flagged
-// Partial (today the ingest deletion guard holds back removal of identities and account status only,
-// not permissions or edges); none readable is an error. A project whose service accounts
+// Partial (the ingest deletion guard holds back removal of identities and account status, and edge
+// pruning, issue #577, leaves the edges of the unread resources alone); none readable is an error. A project whose service accounts
 // cannot be listed (IAM API off, no permission) keeps the service accounts its policies name.
 func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 	res, err := c.Resources(ctx)
@@ -481,7 +481,11 @@ func parseMember(m string) (member, bool) {
 }
 
 func build(s *Snapshot) *connectors.DiscoveryResult {
-	res := &connectors.DiscoveryResult{System: System, Partial: s.Partial}
+	res := &connectors.DiscoveryResult{System: System, Partial: s.Partial, EdgeSnapshotOf: []string{System}}
+	for n := range s.Policies { // a resource whose policy was read has all its bindings
+		res.EdgeScopesRead = append(res.EdgeScopesRead, n)
+	}
+	sort.Strings(res.EdgeScopesRead)
 	for _, r := range s.Resources {
 		name := r.DisplayName
 		if name == "" {

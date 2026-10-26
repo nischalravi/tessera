@@ -36,19 +36,22 @@ func trailConfig() *CloudTrailConfig {
 type fakeBucket struct {
 	re *awsreplay.Replay
 
-	mu       sync.Mutex
-	objects  map[string][]byte
-	sizes    map[string]int64 // a listed size different from the object's
-	status   map[string]int   // key -> status of its GET (403 ...)
-	listErr  int              // status of every list when set
-	listDeny map[string]int   // prefix substring -> status of the lists under it
-	gets     []string
-	lists    []string
-	bad      []string
+	mu         sync.Mutex
+	objects    map[string][]byte
+	sizes      map[string]int64 // a listed size different from the object's
+	status     map[string]int   // key -> status of its GET (403 ...)
+	trailCalls int
+	trailMode  string            // GetTrail: "" validation off, "on", "error"
+	sigs       map[string]string // key -> x-amz-meta-signature of a digest
+	listErr    int               // status of every list when set
+	listDeny   map[string]int    // prefix substring -> status of the lists under it
+	gets       []string
+	lists      []string
+	bad        []string
 }
 
 func newFakeBucket(re *awsreplay.Replay) *fakeBucket {
-	return &fakeBucket{re: re, objects: map[string][]byte{}, sizes: map[string]int64{}, status: map[string]int{}}
+	return &fakeBucket{re: re, objects: map[string][]byte{}, sigs: map[string]string{}, sizes: map[string]int64{}, status: map[string]int{}}
 }
 
 func (f *fakeBucket) put(key string, b []byte) { f.objects[key] = b }
@@ -60,6 +63,22 @@ func (f *fakeBucket) getCount() int {
 }
 
 func (f *fakeBucket) Do(req *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".GetTrail") {
+		f.mu.Lock()
+		mode := f.trailMode
+		f.trailCalls++
+		f.mu.Unlock()
+		resp := func(status int, body string) (*http.Response, error) {
+			return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+		}
+		switch mode {
+		case "on":
+			return resp(200, `{"Trail":{"Name":"org-trail","LogFileValidationEnabled":true}}`)
+		case "error":
+			return resp(400, `{"__type":"AccessDeniedException","message":"denied"}`)
+		}
+		return resp(200, `{"Trail":{"Name":"org-trail","LogFileValidationEnabled":false}}`)
+	}
 	if req.URL.Host != trailBucket+".s3.us-east-1.amazonaws.com" {
 		return f.re.Do(req)
 	}
@@ -99,7 +118,11 @@ func (f *fakeBucket) Do(req *http.Request) (*http.Response, error) {
 	if !ok {
 		return respond(404, []byte("<Error><Code>NoSuchKey</Code><Message>no</Message></Error>"))
 	}
-	return respond(200, b)
+	resp, _ := respond(200, b)
+	if sig, ok := f.sigs[key]; ok {
+		resp.Header.Set("X-Amz-Meta-Signature", sig)
+	}
+	return resp, nil
 }
 
 type listXML struct {
