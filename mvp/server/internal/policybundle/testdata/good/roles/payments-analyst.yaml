@@ -1,0 +1,7 @@
+schema: tessera.role/v1
+key: payments-analyst
+name: Payments analyst
+owner: emp-1042
+risk: medium
+requestable: true
+entitlements: [okta:payments-ro, aws:PaymentsReadOnly]

@@ -20,6 +20,7 @@ import (
 var pureDirs = []string{
 	"internal/aws/eval",
 	"internal/cedarx",
+	"internal/policybundle",
 	"internal/aws/glob",
 	"internal/aws/index",
 	"internal/aws/model",

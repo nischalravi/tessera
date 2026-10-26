@@ -1,0 +1,25 @@
+schema: tessera.test/v1
+name: payments analyst birthright
+
+entities:
+  - uid: {type: Tessera::Identity, id: alice}
+    parents: []
+    attrs: {type: human, status: active, department: finance, created_days: 400, attrs: {cost_center: "4410"}}
+  - uid: {type: Tessera::Identity, id: bob}
+    parents: []
+    attrs: {type: human, status: active, department: sales, created_days: 12, attrs: {}}
+  - uid: {type: Tessera::Role, id: payments-analyst}
+    parents: []
+    attrs: {key: payments-analyst, name: Payments analyst, risk: medium, requestable: true, entitlements: []}
+cases:
+  - name: finance employee in cost center 4410 gets the role
+    principal: Tessera::Identity::"alice"
+    action: birthright
+    resource: Tessera::Role::"payments-analyst"
+    expect: allow
+    by: [payments-analyst-birthright]
+  - name: sales employee does not
+    principal: Tessera::Identity::"bob"
+    action: birthright
+    resource: Tessera::Role::"payments-analyst"
+    expect: deny

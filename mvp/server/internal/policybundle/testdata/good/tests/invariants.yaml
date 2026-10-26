@@ -1,0 +1,47 @@
+schema: tessera.test/v1
+name: invariants against a fixture snapshot
+entities:
+  - uid: {type: Tessera::Identity, id: alice}
+    parents: []
+    attrs: {type: human, status: active, created_days: 400, attrs: {}}
+  - uid: {type: Tessera::Identity, id: gone}
+    parents: []
+    attrs: {type: human, status: terminated, created_days: 900, attrs: {}}
+  - uid: {type: Tessera::Identity, id: svc-batch}
+    parents: []
+    attrs: {type: service, status: active, created_days: 30, attrs: {}}
+  - uid: {type: Tessera::Resource, id: "aws:prod-db"}
+    parents: []
+    attrs: {system: aws, environment: prod, tags: [], privileged: true}
+  - uid: {type: Tessera::Resource, id: "aws:dev-db"}
+    parents: []
+    attrs: {system: aws, environment: dev, tags: [], privileged: true}
+  - uid: {type: Tessera::Credential, id: key-1}
+    parents: []
+    attrs: {kind: api_key, age_days: 120, holder: {__entity: {type: Tessera::Identity, id: svc-batch}}}
+snapshot:
+  facts:
+    - principal: Tessera::Identity::"alice"
+      action: reach
+      resource: Tessera::Resource::"aws:prod-db"
+      context: {action: "rds:*", action_class: admin, system: aws, standing: true, via_jit: false, fidelity: EXACT}
+    - principal: Tessera::Identity::"alice"
+      action: reach
+      resource: Tessera::Resource::"aws:dev-db"
+      context: {action: "rds:*", action_class: admin, system: aws, standing: true, via_jit: false, fidelity: EXACT}
+    - principal: Tessera::Identity::"gone"
+      action: reach
+      resource: Tessera::Resource::"aws:dev-db"
+      context: {action: "rds:Describe*", action_class: read, system: aws, standing: true, via_jit: false, fidelity: APPROXIMATE}
+    - principal: Tessera::Identity::"svc-batch"
+      action: exist
+      resource: Tessera::Resource::"aws:dev-db"
+    - principal: Tessera::Identity::"svc-batch"
+      action: hold_credential
+      resource: Tessera::Credential::"key-1"
+  violations:
+    - {invariant: no-standing-prod, principal: 'Tessera::Identity::"alice"', action: reach, resource: 'Tessera::Resource::"aws:prod-db"'}
+    - {invariant: nhi-ownership, principal: 'Tessera::Identity::"svc-batch"', action: exist, resource: 'Tessera::Resource::"aws:dev-db"'}
+    - {invariant: secret-max-age, principal: 'Tessera::Identity::"svc-batch"', action: hold_credential, resource: 'Tessera::Credential::"key-1"'}
+  findings:
+    - {invariant: terminated-with-access, principal: 'Tessera::Identity::"gone"', action: reach, resource: 'Tessera::Resource::"aws:dev-db"'}

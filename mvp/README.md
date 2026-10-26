@@ -6784,3 +6784,28 @@ parse and type-check. `Check` refuses, by a linear lexical scan before cedar-go 
 and more than 10,000 entities are refused after. Tests: `go test ./internal/cedarx` (table tests and four fuzz targets) and
 `go test -run TestCedar_ ./internal/groups/policygroups` (differential test of the groups fragment parser against cedar-go;
 the places where the fragment is wider than Cedar are pinned there).
+
+## Policy bundle and offline CLI (`internal/policybundle`, AC-2)
+
+`tessera policy` checks an access-as-code repository (`docs/design/access-as-code-repo.md` sections 3 and 4) with no tenant,
+credential, network or database; run it in the checkout or pass `-dir`:
+
+```
+tessera policy validate [-dir .] [-attrs a,b]   load and validate the whole bundle
+tessera policy test     [-dir .] [-attrs a,b]   validate, then run tests/*.yaml
+tessera policy schema   [-attrs a,b]            print the generated Cedar schema (commit it as schema/tessera.cedarschema)
+```
+
+Exit status: 0 ok, 1 findings or failing tests, 2 usage, an unreadable directory, a symbolic link or a file over the limits.
+`validate` reads `tessera.yaml`, `schema/tessera.cedarschema` (else the generated schema, with `-attrs` as the identity attribute
+names), `roles/` (`tessera.role/v1`), `jit/` (`tessera.jit/v1`), `sod/` (`tessera.sod/v1`, the server's format), and the Cedar
+folders `birthright/` (permit, `@role`), `agents/` (permit, `@agent` or `@blueprint`) and `invariants/` (forbid, `@severity`); every
+policy needs a unique `@id`. Cedar is type-checked against the schema under the `cedarx` limits; the other folders (`groups/`, `.git`)
+are not read. The limits are 256 KiB per file, 4 MiB and 2,000 files per bundle.
+A test file (`tessera.test/v1`) has `entities` (Cedar entity JSON; the bundle's roles and eligibilities are in scope), `cases`
+(`principal`, `action`, `resource`, `context`, `expect: allow|deny`, optional `by: [@id]`, `against: birthright|agents|invariants`) and a
+`snapshot` of facts with the exact `violations` and `findings` expected: a `reach` fact whose `fidelity` is not `EXACT` is a finding,
+never a violation. The loader is pure (`internal/archtest` `TestPolicyBundleIsOffline`); an example repository is
+`server/internal/policybundle/testdata/good`. Tests: `go test ./internal/policybundle ./cmd/tessera -run 'Policy|Load|Run'`
+(golden CLI output in `cmd/tessera/testdata/policy`, refresh with `-update-policy-golden`) and `go test ./internal/policybundle
+-fuzz FuzzLoad`.

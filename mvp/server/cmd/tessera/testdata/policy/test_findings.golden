@@ -1,0 +1,3 @@
+invariants/bad.cedar: validation: for policy `policy0`, attribute `nope` on entity type `Tessera::Identity` not found
+for policy `policy0`, attribute `nope` on entity type `Tessera::Agent` not found
+error: policy test: 1 finding(s)
