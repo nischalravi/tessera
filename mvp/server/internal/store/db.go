@@ -480,6 +480,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	if err := d.upgradeProvTargetKinds(ctx); err != nil {
 		return err
 	}
+	if err := d.upgradeSigningKeyPurposes(ctx); err != nil {
+		return err
+	}
 	if err := d.upgradeAgentJobs(ctx); err != nil {
 		return err
 	}
@@ -542,6 +545,40 @@ func (d *DB) upgradeAgentJobs(ctx context.Context) error {
 		return fmt.Errorf("store: upgrade agent_jobs: %w", err)
 	}
 	return nil
+}
+
+// upgradeSigningKeyPurposes lets a SQLite database created before the aws_federation
+// key purpose (issue #676) take it. CREATE TABLE IF NOT EXISTS cannot change a CHECK and
+// the table holds sealed private keys that must survive, so it is rebuilt: the new table is
+// made from the old definition with the wider list, the rows are copied, the old table (its
+// indexes are recreated by the schema run) is dropped and the new one takes its name.
+// Postgres does this in migration 0934.
+func (d *DB) upgradeSigningKeyPurposes(ctx context.Context) error {
+	const old = "CHECK (purpose IN ('access_token','idp_client_auth'))"
+	const wider = "CHECK (purpose IN ('access_token','idp_client_auth','aws_federation'))"
+	var ddl string
+	err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tenant_signing_keys'`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !strings.Contains(ddl, old)) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	newDDL := strings.Replace(strings.Replace(ddl, old, wider, 1), "tenant_signing_keys", "tenant_signing_keys__new", 1)
+	for _, q := range []string{newDDL,
+		"INSERT INTO tenant_signing_keys__new SELECT * FROM tenant_signing_keys",
+		"DROP TABLE tenant_signing_keys",
+		"ALTER TABLE tenant_signing_keys__new RENAME TO tenant_signing_keys"} {
+		if _, err := tx.ExecContext(ctx, q); err != nil { // #nosec G202 -- fixed statements and the table's own stored definition
+			return fmt.Errorf("store: upgrade tenant_signing_keys: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // upgradeLoginTxnPurpose lets a SQLite database created before the 'test' and 'claim'

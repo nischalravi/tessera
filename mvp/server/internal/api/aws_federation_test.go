@@ -120,6 +120,23 @@ func TestAWSFederation_PublicDocuments(t *testing.T) {
 		}
 	}
 
+	// the AWS JWKS publishes the aws_federation keys only, never the API's access_token keys (#676)
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		var access []*store.TenantSigningKey
+		if err := f.DB.ReadTenant(context.Background(), tn.ID, func(c *store.TenantTx) (err error) {
+			access, err = c.SigningKeys(store.KeyPurposeAccessToken)
+			return err
+		}); err != nil || len(access) == 0 {
+			t.Fatalf("access_token keys: %v (%d)", err, len(access))
+		}
+		body := get("/t/" + tn.Slug + "/aws/.well-known/jwks.json").Body.String()
+		for _, k := range access {
+			if strings.Contains(body, k.KID) {
+				t.Errorf("%s: the AWS JWKS publishes access_token key %s", tn.Slug, k.KID)
+			}
+		}
+	}
+
 	// unknown tenants and the platform's reserved slug answer 404, with no detail
 	for _, slug := range []string{"nobody", "_platform", "Bad_Slug"} {
 		for _, p := range []string{"openid-configuration", "jwks.json"} {

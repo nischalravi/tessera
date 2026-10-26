@@ -65,7 +65,7 @@ func (e *fedEnv) jwks(t *testing.T, tn storetest.Tenant) *jose.JSONWebKeySet {
 	t.Helper()
 	var set *jose.JSONWebKeySet
 	if err := e.f.DB.ReadTenant(context.Background(), tn.ID, func(c *store.TenantTx) (err error) {
-		set, err = keys.JWKSFor(c, store.KeyPurposeAccessToken, testNow, nil)
+		set, err = keys.JWKSFor(c, store.KeyPurposeAWSFederation, testNow, nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)

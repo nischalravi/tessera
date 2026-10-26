@@ -7,7 +7,7 @@
 CREATE TABLE IF NOT EXISTS tenant_signing_keys (
   kid TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
-  purpose TEXT NOT NULL CHECK (purpose IN ('access_token','idp_client_auth')),
+  purpose TEXT NOT NULL CHECK (purpose IN ('access_token','idp_client_auth','aws_federation')),
   alg TEXT NOT NULL DEFAULT 'ES256' CHECK (alg = 'ES256'),
   public_jwk TEXT NOT NULL,
   private_key_enc BLOB NOT NULL,
