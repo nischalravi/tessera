@@ -2432,6 +2432,41 @@ CREATE POLICY tenant_isolation ON policy_versions
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE lp_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lp_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON lp_settings;
+CREATE POLICY tenant_isolation ON lp_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE lp_revocations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lp_revocations FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON lp_revocations;
+CREATE POLICY tenant_isolation ON lp_revocations
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE lp_revocation_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lp_revocation_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON lp_revocation_events;
+CREATE POLICY tenant_isolation ON lp_revocation_events
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE lp_protected ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lp_protected FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON lp_protected;
+CREATE POLICY tenant_isolation ON lp_protected
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE lp_exemptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lp_exemptions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON lp_exemptions;
+CREATE POLICY tenant_isolation ON lp_exemptions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN
