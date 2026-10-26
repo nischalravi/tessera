@@ -5,6 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
+	"sort"
+	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -26,24 +32,81 @@ type provWriteBackPayload struct {
 }
 
 func init() {
-	changeTypes[TypeProvWriteBackEnable] = typed(TypeProvWriteBackEnable, nil, planProvWriteBack, applyProvWriteBack,
-		func(e *env, v *provWriteBackPayload) string {
-			return "Enable write-back on provisioning target " + e.provTargetName(v.ConnectionID)
-		})
+	t := typed(TypeProvWriteBackEnable, nil, planProvWriteBack, applyProvWriteBack,
+		func(e *env, v *provWriteBackPayload) string { return e.provSummary(v.ConnectionID) })
+	// one open request per target: a second one while the first waits would only approve the same thing twice
+	t.afterSubmit = func(e *env, ch *store.AdminChange, v any) error {
+		open, err := e.tx.OpenAdminChanges()
+		if err != nil {
+			return err
+		}
+		for _, o := range open {
+			if o.ID != ch.ID && o.Type == TypeProvWriteBackEnable && o.TargetID == ch.TargetID {
+				return conflict("invalid_state", "a write-back request for this target is already waiting for approval")
+			}
+		}
+		return nil
+	}
+	changeTypes[TypeProvWriteBackEnable] = t
+}
+
+// provSummary tells the approver what they are enabling: the connection, kind, origin, what happens to deprovisioned
+// accounts and what the target may write.
+func (e *env) provSummary(connectionID string) string {
+	name := e.provTargetName(connectionID)
+	t, err := e.tx.ProvTarget(connectionID)
+	if err != nil {
+		return "Enable write-back on provisioning target " + name
+	}
+	var st provision.Settings
+	_ = json.Unmarshal([]byte(t.Settings), &st)
+	scope := "the target's standard user and group operations"
+	switch {
+	case st.LDAP != nil:
+		scope = "entries under " + strings.Join(st.LDAP.WriteScope, ", ")
+	case st.SQL != nil:
+		scope = fmt.Sprintf("database %s on %s (%s mode)", st.SQL.Database, st.SQL.Host, st.SQL.Mode)
+	case len(st.REST) > 0:
+		var spec struct {
+			Writes map[string]json.RawMessage `json:"writes"`
+		}
+		if json.Unmarshal(st.REST, &spec) == nil {
+			ops := make([]string, 0, len(spec.Writes))
+			for k := range spec.Writes {
+				ops = append(ops, k)
+			}
+			sort.Strings(ops)
+			scope = "REST operations " + strings.Join(ops, ", ")
+		}
+	}
+	onDep := "disable"
+	if st.OnDeprovision == "delete" {
+		onDep = "delete"
+	}
+	origin := t.BaseURL
+	if u, err := url.Parse(t.BaseURL); err == nil && u.Host != "" {
+		origin = u.Scheme + "://" + u.Host
+	}
+	return fmt.Sprintf("Enable write-back on provisioning target %s (kind %s, origin %s, deprovisioned accounts: %s, may write: %s)",
+		name, t.Kind, origin, onDep, scope)
 }
 
 // ProvTargetConfigHash fingerprints what a write-back approval covers: the target's kind, origin, settings
 // (without the informational discovery record) and credential version. It holds no secret.
 func ProvTargetConfigHash(t *store.ProvTarget) string {
 	var st provision.Settings
-	_ = json.Unmarshal([]byte(t.Settings), &st)
-	st.Discovery = nil
-	b, _ := json.Marshal(st)
+	settings := t.Settings // settings that do not parse are hashed as stored, so any change still shows
+	if json.Unmarshal([]byte(t.Settings), &st) == nil {
+		st.Discovery = nil
+		if b, err := json.Marshal(st); err == nil {
+			settings = string(b)
+		}
+	}
 	ver := ""
 	if t.CredentialVer != nil {
 		ver = *t.CredentialVer
 	}
-	h := sha256.Sum256([]byte(t.Kind + "\x00" + t.BaseURL + "\x00" + string(b) + "\x00" + ver))
+	h := sha256.Sum256([]byte(t.Kind + "\x00" + t.BaseURL + "\x00" + settings + "\x00" + ver))
 	return hex.EncodeToString(h[:])
 }
 
@@ -55,11 +118,11 @@ func (e *env) provTargetName(connectionID string) string {
 }
 
 func planProvWriteBack(e *env, v *provWriteBackPayload) (plan, error) {
-	if len(v.ConnectionID) != 36 {
-		return plan{}, invalid("connection_id is required")
+	if _, err := uuid.Parse(v.ConnectionID); err != nil || len(v.ConnectionID) != 36 {
+		return plan{}, invalid("connection_id must be the id of the connection")
 	}
-	if len(v.ConfigHash) != 64 {
-		return plan{}, invalid("config_hash is required: the config_hash of the target you reviewed")
+	if raw, err := hex.DecodeString(v.ConfigHash); err != nil || len(raw) != sha256.Size {
+		return plan{}, invalid("config_hash is required: the 64 hex characters of the config_hash of the target you reviewed")
 	}
 	t, err := e.tx.ProvTarget(v.ConnectionID)
 	if errors.Is(err, store.ErrNotFound) {

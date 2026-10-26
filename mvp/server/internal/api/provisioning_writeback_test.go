@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -192,6 +193,7 @@ func TestProvisioning_WriteBackRequestIsBoundToWhatWasReviewed(t *testing.T) {
 		}
 	}
 	// a request for a target whose write-back is already on is refused
+	e.c.json("POST", "/api/admin/change-requests/"+id+"/cancel", "", 200) // the stale one still waits
 	cur := e.view()
 	id, hash = e.request(asString(cur["config_hash"]))
 	e.approve(e.other, id, hash, 200)
@@ -248,8 +250,14 @@ func TestProvisioning_WriteBackWideningNeedsSecondAdmin(t *testing.T) {
 func TestProvisioning_RESTWriteBackOperations(t *testing.T) {
 	e, closeRest := newWBEnv(t)
 	defer closeRest()
+	credSent := false // the credential goes with the first save only: a new one on a writing target is a widening
 	rest := func(spec string) string {
-		return `{"kind":"rest","base_url":"` + e.restURL + `","rest":` + spec + `,"token":"sec-1","write_back":true}`
+		tok := `,"token":"sec-1"`
+		if credSent {
+			tok = ""
+		}
+		credSent = true
+		return `{"kind":"rest","base_url":"` + e.restURL + `","rest":` + spec + tok + `,"write_back":true}`
 	}
 	full := strings.Replace(restSpec, "%s", e.restURL, 1)
 	narrow := strings.Replace(full, `,
@@ -270,5 +278,69 @@ func TestProvisioning_RESTWriteBackOperations(t *testing.T) {
 	}
 	if e.view()["write_back"] != true {
 		t.Error("narrowing turned write-back off")
+	}
+}
+
+func TestProvisioning_WriteBackCredentialAndStaleRequests(t *testing.T) {
+	e, closeRest := newWBEnv(t)
+	defer closeRest()
+	scim := func(wb bool, token string) string {
+		tok := ""
+		if token != "" {
+			tok = `,"token":"` + token + `"`
+		}
+		return fmt.Sprintf(`{"kind":"scim","base_url":"https://scim.example/scim/v2","write_back":%t%s}`, wb, tok)
+	}
+	put := func(body string) *httptest.ResponseRecorder {
+		return e.c.do("PUT", "/api/provisioning/targets/"+e.conn, body)
+	}
+	// a new credential on a target that is not writing is allowed
+	if r := put(scim(false, "tok-1")); r.Code != 200 {
+		t.Fatalf("credential on a non-writing target: %d %s", r.Code, r.Body)
+	}
+	v := e.c.json("PUT", "/api/provisioning/targets/"+e.conn, scim(true, "tok-2"), 200).(map[string]any)
+	if v["write_back_pending"] != true {
+		t.Fatalf("pending = %v", v)
+	}
+	id, hash := e.request(asString(v["config_hash"]))
+	// a second request while one waits is refused
+	body := fmt.Sprintf(`{"type":%q,"payload":{"connection_id":%q,"config_hash":%q}}`, admin.TypeProvWriteBackEnable, e.conn, asString(v["config_hash"]))
+	if r := e.c.do("POST", "/api/admin/change-requests", body); r.Code != http.StatusConflict || !strings.Contains(r.Body.String(), "invalid_state") {
+		t.Errorf("second request: %d %s", r.Code, r.Body)
+	}
+	// a credential-only edit between request and approval makes the request stale
+	if r := put(scim(false, "tok-3")); r.Code != 200 {
+		t.Fatalf("edit: %d %s", r.Code, r.Body)
+	}
+	if r := e.other.do("POST", "/api/admin/change-requests/"+id+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, hash)); r.Code != http.StatusConflict ||
+		!strings.Contains(r.Body.String(), "stale_target") {
+		t.Fatalf("stale approval: %d %s", r.Code, r.Body)
+	}
+	if e.view()["write_back"] != false {
+		t.Fatal("a stale request enabled write-back")
+	}
+	// a target deleted before approval: nothing to enable
+	e.c.json("POST", "/api/admin/change-requests/"+id+"/cancel", "", 200)
+	v = e.c.json("PUT", "/api/provisioning/targets/"+e.conn, scim(true, ""), 200).(map[string]any)
+	id, hash = e.request(asString(v["config_hash"]))
+	e.c.json("DELETE", "/api/provisioning/targets/"+e.conn, "", 200)
+	if r := e.other.do("POST", "/api/admin/change-requests/"+id+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, hash)); r.Code != http.StatusNotFound {
+		t.Errorf("approving for a deleted target: %d %s", r.Code, r.Body)
+	}
+	e.c.json("POST", "/api/admin/change-requests/"+id+"/cancel", "", 200)
+	// a new credential on a target that is writing needs the two-admin route
+	e.c.json("PUT", "/api/provisioning/targets/"+e.conn, scim(false, "tok-4"), 200)
+	v = e.c.json("PUT", "/api/provisioning/targets/"+e.conn, scim(true, ""), 200).(map[string]any)
+	id, hash = e.request(asString(v["config_hash"]))
+	e.approve(e.other, id, hash, 200)
+	if r := put(scim(true, "tok-5")); r.Code != http.StatusConflict || !strings.Contains(r.Body.String(), "two_admin_change_required") {
+		t.Errorf("credential change on a writing target: %d %s", r.Code, r.Body)
+	}
+	if r := put(scim(true, "")); r.Code != 200 {
+		t.Errorf("an edit that changes nothing: %d %s", r.Code, r.Body)
+	}
+	bad := `{"type":"` + admin.TypeProvWriteBackEnable + `","payload":{"connection_id":"not-a-uuid-not-a-uuid-not-a-uuid-xxxx","config_hash":"` + strings.Repeat("z", 64) + `"}}`
+	if r := e.c.do("POST", "/api/admin/change-requests", bad); r.Code != 422 {
+		t.Errorf("malformed ids: %d %s", r.Code, r.Body)
 	}
 }

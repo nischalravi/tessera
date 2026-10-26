@@ -616,9 +616,9 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	}
 	// Enabling write-back, or widening what a target that already writes may write, is a two-admin change
 	// (issue #569). Turning it off, or narrowing, stays this one admin's call.
-	if in.WriteBack && existing && old.WriteBack && widensWrites(old, t, st) {
+	if in.WriteBack && existing && old.WriteBack && (in.Token != "" || widensWrites(old, t, st)) {
 		return 0, nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
-			Msg: "this widens what a write-back target may write (a new destination, operation, delete or scope): turn write-back off, make the edit, and " +
+			Msg: "this widens what a write-back target may write (a new destination, credential, operation, delete or scope): turn write-back off, make the edit, and " +
 				"enable write-back again through a change request of type " + admin.TypeProvWriteBackEnable + " for a different admin to approve",
 			Extra: map[string]any{"change_type": admin.TypeProvWriteBackEnable}}
 	}
@@ -664,7 +664,7 @@ func widensWrites(old, next *store.ProvTarget, ns provision.Settings) bool {
 	if old.Kind != next.Kind || targetOrigin(old.BaseURL) != targetOrigin(next.BaseURL) {
 		return true
 	}
-	if (ns.OnDeprovision == "delete" && os.OnDeprovision != "delete") || ns.Dialect != os.Dialect || ns.Preset != os.Preset ||
+	if (ns.OnDeprovision == "delete" && os.OnDeprovision != "delete") || ns.Dialect != os.Dialect || ns.Fault != os.Fault || ns.Preset != os.Preset ||
 		ns.APIRoot != os.APIRoot || ns.AgentID != os.AgentID {
 		return true
 	}
