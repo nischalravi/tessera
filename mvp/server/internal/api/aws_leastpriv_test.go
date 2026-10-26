@@ -1,0 +1,159 @@
+package api
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/aws/awstest"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/awsorg"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
+)
+
+// seedUsage stores CloudTrail state, gaps and one used call for alice, as the
+// LP-1 ingest would.
+func seedUsage(t *testing.T, c awsClient, s3 string, gaps ...*store.AWSUsageGap) {
+	t.Helper()
+	now := testkit.Now.UTC()
+	dayAgo := func(n int) string { return now.AddDate(0, 0, -n).Format("2006-01-02") }
+	err := c.st.DB.InTenant(context.Background(), c.st.Tenant, func(tx *store.TenantTx) error {
+		if err := tx.PutAWSUsageState(&store.AWSUsageState{ConnectorID: "conn-1", Source: store.AWSUsageCloudTrail,
+			CoveredFrom: dayAgo(120), CoveredTo: dayAgo(0), S3DataEvents: s3, UpdatedAt: now}); err != nil {
+			return err
+		}
+		for _, g := range gaps {
+			g.ConnectorID, g.RecordedAt = "conn-1", now
+			if err := tx.PutAWSUsageGap(g); err != nil {
+				return err
+			}
+		}
+		for i := 0; i < 60; i += 3 {
+			if err := tx.SetAWSUsage(&store.AWSUsageDay{ConnectorID: "conn-1", PrincipalARN: awstest.EstateAlice, Action: "s3:ListBucket",
+				ResourceScope: "*", Day: dayAgo(i), Source: store.AWSUsageCloudTrail, Count: 1, LastSeen: now}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newAWSEvalDated is newAWSEval with the estate's alice created on the given date.
+func newAWSEvalDated(t *testing.T, create string) awsClient {
+	t.Helper()
+	c := newRD(t, withAWSCatalog)
+	snap, err := awstest.Estate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.Principals[awstest.EstateAlice].CreateDate = create
+	col := &awsorg.Collection{Snapshot: snap, AccountIDs: []string{awstest.EstateDev, awstest.EstateProd}}
+	if snap.ID, err = awsorg.ContentID(col); err != nil {
+		t.Fatal(err)
+	}
+	err = c.st.DB.InTenant(context.Background(), c.st.Tenant, func(tx *store.TenantTx) error {
+		_, err := awsorg.Persist(tx, col, awsorg.PersistInput{Source: store.AWSSourceConnector, CatalogVersion: "awstest-1"})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return awsClient{c, snap.ID}
+}
+
+func lpItems(t *testing.T, v map[string]any) map[string]map[string]any {
+	t.Helper()
+	out := map[string]map[string]any{}
+	for _, it := range v["items"].([]any) {
+		m := it.(map[string]any)
+		out[m["action"].(string)] = m
+	}
+	return out
+}
+
+func lpLevel(t *testing.T, items map[string]map[string]any, action string) string {
+	t.Helper()
+	it := items[action]
+	if it == nil {
+		t.Fatalf("%s is not in the answer", action)
+	}
+	return it["confidence"].(map[string]any)["level"].(string)
+}
+
+func TestAWSLeastPrivConfidence(t *testing.T) {
+	c := newAWSEvalDated(t, "2020-01-01T00:00:00Z")
+	base := "/api/aws/principals/" + awstest.EstateAlice + "/least-privilege?connector=conn-1&limit=500"
+	path := base
+
+	// nothing ingested: unknown, never high
+	items := lpItems(t, c.get(path, 200))
+	if items["s3:GetObject"]["used"] != false || lpLevel(t, items, "s3:GetObject") != "unknown" {
+		t.Fatalf("before ingest: %v", items["s3:GetObject"])
+	}
+
+	// data events off: object actions stay unknown, never high
+	seedUsage(t, c, store.AWSDataEventsDisabled)
+	items = lpItems(t, c.get(path, 200))
+	if got := lpLevel(t, items, "s3:GetObject"); got != "unknown" {
+		t.Errorf("GetObject with data events off = %v", got)
+	}
+	// the used management call is a used finding, not an unused one
+	if lb := items["s3:ListBucket"]; lb != nil && (lb["used"] != true || lb["last_used"] == nil) {
+		t.Errorf("ListBucket = %v", lb)
+	}
+
+	// data events on: the same permission can be high
+	seedUsage(t, c, store.AWSDataEventsEnabled)
+	items = lpItems(t, c.get(path, 200))
+	if got := lpLevel(t, items, "s3:GetObject"); got != "high" {
+		t.Errorf("GetObject with data events on = %v: %v", got, items["s3:GetObject"])
+	}
+
+	// without a creation date in the snapshot, the level is capped at medium
+	undated := newAWSEval(t, nil)
+	seedUsage(t, undated, store.AWSDataEventsEnabled)
+	items = lpItems(t, undated.get(base, 200))
+	if got := lpLevel(t, items, "s3:GetObject"); got != "medium" {
+		t.Errorf("no creation date = %v", got)
+	}
+
+	// a future digest gap (issue #680) lowers it to low with no schema change
+	seedUsage(t, c, store.AWSDataEventsEnabled, &store.AWSUsageGap{Source: store.AWSUsageCloudTrail, Ref: "s3://logs/x", Code: "digest_missing",
+		Day: testkit.Now.UTC().AddDate(0, 0, -3).Format("2006-01-02")})
+	items = lpItems(t, c.get(path, 200))
+	if got := lpLevel(t, items, "s3:GetObject"); got != "low" {
+		t.Errorf("digest gap = %v", got)
+	}
+
+	// a window longer than the logs is not high
+	items = lpItems(t, c.get(path+"&unused_days=300", 200))
+	if got := lpLevel(t, items, "s3:GetObject"); got == "high" {
+		t.Errorf("window longer than the logs = %v", got)
+	}
+}
+
+func TestAWSLeastPrivRefusesBadInput(t *testing.T) {
+	c := newAWSEval(t, nil)
+	base := "/api/aws/principals/" + awstest.EstateAlice + "/least-privilege"
+	for name, tc := range map[string]struct {
+		path string
+		want int
+	}{
+		"no connector, none on the snapshot": {base, 422},
+		"bad unused_days":                    {base + "?connector=c&unused_days=0", 422},
+		"huge unused_days":                   {base + "?connector=c&unused_days=9999", 422},
+		"supplied created is refused":        {base + "?connector=c&created=2000-01-01", 422},
+		"bad service":                        {base + "?connector=c&service=S3:x", 422},
+		"bad limit":                          {base + "?connector=c&limit=0", 422},
+		"control character in connector":     {base + "?connector=c%0A", 422},
+		"unknown principal":                  {"/api/aws/principals/arn:aws:iam::111111111111:user/nobody/least-privilege?connector=c", 404},
+		"unknown snapshot":                   {base + "?connector=c&snapshot=" + strings.Repeat("0", 64), 404},
+	} {
+		if rec := c.do("GET", tc.path, ""); rec.Code != tc.want {
+			t.Errorf("%s: %d, want %d: %.200s", name, rec.Code, tc.want, rec.Body.String())
+		}
+	}
+}

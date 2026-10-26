@@ -119,6 +119,7 @@ type xmlUser struct {
 	Path       string        `xml:"Path"`
 	UserName   string        `xml:"UserName"`
 	UserID     string        `xml:"UserId"`
+	CreateDate string        `xml:"CreateDate"`
 	ARN        string        `xml:"Arn"`
 	Groups     []string      `xml:"GroupList>member"`
 	Inline     []xmlInline   `xml:"UserPolicyList>member"`
@@ -140,6 +141,7 @@ type xmlRole struct {
 	Path       string        `xml:"Path"`
 	RoleName   string        `xml:"RoleName"`
 	RoleID     string        `xml:"RoleId"`
+	CreateDate string        `xml:"CreateDate"`
 	ARN        string        `xml:"Arn"`
 	Trust      string        `xml:"AssumeRolePolicyDocument"` // URL-encoded
 	Inline     []xmlInline   `xml:"RolePolicyList>member"`

@@ -40,6 +40,7 @@ func (s *Server) registerAWSRoutes() {
 	s.handle(G, "/api/aws/snapshots/{id}", read, need(auth.PermConnectionsRead), s.rd(s.getAWSSnapshot))
 	s.registerAWSCollectRoutes()
 	s.registerAWSEvalRoutes()
+	s.registerAWSLeastPrivRoutes()
 }
 
 func (s *Server) awsService() *awsorg.Service {
