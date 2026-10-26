@@ -185,6 +185,8 @@ GET    /api/aws/principals/{arn}/least-privilege     graph.read         -  # iss
 GET    /api/aws/resources/{arn}/who-can              graph.read         -  # issue #30
 GET    /api/aws/explanations/{id}                    graph.read         -  # issue #30
 POST   /api/aws/principals/{arn}/right-size          graph.read         -  # issue #659 (LP-3: read-only verified right-size)
+POST   /api/aws/principals/{arn}/right-size/apply    provisioning.manage STEP_UP_POLICY  # issue #660 (LP-4: queues the verified right-size on the AWS write target)
+POST   /api/aws/changes/{op_id}/restore              provisioning.manage STEP_UP_POLICY  # issue #660 (LP-4: queues the restore of a verified change)
 POST   /api/aws/simulate-policy-change               graph.read         -  # issue #30 (a comment post: connections.manage + STEP_UP_POLICY in the handler)
 GET    /api/aws/shadow                               connections.read   -  # issue #641
 PUT    /api/aws/shadow                               connections.manage STEP_UP_POLICY  # issue #641

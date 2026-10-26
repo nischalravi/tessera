@@ -95,6 +95,24 @@ func (f *Federation) Source(t tenancy.ID, connectorID string) TokenSource {
 // connector of another tenant, or of none, is never signed. Errors name no
 // token.
 func (f *Federation) Token(ctx context.Context, t tenancy.ID, connectorID string) (string, error) {
+	return f.sign(ctx, t, connectorID, Subject(t, connectorID))
+}
+
+// WriterSubject is the sub claim of a connector's writer token (issue #660, LP-4). It differs from Subject, so the
+// reader role's trust policy never accepts a writer token and the writer role's never accepts a reader token.
+func WriterSubject(t tenancy.ID, connectorID string) string {
+	return "tessera:tenant:" + t.String() + ":aws-writer:" + connectorID
+}
+
+// WriterSource is the TokenSource of the writer role of one connector of tenant t.
+func (f *Federation) WriterSource(t tenancy.ID, connectorID string) TokenSource {
+	return func(ctx context.Context) (string, error) {
+		return f.sign(ctx, t, connectorID, WriterSubject(t, connectorID))
+	}
+}
+
+// sign is Token for any subject.
+func (f *Federation) sign(ctx context.Context, t tenancy.ID, connectorID, subject string) (string, error) {
 	if f == nil || f.DB == nil || f.Sealer == nil || f.PublicURL == "" {
 		return "", errors.New("awsorg: federation is not configured")
 	}
@@ -124,7 +142,7 @@ func (f *Federation) Token(ctx context.Context, t tenancy.ID, connectorID string
 		return "", err
 	}
 	now := f.now().UTC()
-	tok, err := jwt.Signed(signer).Claims(webIdentityClaims{Issuer: IssuerURL(f.PublicURL, slug), Subject: Subject(t, connectorID),
+	tok, err := jwt.Signed(signer).Claims(webIdentityClaims{Issuer: IssuerURL(f.PublicURL, slug), Subject: subject,
 		Audience: FederationAudience, IssuedAt: now.Add(-tokenSkew).Unix(), NotBefore: now.Add(-tokenSkew).Unix(),
 		Expiry: now.Add(TokenTTL).Unix(), JTI: "awsfed_" + seal.RandomSecret(16)}).Serialize()
 	if err != nil {

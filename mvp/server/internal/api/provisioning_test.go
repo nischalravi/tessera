@@ -460,6 +460,7 @@ func TestIsolation_ProvisioningRoutes(t *testing.T) {
 		{"GET", "/api/provisioning/ops/%s", ""},
 		{"POST", "/api/provisioning/ops/%s/retry", ""},
 		{"POST", "/api/provisioning/ops/%s/cancel", ""},
+		{"POST", "/api/aws/changes/%s/restore", ""},
 		{"PUT", "/api/provisioning/targets/%s", `{"kind":"scim","base_url":"https://x.example"}`},
 		{"DELETE", "/api/provisioning/targets/%s", ""},
 	} {

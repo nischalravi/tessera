@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/awsorg"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldapwrite"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
@@ -101,6 +103,8 @@ type targetView struct {
 	LDAP *ldapwrite.Config `json:"ldap,omitempty"`
 	// Rest is a REST target's spec as saved (no base URL, no secret; issue #552).
 	Rest json.RawMessage `json:"rest,omitempty"`
+	// AWS is an aws target's connector and writer role (issue #660; it holds no credential).
+	AWS *provision.AWSSettings `json:"aws,omitempty"`
 	// Discovery is the last read of a SCIM target's ServiceProviderConfig and ResourceTypes (issue #542).
 	Discovery *provision.DiscoveryRecord `json:"discovery,omitempty"`
 	WriteBack bool                       `json:"write_back"`
@@ -119,7 +123,7 @@ func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, SQL: st.SQL, LDAP: st.LDAP, Discovery: st.Discovery, WriteBack: t.WriteBack, ConfigHash: admin.ProvTargetConfigHash(t), HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, SQL: st.SQL, LDAP: st.LDAP, AWS: st.AWS, Discovery: st.Discovery, WriteBack: t.WriteBack, ConfigHash: admin.ProvTargetConfigHash(t), HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -301,7 +305,12 @@ type targetInput struct {
 	SQL *sqldb.Config `json:"sql"`
 	// LDAP is the directory of an ldap or ad target (issue #586). The bind password is token.
 	LDAP *ldapwrite.Config `json:"ldap"`
+	// AWS is the connector and writer role of an aws target (issue #660). It has no token: the target signs in
+	// with the connector's federation.
+	AWS *provision.AWSSettings `json:"aws"`
 }
+
+var awsRoleNameRE = regexp.MustCompile(`^[A-Za-z0-9_+=,.@-]{1,64}$`)
 
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	var st provision.Settings
@@ -361,6 +370,24 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		}
 		in.BaseURL = "ldaps://" + net.JoinHostPort(strings.ToLower(cfg.Host), strconv.Itoa(cfg.Port))
 		st.LDAP = &cfg
+	case provision.KindAWS:
+		if in.AWS == nil || !idRE.MatchString(in.AWS.ConnectorID) {
+			return st, badRequest("invalid_aws", "aws.connector_id (the id of a federated AWS connector) is required for an aws target")
+		}
+		role := in.AWS.WriterRole
+		switch {
+		case role != "" && !awsRoleNameRE.MatchString(role):
+			return st, badRequest("invalid_aws", "aws.writer_role is not a valid IAM role name")
+		case in.Token != "":
+			return st, badRequest("invalid_credential", "an aws target holds no credential: it signs in with the connector's federation")
+		case in.Fault != "" || in.APIRoot != "" || in.Preset != "" || in.Dialect != "":
+			return st, badRequest("invalid_aws", "an aws target takes no dialect, preset, fault or api_root")
+		}
+		if role == awsorg.DefaultWriterRoleName {
+			role = ""
+		}
+		in.BaseURL = "aws://" + in.AWS.ConnectorID
+		st.AWS = &provision.AWSSettings{ConnectorID: in.AWS.ConnectorID, WriterRole: role}
 	case provision.KindFake:
 		if s.cfg.FakeTargetURL == "" {
 			return st, badRequest("fake_unavailable", "the fake target is available only in dev (TESSERA_DEV_FAKE_TARGET)")
@@ -374,7 +401,10 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 			st.Fault = in.Fault
 		}
 	default:
-		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle, sql, salesforce, servicenow, atlassian, ldap, ad or fake")
+		return st, badRequest("invalid_kind", "kind must be scim, okta, rest, cyberark, delinea, beyondtrust, sap, oracle, sql, salesforce, servicenow, atlassian, ldap, ad, aws or fake")
+	}
+	if in.AWS != nil && in.Kind != provision.KindAWS {
+		return st, badRequest("invalid_aws", "aws applies to aws targets only")
 	}
 	if in.Kind == provision.KindSalesforce {
 		if _, err := salesforce.CheckURL(in.BaseURL, s.sfRuntime()); err != nil {
@@ -401,7 +431,7 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		return st, badRequest("invalid_rest", "rest applies to REST targets only")
 	}
 	vault := slices.Contains(provision.PAMKinds, in.Kind) || slices.Contains(provision.ERPKinds, in.Kind) // a target with a path root and a user:secret credential
-	noDialect := vault || in.Kind == provision.KindSalesforce || in.Kind == provision.KindServiceNow || in.Kind == provision.KindAtlassian || in.Kind == provision.KindLDAP || in.Kind == provision.KindAD
+	noDialect := vault || in.Kind == provision.KindSalesforce || in.Kind == provision.KindServiceNow || in.Kind == provision.KindAtlassian || in.Kind == provision.KindLDAP || in.Kind == provision.KindAD || in.Kind == provision.KindAWS
 	switch {
 	case (in.Kind == provision.KindOkta || noDialect || in.Kind == provision.KindREST) && in.Dialect != "":
 		return st, badRequest("invalid_dialect", "dialect applies to SCIM targets only")
@@ -426,6 +456,8 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		switch {
 		case in.Kind == provision.KindFake:
 			return st, badRequest("invalid_agent", "the dev fake target cannot be reached through an agent")
+		case in.Kind == provision.KindAWS:
+			return st, badRequest("invalid_agent", "an aws target is reached with the connector's federation, not through an agent")
 		case !idRE.MatchString(in.AgentID):
 			return st, badRequest("invalid_agent", "agent_id is not a Directory Agent id")
 		case !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://"):
@@ -502,6 +534,18 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, notFoundErr("connection")
 	} else if err != nil {
 		return 0, nil, err
+	}
+	if in.Kind == provision.KindAWS {
+		// the connector must be this tenant's and federated: a stored key is never used for a change
+		k, err := c.AWSConnector(st.AWS.ConnectorID)
+		if errors.Is(err, store.ErrNotFound) {
+			return 0, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "invalid_aws", Msg: "aws.connector_id is not an AWS connector of this tenant"}
+		} else if err != nil {
+			return 0, nil, err
+		}
+		if cfg, err := awsorg.ParseConfig(k.Config); err != nil || cfg.Mode() != awsorg.AuthFederated {
+			return 0, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "invalid_aws", Msg: "only a federated AWS connector can write: recreate it as one"}
+		}
 	}
 	if in.AgentID != "" {
 		a, err := c.DirectoryAgent(in.AgentID)
@@ -668,7 +712,7 @@ func widensWrites(old, next *store.ProvTarget, ns provision.Settings) bool {
 		ns.APIRoot != os.APIRoot || ns.AgentID != os.AgentID {
 		return true
 	}
-	if !sameJSON(os.SQL, ns.SQL) || !sameJSON(os.LDAP, ns.LDAP) {
+	if !sameJSON(os.SQL, ns.SQL) || !sameJSON(os.LDAP, ns.LDAP) || !sameJSON(os.AWS, ns.AWS) {
 		return true
 	}
 	return !restNarrows(os.REST, ns.REST)
@@ -886,7 +930,7 @@ func (s *Server) listOps(r *http.Request, _ *params) (int, any, error) {
 	if f.Status != "" && !slices.Contains(provision.Statuses, f.Status) {
 		return 0, nil, badRequest("invalid_status", "status must be one of "+strings.Join(provision.Statuses, ", "))
 	}
-	if f.Kind != "" && !slices.Contains(target.Kinds, f.Kind) {
+	if f.Kind != "" && !slices.Contains(target.Kinds, f.Kind) && !target.IsAWSKind(f.Kind) {
 		return 0, nil, badRequest("invalid_kind", "unknown operation kind")
 	}
 	if f.ConnectionID != "" && !idRE.MatchString(f.ConnectionID) {

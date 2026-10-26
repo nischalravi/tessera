@@ -62,6 +62,13 @@ func (e *env) provSummary(connectionID string) string {
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	scope := "the target's standard user and group operations"
 	switch {
+	case st.AWS != nil:
+		role := st.AWS.WriterRole
+		if role == "" {
+			role = "TesseraWriter"
+		}
+		scope = "AWS changes through connector " + st.AWS.ConnectorID + " with the writer role " + role +
+			": detach and delete policies, new policy versions, group removals and Identity Center assignment deletions, and their restores"
 	case st.LDAP != nil:
 		scope = "entries under " + strings.Join(st.LDAP.WriteScope, ", ")
 	case st.SQL != nil:

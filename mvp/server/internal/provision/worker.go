@@ -69,6 +69,10 @@ const (
 	// is the bind password.
 	KindLDAP = "ldap"
 	KindAD   = "ad"
+	// KindAWS: changes of an AWS account's IAM and IAM Identity Center that take access away or put it back, written
+	// with a writer role and verified by re-reading with the reader role (issue #660, internal/connectors/awsorg
+	// WriteTarget). Settings.AWS names the connector it writes through; the target holds no credential.
+	KindAWS = "aws"
 )
 
 // ERPKinds are the ERP target kinds; the kind is the system's name in internal/connectors/erp.
@@ -107,9 +111,19 @@ type Settings struct {
 	// REST is the spec of a generic REST target (restgen.Spec as JSON). It holds no secret; the
 	// credential is the sealed token. REST targets only.
 	REST json.RawMessage `json:"rest,omitempty"`
+	// AWS is the connector and writer role of an aws target.
+	AWS *AWSSettings `json:"aws,omitempty"`
 	// Discovery is the last read of the target's ServiceProviderConfig and
 	// ResourceTypes (issue #542). It is informational and never gates provisioning.
 	Discovery *DiscoveryRecord `json:"discovery,omitempty"`
+}
+
+// AWSSettings are the settings of an aws target.
+type AWSSettings struct {
+	// ConnectorID is the AWS connector (federated) whose accounts, regions and reader role the target uses.
+	ConnectorID string `json:"connector_id"`
+	// WriterRole is the name of the writer role in each account ("" for awsorg.DefaultWriterRoleName).
+	WriterRole string `json:"writer_role,omitempty"`
 }
 
 // scimClient builds the SCIM client of a target: its dialect, the quirks of its
@@ -154,6 +168,10 @@ type Engine struct {
 	LDAPDialer func() (*safedial.Dialer, error)
 	// Build creates the connector of a target (tests inject fakes).
 	Build func(t *store.ProvTarget, token string) (target.Connector, error)
+	// BuildAWS creates the connector of an aws target for a tenant: the AWS connector it writes through, the writer
+	// role's name ("" for the default); the server's AWS client (safehttp, limits sized for IAM) is the hook's own
+	// (awsorg.Federation.OpenWriteTarget). Nil: an aws target cannot be built.
+	BuildAWS func(ctx context.Context, t tenancy.ID, connectorID, writerRole string) (target.Connector, error)
 	// Guard, when set, runs every call to a target under that target's
 	// limits and circuit breaker (internal/worker.Guard). A call it refuses
 	// with a Deferred error is not an attempt: the operation waits and is
@@ -362,6 +380,8 @@ func (e *Engine) buildWith(hc *http.Client, pt *store.ProvTarget, token string) 
 		return e.buildSQL(token, s)
 	case KindLDAP, KindAD:
 		return e.buildLDAP(pt, token, s)
+	case KindAWS:
+		return nil, errors.New("an aws target is built for a tenant: it has no dry run")
 	}
 	return nil, fmt.Errorf("unknown target kind %q", pt.Kind)
 }
@@ -461,6 +481,22 @@ func (e *Engine) buildLDAP(pt *store.ProvTarget, token string, s Settings) (targ
 	return ldapwrite.NewTarget(cfg, connsync.NewSecret(token), d)
 }
 
+// buildAWS builds the target of an AWS connector through the hook the server wires (internal/connectors/awsorg
+// imports this package's dependents, so this package cannot import it).
+func (e *Engine) buildAWS(ctx context.Context, t tenancy.ID, pt *store.ProvTarget) (target.Connector, error) {
+	var s Settings
+	if err := json.Unmarshal([]byte(pt.Settings), &s); err != nil {
+		return nil, fmt.Errorf("target settings are unreadable: %w", err)
+	}
+	switch {
+	case s.AWS == nil:
+		return nil, errors.New("the AWS settings are missing")
+	case e.BuildAWS == nil:
+		return nil, errors.New("this server cannot write to AWS")
+	}
+	return e.BuildAWS(ctx, t, s.AWS.ConnectorID, s.AWS.WriterRole)
+}
+
 func (e *Engine) workerCtx(ctx context.Context) context.Context {
 	return audit.AsSystem(ctx, WorkerActor)
 }
@@ -541,7 +577,12 @@ func (e *Engine) connector(ctx context.Context, t tenancy.ID, connID string, cac
 	if err != nil {
 		return nil, err
 	}
-	c, err := e.buildWith(hc, pt, token)
+	var c target.Connector
+	if pt.Kind == KindAWS && e.Build == nil {
+		c, err = e.buildAWS(ctx, t, pt)
+	} else {
+		c, err = e.buildWith(hc, pt, token)
+	}
 	if err != nil {
 		return nil, target.Permanent("%v", err)
 	}

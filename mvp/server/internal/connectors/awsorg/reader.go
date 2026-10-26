@@ -67,6 +67,20 @@ var ReaderActions = []string{
 	"sso:ListPermissionSets",
 	"sso:DescribePermissionSet",
 	"sso:ListAccountAssignments",
+	// Targeted re-reads that verify a change of the write target (issue #660, LP-4). The writer role never
+	// certifies its own change: these are the reader's.
+	"iam:GetRolePolicy",
+	"iam:GetUserPolicy",
+	"iam:GetGroupPolicy",
+	"iam:ListAttachedRolePolicies",
+	"iam:ListAttachedUserPolicies",
+	"iam:ListAttachedGroupPolicies",
+	"iam:GetPolicy",
+	"iam:GetPolicyVersion",
+	"iam:ListPolicyVersions",
+	"iam:ListGroupsForUser",
+	"sso:DescribeAccountAssignmentCreationStatus",
+	"sso:DescribeAccountAssignmentDeletionStatus",
 }
 
 // ReaderPolicy returns the IAM permissions policy of the connector's role: one
