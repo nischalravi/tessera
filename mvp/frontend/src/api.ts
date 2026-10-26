@@ -4297,7 +4297,7 @@ export interface ProvDiscovery { checked_at: string; agent_advertised: boolean; 
 
 export interface ProvTarget {
   connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake" | "cyberark" | "delinea" | "beyondtrust" | "sap" | "oracle" | "salesforce" | "servicenow" | "atlassian" | "ldap" | "ad"; base_url: string; api_root?: string;
-  dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; agent_id?: string; discovery?: ProvDiscovery; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
+  dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; agent_id?: string; discovery?: ProvDiscovery; write_back: boolean; write_back_pending?: boolean; config_hash: string; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
 /** token is write-only: omit it to keep the stored credential. A change of kind or origin (scheme, host, port) needs a new token (422 credential_required). */
@@ -4451,7 +4451,7 @@ export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
   | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
   | "groups.loader.save" | "retention.update" | "deletion_guard.update" | "siem.sink.filter"
-  | "siem.sink.target" | "alerts.rule.loosen" | "breach.item.attest";
+  | "siem.sink.target" | "alerts.rule.loosen" | "breach.item.attest" | "provisioning.write_back.enable";
 
 export interface AdminPersonRef { id: string; display_name: string }
 

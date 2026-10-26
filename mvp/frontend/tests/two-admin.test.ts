@@ -21,6 +21,13 @@ test("breach.item.attest is a two-admin type and its payload names plan, item an
   assert.ok(t.TWO_ADMIN_TITLE["breach.item.attest"].includes("second admin"));
 });
 
+test("provisioning.write_back.enable is a two-admin type and its payload names the target and the reviewed config (issue #569)", () => {
+  const e = new api.ApiError("x", 409, { error: "two_admin_change_required", change_type: "provisioning.write_back.enable" });
+  assert.equal(t.twoAdminType(e), "provisioning.write_back.enable");
+  assert.deepEqual(t.provWriteBackPayload("c1", "h".repeat(64)), { connection_id: "c1", config_hash: "h".repeat(64) });
+  assert.ok(t.TWO_ADMIN_TITLE["provisioning.write_back.enable"].includes("second admin"));
+});
+
 test("twoAdminType reads the 409 and nothing else", () => {
   const e = new api.ApiError("x", 409, { error: "two_admin_change_required", message: "m", change_type: "siem.sink.target" });
   assert.equal(t.twoAdminType(e), "siem.sink.target");

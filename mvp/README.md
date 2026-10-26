@@ -875,7 +875,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET|POST /api/auth/dev-login` (dev and test only) ·
 `GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
 `POST /api/jobs/{job_id}/retry` ·
-`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` · `POST /api/provisioning/targets/{connection_id}/dry-run` · `POST /api/provisioning/targets/{connection_id}/discover` ·
+`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` (issue #569: for every target kind, a PUT with `write_back: true` saves the configuration with write-back still off and answers `write_back_pending: true` plus a `config_hash`; a different admin must approve an admin change request of type `provisioning.write_back.enable` `{connection_id, config_hash}`, applied at once on approval, self-approval 403 `self_approval_refused`, a target edited meanwhile 409 `stale_target`, audited as `provision.write_back_enabled`. Turning write-back off is one admin and immediate. On a target that already writes, an edit that widens it (another kind or origin, `on_deprovision: delete`, a new REST operation, any SQL/LDAP/agent/preset/dialect change) is 409 `two_admin_change_required`: turn write-back off, edit, request it on again) · `POST /api/provisioning/targets/{connection_id}/dry-run` · `POST /api/provisioning/targets/{connection_id}/discover` ·
 `GET /api/provisioning/ops[?status=&kind=&connection_id=&limit=]` · `GET /api/provisioning/ops/{op_id}` ·
 `POST /api/provisioning/ops/{op_id}/retry|cancel` · `POST /api/provisioning/run` ·
 `GET /api/provisioning/findings[?status=open|resolved]` ·
@@ -5511,6 +5511,7 @@ evaluator routes answer `503 aws_catalog_unavailable` and nothing else changes.
 | `GET /api/aws/can?principal=&action=&resource=&profile=&snapshot=` | `graph.read` | one decision with its trace and `explanation_id` |
 | `GET /api/aws/principals/{arn}/effective?service=&profile=&limit=&cursor=` | `graph.read` | what a principal can do, paged; a larger answer than 200,000 cells needs `service=` |
 | `GET /api/aws/principals/{arn}/least-privilege?connector=&unused_days=&service=&limit=&cursor=` | `graph.read` | each permission the principal holds, whether the usage ingest saw it used in the window, and a `confidence` (`high`, `medium`, `low`, `unknown`) with reasons: window coverage, data events (S3 object actions are `unknown` unless the trail logs them), log gaps (a `digest_*` gap code lowers it to `low`), identity age (IAM `CreateDate` from the snapshot; without it, at most `medium`) and sparse activity. `connector` defaults to the snapshot's own; another connector is 422 `connector_mismatch`, and on a snapshot with no connector any `connector` is 422 `connector_unknown_for_snapshot` while omitting it answers 200 with every level `unknown` (no usage evidence) |
+| `POST /api/aws/principals/{arn}/right-size` | `graph.read` | `{policy_arn, unused_days?, connector?, snapshot?, profile?}` (LP-3, #659): a verified right-size of one customer-managed policy. The candidate keeps the policy's Deny statements and replaces its Allow statements with the calls the principal used in the window (the snapshot's own connector's usage; the binding rules of the row above apply, and a connector-less snapshot is 422 `no_usage_evidence`). The evaluator re-evaluates it: `verdict` is `verified` (every used call stays allowed at EXACT fidelity, nothing is added, everything removed rests on an EXACT unconditional allow), `review` (only the removed side is inexact) or `refused` (a used call breaks or is not EXACT, the candidate adds, removes nothing, or uses no call). The answer carries the candidate `document`, the `verification`, the evaluator `diff`, the lowest `confidence` over the removed permissions, and `auto_eligible` (verified, policy attached to this principal only, confidence high). Used calls the principal is not allowed now are `skipped_calls`; one allowed only conditionally refuses. Read-only: nothing is changed in AWS. POST for its body; recorded like the rotation plan |
 | `GET /api/aws/resources/{arn}/who-can?action=&profile=` | `graph.read` | principals that can, with decisions |
 | `GET /api/aws/explanations/{id}` | `graph.read` | a trace by id (from the store, else the recent ones held in memory) |
 | `POST /api/aws/simulate-policy-change` | `graph.read` | `{changes, base_snapshot?, profile?, head?, comment?: {pull_number}}`: who gains or loses what, plus the PR comment text |
@@ -6771,3 +6772,15 @@ See [the contract, examples and phase limits](../docs/migration-assessment.md).
   389-DS `passwordStorageScheme`); without that the value is stored as sent.
 - **Not yet.** Reaching a private directory through the Directory Agent (the agent push job handles SCIM and Okta only), group
   create/update, and showing a reset password to the user. Tests use an in-process fake (`ldapwrite/ldapfake`).
+
+## Cedar wrapper (`internal/cedarx`, AC-1)
+
+`server/internal/cedarx` wraps `github.com/cedar-policy/cedar-go` (v1.8.0) for the access-as-code repository
+(`docs/design/access-as-code-repo.md` sections 3 and 9). It is pure (no database, network, clock or Tessera import; `internal/archtest`
+enforces it, and that only `cedarx` imports cedar-go). `Generate(Facts)` builds the tenant schema from the identity attribute names
+of the graph; `GroupsSchema` builds the policy-groups one; `ParsePolicies`, `ParseSchema`, `Schema.Validate` and `Schema.Check`
+parse and type-check. `Check` refuses, by a linear lexical scan before cedar-go parses, a file over 256 KiB, nesting over 32
+(brackets, chained `!` or `-`, `if`), a policy over 20,000 tokens or a file over 5,000 policies; annotation values over 1 KiB
+and more than 10,000 entities are refused after. Tests: `go test ./internal/cedarx` (table tests and four fuzz targets) and
+`go test -run TestCedar_ ./internal/groups/policygroups` (differential test of the groups fragment parser against cedar-go;
+the places where the fragment is wider than Cedar are pinned there).

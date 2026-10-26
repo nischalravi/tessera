@@ -4,6 +4,8 @@ import {
   Connection, ProvDryRun, ProvKind, ProvOp, ProvOpDetail, ProvStatus, ProvTarget, ProvTargetInput, fmtDate, provisioning, relTime, useApi,
 } from "../../api";
 import { Badge, Button, Callout, DataTable, SidePanel, useToast } from "../../components";
+import { TwoAdminDialog } from "./TwoAdminDialog";
+import { provWriteBackPayload } from "./twoAdmin";
 
 const KIND: Record<ProvKind, string> = {
   create_account: "Create account", update_account: "Update account", disable_account: "Disable account", delete_account: "Delete account",
@@ -248,6 +250,8 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
   const [onDeprovision, setOnDeprovision] = useState<"disable" | "delete">(target?.on_deprovision ?? "disable");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // the saved target when write-back was asked for: it stays off until a different admin approves (issue #569)
+  const [pending, setPending] = useState<ProvTarget | null>(null);
   // legacy (pre-readiness) entries have no id and no target to configure
   const usable = (conns.data ?? []).filter((c) => c.id && !c.legacy && !c.retired_at);
   const save = async (e: FormEvent) => {
@@ -259,8 +263,13 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
     if (kind === "fake") body.fault = fault;
     if (token) body.token = token;
     try {
-      await provisioning.putTarget(conn, body);
-      toast(`Target saved. Write-back is ${writeBack ? "on" : "off"}.`);
+      const saved = await provisioning.putTarget(conn, body);
+      if (saved.write_back_pending) {
+        toast("Target saved. Write-back stays off until a second admin approves it.");
+        setPending(saved);
+        return;
+      }
+      toast(`Target saved. Write-back is ${saved.write_back ? "on" : "off"}.`);
       onClose();
     } catch (e2) {
       setErr((e2 as Error).message);
@@ -270,6 +279,11 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
   };
   return (
     <SidePanel title={target ? `Target of ${target.connection_name}` : "Configure a target"} onClose={onClose}>
+      {pending && (
+        <TwoAdminDialog type="provisioning.write_back.enable" onClose={onClose}
+          payload={provWriteBackPayload(pending.connection_id, pending.config_hash)}
+          what="Write-back lets Tessera change accounts in this system. The target is saved with write-back off. Turning it on must be approved by a second admin; turning it off again never needs one." />
+      )}
       <form className="stack-sm" onSubmit={save}>
         {err && <Callout tone="bad">{err}</Callout>}
         {!target && (
@@ -330,6 +344,7 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
         <label className="row tight small">
           <input type="checkbox" checked={writeBack} onChange={(e) => setWriteBack(e.target.checked)} /> Write-back: send changes to this target and update Tessera only after a re-read confirms them
         </label>
+        {writeBack && !target?.write_back && <p className="hint" style={{ margin: 0 }}>Turning write-back on needs a second admin to approve. Widening what a target that already writes may write (another system, delete) needs write-back switched off first.</p>}
         <label className="field">Accounts of deprovisioned guests
           <select className="input" value={onDeprovision} onChange={(e) => setOnDeprovision(e.target.value as "disable" | "delete")}>
             <option value="disable">Leave disabled after the grace period</option>

@@ -92,19 +92,8 @@ func (s *Server) awsLeastPriv(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	switch {
-	case ac.hdr.ConnectorID == "" && connector != "":
-		// a snapshot with no connector has no usage evidence of its own: any connector named here would be
-		// another source's logs, which would rate used permissions as unused (issue #693, as #688)
-		return 0, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "connector_unknown_for_snapshot",
-			Msg: "the snapshot has no connector, so no connector's usage is evidence for it"}
-	case connector == "":
-		connector = ac.hdr.ConnectorID
-	case connector != ac.hdr.ConnectorID:
-		// the usage evidence is the snapshot's own connector's: another connector's complete logs, which hold no
-		// rows for this principal, would rate its used permissions as unused with high confidence
-		return 0, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "connector_mismatch",
-			Msg: "connector is not the connector that collected the snapshot"}
+	if connector, err = awsLPConnector(ac, connector); err != nil {
+		return 0, nil, err
 	}
 	qr, _, err := s.awsQuerier(ac, q.Get("profile"))
 	if err != nil {
@@ -214,6 +203,26 @@ func (s *Server) awsLeastPriv(r *http.Request, p *params) (int, any, error) {
 		view.Next = &next
 	}
 	return http.StatusOK, view, nil
+}
+
+// awsLPConnector binds usage evidence to the snapshot's own connector (issues #688, #693) and returns the
+// connector whose usage is evidence for it, or the refusal. requested is "" when the caller named none.
+func awsLPConnector(ac *awsCtx, requested string) (string, error) {
+	switch {
+	case ac.hdr.ConnectorID == "" && requested != "":
+		// a snapshot with no connector has no usage evidence of its own: any connector named here would be
+		// another source's logs, which would rate used permissions as unused (issue #693, as #688)
+		return "", &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "connector_unknown_for_snapshot",
+			Msg: "the snapshot has no connector, so no connector's usage is evidence for it"}
+	case requested == "":
+		return ac.hdr.ConnectorID, nil
+	case requested != ac.hdr.ConnectorID:
+		// the usage evidence is the snapshot's own connector's: another connector's complete logs, which hold no
+		// rows for this principal, would rate its used permissions as unused with high confidence
+		return "", &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "connector_mismatch",
+			Msg: "connector is not the connector that collected the snapshot"}
+	}
+	return requested, nil
 }
 
 type awsLPCell struct{ action, resource, outcome, fidelity string }

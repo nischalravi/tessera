@@ -2,9 +2,9 @@
 // become the payload of an admin change request. Pure helpers, no React, so `npm test` covers the mapping.
 
 /** The change types a 409 two_admin_change_required can name. */
-export type TwoAdminType = "siem.sink.filter" | "siem.sink.target" | "alerts.rule.loosen" | "breach.item.attest";
+export type TwoAdminType = "siem.sink.filter" | "siem.sink.target" | "alerts.rule.loosen" | "breach.item.attest" | "provisioning.write_back.enable";
 
-const TYPES: readonly string[] = ["siem.sink.filter", "siem.sink.target", "alerts.rule.loosen", "breach.item.attest"];
+const TYPES: readonly string[] = ["siem.sink.filter", "siem.sink.target", "alerts.rule.loosen", "breach.item.attest", "provisioning.write_back.enable"];
 
 /** The change type to file when `err` is the API's 409 two_admin_change_required, else null. */
 export function twoAdminType(err: unknown): TwoAdminType | null {
@@ -41,12 +41,16 @@ export function alertLoosenPayload(ruleId: string, f: { enabled: boolean; severi
   return { rule_id: ruleId, enabled: f.enabled, severity: f.severity, threshold: f.threshold, window_minutes: f.window_minutes };
 }
 
+/** provisioning.write_back.enable: the target and the fingerprint of the configuration the admin reviewed (the server refuses a stale one). */
+export const provWriteBackPayload = (connectionId: string, configHash: string) => ({ connection_id: connectionId, config_hash: configHash });
+
 /** What the dialog tells the admin the request is for. */
 export const TWO_ADMIN_TITLE: Record<TwoAdminType, string> = {
   "siem.sink.filter": "Narrowing what this sink receives needs a second admin",
   "siem.sink.target": "Moving this sink to another destination needs a second admin",
   "alerts.rule.loosen": "Loosening a security alert rule needs a second admin",
   "breach.item.attest": "Attesting a breach item needs a second admin",
+  "provisioning.write_back.enable": "Turning on write-back needs a second admin",
 };
 
 /** The pause length for a protected schedule: a whole number of hours, 1 to 24. NaN when the text is not one. */

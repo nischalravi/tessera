@@ -184,6 +184,7 @@ GET    /api/aws/principals/{arn}/effective           graph.read         -  # iss
 GET    /api/aws/principals/{arn}/least-privilege     graph.read         -  # issue #645
 GET    /api/aws/resources/{arn}/who-can              graph.read         -  # issue #30
 GET    /api/aws/explanations/{id}                    graph.read         -  # issue #30
+POST   /api/aws/principals/{arn}/right-size          graph.read         -  # issue #659 (LP-3: read-only verified right-size)
 POST   /api/aws/simulate-policy-change               graph.read         -  # issue #30 (a comment post: connections.manage + STEP_UP_POLICY in the handler)
 GET    /api/aws/shadow                               connections.read   -  # issue #641
 PUT    /api/aws/shadow                               connections.manage STEP_UP_POLICY  # issue #641

@@ -36,6 +36,9 @@ type Verification struct {
 	// are, with the decision they now get.
 	Kept   []UsedCall   `json:"kept"`
 	Broken []BrokenCall `json:"broken"`
+	// Inexact are the kept calls whose decision after the change is allowed
+	// but not EXACT: a right-size that rests on them is refused (LP-3).
+	Inexact []UsedCall `json:"inexact"`
 	// Added counts the permissions the candidate gives that the principal did
 	// not have; Removed those it takes away.
 	Added   int `json:"added"`
@@ -97,7 +100,7 @@ func VerifyAWS(ctx context.Context, base, head *awsq.Querier, principal string, 
 	if err != nil {
 		return nil, err
 	}
-	v := &Verification{Kept: []UsedCall{}, Broken: []BrokenCall{}, Reasons: []string{}}
+	v := &Verification{Kept: []UsedCall{}, Broken: []BrokenCall{}, Inexact: []UsedCall{}, Reasons: []string{}}
 	exact := func(c *index.Cell) bool { return c != nil && c.Outcome == authz.Allow && c.Fidelity == authz.Exact }
 	auto := true
 	for _, u := range used {
@@ -110,6 +113,7 @@ func VerifyAWS(ctx context.Context, base, head *awsq.Querier, principal string, 
 			v.Kept = append(v.Kept, u)
 			if d.Fidelity != authz.Exact {
 				auto = false
+				v.Inexact = append(v.Inexact, u)
 				v.Reasons = append(v.Reasons, fmt.Sprintf("%s on %s is %s after the change", u.Action, u.Resource, d.Fidelity))
 			}
 			continue
