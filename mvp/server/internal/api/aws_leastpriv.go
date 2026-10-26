@@ -51,7 +51,7 @@ type awsLPView struct {
 // awsLeastPriv answers GET /api/aws/principals/{arn}/least-privilege
 // ?connector=&unused_days=&service=&limit=&cursor=&snapshot=&profile=
 //
-// connector defaults to the snapshot's own. The identity's creation date is the
+// connector defaults to the snapshot's own, and must be it when the snapshot names one. The identity's creation date is the
 // snapshot's (IAM CreateDate); without it the level is capped at medium. A
 // permission counts as used when the principal's rows name its action in the
 // window, or name its service as a whole (Access Advisor): the finding is then
@@ -92,6 +92,11 @@ func (s *Server) awsLeastPriv(r *http.Request, p *params) (int, any, error) {
 	}
 	if connector == "" {
 		connector = ac.hdr.ConnectorID
+	} else if ac.hdr.ConnectorID != "" && connector != ac.hdr.ConnectorID {
+		// the usage evidence is the snapshot's own connector's: another connector's complete logs, which hold no
+		// rows for this principal, would rate its used permissions as unused with high confidence
+		return 0, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "connector_mismatch",
+			Msg: "connector is not the connector that collected the snapshot"}
 	}
 	if connector == "" {
 		return 0, nil, badRequest("invalid_connector", "connector is required: the snapshot has none of its own")
