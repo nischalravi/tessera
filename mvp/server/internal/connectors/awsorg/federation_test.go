@@ -486,6 +486,65 @@ func TestService_StaticKeysFlag(t *testing.T) {
 
 // TestTrustPolicy: the policy the customer attaches to the role parses, trusts
 // only the account's provider for the issuer, and pins aud and sub.
+// TestFederationToken_LegacyTenantCutover (#676): a tenant that has only access_token and
+// idp_client_auth keys (created before the aws_federation purpose) gets an aws_federation
+// key from EnsureAll at the next start, and federation tokens are then signed with it,
+// never with the access_token key.
+func TestFederationToken_LegacyTenantCutover(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	sl := testSealer(t)
+	ctx := context.Background()
+	full := keys.TenantPurposes
+	keys.TenantPurposes = []string{store.KeyPurposeAccessToken, store.KeyPurposeIdPClientAuth}
+	err := f.DB.InTenant(ctx, f.A.ID, func(c *store.TenantTx) error { return keys.EnsureKeys(c, f.A.Slug, sl, testNow) })
+	keys.TenantPurposes = full
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{Sealer: sl, Clock: func() time.Time { return testNow }}
+	fed := &Federation{DB: f.DB, Sealer: sl, PublicURL: fedPublicURL, Clock: func() time.Time { return testNow }}
+	var k *store.AWSConnector
+	if err := f.DB.InTenant(ctx, f.A.ID, func(c *store.TenantTx) (err error) {
+		k, err = svc.CreateConnector(c, CreateInput{Name: "legacy", Config: *orgConfig()}, "admin", testNow)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fed.Token(ctx, f.A.ID, k.ID); err == nil {
+		t.Fatal("a token was signed before the tenant had an aws_federation key")
+	}
+	if err := keys.EnsureAll(ctx, f.DB, sl, testNow); err != nil {
+		t.Fatal(err)
+	}
+	tok, err := fed.Token(ctx, f.A.ID, k.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := jwt.ParseSigned(tok, []jose.SignatureAlgorithm{jose.ES256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := parsed.Headers[0].KeyID
+	if err := f.DB.ReadTenant(ctx, f.A.ID, func(c *store.TenantTx) error {
+		for purpose, want := range map[string]bool{store.KeyPurposeAWSFederation: true, store.KeyPurposeAccessToken: false} {
+			ks, err := c.SigningKeys(purpose)
+			if err != nil {
+				return err
+			}
+			found := false
+			for _, key := range ks {
+				found = found || key.KID == kid
+			}
+			if found != want {
+				t.Errorf("kid %s in %s keys = %v, want %v", kid, purpose, found, want)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTrustPolicy(t *testing.T) {
 	iss := IssuerURL(fedPublicURL, "larkspur")
 	sub := Subject(tenancy.Platform, "conn-1")

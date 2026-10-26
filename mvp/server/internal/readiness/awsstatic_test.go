@@ -43,6 +43,16 @@ func TestGoverned_AWSStoredKeyRefusedAtCreation(t *testing.T) {
 				if !errors.As(err, &re) || re.Code != "static_keys_disabled" || strings.Contains(re.Msg, govSecret) {
 					t.Fatalf("err = %v", err)
 				}
+				// nothing was sealed and the revision holds no secret reference
+				if err := st.Write(context.Background(), func(c *store.TenantTx) error {
+					b, err := s.Current(c, id, t0)
+					if err == nil && b.Rev.SecretRef != nil {
+						t.Errorf("a refused secret left a reference: %q", *b.Rev.SecretRef)
+					}
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
 			} else if err != nil {
 				t.Fatalf("err = %v", err)
 			}

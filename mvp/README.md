@@ -5342,8 +5342,8 @@ sent through `internal/safehttp`. Throttling and 5xx are retried with exponentia
 jitter (honouring `Retry-After`); every `List*` follows its token to the last page.
 
 - **Credentials (federated, no stored keys; issue #638).** A new connector is federated: it stores
-  no secret. For each account it signs a short-lived JWT (ES256, 5 minutes) with the tenant's key
-  from `internal/keys` and calls STS `AssumeRoleWithWebIdentity` (an unsigned call, through
+  no secret. For each account it signs a short-lived JWT (ES256, 5 minutes) with the tenant's dedicated
+  `aws_federation` key from `internal/keys` (not the access-token key; its public half is the AWS JWKS) and calls STS `AssumeRoleWithWebIdentity` (an unsigned call, through
   `safehttp`) for one hour of credentials in the customer's read-only role, cached until 5 minutes
   before they expire. Claims: `iss` `{TESSERA_PUBLIC_URL}/t/{slug}/aws`, `aud` `sts.amazonaws.com`,
   `sub` `tessera:tenant:{tenant-id}:aws-connector:{connector-id}`, `jti`. The token is never
@@ -5359,11 +5359,11 @@ jitter (honouring `Retry-After`); every `List*` follows its token to the last pa
      List and Read actions, verified against the action catalog (`CheckReadOnly`, tested).
   3. Collect. There is no `sts:ExternalId` in this mode: the `sub` pin replaces it.
 
-  The issuer needs an https `TESSERA_PUBLIC_URL` that AWS can reach. **Stored-key mode** (a sealed
+  The issuer needs an https `TESSERA_PUBLIC_URL` that AWS can reach, with no port (prod refuses one). Cutover: an existing tenant gets its `aws_federation` key at the next start, and AWS caches the OIDC provider's JWKS, so tokens with the new kid may fail until AWS refetches it (re-save the provider's thumbprint or wait). **Stored-key mode** (a sealed
   access key that signs `sts:AssumeRole`, with an `external_id`) remains only behind
   `TESSERA_AWS_ALLOW_STATIC_KEYS`: default on in dev and test, off in prod, and prod refuses it
   set to true (the server will not start). With it off, creating a keyed connector (directly or by a
-  governed connection's handover) is refused (`422 static_keys_disabled`) and a stored one is not
+  governed connection's handover) is refused (`422 static_keys_disabled`, also when a secret is put on a governed `awsorg` connection) and a stored one is not
   collected from; in prod, governed AWS connections (which hold a key) are not probed either. Existing connectors without `config.auth` are stored-key ones.
 - **Fail closed (design §3.3).** A stored policy that does not parse, a statement dropped as an
   ingest anomaly, and a read that fails (an account that refuses the role, a bucket policy that is
