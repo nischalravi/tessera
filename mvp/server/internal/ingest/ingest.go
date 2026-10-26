@@ -192,7 +192,8 @@ type DiscoveryStats struct {
 	HeldIdentities, HeldAccounts int
 	// Pruned are the permission edges removed because a read that covered their scope no longer
 	// reported them (issue #577); the caller audits each. Not in Object().
-	Pruned []PrunedEdge
+	Pruned     []PrunedEdge
+	HeldPrunes []HeldPrune // edges the deletion guard kept: over the threshold or the feed looked wrong
 }
 
 // Object renders the stats as an ordered JSON object.
@@ -372,7 +373,7 @@ func discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 	if err := recordObserved(c, now, results); err != nil {
 		return st, err
 	}
-	if st.Pruned, err = pruneSnapshots(c, now, results, seen); err != nil {
+	if st.Pruned, st.HeldPrunes, err = pruneSnapshots(c, now, results, seen); err != nil {
 		return st, err
 	}
 	if pruneEdges {
