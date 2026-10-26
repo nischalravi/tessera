@@ -1,0 +1,2 @@
+go test fuzz v1
+string("permit (principal, action == Tessera::Action::\"member\", resource == Tessera::Group::\"app:x:pol\")\nwhen { (principal.campus  in[\"north\", \"main\"] && ((principal in Tessera::Group::\"a:one\" || principal has affiliation) && principal in Tessera::Group::\"b:two\")) };\n")

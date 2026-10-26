@@ -6772,3 +6772,15 @@ See [the contract, examples and phase limits](../docs/migration-assessment.md).
   389-DS `passwordStorageScheme`); without that the value is stored as sent.
 - **Not yet.** Reaching a private directory through the Directory Agent (the agent push job handles SCIM and Okta only), group
   create/update, and showing a reset password to the user. Tests use an in-process fake (`ldapwrite/ldapfake`).
+
+## Cedar wrapper (`internal/cedarx`, AC-1)
+
+`server/internal/cedarx` wraps `github.com/cedar-policy/cedar-go` (v1.8.0) for the access-as-code repository
+(`docs/design/access-as-code-repo.md` sections 3 and 9). It is pure (no database, network, clock or Tessera import; `internal/archtest`
+enforces it, and that only `cedarx` imports cedar-go). `Generate(Facts)` builds the tenant schema from the identity attribute names
+of the graph; `GroupsSchema` builds the policy-groups one; `ParsePolicies`, `ParseSchema`, `Schema.Validate` and `Schema.Check`
+parse and type-check. `Check` refuses, by a linear lexical scan before cedar-go parses, a file over 256 KiB, nesting over 32
+(brackets, chained `!` or `-`, `if`), a policy over 20,000 tokens or a file over 5,000 policies; annotation values over 1 KiB
+and more than 10,000 entities are refused after. Tests: `go test ./internal/cedarx` (table tests and four fuzz targets) and
+`go test -run TestCedar_ ./internal/groups/policygroups` (differential test of the groups fragment parser against cedar-go;
+the places where the fragment is wider than Cedar are pinned there).
