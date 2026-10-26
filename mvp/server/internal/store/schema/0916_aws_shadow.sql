@@ -55,3 +55,11 @@ CREATE TABLE IF NOT EXISTS aws_shadow_triage (
   FOREIGN KEY (tenant_id, check_id) REFERENCES aws_shadow_checks (tenant_id, id)
 );
 CREATE INDEX IF NOT EXISTS aws_shadow_triage_check ON aws_shadow_triage (tenant_id, check_id, created_at);
+
+CREATE TRIGGER IF NOT EXISTS tg_aws_shadow_triage_xtenant_ins BEFORE INSERT ON aws_shadow_triage
+WHEN NOT EXISTS (SELECT 1 FROM aws_shadow_checks p WHERE p.id = NEW.check_id AND p.tenant_id = NEW.tenant_id)
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: aws_shadow_triage'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_aws_shadow_triage_xtenant_upd BEFORE UPDATE OF tenant_id, check_id ON aws_shadow_triage
+WHEN NOT EXISTS (SELECT 1 FROM aws_shadow_checks p WHERE p.id = NEW.check_id AND p.tenant_id = NEW.tenant_id)
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: aws_shadow_triage'); END;
