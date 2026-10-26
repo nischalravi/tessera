@@ -1,0 +1,8 @@
+schema: tessera.repo/v1
+tenant: larkspur
+manage:
+  roles: full
+  sod: full
+  jit: partial
+  invariants: full
+  agents: full

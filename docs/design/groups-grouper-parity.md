@@ -880,8 +880,10 @@ The Deployment Guide's access policy group is a precomputed authorization decisi
 A policy group file contains Cedar `permit` and `forbid` policies on the action `Tessera::Action::"member"` with a single resource, `Tessera::Group::"<name>"`. The `when`/`unless` conditions may use only:
 
 - `principal in Tessera::Group::"<name>"` (a reference to any group, including other policy groups and manual exception groups),
-- `principal.<attr> == <literal>`, `principal.<attr> in [<literals>]`, `principal.<attr>.contains(<literal>)` and `principal has <attr>`, over a declared set of identity attributes (department, affiliation, employee type, campus, cost center, class year, and so on; §8.4),
+- `principal.<attr> == <literal>`, `[<literals>].contains(principal.<attr>)` (a string attribute is one of the literals; `principal.<attr> in [..]` is not Cedar and is refused), `principal.<attr>.contains(<literal>)` and `principal has <attr>`, over a declared set of identity attributes (department, affiliation, employee type, campus, cost center, class year, and so on; §8.4),
 - `&&`, `||`, `!` and parentheses.
+
+The fragment is Cedar's grammar and its validator's rules, nothing looser (issue #698, checked against cedar-go by a differential test): an optional attribute is guarded by `principal has <attr> &&` within the same `when` or `unless` clause (a guard in one clause does not cover another); `@provision` takes one string, the targets comma-separated; a string holds no raw control character (use `\n`, `\u{..}`).
 
 No `context`, no `resource` attributes, no arithmetic, no datetime, no extension functions. Anything else fails validation in CI and in the API with a precise error. Within this fragment, membership is decidable and equals:
 
@@ -897,7 +899,7 @@ E(policy) = ( ⋃ permit-conditions ) − ( ⋃ forbid-conditions )
 @group("app:foo:service:policy:foo_user")
 @display("Foo users")
 @owner("app:foo:security:fooAdmin")
-@provision("ldap-main", "entra")
+@provision("ldap-main,entra")
 @id("allow")
 permit (principal, action == Tessera::Action::"member", resource == Tessera::Group::"app:foo:service:policy:foo_user")
 when {

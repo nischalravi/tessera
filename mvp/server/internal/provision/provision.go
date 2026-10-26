@@ -111,7 +111,9 @@ type Change struct {
 	Kind    string
 	Account target.Account
 	Group   target.Group
-	Source  string
+	// AWS is the change of an AWS kind (target.AWSKinds); nil for every other kind.
+	AWS    *target.AWSChange
+	Source string
 	// Key names the intent ("jit:12:expire"). Submitting the same key twice
 	// yields one operation.
 	Key string
@@ -136,6 +138,9 @@ func (c Change) ref() string {
 }
 
 func validKind(k string) bool {
+	if target.IsAWSKind(k) {
+		return true
+	}
 	for _, x := range target.Kinds {
 		if x == k {
 			return true
@@ -183,6 +188,8 @@ func Enqueue(tx *store.TenantTx, now time.Time, connectionID string, c Change) (
 		return nil, &Error{400, "invalid_account", "an operation needs an account username"}
 	case c.Key == "" || len(c.Key) > 200:
 		return nil, &Error{400, "invalid_key", "an operation needs an idempotency key of at most 200 characters"}
+	case target.IsAWSKind(c.Kind) != (c.AWS != nil):
+		return nil, &Error{400, "invalid_aws", "an AWS operation carries its aws change, and no other operation does"}
 	case (c.Kind == target.AddEntitlement || c.Kind == target.RemoveEntitlement) && c.Group.ExternalID == "" && c.Group.Name == "":
 		return nil, &Error{400, "invalid_group", "an entitlement operation needs a group"}
 	}
@@ -201,7 +208,7 @@ func Enqueue(tx *store.TenantTx, now time.Time, connectionID string, c Change) (
 		// the deletion guard held it (internal/deleteguard): nothing is queued until a second admin releases it
 		return &store.ProvOp{ConnectionID: connectionID, Kind: c.Kind, TargetRef: c.ref(), Source: c.Source, IdempotencyKey: c.Key, Status: Held}, nil
 	}
-	payload, err := json.Marshal(target.Request{Account: c.Account, Group: c.Group})
+	payload, err := json.Marshal(target.Request{Account: c.Account, Group: c.Group, AWS: c.AWS})
 	if err != nil {
 		return nil, err
 	}

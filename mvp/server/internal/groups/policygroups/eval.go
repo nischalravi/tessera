@@ -117,7 +117,7 @@ func String(x Expr) string {
 		for i, v := range n.Values {
 			q[i] = fmt.Sprintf("%q", v)
 		}
-		return fmt.Sprintf("principal.%s in [%s]", n.Attr, strings.Join(q, ", "))
+		return fmt.Sprintf("[%s].contains(principal.%s)", strings.Join(q, ", "), n.Attr)
 	case AttrContains:
 		return fmt.Sprintf("principal.%s.contains(%q)", n.Attr, n.Value)
 	case AttrHas:

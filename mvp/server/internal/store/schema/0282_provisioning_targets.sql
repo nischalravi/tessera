@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS provisioning_targets (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
   connection_id TEXT NOT NULL REFERENCES connections (id),
-  kind TEXT NOT NULL CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql','salesforce','servicenow','atlassian','ldap','ad')),
+  kind TEXT NOT NULL CHECK (kind IN ('scim','okta','fake','cyberark','delinea','beyondtrust','sap','oracle','rest','sql','salesforce','servicenow','atlassian','ldap','ad','aws')),
   base_url TEXT NOT NULL,
   settings TEXT NOT NULL DEFAULT '{}',
   credential_enc BLOB,

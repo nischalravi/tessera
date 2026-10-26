@@ -60,6 +60,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/queue"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
@@ -470,6 +471,12 @@ func New(cfg Config) *Server {
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
 		Runtime: connsync.Runtime{Env: cfg.Env, AllowLoopback: cfg.Env == config.Dev},
 		Clock:   func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning"), Guard: s.guard}
+	if cfg.AWSHTTP != nil {
+		fed := &awsorg.Federation{DB: cfg.Store, Sealer: cfg.Sealer, PublicURL: cfg.PublicURL, Clock: s.clock}
+		s.prov.BuildAWS = func(ctx context.Context, t tenancy.ID, connectorID, writerRole string) (target.Connector, error) {
+			return fed.OpenWriteTarget(ctx, t, connectorID, writerRole, cfg.AWSHTTP, s.clock)
+		}
+	}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
 	if cfg.RPID != "" && cfg.PublicOrigin != "" {

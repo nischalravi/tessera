@@ -1,0 +1,4 @@
+PASS tests/birthright.yaml: finance employee in cost center 4410 gets the role
+PASS tests/birthright.yaml: sales employee does not
+PASS tests/invariants.yaml: snapshot
+3 tests passed

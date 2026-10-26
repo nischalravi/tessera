@@ -5,6 +5,7 @@
 //	tessera check-db [-db tessera.db]   exit 0 if the database opens with this server's schema
 //	                                    (run.sh reseeds a database from before sign-in)
 //	tessera readiness lint [-dir path]   lint the readiness checklist templates
+//	tessera policy validate|test|schema [-dir path]   check the access-as-code policy repository offline (see policy.go)
 //	tessera groups policy validate [-dir path]   check the policy group files (*.cedar) offline (see groups.go)
 //	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
 //	tessera notify seal-password             seal an SMTP password (stdin) for TESSERA_SMTP_PASSWORD_SEALED
@@ -169,6 +170,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	if cmd == "readiness" {
 		return readinessCmd(args, stdout, stderr)
+	}
+	if cmd == "policy" {
+		return policyCmd(args, stdout, stderr)
 	}
 	if cmd == "groups" {
 		return groupsCmd(args, stdout, stderr)

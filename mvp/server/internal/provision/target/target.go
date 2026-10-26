@@ -54,6 +54,8 @@ type Request struct {
 	Key     string  `json:"-"`
 	Account Account `json:"account"`
 	Group   Group   `json:"group,omitempty"`
+	// AWS is the change of an AWS kind (aws.go); nil for every other.
+	AWS *AWSChange `json:"aws,omitempty"`
 }
 
 // Verdict is the outcome of a re-read.

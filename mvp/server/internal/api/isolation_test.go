@@ -421,6 +421,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/aws/connectors/{id}/collect" || rt.Pattern == "/api/aws/collection-runs/{id}" {
 			continue // TestAWSCollectTenantIsolation, and store.TestIsolation_AWSCollectionRuns (UUIDs, not fixture ids)
 		}
+		if rt.Pattern == "/api/aws/changes/{op_id}/restore" {
+			continue // TestIsolation_ProvisioningRoutes (a UUID, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/aws/shadow/checks/{id}") {
 			continue // TestAWSShadowTenantIsolation (UUIDs, not fixture ids)
 		}

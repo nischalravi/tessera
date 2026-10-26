@@ -1,0 +1,87 @@
+{
+  "Statement": [
+    {
+      "Action": [
+        "iam:DetachRolePolicy",
+        "iam:DetachUserPolicy",
+        "iam:DetachGroupPolicy",
+        "iam:DeleteRolePolicy",
+        "iam:DeleteUserPolicy",
+        "iam:DeleteGroupPolicy",
+        "iam:CreatePolicyVersion",
+        "iam:SetDefaultPolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:RemoveUserFromGroup",
+        "sso:DeleteAccountAssignment",
+        "iam:AttachRolePolicy",
+        "iam:AttachUserPolicy",
+        "iam:AttachGroupPolicy",
+        "iam:PutRolePolicy",
+        "iam:PutUserPolicy",
+        "iam:PutGroupPolicy",
+        "iam:AddUserToGroup",
+        "sso:CreateAccountAssignment"
+      ],
+      "Effect": "Allow",
+      "Resource": "*",
+      "Sid": "TesseraRevokeAndRestore"
+    },
+    {
+      "Action": [
+        "iam:CreatePolicy",
+        "iam:CreateRole",
+        "iam:CreateUser",
+        "iam:CreateAccessKey",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:PassRole",
+        "iam:PutRolePermissionsBoundary",
+        "iam:PutUserPermissionsBoundary",
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:DeleteUserPermissionsBoundary",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:TagUser",
+        "iam:UntagUser",
+        "iam:TagPolicy",
+        "iam:UntagPolicy",
+        "organizations:*",
+        "sts:*"
+      ],
+      "Effect": "Deny",
+      "Resource": "*",
+      "Sid": "TesseraNeverCreateOrEscalate"
+    },
+    {
+      "Action": [
+        "iam:DetachRolePolicy",
+        "iam:DetachUserPolicy",
+        "iam:DetachGroupPolicy",
+        "iam:DeleteRolePolicy",
+        "iam:DeleteUserPolicy",
+        "iam:DeleteGroupPolicy",
+        "iam:CreatePolicyVersion",
+        "iam:SetDefaultPolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:RemoveUserFromGroup",
+        "sso:DeleteAccountAssignment",
+        "iam:AttachRolePolicy",
+        "iam:AttachUserPolicy",
+        "iam:AttachGroupPolicy",
+        "iam:PutRolePolicy",
+        "iam:PutUserPolicy",
+        "iam:PutGroupPolicy",
+        "iam:AddUserToGroup",
+        "sso:CreateAccountAssignment"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/tessera:protected": "true"
+        }
+      },
+      "Effect": "Deny",
+      "Resource": "*",
+      "Sid": "TesseraNeverTouchProtected"
+    }
+  ],
+  "Version": "2012-10-17"
+}
