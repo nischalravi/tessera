@@ -2,7 +2,7 @@
 
 # Brief: the least-privilege loop (revoke, verify, restore)
 
-**Status: Draft — needs human approval.** Built: LP-1 usage ingest, LP-2 confidence, EP-6 shadow agreement, explanation links. Not built: LP-3..LP-10, #569.
+**Status: Approved 2026-10-26** (decisions in the full doc §11). Built: LP-1 usage ingest, LP-2 confidence, EP-6 shadow agreement, explanation links. Not built: LP-3..LP-10, #569.
 
 ## Non-negotiable rules
 - Modes `off` (default) → `suggest` → `staged` (person approves each batch) → `auto` (LP-8 policy in the access-as-code repo). Loosening takes two people; tightening and pausing take one.
@@ -33,5 +33,5 @@ LP-3 #659 · LP-4 #660 · LP-5 #661 · LP-6 #662 · LP-7 #663 · LP-8 #664 · LP
 ## Which sections to read
 Already built §2; modes §3; auto vs suggest §4; states, caps, restore §5; AWS roles §6; evidence §7; reviews §8; JIT §9; open questions §11.
 
-## Open questions (human)
-Thresholds and caps; medium items in staged batches; privileged prod auto-eligible; restore-only third role; JIT re-request restores standing or grants JIT; CloudTrail Lake; evidence retention; silence as consent.
+## Decisions
+Approved 2026-10-26; see the full doc's decisions section.

@@ -2,7 +2,7 @@
 
 # Brief: the access-as-code policy repo (Cedar schema)
 
-**Status: Draft — needs human approval.** Nothing of AC-1..AC-11 is built; `cedar-go` is not in `go.mod`.
+**Status: Approved 2026-10-26** (decisions in the full doc §10). Nothing of AC-1..AC-11 is built; `cedar-go` is not in `go.mod`.
 
 ## Non-negotiable rules
 - Objects are data (YAML → Cedar entities: `Role`, `JitEligibility`, SoD as `tessera.sod/v1`); rules are Cedar policies (`BirthrightRule`, `AgentScope`, `Invariant`). One generated schema (`schema/tessera.cedarschema`) validates all.
@@ -35,5 +35,5 @@ AC-1 #647 cedarx · AC-2 #648 bundle + CLI · AC-3 #649 invariants · AC-4 #650 
 ## Which sections to read
 Schema and object formats §3; mapping §5; apply §6; two-person §7; blast hook §8; security §9; open questions §10.
 
-## Open questions (human)
-Two-person for every apply vs tighten-only single; approver ≠ PR author; one or many birthright rules per role; refuse vs override large/removal-heavy applies; unscoped agents; invariants on APPROXIMATE facts; signed commits; YAML vs Cedar entity JSON; `business_roles.key`.
+## Decisions
+Approved 2026-10-26; see the full doc's decisions section.

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **Draft — needs human approval** |
+| Status | **Approved 2026-10-26** (owner accepted the recommendations; decisions in §11) |
 | Issue | #658 (LP-0), milestone M7; plan: [`differentiators-plan.md`](differentiators-plan.md) §3 |
 | Author | iam-architect (agent draft) |
 | Date | 2026-10-26, checked against `origin/dev` 4e7f774 |
@@ -167,16 +167,18 @@ The record's SHA-256 is in the audit event of its transition (hash chain). New r
 
 Thresholds of `confidence.go` stay as shipped (14-day young identity, 2-day stale logs, half-window low cutoff). The loop adds: `auto_min_days` 90, announce 7 days, finalize 30 days. Calibration: per rule and level, restores ÷ revocations over 60 days; if `high` exceeds 1%, the tenant is paused for auto and the rule is reviewed by a person (no self-tuning in v1).
 
-## 11. Open questions for the human
+## 11. Decisions (approved 2026-10-26)
 
-1. **Thresholds**: auto requires `high` and ≥ 90 days unused, announce 7 days, finalize 30 days, caps 25/run, 100/day, 10/account/day. Accept?
-2. **Medium findings in `staged`**: may a person approve a batch containing `medium` items (recommended: yes, item by item), or `high` only?
-3. **Privileged prod permissions**: auto-eligible (with a longer 14-day announcement) or suggest only (recommended for v1)?
-4. **Restore role**: let the writer role restore (Attach/Put), or a third restore-only role?
-5. **JIT re-request**: restore the standing grant (plan) or grant time-bound JIT access and keep the standing one revoked?
-6. **CloudTrail Lake**: support it in the reader role if catalogued read-only, or only S3 trails in v1?
-7. **Evidence retention**: 730 days default, 365 minimum — or tie to the tenant's audit retention?
-8. **Silence as consent**: in `auto`, does no objection during announcement count as consent (recommended), or must the owner acknowledge?
+The owner approved the recommendations. Where the draft had none, the safer or simpler default is taken.
+
+1. **Thresholds accepted:** auto requires `high` confidence, at least 90 days unused and an EXACT evaluator result; announce 7 days; final after 30 days; caps 25 per run, 100 per day, 10 per AWS account per day. One person can pause; resuming takes two.
+2. **Medium items in `staged` batches:** a person may approve them, item by item.
+3. **Privileged prod permissions are suggest-only** in v1.
+4. **Restore uses the writer role** (its Attach/Put actions); no third role.
+5. **JIT re-request grants time-bound JIT access** and the standing grant stays revoked. Restoring the standing grant is the explicit undo, available until the revocation is final.
+6. **S3 trails only in v1**; CloudTrail Lake later.
+7. **Evidence retention:** 730 days by default, 365 minimum, and never shorter than the tenant's audit retention.
+8. **Silence is consent in `auto`** (auto is opt-in per tenant, and owners are notified at announcement).
 
 ## 12. PR plan (unchanged from the plan)
 
