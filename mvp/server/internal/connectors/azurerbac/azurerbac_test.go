@@ -395,6 +395,15 @@ func TestUnreadableScopeIsPartialAndNoReadableScopeIsAnError(t *testing.T) {
 	if !strings.Contains(res.Partial, "1 of 3 scopes could not be read") {
 		t.Errorf("partial = %q", res.Partial)
 	}
+	// the denied scope is not in the scopes whose edges may be pruned (issue #577)
+	if len(res.EdgeSnapshotOf) != 1 || len(res.EdgeScopesRead) != 2 {
+		t.Errorf("snapshot of %v, scopes read %v", res.EdgeSnapshotOf, res.EdgeScopesRead)
+	}
+	for _, s := range res.EdgeScopesRead {
+		if strings.Contains(s, subB) {
+			t.Errorf("denied scope %s counted as read", s)
+		}
+	}
 	r = newRig(t, &fake{deny: map[string]int{"/subscriptions/" + subA: 403, "/subscriptions/" + subB: 403, "/providers/Microsoft.Management/managementGroups/corp": 403}})
 	if _, err := r.open(t).Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "no scope could be read") {
 		t.Errorf("err = %v", err)

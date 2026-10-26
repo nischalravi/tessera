@@ -266,8 +266,8 @@ func unreadable(err error) bool {
 
 // Read lists the scopes, then the role definitions and assignments (and eligible assignments) of
 // each. A scope the application cannot read is skipped and the snapshot is flagged Partial (today the
-// ingest deletion guard holds back removal of identities and account status only, not permissions
-// or edges); no readable scope at all is an error.
+// ingest deletion guard holds back removal of identities and account status, and edge pruning (issue
+// #577) only touches the scopes in Snapshot.ReadScopes); no readable scope at all is an error.
 func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 	scopes, partial, err := c.Scopes(ctx)
 	if err != nil {
@@ -297,13 +297,18 @@ func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 			continue
 		}
 		read++
+		complete := true
 		if c.cfg.IncludeEligible {
 			if err := c.assignments(ctx, sc.ID, true, byID); err != nil {
 				if !unreadable(err) {
 					return nil, fmt.Errorf("eligible assignments of %s: %w", sc.Name, err)
 				}
 				reasons = append(reasons, "eligible (PIM) assignments could not be read at "+sc.Name)
+				complete = false
 			}
+		}
+		if complete {
+			snap.ReadScopes = append(snap.ReadScopes, sc.ID)
 		}
 	}
 	if len(scopes) > 0 && read == 0 {

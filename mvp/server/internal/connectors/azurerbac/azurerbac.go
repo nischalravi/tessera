@@ -222,6 +222,9 @@ type Snapshot struct {
 	// Partial says why the read is not the whole picture (a scope or the eligible assignments
 	// could not be read); empty when it is complete.
 	Partial string
+	// ReadScopes are the ids of the scopes whose role assignments (and eligible assignments, when
+	// read) were listed in full. Only those scopes' edges may be pruned.
+	ReadScopes []string
 }
 
 func lower(s string) string { return strings.ToLower(s) }
@@ -265,7 +268,10 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 }
 
 func (c *Connector) build(s *Snapshot) *connectors.DiscoveryResult {
-	res := &connectors.DiscoveryResult{System: System, Partial: s.Partial}
+	res := &connectors.DiscoveryResult{System: System, Partial: s.Partial, EdgeSnapshotOf: []string{System}}
+	for _, sc := range s.ReadScopes {
+		res.EdgeScopesRead = append(res.EdgeScopesRead, lower(sc))
+	}
 	names := map[string]string{}
 	for _, sc := range s.Scopes {
 		names[lower(sc.ID)] = sc.Name
