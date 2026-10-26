@@ -13,17 +13,22 @@ import (
 // seedCalls stores CloudTrail state (data events on, 120 days covered) and, for alice, one usage row per call on
 // every third day of the last 60.
 func seedCalls(t *testing.T, c awsClient, calls ...[2]string) {
+	seedCallsFor(t, c.st, "conn-1", calls...)
+}
+
+// seedCallsFor is seedCalls for a connector of the given id.
+func seedCallsFor(t *testing.T, st *testkit.DB, connector string, calls ...[2]string) {
 	t.Helper()
 	now := testkit.Now.UTC()
 	dayAgo := func(n int) string { return now.AddDate(0, 0, -n).Format("2006-01-02") }
-	err := c.st.DB.InTenant(context.Background(), c.st.Tenant, func(tx *store.TenantTx) error {
-		if err := tx.PutAWSUsageState(&store.AWSUsageState{ConnectorID: "conn-1", Source: store.AWSUsageCloudTrail,
+	err := st.DB.InTenant(context.Background(), st.Tenant, func(tx *store.TenantTx) error {
+		if err := tx.PutAWSUsageState(&store.AWSUsageState{ConnectorID: connector, Source: store.AWSUsageCloudTrail,
 			CoveredFrom: dayAgo(120), CoveredTo: dayAgo(0), S3DataEvents: store.AWSDataEventsEnabled, UpdatedAt: now}); err != nil {
 			return err
 		}
 		for i := 0; i < 60; i += 3 {
 			for _, call := range calls {
-				if err := tx.SetAWSUsage(&store.AWSUsageDay{ConnectorID: "conn-1", PrincipalARN: awstest.EstateAlice, Action: call[0],
+				if err := tx.SetAWSUsage(&store.AWSUsageDay{ConnectorID: connector, PrincipalARN: awstest.EstateAlice, Action: call[0],
 					ResourceScope: call[1], Day: dayAgo(i), Source: store.AWSUsageCloudTrail, Count: 1, LastSeen: now}); err != nil {
 					return err
 				}

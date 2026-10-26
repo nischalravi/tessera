@@ -5511,7 +5511,9 @@ evaluator routes answer `503 aws_catalog_unavailable` and nothing else changes.
 | `GET /api/aws/can?principal=&action=&resource=&profile=&snapshot=` | `graph.read` | one decision with its trace and `explanation_id` |
 | `GET /api/aws/principals/{arn}/effective?service=&profile=&limit=&cursor=` | `graph.read` | what a principal can do, paged; a larger answer than 200,000 cells needs `service=` |
 | `GET /api/aws/principals/{arn}/least-privilege?connector=&unused_days=&service=&limit=&cursor=` | `graph.read` | each permission the principal holds, whether the usage ingest saw it used in the window, and a `confidence` (`high`, `medium`, `low`, `unknown`) with reasons: window coverage, data events (S3 object actions are `unknown` unless the trail logs them), log gaps (a `digest_*` gap code lowers it to `low`), identity age (IAM `CreateDate` from the snapshot; without it, at most `medium`) and sparse activity. `connector` defaults to the snapshot's own; another connector is 422 `connector_mismatch`, and on a snapshot with no connector any `connector` is 422 `connector_unknown_for_snapshot` while omitting it answers 200 with every level `unknown` (no usage evidence) |
-| `POST /api/aws/principals/{arn}/right-size` | `graph.read` | `{policy_arn, unused_days?, connector?, snapshot?, profile?}` (LP-3, #659): a verified right-size of one customer-managed policy. The candidate keeps the policy's Deny statements and replaces its Allow statements with the calls the principal used in the window (the snapshot's own connector's usage; the binding rules of the row above apply, and a connector-less snapshot is 422 `no_usage_evidence`). The evaluator re-evaluates it: `verdict` is `verified` (every used call stays allowed at EXACT fidelity, nothing is added, everything removed rests on an EXACT unconditional allow), `review` (only the removed side is inexact) or `refused` (a used call breaks or is not EXACT, the candidate adds, removes nothing, or uses no call). The answer carries the candidate `document`, the `verification`, the evaluator `diff`, the lowest `confidence` over the removed permissions, and `auto_eligible` (verified, policy attached to this principal only, confidence high). Used calls the principal is not allowed now are `skipped_calls`; one allowed only conditionally refuses. Read-only: nothing is changed in AWS. POST for its body; recorded like the rotation plan |
+| `POST /api/aws/principals/{arn}/right-size` | `graph.read` | `{policy_arn, unused_days?, connector?, snapshot?, profile?}` (LP-3, #659): a verified right-size of one customer-managed policy. The candidate keeps the policy's Deny statements and replaces its Allow statements with the calls the principal used in the window (the snapshot's own connector's usage; the binding rules of the row above apply, and a connector-less snapshot is 422 `no_usage_evidence`). The evaluator re-evaluates it: `verdict` is `verified` (every used call stays allowed at EXACT fidelity, nothing is added, everything removed rests on an EXACT unconditional allow), `review` (only the removed side is inexact) or `refused` (a used call breaks or is not EXACT, the candidate adds, removes nothing, or uses no call). The answer carries the candidate `document` (and `document_sha256`), the `verification`, the evaluator `diff`, the lowest `confidence` over the removed permissions, and `auto_eligible` (verified, policy attached to this principal only, confidence high). Used calls the principal is not allowed now are `skipped_calls`; one allowed only conditionally refuses. Read-only: nothing is changed in AWS. POST for its body; recorded like the rotation plan |
+| `POST /api/aws/principals/{arn}/right-size/apply` | `provisioning.manage` + step-up | `{policy_arn, candidate_sha256, unused_days?, connector?, snapshot?, profile?}` (LP-4, #660): queues a verified right-size on the AWS write target (`202 {op_id, status}`); see "AWS write target" |
+| `POST /api/aws/changes/{op_id}/restore` | `provisioning.manage` + step-up | queues the restore of a verified AWS change from its recorded prior state (LP-4, #660) |
 | `GET /api/aws/resources/{arn}/who-can?action=&profile=` | `graph.read` | principals that can, with decisions |
 | `GET /api/aws/explanations/{id}` | `graph.read` | a trace by id (from the store, else the recent ones held in memory) |
 | `POST /api/aws/simulate-policy-change` | `graph.read` | `{changes, base_snapshot?, profile?, head?, comment?: {pull_number}}`: who gains or loses what, plus the PR comment text |
@@ -6743,6 +6745,59 @@ It writes a private JSON report, refusing overwrites without `--force`,
 without opening the database or changing access. Native vendor compatibility is
 unverified; unsupported logic is reported as blocking diagnostics.
 See [the contract, examples and phase limits](../docs/migration-assessment.md).
+
+### AWS write target (issue #660, LP-4)
+
+The loop of `docs/design/least-privilege-loop.md` (§4.1, §6.3) needs a way to take access away in AWS and to put it back.
+This is that target; there is no auto mode yet (LP-5, LP-8). `internal/connectors/awsorg` `WriteTarget` is a provisioning
+target of kind `aws` (`PUT /api/provisioning/targets/{connection}` with `{"kind":"aws","aws":{"connector_id":"<AWS connector id>","writer_role":"TesseraWriter"}}`;
+no token: the connector must be federated, a stored-key connector is refused). Every call is signed with SigV4 and sent
+through the safehttp AWS client.
+
+- **Operations** (kinds `aws_*`, each with its restore): detach a managed policy (`aws_detach_policy` / `aws_attach_policy`),
+  delete an inline policy (`aws_delete_inline_policy` / `aws_put_inline_policy`), right-size a customer-managed policy by a
+  new default version with the old one kept (`aws_set_policy_version` / `aws_restore_policy_version`), remove a user from an
+  IAM group (`aws_remove_from_group` / `aws_add_to_group`), delete an Identity Center account assignment
+  (`aws_delete_assignment` / `aws_create_assignment`; asynchronous, its request status is polled). `Account.Username` is the
+  principal's ARN (the Identity Store id for Identity Center); `Request.AWS` (`provision/target/aws.go`) holds the rest.
+- **Two roles, two tokens.** Writes use the **writer role** (default `TesseraWriter`), assumed with a web identity token whose
+  `sub` is `tessera:tenant:{tenant}:aws-writer:{connector}` (the reader's is `...:aws-connector:...`, so neither role accepts the
+  other's token). The writer's policy is `awsorg.WriterPolicy()`: Allow of `WriterActions` (Detach*/Delete*Policy,
+  Create/SetDefault/DeletePolicyVersion, RemoveUserFromGroup, `sso:DeleteAccountAssignment`) and `RestoreActions` (Attach*/Put*Policy,
+  AddUserToGroup, `sso:CreateAccountAssignment`); explicit Deny of create, access keys, trust policy, PassRole, permissions
+  boundaries, tagging, `organizations:*` and `sts:*`; and a Deny of every write on a resource tagged `tessera:protected=true`.
+  Terraform module: `deploy/terraform/aws-writer-role` (apply per account; its `writer-policy.json` is generated from
+  `WriterPolicy()` and a test keeps them equal). **Human setup:** create the role in each account with that module, using the
+  connector's `federation.issuer` and the writer subject, then add the `aws` target and have a second admin enable write-back.
+- **Verified by re-reading with the reader role.** `Apply` reads the current state (reader), skips a change already in place
+  (a repeated request converges), refuses a revoke when the state is no longer the one it was evaluated against (digest of the
+  inline policy or default version differs), then writes (writer). `Verify` re-reads with the reader and compares with the
+  intended state (not attached, policy gone, default version has the intended digest and the old version still exists, not in
+  the group, assignment gone). A re-read that disagrees is a `mismatch`: a high finding and `provision.mismatch` audit event
+  (the engine's closed loop). The reader gains `iam:Get{Role,User,Group}Policy`, `iam:ListAttached{Role,User,Group}Policies`,
+  `iam:GetPolicy`, `iam:GetPolicyVersion`, `iam:ListPolicyVersions`, `iam:ListGroupsForUser` and
+  `sso:DescribeAccountAssignment{Creation,Deletion}Status`: an existing reader role needs them added before the first change
+  (they pass `CheckReadOnly`).
+- **Prior state is kept verbatim** in the operation's payload (`prior`, `prior_sha256` of the canonical JSON, `prior_version_id`);
+  a restore is refused when the payload does not match its digest, when the old version no longer holds that digest or was
+  deleted, or when a different inline policy of that name exists. The target refuses Tessera's own reader and writer roles,
+  Identity Center roles, service-linked roles, accounts outside the connector, AWS-managed policies (detach those), and a
+  policy that already has five versions.
+- **Enabling it takes two admins (#569).** Write-back on an `aws` target is switched on by the `provisioning.write_back.enable`
+  change request like every kind; the approver's summary names the connector and writer role, and pointing a write-back target
+  at another connector or role is a widening that needs the same again.
+- **Manual apply of a verified right-size** (`provisioning.manage` + step-up): `POST /api/aws/principals/{arn}/right-size/apply`
+  `{policy_arn, unused_days?, connector?, snapshot?, profile?, candidate_sha256}` recomputes the right-size of
+  `POST .../right-size` (whose answer now carries `document_sha256`) and queues `aws_set_policy_version` on the aws target of the
+  snapshot's connector (202 `{op_id, status, ...}`) only if it is `verified`, the policy is this principal's alone, the confidence
+  is high or medium, `candidate_sha256` is what the reviewer saw (else 409 `stale_candidate`) and write-back is on (else 409
+  `write_back_off`; 409 `no_aws_target` without a target). `POST /api/aws/changes/{op_id}/restore` queues the restore of a
+  *verified* least-privilege AWS operation (same payload and digest, one per operation, not blocked by write-back being off).
+  Audit: `aws.right_size.requested`, `aws.change.restore_requested`, plus the engine's `provision.*` events. The provisioning
+  worker (or `POST /api/provisioning/run`) sends them.
+- **Schema.** `provisioning_targets.kind` admits `aws` and `provisioning_ops.kind` the ten `aws_*` kinds (schema `0282`/`0283`
+  widened in place, `DB.upgradeProvTargetKinds` / `DB.upgradeProvOpKinds` rebuild an existing SQLite database, Postgres
+  `0944_prov_aws_kinds.sql`). No new table.
 
 ### LDAP and Active Directory provisioning (issue #586)
 

@@ -19,9 +19,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/all"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/awsorg"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed/wire"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/queue"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
@@ -134,6 +136,10 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	rsvc := readiness.NewService(templates, cfg.Env)
+	awsHTTP, err := awsorg.NewHTTPClient(cfg) // the AWS write target's calls: safehttp, limits sized for IAM
+	if err != nil {
+		return err
+	}
 	rsvc.Runner.Live.Sealer = sealer
 	rsvc.Runner.Gov = wire.Options(outbound, connsync.RuntimeFromConfig(cfg), cfg.LoaderDataDir, cfg.Env == config.Prod)
 	guard := &worker.Guard{DB: st, Clock: clock, Defaults: &worker.Limits{MaxConcurrency: o.targetConcurrency,
@@ -149,6 +155,10 @@ func workerCmd(ctx context.Context, args []string, stderr io.Writer) error {
 		Connectors: func(now time.Time) ([]connectors.Connector, error) { return connectors.Load("", now) },
 		Provision: &provision.Engine{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Guard: guard, Runtime: connsync.RuntimeFromConfig(cfg), DialAllow: dialAllow,
 			Log: logger.With("component", "provisioning")}}
+	awsFed := &awsorg.Federation{DB: st, Sealer: sealer, PublicURL: cfg.PublicURL, Clock: clock}
+	deps.Provision.BuildAWS = func(ctx context.Context, t tenancy.ID, connectorID, writerRole string) (target.Connector, error) {
+		return awsFed.OpenWriteTarget(ctx, t, connectorID, writerRole, awsHTTP, clock)
+	}
 	q := &queue.Queue{DB: st, Clock: clock, Owner: o.id, Concurrency: o.concurrency, Poll: o.poll, Lease: o.lease,
 		ShutdownGrace: o.grace, Log: logger.With("component", "queue")}
 	metrics := worker.NewMetrics(q, guard)

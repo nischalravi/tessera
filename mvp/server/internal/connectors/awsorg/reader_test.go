@@ -37,6 +37,12 @@ func readerCatalog(t *testing.T, extra map[string]catalog.AccessLevel) *catalog.
 		"ec2:DescribeVpcEndpoints": catalog.AccessList,
 		"sso:ListInstances":        catalog.AccessList, "sso:ListPermissionSets": catalog.AccessList, "sso:DescribePermissionSet": catalog.AccessRead,
 		"sso:ListAccountAssignments": catalog.AccessList,
+		// the write target's re-reads (issue #660)
+		"iam:GetRolePolicy": catalog.AccessRead, "iam:GetUserPolicy": catalog.AccessRead, "iam:GetGroupPolicy": catalog.AccessRead,
+		"iam:ListAttachedRolePolicies": catalog.AccessList, "iam:ListAttachedUserPolicies": catalog.AccessList, "iam:ListAttachedGroupPolicies": catalog.AccessList,
+		"iam:GetPolicy": catalog.AccessRead, "iam:GetPolicyVersion": catalog.AccessRead, "iam:ListPolicyVersions": catalog.AccessList,
+		"iam:ListGroupsForUser":                       catalog.AccessList,
+		"sso:DescribeAccountAssignmentCreationStatus": catalog.AccessRead, "sso:DescribeAccountAssignmentDeletionStatus": catalog.AccessRead,
 		// actions the connector must not be given
 		"iam:CreateUser": catalog.AccessWrite, "iam:PutUserPolicy": catalog.AccessPermissionsManagement,
 		"s3:PutBucketPolicy": catalog.AccessPermissionsManagement, "s3:GetObject": catalog.AccessRead, "kms:Decrypt": catalog.AccessWrite,

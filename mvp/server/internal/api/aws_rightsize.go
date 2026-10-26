@@ -15,6 +15,7 @@ import (
 	awsq "github.com/nischalravi/tessera/mvp/server/internal/aws/query"
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/snapshot"
 	"github.com/nischalravi/tessera/mvp/server/internal/leastpriv"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -79,8 +80,10 @@ type awsRightSizeView struct {
 	Skipped    []awsRSSkipped          `json:"skipped_calls"`
 	Check      *leastpriv.Verification `json:"verification"`
 	// Document is the candidate policy document ("" when none could be built).
-	Document string     `json:"document"`
-	Diff     *awsRSDiff `json:"diff"`
+	Document string `json:"document"`
+	// DocumentSHA256 is target.DocDigest of Document: what a reviewer approves and the apply route checks (issue #660).
+	DocumentSHA256 string     `json:"document_sha256"`
+	Diff           *awsRSDiff `json:"diff"`
 }
 
 // awsRSSkipped is a used call left out of the candidate because it is not
@@ -109,42 +112,67 @@ func (s *Server) awsRightSize(r *http.Request, p *params) (int, any, error) {
 	if err := decodeBody(r, &in, false); err != nil {
 		return 0, nil, err
 	}
-	if in.PolicyARN, err = awsName("policy_arn", in.PolicyARN, true); err != nil {
+	if err := in.check(); err != nil {
 		return 0, nil, err
 	}
-	if in.Connector, err = awsName("connector", in.Connector, false); err != nil {
+	res, err := s.rightSize(r, arn, in)
+	if err != nil {
 		return 0, nil, err
+	}
+	return http.StatusOK, res.view, nil
+}
+
+// check validates the input of a right-size and fills its defaults.
+func (in *awsRightSizeIn) check() (err error) {
+	if in.PolicyARN, err = awsName("policy_arn", in.PolicyARN, true); err != nil {
+		return err
+	}
+	if in.Connector, err = awsName("connector", in.Connector, false); err != nil {
+		return err
 	}
 	if in.UnusedDays == 0 {
 		in.UnusedDays = awsLPDefaultDays
 	}
 	if in.UnusedDays < 1 || in.UnusedDays > awsLPMaxDays {
-		return 0, nil, badRequest("invalid_unused_days", "unused_days must be 1 to "+strconv.Itoa(awsLPMaxDays))
+		return badRequest("invalid_unused_days", "unused_days must be 1 to "+strconv.Itoa(awsLPMaxDays))
 	}
+	return nil
+}
+
+// rsResult is a computed right-size: the view the route answers with, and what applying it needs.
+type rsResult struct {
+	view *awsRightSizeView
+	// doc is the policy as the snapshot has it: its default version and verbatim document are the prior state.
+	doc *model.PolicyDoc
+}
+
+// rightSize computes the verified right-size of one policy for one principal (see the route's comment). It
+// reads; the apply route uses the same computation, so what is applied is what was verified.
+func (s *Server) rightSize(r *http.Request, arn string, in awsRightSizeIn) (*rsResult, error) {
 	ctx := r.Context()
 	tx := store.TxFrom(ctx)
 	ac, err := s.awsContext(tx, in.Snapshot)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	connector, err := awsLPConnector(ac, in.Connector)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	if connector == "" {
-		return 0, nil, rsRefusal("no_usage_evidence", "the snapshot has no connector, so there is no usage to right-size from")
+		return nil, rsRefusal("no_usage_evidence", "the snapshot has no connector, so there is no usage to right-size from")
 	}
 	snap := ac.eng.snap
 	if snap.Principals[arn] == nil {
-		return 0, nil, &readiness.Error{Status: http.StatusNotFound, Code: "principal_not_found", Msg: "no such principal in the snapshot"}
+		return nil, &readiness.Error{Status: http.StatusNotFound, Code: "principal_not_found", Msg: "no such principal in the snapshot"}
 	}
 	doc, exclusive, err := rsPolicy(snap, in.PolicyARN, arn)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	bq, _, err := s.awsQuerier(ac, in.Profile)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 
 	now := s.clock()
@@ -152,27 +180,28 @@ func (s *Server) awsRightSize(r *http.Request, p *params) (int, any, error) {
 	since := today.AddDate(0, 0, -(in.UnusedDays - 1)).Format("2006-01-02")
 	rows, err := tx.AWSUsage(connector, arn, since, 0)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	states, err := tx.AWSUsageStates(connector)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	gaps, err := tx.AWSUsageGaps(connector, 0)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	used := leastpriv.UsedCallsFromUsage(rows)
 	if len(used) > awsRSMaxUsedCalls {
-		return 0, nil, rsRefusal("too_many_calls", "the principal used more distinct calls than one right-size verifies: narrow unused_days")
+		return nil, rsRefusal("too_many_calls", "the principal used more distinct calls than one right-size verifies: narrow unused_days")
 	}
 
 	view := &awsRightSizeView{Principal: arn, Snapshot: snapshotRef(ac.hdr), Connector: connector, PolicyARN: in.PolicyARN,
 		UnusedDays: in.UnusedDays, Exclusive: exclusive, Reasons: []string{}, Used: []leastpriv.UsedCall{}, Skipped: []awsRSSkipped{},
 		Confidence: leastpriv.Confidence{Level: leastpriv.ConfUnknown, Reasons: []string{}}}
-	refuse := func(reasons ...string) (int, any, error) {
+	res := &rsResult{view: view, doc: doc}
+	refuse := func(reasons ...string) (*rsResult, error) {
 		view.Verdict, view.Reasons = leastpriv.VerdictRefused, reasons
-		return http.StatusOK, view, nil
+		return res, nil
 	}
 
 	// A used call the principal is not allowed now cannot be broken by a narrowing: it is left out. A conditional
@@ -183,7 +212,7 @@ func (s *Server) awsRightSize(r *http.Request, p *params) (int, any, error) {
 		case errors.Is(err, eval.ErrInvalidRequest):
 			view.Skipped = append(view.Skipped, awsRSSkipped{u, "the call cannot be evaluated"})
 		case err != nil:
-			return 0, nil, awsEvalErr(err)
+			return nil, awsEvalErr(err)
 		case d.Outcome == authz.Conditional:
 			return refuse(u.Action + " on " + u.Resource + " is allowed only under a condition now, which the candidate would drop")
 		case d.Outcome != authz.Allow:
@@ -197,42 +226,42 @@ func (s *Server) awsRightSize(r *http.Request, p *params) (int, any, error) {
 		if errors.Is(err, leastpriv.ErrRightSize) {
 			return refuse(strings.TrimPrefix(err.Error(), leastpriv.ErrRightSize.Error()+": "))
 		}
-		return 0, nil, err
+		return nil, err
 	}
-	view.Document = candidate
+	view.Document, view.DocumentSHA256 = candidate, target.DocDigest(candidate)
 
 	head, err := snapshot.Apply(snap, []snapshot.PolicyChange{{Op: snapshot.OpPutPolicyVersion, TargetARN: in.PolicyARN, Document: &candidate}},
 		snapshot.ApplyOptions{FetchedAt: now, MultivaluedKey: ac.cat.MultivaluedKey})
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	hix, err := ac.eng.ix.Refine(head, ac.cat.indexConfig(head))
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	opts, _, err := awsOptions(in.Profile, now)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	hq, err := awsq.New(hix, ac.eng.memo, opts)
 	if err != nil {
-		return 0, nil, badRequest("invalid_profile", err.Error())
+		return nil, badRequest("invalid_profile", err.Error())
 	}
 	v, err := leastpriv.VerifyAWS(ctx, bq, hq, arn, view.Used)
 	if err != nil {
-		return 0, nil, awsEvalErr(err)
+		return nil, awsEvalErr(err)
 	}
 	view.Check = v
 	view.Verdict, view.Reasons = leastpriv.Judge(v)
 
-	res, err := awsq.Diff(ctx, bq, hq, awsq.DiffOptions{MaxExpand: awsRSMaxAssessed})
+	dres, err := awsq.Diff(ctx, bq, hq, awsq.DiffOptions{MaxExpand: awsRSMaxAssessed})
 	if err != nil {
-		return 0, nil, awsEvalErr(err)
+		return nil, awsEvalErr(err)
 	}
-	view.Diff = rsDiffView(ac.eng, res)
-	view.Confidence = rsConfidence(now, in.UnusedDays, arn, ac, rows, states, gaps, res)
+	view.Diff = rsDiffView(ac.eng, dres)
+	view.Confidence = rsConfidence(now, in.UnusedDays, arn, ac, rows, states, gaps, dres)
 	view.AutoEligible = view.Verdict == leastpriv.VerdictVerified && exclusive && view.Confidence.Level == leastpriv.ConfHigh
-	return http.StatusOK, view, nil
+	return res, nil
 }
 
 // rsPolicy finds the customer-managed policy in the snapshot and says whether
