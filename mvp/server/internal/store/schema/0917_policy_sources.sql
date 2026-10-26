@@ -55,3 +55,7 @@ BEGIN SELECT RAISE(ABORT, 'policy_versions is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS tg_policy_versions_xtenant_ins BEFORE INSERT ON policy_versions
 WHEN NOT EXISTS (SELECT 1 FROM policy_sources p WHERE p.tenant_id = NEW.tenant_id AND p.kind = NEW.kind AND p.src_key = NEW.src_key)
 BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: policy_versions'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_policy_versions_xtenant_upd BEFORE UPDATE OF tenant_id, kind, src_key ON policy_versions
+WHEN NOT EXISTS (SELECT 1 FROM policy_sources p WHERE p.tenant_id = NEW.tenant_id AND p.kind = NEW.kind AND p.src_key = NEW.src_key)
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: policy_versions'); END;
