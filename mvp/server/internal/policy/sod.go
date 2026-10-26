@@ -64,7 +64,8 @@ func riskPolicies(risks []*sod.Risk) []*Policy {
 func ToViolation(v sod.Violation) Violation {
 	id := v.IdentityID
 	return Violation{PolicyID: v.RiskKey, PolicyName: v.RiskName, Severity: v.Priority, IdentityID: &id,
-		IdentityName: v.IdentityName, Key: v.Key, Message: v.Message, Evidence: v.Evidence, Edges: v.Edges}
+		IdentityName: v.IdentityName, Key: v.Key, Message: v.Message, Evidence: v.Evidence, Edges: v.Edges,
+		ExplanationID: v.ExplanationID}
 }
 
 func evalSoDRisk(p *Policy, c *Context) ([]Violation, error) {

@@ -64,6 +64,9 @@ type Violation struct {
 	Message      string     `json:"message"`
 	Evidence     []string   `json:"evidence"`
 	Edges        [][]string `json:"edges"` // grant edges (src, dst) implicated
+	// ExplanationID names the AWS evaluator trace behind the finding
+	// (GET /api/aws/explanations/{id}); absent when no evaluated edge is implicated.
+	ExplanationID string `json:"explanation_id,omitempty"`
 }
 
 func newViolation(p *Policy, iid int64, name, key, msg string, evidence []string, edges [][]string) Violation {
@@ -74,7 +77,8 @@ func newViolation(p *Policy, iid int64, name, key, msg string, evidence []string
 		edges = [][]string{}
 	}
 	id := iid
-	return Violation{p.ID, p.Name, p.Severity, &id, name, key, msg, evidence, edges}
+	return Violation{PolicyID: p.ID, PolicyName: p.Name, Severity: p.Severity, IdentityID: &id,
+		IdentityName: name, Key: key, Message: msg, Evidence: evidence, Edges: edges}
 }
 
 // ------------------------------------------------------------------ loading
@@ -712,6 +716,11 @@ func Evaluate(policies []*Policy, c *Context) ([]Violation, error) {
 		vs, err := fn(p, c)
 		if err != nil {
 			return nil, err
+		}
+		for i := range vs {
+			if vs[i].ExplanationID == "" {
+				vs[i].ExplanationID = c.Graph.EdgesExplanation(vs[i].Edges)
+			}
 		}
 		out = append(out, vs...)
 	}

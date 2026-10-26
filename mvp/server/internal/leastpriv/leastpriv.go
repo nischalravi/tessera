@@ -39,6 +39,9 @@ type Recommendation struct {
 	Holders          []string `json:"holders,omitempty"`
 	Score            int      `json:"score"`
 	Rationale        string   `json:"rationale"`
+	// ExplanationID names the AWS evaluator trace of the grant's edge; absent
+	// when the edge was not evaluated.
+	ExplanationID string `json:"explanation_id,omitempty"`
 }
 
 func anyWeak(eps []*graph.EffectivePermission) bool {
@@ -163,7 +166,8 @@ func GrantRecommendations(g *graph.Snapshot, u *usage.Index, unusedDays int, ide
 				UnusedLost: len(unused), UsedLost: len(used), PrivilegedUnused: privUnused, SensitiveTags: sensitive,
 				LastUsed: timeutil.ISOPtr(last), DaysSinceUsed: daysSince(u.Now, last),
 				UnusedExamples: examples(unused), UsedExamples: examples(used), Score: score,
-				Rationale: rationale(kind, len(unused), len(lost), unusedDays, last, u.Now),
+				Rationale:     rationale(kind, len(unused), len(lost), unusedDays, last, u.Now),
+				ExplanationID: ag.Edge.ExplanationID,
 			})
 		}
 	}
@@ -280,6 +284,7 @@ func RoleTrimRecommendations(g *graph.Snapshot, u *usage.Index, unusedDays, minH
 			UnusedExamples: []string{pn.Label}, UsedExamples: []string{}, Holders: names, Score: score,
 			Rationale: fmt.Sprintf("None of the %d identities that hold %s through %s used it in %d days. Remove it from the role.",
 				len(who), pn.Label, g.Label(k.group), unusedDays),
+			ExplanationID: ed.ExplanationID,
 		})
 	}
 	SortByScore(recs)

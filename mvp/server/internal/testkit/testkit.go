@@ -284,3 +284,31 @@ func Demo(tb testing.TB) *DB {
 	tb.Cleanup(func() { _ = st.Close() })
 	return &DB{st, seed.LarkspurID}
 }
+
+// ExplainEdges turns every grant edge of db's tenant into an evaluator edge
+// (allow, exact) whose explanation id is name(edge); an edge that name maps to
+// "" is left as it is. It is the evaluated-edge fixture for EP-8 wiring tests.
+func ExplainEdges(tb testing.TB, db *DB, name func(*store.GrantEdge) string) {
+	tb.Helper()
+	Write(tb, db, func(c *store.TenantTx) error {
+		edges, err := c.Edges()
+		if err != nil {
+			return err
+		}
+		for _, e := range edges {
+			id := name(e)
+			if id == "" {
+				continue
+			}
+			if err := c.DeleteEdge(e.ID, time.Now()); err != nil {
+				return err
+			}
+			ok, err := c.UpsertEvaluatorEdge(e.Src, e.Dst, e.Relation, Now,
+				store.EdgeEvaluation{ExplanationID: id, Outcome: "allow", Fidelity: "exact"})
+			if err != nil || !ok {
+				tb.Fatalf("UpsertEvaluatorEdge(%s, %s) = %v, %v", e.Src, e.Dst, ok, err)
+			}
+		}
+		return nil
+	})
+}
