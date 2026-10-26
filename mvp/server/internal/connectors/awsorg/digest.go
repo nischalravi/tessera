@@ -38,9 +38,11 @@ import (
 //
 //	digest_invalid     a signature, hash or chain link does not verify: the file is refused
 //	digest_missing     no digest lists the file, or the chain skips a digest: the file is refused
-//	digest_disabled    the region has no digests at all (validation is off for the trail):
-//	                   the files are counted, as before, and the gap says they are unverified
-//	digest_unreadable  the digests or the public key could not be read: the prefix waits
+//	digest_disabled    cloudtrail:GetTrail says LogFileValidationEnabled is false:
+//	                   the files are counted, as before, and the gap says they are unverified.
+//	                   Missing digests of a trail with validation on are digest_missing, never this
+//	digest_unreadable  the digests, the public key or the trail's setting could not be read
+//	                   (or no trail_arn is set): the prefix waits
 //
 // A file newer than digestGrace is waited for (the cursor stays before it)
 // rather than refused: its digest is not published yet.
@@ -113,14 +115,16 @@ type digestVerifier struct {
 	now   time.Time
 	floor time.Time
 
-	days   map[string]*digestDay // "<account>/<region>/<yyyy/mm/dd>"
-	exists map[string]bool       // "<account>/<region>": the region has digests
-	keys   map[string]publicKeys // by region
+	days  map[string]*digestDay // "<account>/<region>/<yyyy/mm/dd>"
+	valid int                   // 0 unknown, 1 validation off, 2 on
+	// trailValidation asks AWS whether the trail validates its log files
+	trailValidation func(context.Context) (bool, error)
+	keys            map[string]publicKeys // by region
 }
 
-func newDigestVerifier(t *CloudTrailConfig, sess func() (session, error), now, floor time.Time) *digestVerifier {
-	return &digestVerifier{t: t, sess: sess, now: now, floor: floor,
-		days: map[string]*digestDay{}, exists: map[string]bool{}, keys: map[string]publicKeys{}}
+func newDigestVerifier(t *CloudTrailConfig, sess func() (session, error), trailValidation func(context.Context) (bool, error), now, floor time.Time) *digestVerifier {
+	return &digestVerifier{t: t, sess: sess, now: now, floor: floor, trailValidation: trailValidation,
+		days: map[string]*digestDay{}, keys: map[string]publicKeys{}}
 }
 
 func (v *digestVerifier) dir(p *trailPrefix) string {
@@ -170,12 +174,14 @@ func (v *digestVerifier) check(ctx context.Context, p *trailPrefix, tail, hash s
 			return verdict{}, nil
 		}
 	}
-	any, err := v.regionHasDigests(ctx, p)
+	// "off" is AWS's word (the trail's LogFileValidationEnabled), never inferred from missing
+	// digests: whoever can write the bucket could delete them all to downgrade the trail
+	on, err := v.validationOn(ctx)
 	if err != nil {
 		return verdict{}, err
 	}
-	if !any {
-		return verdict{"digest_disabled", "the trail publishes no digest files for this region (log file validation is off), so its logs are unverified"}, nil
+	if !on {
+		return verdict{"digest_disabled", "log file validation is off for the trail (LogFileValidationEnabled is false), so its logs are unverified"}, nil
 	}
 	if at, ok := logFileTime(tail); !ok || v.now.Sub(at) < digestGrace {
 		return verdict{}, errDigestPending
@@ -192,21 +198,19 @@ func logFileTime(tail string) (time.Time, bool) {
 	return t, err == nil
 }
 
-// regionHasDigests says whether any digest object exists for the prefix's region.
-func (v *digestVerifier) regionHasDigests(ctx context.Context, p *trailPrefix) (bool, error) {
-	if any, ok := v.exists[p.key]; ok {
-		return any, nil
+// validationOn reads the trail's LogFileValidationEnabled once per run.
+func (v *digestVerifier) validationOn(ctx context.Context) (bool, error) {
+	if v.valid == 0 {
+		on, err := v.trailValidation(ctx)
+		if err != nil {
+			return false, &digestError{err}
+		}
+		v.valid = 1
+		if on {
+			v.valid = 2
+		}
 	}
-	s, err := v.sess()
-	if err != nil {
-		return false, &digestError{err}
-	}
-	objs, _, _, err := s.listObjects(ctx, v.t, v.dir(p), "", "", "", 1)
-	if err != nil {
-		return false, &digestError{err}
-	}
-	v.exists[p.key] = len(objs) > 0
-	return len(objs) > 0, nil
+	return v.valid == 2, nil
 }
 
 // loadDay lists, reads and verifies the digests of one day (yyyy/mm/dd).
@@ -461,4 +465,15 @@ func inflatedSHA256(gz []byte) (string, error) {
 		return "", &refusal{"inflated_too_large", fmt.Sprintf("the log file inflates to more than %d bytes", maxLogInflatedBytes)}
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// getTrailValidation reads LogFileValidationEnabled (cloudtrail GetTrail, in the trail's home region).
+func (s session) getTrailValidation(ctx context.Context, region, trailARN string) (bool, error) {
+	var r struct {
+		Trail struct {
+			LogFileValidationEnabled bool `json:"LogFileValidationEnabled"`
+		} `json:"Trail"`
+	}
+	err := s.jsonCall(ctx, svcCloudTrail, region, cloudTrailTarget+"GetTrail", json11, map[string]string{"Name": trailARN}, &r)
+	return r.Trail.LogFileValidationEnabled, err
 }

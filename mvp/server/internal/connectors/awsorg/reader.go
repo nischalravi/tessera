@@ -31,6 +31,7 @@ var ReaderActions = []string{
 	"iam:GenerateServiceLastAccessedDetails",
 	"iam:GetServiceLastAccessedDetails",
 	"cloudtrail:GetEventSelectors",
+	"cloudtrail:GetTrail",       // whether the trail validates its log files (#680)
 	"cloudtrail:ListPublicKeys", // the keys that verify the log file digests (#680)
 	"organizations:DescribeOrganization",
 	"organizations:ListRoots",

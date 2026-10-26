@@ -276,7 +276,18 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 	}
 	agg := map[usageKey]*usageVal{}
 	unmapped := map[string]bool{}
-	dv := newDigestVerifier(t, sess, now, floor)
+	trailValidation := func(ctx context.Context) (bool, error) {
+		region, account := t.trailParts()
+		if region == "" {
+			return false, errors.New("no trail_arn is configured, so it is not known whether log file validation is on")
+		}
+		s, err := col.assume(ctx, cache, account)
+		if err != nil {
+			return false, err
+		}
+		return s.session.getTrailValidation(ctx, region, t.TrailARN)
+	}
+	dv := newDigestVerifier(t, sess, trailValidation, now, floor)
 	unverified, verified := map[string]bool{}, map[string]bool{} // prefixes with a digest_disabled gap, or with a file a digest confirmed
 	// a record's time is the customer's data: one far in the future would be a row
 	// that never ages out, and one older than the retention is pruned at once
@@ -432,7 +443,7 @@ func (u *UsageCollector) collectTrail(ctx context.Context, connectorID string, a
 					}
 					var de *digestError
 					if errors.As(err, &de) {
-						gap(store.AWSUsageCloudTrail, "digest:"+p.key, "digest_unreadable", "reading the CloudTrail digests: "+u.accessHint(de.err, t)+"; the reader role also needs cloudtrail:ListPublicKeys", "")
+						gap(store.AWSUsageCloudTrail, "digest:"+p.key, "digest_unreadable", "reading the CloudTrail digests: "+u.accessHint(de.err, t)+"; the reader role also needs cloudtrail:GetTrail and cloudtrail:ListPublicKeys; set trail_arn", "")
 						break
 					}
 					gap(store.AWSUsageCloudTrail, "s3:"+p.key, errCode(err), "reading "+p.key+"/"+strings.TrimPrefix(o.Key, p.dir)+": "+u.accessHint(err, t), "")

@@ -149,6 +149,7 @@ func digestGap(e *usageEnv, t *testing.T, ref, code string) *store.AWSUsageGap {
 
 func TestDigest_ValidChainCountsRecords(t *testing.T) {
 	e := newUsageEnv(t, trailOnly())
+	e.bucket.trailMode = "on"
 	s := newDigestSigner(t)
 	s.install(e)
 	k1, b1 := putLog(t, e, 1)
@@ -219,6 +220,7 @@ func TestDigest_Failures(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := newUsageEnv(t, trailOnly())
+			e.bucket.trailMode = "on"
 			s := newDigestSigner(t)
 			s.install(e)
 			k, b := putLog(t, e, 1)
@@ -255,7 +257,7 @@ func TestDigest_DisabledIsAnExplicitGap(t *testing.T) {
 		t.Errorf("count = %d", got)
 	}
 	g := digestGap(e, t, "digest:"+dAcct+"/us-east-1", "digest_disabled")
-	if !strings.Contains(g.Detail, "validation is off") {
+	if !strings.Contains(g.Detail, "LogFileValidationEnabled is false") {
 		t.Errorf("detail = %q", g.Detail)
 	}
 	if e.gaps(t)["cloudtrail "+k] != nil || e.gaps(t)["cloudtrail "+k2] != nil {
@@ -276,6 +278,7 @@ func TestDigest_DisabledIsAnExplicitGap(t *testing.T) {
 // cursor stays before it; once the digest is out, the next run counts it.
 func TestDigest_RecentFileWaitsForItsDigest(t *testing.T) {
 	e := newUsageEnv(t, trailOnly())
+	e.bucket.trailMode = "on"
 	s := newDigestSigner(t)
 	s.install(e)
 	k1, b1 := putLog(t, e, 1)
@@ -314,6 +317,7 @@ func TestDigest_RecentFileWaitsForItsDigest(t *testing.T) {
 // Digests that cannot be read hold the prefix with a digest_unreadable gap.
 func TestDigest_UnreadableHoldsThePrefix(t *testing.T) {
 	e := newUsageEnv(t, trailOnly())
+	e.bucket.trailMode = "on"
 	s := newDigestSigner(t)
 	s.install(e)
 	k, b := putLog(t, e, 1)
@@ -343,6 +347,7 @@ func TestDigest_UnreadableHoldsThePrefix(t *testing.T) {
 
 func TestDigest_PublicKeyNotFound(t *testing.T) {
 	e := newUsageEnv(t, trailOnly())
+	e.bucket.trailMode = "on"
 	s := newDigestSigner(t)
 	s.fp = "aaaa"
 	s.install(e)
@@ -363,5 +368,48 @@ func TestReaderActionsHaveListPublicKeys(t *testing.T) {
 	}
 	if !found {
 		t.Error("cloudtrail:ListPublicKeys is not in ReaderActions")
+	}
+}
+
+// Validation on and every digest deleted: whoever writes the bucket cannot
+// downgrade the trail to "disabled"; the files are refused as digest_missing.
+func TestDigest_EnabledWithEmptyPrefixIsRefused(t *testing.T) {
+	e := newUsageEnv(t, trailOnly())
+	e.bucket.trailMode = "on"
+	k, _ := putLog(t, e, 1)
+	st := e.mustRun(t)
+	if ct := st.CloudTrail; ct.Objects != 0 || ct.Refused != 1 {
+		t.Fatalf("stats = %+v", ct)
+	}
+	digestGap(e, t, k, "digest_missing")
+	if len(e.rows(t)) != 0 || e.gaps(t)["cloudtrail digest:"+dAcct+"/us-east-1"] != nil {
+		t.Errorf("rows %v, gaps %v", e.rows(t), e.gaps(t))
+	}
+}
+
+// A failed trail lookup holds the prefix: it is not "disabled".
+func TestDigest_TrailLookupErrorHolds(t *testing.T) {
+	e := newUsageEnv(t, trailOnly())
+	e.bucket.trailMode = "error"
+	putLog(t, e, 1)
+	st := e.mustRun(t)
+	if ct := st.CloudTrail; ct.Objects != 0 {
+		t.Fatalf("stats = %+v", ct)
+	}
+	digestGap(e, t, "digest:"+dAcct+"/us-east-1", "digest_unreadable")
+	if len(e.rows(t)) != 0 {
+		t.Errorf("rows = %v", e.rows(t))
+	}
+}
+
+func TestDigest_NoTrailARNHolds(t *testing.T) {
+	c := trailConfig()
+	c.TrailARN = ""
+	e := newUsageEnv(t, &UsageConfig{CloudTrail: c})
+	putLog(t, e, 1)
+	e.mustRun(t)
+	digestGap(e, t, "digest:"+dAcct+"/us-east-1", "digest_unreadable")
+	if len(e.rows(t)) != 0 {
+		t.Errorf("rows = %v", e.rows(t))
 	}
 }

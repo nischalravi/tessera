@@ -920,7 +920,7 @@ func TestCollectAndMaterialize_RunsUsageIngest(t *testing.T) {
 }
 
 // usageActions are the ReaderActions that only the usage ingest calls.
-var usageActions = map[string]bool{"iam:GenerateServiceLastAccessedDetails": true, "iam:GetServiceLastAccessedDetails": true, "cloudtrail:GetEventSelectors": true, "cloudtrail:ListPublicKeys": true}
+var usageActions = map[string]bool{"iam:GenerateServiceLastAccessedDetails": true, "iam:GetServiceLastAccessedDetails": true, "cloudtrail:GetEventSelectors": true, "cloudtrail:ListPublicKeys": true, "cloudtrail:GetTrail": true}
 
 // Every call of the usage ingest is a read the customer allowed: the IAM and
 // CloudTrail ones are ReaderActions, and the S3 ones are what TrailReaderPolicy
@@ -928,10 +928,12 @@ var usageActions = map[string]bool{"iam:GenerateServiceLastAccessedDetails": tru
 func TestCollectUsage_UsesOnlyReaderActions(t *testing.T) {
 	e := newUsageEnv(t, &UsageConfig{CloudTrail: trailConfig(), AccessAdvisor: true, AdvisorPerRun: 1000})
 	e.collected(t)
+	e.bucket.trailMode = "on"
 	ds := newDigestSigner(t)
 	ds.install(e)
 	lk, lb := putLog(t, e, 1)
 	ds.add(e, dAcct, "us-east-1", dEnd(3), digestOpt{listed: map[string]string{lk: lb}})
+	putLog(t, e, 2) // listed by no digest: the trail's validation setting is read
 	e.mustRun(t)
 	used := map[string]bool{}
 	for _, q := range e.re.Requests() {
@@ -946,6 +948,7 @@ func TestCollectUsage_UsesOnlyReaderActions(t *testing.T) {
 		}
 		used[q.Service+":"+q.Operation] = true
 	}
+	used["cloudtrail:GetTrail"] = e.bucket.trailCalls > 0 // answered by the fake bucket, not the replay
 	for a := range usageActions {
 		if !used[a] {
 			t.Errorf("%s is in ReaderActions for the usage ingest but was not called", a)
