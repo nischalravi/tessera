@@ -3765,6 +3765,28 @@ export const awsShadow = {
     api<AwsShadowCheck>(`/aws/shadow/checks/${encodeURIComponent(id)}/triage`, { status, note }),
 };
 
+// ------------------------------------------------------------------ least-privilege loop: staged revocation (/api/lp, LP-5 #661)
+
+export type LpState = "candidate" | "announced" | "revoking" | "revoked" | "finalized" | "restoring" | "restored" | "exempted" | "failed" | "superseded";
+export interface LpSettings {
+  mode: "off" | "suggest" | "staged" | "auto"; paused: boolean; paused_reason?: string; paused_by?: string; paused_at?: string;
+  operator_disabled: boolean; active: boolean;
+  cap_per_run: number; cap_per_day: number; cap_per_account: number; cap_per_principal: number;
+  announce_days: number; finalize_days: number; auto_min_days: number; executed_last_24h: number;
+}
+export interface LpRevocation {
+  id: string; state: LpState; kind: string; eligibility: "auto" | "item"; principal: string; policy_arn: string; account_id: string;
+  unused_days: number; confidence: string; candidate_sha256: string; restore_sha256: string; created_by: string; created_at: string;
+  approved_by?: string; announce_until?: string; revoked_at?: string; restore_until?: string; finalized_at?: string; reason?: string;
+}
+export const lpLoop = {
+  /** The kill switch: one person; resuming takes a second admin through a change request (lp.settings.update). */
+  pause: (reason: string) => api<LpSettings>("/lp/pause", { reason }),
+  approve: (batch: string[], items: string[]) => api<{ items: LpRevocation[] }>("/lp/revocations/approve", { batch, items }),
+  object: (id: string, reason: string) => api<LpRevocation>(`/lp/revocations/${encodeURIComponent(id)}/object`, { reason }),
+  restore: (id: string) => api<LpRevocation>(`/lp/revocations/${encodeURIComponent(id)}/restore`, {}),
+};
+
 // ------------------------------------------------------------------ conditional access (issue #163)
 
 export type AccessScope = "signin" | "privileged";

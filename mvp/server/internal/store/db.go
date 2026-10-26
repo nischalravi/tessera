@@ -185,6 +185,8 @@ var tables = []string{
 	"aws_collection_runs",
 	// AWS production shadow agreement (schema/0916_aws_shadow.sql)
 	"aws_shadow_settings", "aws_shadow_checks", "aws_shadow_triage",
+	// least-privilege loop: settings, staged revocations and their events, protected list, exemptions (schema/0921_lp_revocations.sql)
+	"lp_settings", "lp_revocations", "lp_revocation_events", "lp_protected", "lp_exemptions",
 	// AWS usage (schema/0915_aws_usage.sql)
 	"aws_usage_daily", "aws_usage_state", "aws_usage_gaps",
 	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
