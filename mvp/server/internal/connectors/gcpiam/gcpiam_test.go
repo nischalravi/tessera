@@ -13,6 +13,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -382,6 +383,64 @@ func TestUnreadablePolicyIsPartial(t *testing.T) {
 	if _, err := r.open(t, func(c *gcpiam.Config) { c.OrganizationID, c.ProjectIDs = "", []string{"alpha-proj-1"} }).Discover(context.Background()); err == nil ||
 		!strings.Contains(err.Error(), "no policy could be read") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// EdgeScopesRead names the resources whose policy was read in full, by the same external ids the permissions carry,
+// so the edge pruner can match them; a resource whose policy could not be read is left out, so its edges are kept.
+func TestEdgeScopesReadMatchPermissionResourcesAndOmitUnreadScopes(t *testing.T) {
+	scopes := func(res *connectors.DiscoveryResult) map[string]bool {
+		m := map[string]bool{}
+		for _, s := range res.EdgeScopesRead {
+			m[s] = true
+		}
+		return m
+	}
+	permScopes := func(res *connectors.DiscoveryResult) map[string]bool {
+		m := map[string]bool{}
+		for _, p := range res.Permissions {
+			m[p.ResourceExternalID] = true
+		}
+		return m
+	}
+	res, err := newRig(t, &fake{}).open(t).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Partial != "" || len(res.EdgeSnapshotOf) != 1 || res.EdgeSnapshotOf[0] != gcpiam.System {
+		t.Fatalf("partial %q, snapshot of %v", res.Partial, res.EdgeSnapshotOf)
+	}
+	full := scopes(res)
+	for _, r := range res.Resources {
+		if !full[r.ExternalID] {
+			t.Errorf("resource %s was read in full but is not a scope read: %v", r.ExternalID, res.EdgeScopesRead)
+		}
+	}
+	for rid := range permScopes(res) {
+		if !full[rid] {
+			t.Errorf("permission resource %q is not among the scopes read %v", rid, res.EdgeScopesRead)
+		}
+	}
+	if !slices.IsSorted(res.EdgeScopesRead) {
+		t.Errorf("scopes are not sorted: %v", res.EdgeScopesRead)
+	}
+
+	// a policy that cannot be read: the scope is omitted, the others stay
+	res, err = newRig(t, &fake{deny: map[string]int{"/v3/folders/1000:getIamPolicy": 403}}).open(t).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := scopes(res)
+	if res.Partial == "" || part["folders/1000"] || permScopes(res)["folders/1000"] {
+		t.Errorf("partial %q: unread folder in scopes %v, permissions %v", res.Partial, res.EdgeScopesRead, permScopes(res))
+	}
+	if len(part) != len(full)-1 {
+		t.Errorf("scopes read = %v, want all but folders/1000 of %v", res.EdgeScopesRead, full)
+	}
+	for rid := range permScopes(res) {
+		if !part[rid] {
+			t.Errorf("permission resource %q is not among the scopes read %v", rid, res.EdgeScopesRead)
+		}
 	}
 }
 
