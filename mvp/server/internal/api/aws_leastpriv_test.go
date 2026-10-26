@@ -161,6 +161,15 @@ func TestAWSLeastPrivNoConnectorSnapshotTakesNoEvidence(t *testing.T) {
 	if got := lpLevel(t, items, "s3:GetObject"); got != "unknown" {
 		t.Errorf("GetObject with no evidence = %v", got)
 	}
+	for a, it := range items {
+		reasons, _ := it["confidence"].(map[string]any)["reasons"].([]any)
+		if len(reasons) != 1 || !strings.Contains(reasons[0].(string), "no connector") {
+			t.Errorf("%s reasons = %v, want the no-connector reason", a, reasons)
+		}
+	}
+	if v := c.get(base, 200); v["connector"] != "" {
+		t.Errorf("view connector = %v, want \"\"", v["connector"])
+	}
 }
 
 func TestAWSLeastPrivRefusesBadInput(t *testing.T) {

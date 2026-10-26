@@ -51,7 +51,9 @@ type awsLPView struct {
 // awsLeastPriv answers GET /api/aws/principals/{arn}/least-privilege
 // ?connector=&unused_days=&service=&limit=&cursor=&snapshot=&profile=
 //
-// connector defaults to the snapshot's own, and must be it when the snapshot names one; a snapshot with none takes no connector (422) and has no usage evidence. The identity's creation date is the
+// connector defaults to the snapshot's own, and must be it when the snapshot
+// names one; a snapshot with none takes no connector (422) and has no usage
+// evidence, so every level is unknown. The identity's creation date is the
 // snapshot's (IAM CreateDate); without it the level is capped at medium. A
 // permission counts as used when the principal's rows name its action in the
 // window, or name its service as a whole (Access Advisor): the finding is then
@@ -196,6 +198,11 @@ func (s *Server) awsLeastPriv(r *http.Request, p *params) (int, any, error) {
 		}
 		it := awsLPItem{Action: c.action, Resource: c.resource, Outcome: c.outcome, Fidelity: c.fidelity, Used: used,
 			Confidence: leastpriv.Assess(now, days, c.action, used, ev, facts)}
+		if connector == "" {
+			// the snapshot names no connector, so no source's usage is evidence for it (issue #693)
+			it.Confidence = leastpriv.Confidence{Level: leastpriv.ConfUnknown,
+				Reasons: []string{"the snapshot has no connector, so there is no usage evidence for it"}}
+		}
 		if used {
 			it.LastUsed = &la
 		}
