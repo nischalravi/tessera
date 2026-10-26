@@ -37,7 +37,7 @@ import (
 const (
 	FactReach          = "reach"
 	FactExist          = "exist"
-	FactHoldCredential = "hold_credential"
+	FactHoldCredential = "hold_credential" // #nosec G101 -- a fact name, not a secret
 )
 
 // TypeInvariant is the Type of a Cedar invariant without a @type annotation.
@@ -225,7 +225,7 @@ func (c *Context) mfaIdentities() (map[int64]*mfa.Identity, error) {
 const (
 	typeIdentity   = "Tessera::Identity"
 	typeResource   = "Tessera::Resource"
-	typeCredential = "Tessera::Credential"
+	typeCredential = "Tessera::Credential" // #nosec G101 -- a Cedar entity type name, not a secret
 	typeGroup      = "Tessera::Group"
 	typeAction     = "Tessera::Action"
 )
