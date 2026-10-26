@@ -100,9 +100,9 @@ func TestRestore_InvalidatesCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// tenant-a and tenant-b each hold an active and a next access_token key;
+	// tenant-a and tenant-b each hold an active and a next access_token and aws_federation key;
 	// the platform key signs audit checkpoints and is not a tenant credential
-	if got := res.Invalidated; got.Sessions != 1 || got.LoginTransactions != 1 || got.Invitations != 1 || got.SigningKeys != 4 {
+	if got := res.Invalidated; got.Sessions != 1 || got.LoginTransactions != 1 || got.Invitations != 1 || got.SigningKeys != 8 {
 		t.Errorf("invalidated %+v", got)
 	}
 
@@ -163,6 +163,12 @@ func TestRestore_InvalidatesCredentials(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Errorf("no usable access-token key after start: %v", err)
+	}
+	if err := db.InTenant(ctx, tenantA, func(tx *store.TenantTx) error {
+		_, err := keys.ActiveSigningKey(tx, store.KeyPurposeAWSFederation, f.sealer)
+		return err
+	}); err != nil {
+		t.Errorf("no usable aws_federation key after start: %v", err)
 	}
 	// invalidation touches no ledger row: the chain heads match the backup
 	got, err := backup.Heads(ctx, target)

@@ -632,8 +632,22 @@ func TestNewDialer(t *testing.T) {
 	if _, err := safehttp.NewDialer(safehttp.Options{Env: config.Prod, AllowLoopback: true}); err == nil {
 		t.Error("the loopback exception was accepted in prod")
 	}
-	if _, err := safehttp.NewDialer(safehttp.Options{Env: "test"}); err == nil {
+	if _, err := safehttp.NewDialer(safehttp.Options{Env: "staging"}); err == nil {
 		t.Error("an unknown environment was accepted")
+	}
+	// a test deployment gets production's rules (#634): accepted, no loopback
+	if _, err := safehttp.NewDialer(safehttp.Options{Env: config.Test, AllowLoopback: true}); err == nil {
+		t.Error("the loopback exception was accepted in test")
+	}
+	testDial, err := safehttp.NewDialer(safehttp.Options{Env: config.Test, AllowedPorts: []int{25}})
+	if err != nil {
+		t.Fatalf("test environment refused: %v", err)
+	}
+	if c, err := testDial(context.Background(), "tcp", "127.0.0.1:25"); !errors.Is(err, safehttp.ErrBlockedAddress) {
+		if c != nil {
+			_ = c.Close()
+		}
+		t.Errorf("test dial of loopback = %v, want ErrBlockedAddress", err)
 	}
 	r := dns(map[string][][]string{"mail.internal": {{"10.0.0.5"}}, "meta.example": {{"169.254.169.254"}}, "mixed.example": {{"8.8.8.8", "192.168.1.1"}}})
 	dial, err := safehttp.NewDialer(safehttp.Options{Env: config.Prod, Resolver: r, AllowedPorts: []int{25, 587}})

@@ -98,6 +98,8 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.ArchiveSweep, queue.Kind{Handler: s.queueArchive, Actor: archive.Actor})
 	q.Register(jobs.OAuthSync, queue.Kind{Handler: s.queueOAuthSync, Actor: oauthSyncActor})
 	q.Register(jobs.VmsSync, queue.Kind{Handler: s.queueVmsSync, Actor: vmsSyncActor})
+	q.Register(jobs.AWSCollect, queue.Kind{Handler: s.queueAWSCollect, Actor: awsCollectActor})
+	q.Register(jobs.AWSShadow, queue.Kind{Handler: s.queueAWSShadow, Actor: awsShadowActor})
 	// The worker kinds (issue #302): run here unless a `tessera worker` is
 	// meant to. provision_push is not registered here: the process keeps the
 	// provisioning loop (RunProvisioning), which the serve wiring skips when
@@ -117,6 +119,8 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Schedule(jobs.ArchiveSweep, jobs.ArchiveSweep, "@every "+archiveEvery.String(), maxArchiveAttempts)
 	q.Schedule(jobs.OAuthSync, jobs.OAuthSync, "@every "+oauthSyncEvery.String(), maxOAuthSyncAttempts)
 	q.Schedule(jobs.VmsSync, jobs.VmsSync, "@every "+vmsSyncEvery.String(), maxVmsSyncAttempts)
+	q.Schedule(jobs.AWSCollect, jobs.AWSCollect, "@every "+awsCollectEvery.String(), 1)
+	q.Schedule(jobs.AWSShadow, jobs.AWSShadow, "@every "+awsShadowEvery.String(), 1)
 	return q
 }
 

@@ -33,6 +33,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/condaccess"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/awsorg"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed/wire"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
@@ -279,6 +280,15 @@ type Config struct {
 	// (see CatalogFromDir). Nil: the /api/aws evaluator routes answer 503
 	// aws_catalog_unavailable; everything else is unaffected.
 	AWSCatalog func() (*AWSCatalog, error)
+	// AWSHTTP sends the AWS connector's API calls (awsorg.NewHTTPClient: the
+	// safehttp client with limits sized for IAM responses). Nil: collecting an
+	// AWS connector answers 503 aws_collector_unavailable.
+	AWSHTTP awsorg.Doer
+	// AWSAllowStaticKeys lets a connector hold a sealed AWS access key
+	// (config.Config.AWSAllowStaticKeys; prod refuses it). False: connectors
+	// are federated (AssumeRoleWithWebIdentity) and creating a static one is
+	// refused.
+	AWSAllowStaticKeys bool
 	// GitHubAPIBase is where the access-diff comment is posted (default
 	// https://api.github.com). Tests point it at a local server.
 	GitHubAPIBase string
@@ -444,6 +454,7 @@ func New(cfg Config) *Server {
 		}
 		cfg.Helpdesk = &helpdesk.Service{HTTP: hc, Containment: cfg.Containment, Clock: cfg.Clock, Simulated: cfg.Env != "prod"}
 	}
+	cfg.Readiness.AWSAllowStaticKeys = cfg.AWSAllowStaticKeys
 	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), clientLimits: newClientLimiter(cfg.ClientRate), provSeal: provSeal, archive: cfg.Archive,
 		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
@@ -583,6 +594,7 @@ func New(cfg Config) *Server {
 	s.registerGroupsAttrRoutes()
 	s.registerGroupsPermRoutes() // literal /api/groups/permissions/... before the {id} routes
 	s.registerMCPRoutes()
+	s.registerAWSFederationRoutes()
 	s.registerSSFRoutes()
 	s.registerFlatfileRoutes()
 	s.registerEvidenceRoutes()

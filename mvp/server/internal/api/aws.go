@@ -22,13 +22,15 @@ import (
 // returned: a connector shows "credentials_set" only.
 //
 //	GET    /api/aws/connectors        the tenant's connectors, with their last run
-//	POST   /api/aws/connectors        {name, config, credentials}; the response carries the external_id for the role's trust policy
+//	POST   /api/aws/connectors        {name, config}: a federated connector (the default; nothing secret is stored) whose response
+//	                                  carries the issuer, audience, subject and trust policy for the customer's role; or, only where
+//	                                  TESSERA_AWS_ALLOW_STATIC_KEYS allows it, {name, config, credentials} with the external_id
 //	DELETE /api/aws/connectors/{id}
 //	GET    /api/aws/snapshots         newest first
 //	GET    /api/aws/snapshots/{id}    one snapshot with its collection findings
 //
-// Running a collection is not a route yet: a run can outlast the request
-// timeout, so it needs the background runner (awsorg.Service.Collect).
+// Collecting is a queued job (aws_collect.go): POST /api/aws/connectors/{id}/collect
+// and the scheduled collection, with their runs under /api/aws/collection-runs.
 func (s *Server) registerAWSRoutes() {
 	G, P, D := http.MethodGet, http.MethodPost, http.MethodDelete
 	s.handle(G, "/api/aws/connectors", read, need(auth.PermConnectionsRead), s.rd(s.listAWSConnectors))
@@ -36,11 +38,14 @@ func (s *Server) registerAWSRoutes() {
 	s.handle(D, "/api/aws/connectors/{id}", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.deleteAWSConnector))
 	s.handle(G, "/api/aws/snapshots", read, need(auth.PermConnectionsRead), s.rd(s.listAWSSnapshots))
 	s.handle(G, "/api/aws/snapshots/{id}", read, need(auth.PermConnectionsRead), s.rd(s.getAWSSnapshot))
+	s.registerAWSCollectRoutes()
+	s.registerAWSShadowRoutes()
 	s.registerAWSEvalRoutes()
+	s.registerAWSLeastPrivRoutes()
 }
 
 func (s *Server) awsService() *awsorg.Service {
-	return &awsorg.Service{Sealer: s.cfg.Sealer, Clock: s.clock}
+	return &awsorg.Service{Sealer: s.cfg.Sealer, Clock: s.clock, AllowStaticKeys: s.cfg.AWSAllowStaticKeys}
 }
 
 var awsSnapshotIDRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -61,20 +66,33 @@ type awsConnectorView struct {
 	Config         awsorg.Config `json:"config"`
 	ExternalID     string        `json:"external_id"`
 	CredentialsSet bool          `json:"credentials_set"`
-	Status         string        `json:"status"`
-	LastSnapshotID string        `json:"last_snapshot_id"`
-	LastRunAt      *string       `json:"last_run_at"`
-	LastError      string        `json:"last_error"`
-	CreatedBy      string        `json:"created_by"`
-	CreatedAt      string        `json:"created_at"`
+	// Auth is "federated" (no secret stored) or "static_key".
+	Auth string `json:"auth"`
+	// Federation is set for a federated connector: what the customer trusts.
+	Federation     *awsFederation `json:"federation,omitempty"`
+	Status         string         `json:"status"`
+	LastSnapshotID string         `json:"last_snapshot_id"`
+	LastRunAt      *string        `json:"last_run_at"`
+	LastError      string         `json:"last_error"`
+	CreatedBy      string         `json:"created_by"`
+	CreatedAt      string         `json:"created_at"`
 }
 
-func awsConnectorViewOf(k *store.AWSConnector) (awsConnectorView, error) {
+func (s *Server) awsConnectorViewOf(c *store.TenantTx, k *store.AWSConnector) (awsConnectorView, error) {
 	cfg, err := awsorg.ParseConfig(k.Config)
 	if err != nil {
 		return awsConnectorView{}, err
 	}
-	return awsConnectorView{ID: k.ID, Name: k.Name, Config: *cfg, ExternalID: k.ExternalID, CredentialsSet: len(k.CredentialsEnc) > 0,
+	var fed *awsFederation
+	if cfg.Mode() == awsorg.AuthFederated && s.cfg.PublicURL != "" {
+		rec, err := c.TenantRecord()
+		if err != nil {
+			return awsConnectorView{}, err
+		}
+		iss, sub := awsorg.IssuerURL(s.cfg.PublicURL, rec.Slug), awsorg.Subject(c.Tenant(), k.ID)
+		fed = &awsFederation{Issuer: iss, Audience: awsorg.FederationAudience, Subject: sub, TrustPolicy: string(awsorg.TrustPolicy(iss, sub))}
+	}
+	return awsConnectorView{Auth: cfg.Mode(), Federation: fed, ID: k.ID, Name: k.Name, Config: *cfg, ExternalID: k.ExternalID, CredentialsSet: len(k.CredentialsEnc) > 0,
 		Status: k.Status, LastSnapshotID: k.LastSnapshotID, LastRunAt: awsRT(k.LastRunAt), LastError: k.LastError, CreatedBy: k.CreatedBy,
 		CreatedAt: store.RT(k.CreatedAt)}, nil
 }
@@ -88,13 +106,14 @@ func awsRT(t *time.Time) *string {
 }
 
 func (s *Server) listAWSConnectors(r *http.Request, _ *params) (int, any, error) {
-	all, err := store.TxFrom(r.Context()).AWSConnectors()
+	tx := store.TxFrom(r.Context())
+	all, err := tx.AWSConnectors()
 	if err != nil {
 		return 0, nil, err
 	}
 	items := make([]awsConnectorView, 0, len(all))
 	for _, k := range all {
-		v, err := awsConnectorViewOf(k)
+		v, err := s.awsConnectorViewOf(tx, k)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -119,7 +138,7 @@ func (s *Server) createAWSConnector(r *http.Request, _ *params) (int, any, error
 		if err != nil {
 			return err
 		}
-		out, err = awsConnectorViewOf(k)
+		out, err = s.awsConnectorViewOf(c, k)
 		return err
 	})
 	if err != nil {

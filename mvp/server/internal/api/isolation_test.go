@@ -354,6 +354,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/t/{slug}/mcp/") || strings.HasPrefix(rt.Pattern, "/api/mcp/") {
 			continue // TestMCP_CrossTenant (UUID and token ids, a tenant slug in the path)
 		}
+		if strings.HasPrefix(rt.Pattern, "/t/{slug}/aws/.well-known/") {
+			continue // TestAWSFederation_PublicDocuments (public; the tenant is the slug, and its keys are its own)
+		}
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
 		}
@@ -414,6 +417,12 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/aws/connectors/{id}" || rt.Pattern == "/api/aws/snapshots/{id}" {
 			continue // TestAWSAPI_*, and store.TestIsolation_AWSTables (UUIDs and content hashes, not fixture ids)
+		}
+		if rt.Pattern == "/api/aws/connectors/{id}/collect" || rt.Pattern == "/api/aws/collection-runs/{id}" {
+			continue // TestAWSCollectTenantIsolation, and store.TestIsolation_AWSCollectionRuns (UUIDs, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/aws/shadow/checks/{id}") {
+			continue // TestAWSShadowTenantIsolation (UUIDs, not fixture ids)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/evidence/packs/{pack_id}") {
 			continue // TestEvidenceAPI_CrossTenant (a UUID, not a fixture id)
@@ -590,6 +599,12 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		path := rt.Pattern
 		if path == "/api/aws/snapshots/{id}" {
 			continue // a content hash, not a fixture id: TestAWSAPI_Snapshots and store.TestIsolation_AWSTables
+		}
+		if path == "/api/aws/collection-runs/{id}" {
+			continue // a UUID, not a fixture id: TestAWSCollectTenantIsolation
+		}
+		if path == "/api/aws/shadow/checks/{id}" {
+			continue // a UUID, not a fixture id: TestAWSShadowTenantIsolation
 		}
 		if strings.HasPrefix(path, "/api/aws/principals/") || strings.HasPrefix(path, "/api/aws/resources/") ||
 			path == "/api/aws/explanations/{id}" || path == "/api/aws/can" {

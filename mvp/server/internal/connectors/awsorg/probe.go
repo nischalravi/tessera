@@ -73,11 +73,16 @@ func (c *Collector) Probe(ctx context.Context) (*ProbeResult, error) {
 
 // ConfigOf is the connector configuration of a governed connection's settings
 // (role_name, regions, account_ids, management_account_id, identity_center_region).
+// A governed connection holds its access key, so it is a static-key config.
 func ConfigOf(p governed.Params) Config {
 	s := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
 	return Config{RoleName: s("role_name"), Regions: governed.List(s("regions")), AccountIDs: governed.List(s("account_ids")),
-		ManagementAccountID: s("management_account_id"), IdentityCenterRegion: s("identity_center_region")}
+		ManagementAccountID: s("management_account_id"), IdentityCenterRegion: s("identity_center_region"), Auth: AuthStaticKey}
 }
+
+// ErrStaticKeysDisabled is the refusal of a connection that stores an AWS
+// access key where the server allows none (production).
+var ErrStaticKeysDisabled = errors.New("awsorg: stored AWS access keys are disabled on this server; connect AWS with a federated connector (POST /api/aws/connectors without credentials)")
 
 // GovernedProber is the readiness prober of a governed AWS Organizations
 // connection: AssumeRole into the reader role with the connection's keys and

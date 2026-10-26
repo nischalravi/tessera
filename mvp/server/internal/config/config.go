@@ -127,6 +127,12 @@ type Config struct {
 	// unavailable (503). AWSCatalogVersion picks a version (default: newest).
 	AWSCatalogDir     string
 	AWSCatalogVersion string
+	// AWSAllowStaticKeys (TESSERA_AWS_ALLOW_STATIC_KEYS) lets the AWS connector
+	// hold a sealed long-lived access key. Off, a connector reads AWS only with
+	// temporary credentials from sts:AssumeRoleWithWebIdentity (a Tessera-issued
+	// token; no secret is stored). Default on in dev and test, off in prod, and
+	// prod refuses it on.
+	AWSAllowStaticKeys bool
 	// BackupDir (TESSERA_BACKUP_DIR) turns on scheduled encrypted backups
 	// every BackupEveryMinutes, keeping the newest BackupKeep (issue #171).
 	BackupDir string
@@ -515,6 +521,10 @@ func Load(getenv func(string) string) (*Config, error) {
 	if v := c.AWSCatalogVersion; v != "" && (len(v) > 40 || strings.Trim(v, "0123456789abcdef-") != "") {
 		bad("TESSERA_AWS_CATALOG_VERSION: %q is not a compiled catalog version (<date>-<hex>)", v)
 	}
+	c.AWSAllowStaticKeys = boolean("TESSERA_AWS_ALLOW_STATIC_KEYS", true, false)
+	if prod && c.AWSAllowStaticKeys {
+		bad("TESSERA_AWS_ALLOW_STATIC_KEYS must not be set with TESSERA_ENV=prod (the AWS connector reads with federated credentials, not stored access keys)")
+	}
 	c.FakeTarget = boolean("TESSERA_DEV_FAKE_TARGET", false, false)
 	c.DevOAuthFakeURL = strings.TrimRight(strings.TrimSpace(getenv("TESSERA_DEV_OAUTH_FAKE_URL")), "/")
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))
@@ -532,6 +542,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		bad("TESSERA_PUBLIC_URL must be https with TESSERA_ENV=prod (got %s)", pub.Scheme)
 	case prod && DevOnlyURL(c.PublicURL) != "":
 		bad("TESSERA_PUBLIC_URL must not be %s with TESSERA_ENV=prod", DevOnlyURL(c.PublicURL))
+	case prod && pub.Port() != "":
+		// AWS refuses an IAM OIDC provider URL with a port, and the AWS federation issuer is {PUBLIC_URL}/t/{slug}/aws.
+		bad("TESSERA_PUBLIC_URL must not have a port with TESSERA_ENV=prod (AWS rejects an OIDC provider URL with one; got :%s)", pub.Port())
 	}
 	// §11: the insecure-cookie fallback (Safari on http://localhost) only in
 	// dev, and only for a localhost public URL.

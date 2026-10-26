@@ -101,6 +101,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/all"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/awsorg"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed/wire"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
@@ -643,6 +644,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if cfg.StepUpBypass && !cfg.IsProd() {
 		logger.Warn("step-up is OFF (TESSERA_STEPUP_BYPASS): every signed-in session counts as freshly authenticated; dev and test only")
 	}
+	awsHTTP, err := awsorg.NewHTTPClient(cfg) // the AWS connector's collections (issue #637): safehttp, limits sized for IAM
+	if err != nil {
+		return err
+	}
 	srv := api.New(api.Config{ExternalKinds: external, ConnectorSyncSchedule: cfg.ConnectorSyncSchedule, Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger, Archive: archiveSvc,
 		Secrets: secrets, Credential: authority,
 		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, Provisioning: provisioningSvc, LoaderDataDir: cfg.LoaderDataDir, LoaderHTTP: provHTTP, LoaderPGDial: loaderPGDial, LoaderDirectory: loaderDirectory, APIAudience: cfg.APIAudience,
@@ -655,7 +660,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 			Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, Agents: agents, AuditAnchor: anchorURL,
-		Siem: siemSvc, Alerts: alertSvc, AWSCatalog: awsCatalogLoader(cfg),
+		Siem: siemSvc, Alerts: alertSvc, AWSCatalog: awsCatalogLoader(cfg), AWSHTTP: awsHTTP, AWSAllowStaticKeys: cfg.AWSAllowStaticKeys,
 		SoD:          sod.Settings{MaxDays: cfg.SoDMaxMitigationDays, WarnDays: cfg.SoDWarnDays},
 		ClientRate:   api.ClientRate{Burst: cfg.ClientRateBurst, PerMinute: cfg.ClientRatePerMinute},
 		RotationFake: cfg.RotationFakeAdapters, StepUpAllowWeaker: cfg.StepUpAllowWeaker,

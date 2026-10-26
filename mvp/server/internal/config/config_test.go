@@ -50,6 +50,40 @@ func with(base map[string]string, kv ...string) map[string]string {
 	return m
 }
 
+// TestAWSAllowStaticKeys: stored AWS access keys are allowed by default in dev
+// and test, off by default in prod, and prod refuses the flag being on.
+func TestAWSAllowStaticKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{"dev default", map[string]string{"TESSERA_ENV": "dev"}, true},
+		{"dev off", map[string]string{"TESSERA_ENV": "dev", "TESSERA_AWS_ALLOW_STATIC_KEYS": "false"}, false},
+		{"test default", map[string]string{"TESSERA_ENV": "test"}, true},
+	} {
+		c, err := config.Load(env(tc.env))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if c.AWSAllowStaticKeys != tc.want {
+			t.Errorf("%s: AWSAllowStaticKeys = %t, want %t", tc.name, c.AWSAllowStaticKeys, tc.want)
+		}
+	}
+	c, err := config.Load(env(safeProd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AWSAllowStaticKeys {
+		t.Error("prod default allows static AWS keys")
+	}
+	kv := safeProd()
+	kv["TESSERA_AWS_ALLOW_STATIC_KEYS"] = "1"
+	if _, err := config.Load(env(kv)); err == nil || !strings.Contains(err.Error(), "TESSERA_AWS_ALLOW_STATIC_KEYS must not be set") {
+		t.Errorf("prod with static keys: err = %v", err)
+	}
+}
+
 func TestSafeProdStarts(t *testing.T) {
 	c, err := config.Load(env(safeProd()))
 	if err != nil {
@@ -78,7 +112,9 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"public URL plain http", []string{"TESSERA_PUBLIC_URL", "http://tessera.example.com"}, "TESSERA_PUBLIC_URL must be https"},
 		{"public URL missing", []string{"TESSERA_PUBLIC_URL", "<unset>"}, "TESSERA_PUBLIC_URL is required"},
 		{"public URL with userinfo", []string{"TESSERA_PUBLIC_URL", "https://u:p@tessera.example.com"}, "TESSERA_PUBLIC_URL"},
+		{"public URL with a port", []string{"TESSERA_PUBLIC_URL", "https://tessera.example.com:8443"}, "must not have a port"},
 		{"cookie not secure", []string{"TESSERA_COOKIE_SECURE", "false"}, "TESSERA_COOKIE_SECURE must be true"},
+		{"AWS static keys allowed", []string{"TESSERA_AWS_ALLOW_STATIC_KEYS", "true"}, "TESSERA_AWS_ALLOW_STATIC_KEYS must not be set"},
 		{"no KEK", []string{"TESSERA_KEK", "<unset>"}, "a KEK is required"},
 		{"KEK wrong length", []string{"TESSERA_KEK", base64.StdEncoding.EncodeToString([]byte("short"))}, "TESSERA_KEK: must decode to 32 bytes"},
 		{"KEK not base64", []string{"TESSERA_KEK", "not base64!"}, "TESSERA_KEK: not valid base64"},

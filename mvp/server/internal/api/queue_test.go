@@ -64,7 +64,7 @@ func TestQueueAPI(t *testing.T) {
 	// The schedules exist for both tenants and fired once: every sweep ran.
 	var scheds []queueScheduleView
 	rec := corrDo(h, auditor, "GET", "/api/queue/schedules", "")
-	if err := json.Unmarshal(rec.Body.Bytes(), &scheds); err != nil || rec.Code != 200 || len(scheds) != 14 {
+	if err := json.Unmarshal(rec.Body.Bytes(), &scheds); err != nil || rec.Code != 200 || len(scheds) != 16 {
 		t.Fatalf("schedules: %d %s", rec.Code, rec.Body)
 	}
 	for _, s := range scheds {
@@ -80,7 +80,7 @@ func TestQueueAPI(t *testing.T) {
 	}
 	var list []queueJobView
 	rec = corrDo(h, auditor, "GET", "/api/queue/jobs?limit=100", "")
-	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || rec.Code != 200 || len(list) != 13 {
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || rec.Code != 200 || len(list) != 15 {
 		t.Fatalf("jobs: %d %s", rec.Code, rec.Body)
 	}
 	seen := map[string]bool{}

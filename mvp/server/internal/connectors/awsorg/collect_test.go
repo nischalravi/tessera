@@ -69,6 +69,14 @@ func TestCollect_Organization(t *testing.T) {
 		alice.Tags["team"] != "data" || !slices.Equal(alice.GroupARNs, []string{"arn:aws:iam::111111111111:group/eng"}) {
 		t.Fatalf("alice = %+v", alice)
 	}
+	if alice.CreateDate != "2024-01-01T00:00:00Z" {
+		t.Errorf("alice.CreateDate = %q", alice.CreateDate)
+	}
+	for in, want := range map[string]string{"2024-01-01T00:00:00Z": "2024-01-01T00:00:00Z", "2024-01-01T02:00:00+02:00": "2024-01-01T00:00:00Z", "": "", "yesterday": ""} {
+		if got := createDate(in); got != want {
+			t.Errorf("createDate(%q) = %q, want %q", in, got, want)
+		}
+	}
 	if len(alice.IdentityPolicyIDs) != 3 {
 		t.Fatalf("alice has %d identity policies, want inline + managed + the group's", len(alice.IdentityPolicyIDs))
 	}
@@ -257,7 +265,10 @@ func TestCollect_UsesOnlyReaderActions(t *testing.T) {
 		used[action] = true
 	}
 	for _, a := range ReaderActions {
-		if !used[a] {
+		if a == "iam:SimulatePrincipalPolicy" {
+			continue // the shadow agreement's, not the collection's: TestSimulator_AsksTheAccountOfThePrincipal
+		}
+		if !used[a] && !usageActions[a] { // those are called by the usage ingest (TestCollectUsage_UsesOnlyReaderActions)
 			t.Errorf("ReaderActions has %s, which the fixture run never calls", a)
 		}
 	}

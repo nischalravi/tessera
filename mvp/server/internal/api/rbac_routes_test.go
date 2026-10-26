@@ -174,13 +174,22 @@ POST   /api/connections/{id}/retire                  connections.manage STEP_UP_
 GET    /api/aws/connectors                           connections.read   -  # issue #26
 POST   /api/aws/connectors                           connections.manage STEP_UP_POLICY  # issue #26
 DELETE /api/aws/connectors/{id}                      connections.manage STEP_UP_POLICY  # issue #26
+POST   /api/aws/connectors/{id}/collect              connections.manage STEP_UP_POLICY  # issue #637
+GET    /api/aws/collection-runs                      connections.read   -  # issue #637
+GET    /api/aws/collection-runs/{id}                 connections.read   -  # issue #637
 GET    /api/aws/snapshots                            connections.read   -  # issue #26
 GET    /api/aws/snapshots/{id}                       connections.read   -  # issue #26
 GET    /api/aws/can                                  graph.read         -  # issue #30
 GET    /api/aws/principals/{arn}/effective           graph.read         -  # issue #30
+GET    /api/aws/principals/{arn}/least-privilege     graph.read         -  # issue #645
 GET    /api/aws/resources/{arn}/who-can              graph.read         -  # issue #30
 GET    /api/aws/explanations/{id}                    graph.read         -  # issue #30
 POST   /api/aws/simulate-policy-change               graph.read         -  # issue #30 (a comment post: connections.manage + STEP_UP_POLICY in the handler)
+GET    /api/aws/shadow                               connections.read   -  # issue #641
+PUT    /api/aws/shadow                               connections.manage STEP_UP_POLICY  # issue #641
+GET    /api/aws/shadow/checks                        connections.read   -  # issue #641
+GET    /api/aws/shadow/checks/{id}                   connections.read   -  # issue #641
+POST   /api/aws/shadow/checks/{id}/triage            connections.manage -  # issue #641
 GET    /api/aws/pr-comment                           connections.read   -  # issue #30
 PUT    /api/aws/pr-comment                           connections.manage STEP_UP_POLICY  # issue #30
 GET    /api/correlation/queue                        graph.read      -  # issue #160
@@ -388,6 +397,8 @@ PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_
 GET    /t/{slug}/mcp/.well-known/oauth-authorization-server public  # issue #115
 GET    /t/{slug}/mcp/.well-known/oauth-protected-resource/{resource_id} public  # issue #115
 GET    /t/{slug}/mcp/.well-known/jwks.json           public  # issue #115
+GET    /t/{slug}/aws/.well-known/openid-configuration public  # EP-2 (#638)
+GET    /t/{slug}/aws/.well-known/jwks.json           public  # EP-2 (#638)
 POST   /t/{slug}/mcp/oauth/token                     public  # issue #115
 POST   /t/{slug}/mcp/oauth/introspect                public  # issue #115
 POST   /t/{slug}/mcp/oauth/revoke                    public  # issue #115

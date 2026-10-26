@@ -192,3 +192,23 @@ func TestGrantRecommendationsSkipWeakEvaluatedGrants(t *testing.T) {
 		})
 	}
 }
+
+func TestUsedCallsFromUsage(t *testing.T) {
+	row := func(action, scope, day, source string) *store.AWSUsageDay {
+		return &store.AWSUsageDay{PrincipalARN: "arn:aws:iam::111122223333:role/x", Action: action, ResourceScope: scope, Day: day, Source: source, Count: 1}
+	}
+	got := leastpriv.UsedCallsFromUsage([]*store.AWSUsageDay{
+		row("s3:GetObject", "arn:aws:s3:::b/*", "2026-10-14", store.AWSUsageCloudTrail),
+		row("s3:GetObject", "arn:aws:s3:::b/*", "2026-10-15", store.AWSUsageCloudTrail), // another day: one call
+		row("s3:GetObject", "arn:aws:s3:::b/*", "2026-10-15", store.AWSUsageAccessAdvisor),
+		row("ec2:RunInstances", "*", "2026-10-15", store.AWSUsageCloudTrail),
+		row("lambda:*", "*", "2026-10-01", store.AWSUsageAccessAdvisor), // service level: not a call
+	})
+	want := []leastpriv.UsedCall{{Action: "ec2:RunInstances", Resource: "*"}, {Action: "s3:GetObject", Resource: "arn:aws:s3:::b/*"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("UsedCallsFromUsage = %v, want %v", got, want)
+	}
+	if got := leastpriv.UsedCallsFromUsage(nil); len(got) != 0 {
+		t.Errorf("no rows: %v", got)
+	}
+}

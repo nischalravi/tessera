@@ -24,7 +24,7 @@ func newAWSClient(t *testing.T) rdClient {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newRD(t, func(c *Config) { c.Sealer = s })
+	return newRD(t, func(c *Config) { c.Sealer = s; c.AWSAllowStaticKeys = true })
 }
 
 func TestAWSAPI_ConnectorLifecycle(t *testing.T) {
@@ -93,7 +93,6 @@ func TestAWSAPI_CreateValidatesInput(t *testing.T) {
 		"bad region":       strings.Replace(awsCreateBody("x"), "us-east-1", "us-east-1.evil.example", 1),
 		"bad account":      strings.Replace(awsCreateBody("x"), "111111111111", "1111", 1),
 		"short secret":     strings.Replace(awsCreateBody("x"), awsTestSecret, "short", 1),
-		"no credentials":   `{"name":"x","config":{"regions":["us-east-1"],"management_account_id":"111111111111"}}`,
 		"trailing garbage": awsCreateBody("x") + `{}`,
 	} {
 		if rec := c.do("POST", "/api/aws/connectors", body); rec.Code < 400 || rec.Code >= 500 {

@@ -5341,12 +5341,30 @@ stdlib SigV4 signer (`internal/aws/sigv4`, tested against the published `get-van
 sent through `internal/safehttp`. Throttling and 5xx are retried with exponential backoff and full
 jitter (honouring `Retry-After`); every `List*` follows its token to the last page.
 
-- **Credentials.** The connector holds an access key pair, sealed with `internal/seal` (AAD bound to
-  tenant, table, column and connector id) and never returned by the API. It signs only
-  `sts:AssumeRole` with it; everything else is read as the customer's role (default `TesseraReader`)
-  in each account, with an `sts:ExternalId` the connector generates and shows (`external_id`) for
-  the role's trust policy. `awsorg.ReaderPolicy()` is the role's permissions policy: only List and
-  Read actions, verified against the action catalog (`CheckReadOnly`, tested).
+- **Credentials (federated, no stored keys; issue #638).** A new connector is federated: it stores
+  no secret. For each account it signs a short-lived JWT (ES256, 5 minutes) with the tenant's dedicated
+  `aws_federation` key from `internal/keys` (not the access-token key; its public half is the AWS JWKS) and calls STS `AssumeRoleWithWebIdentity` (an unsigned call, through
+  `safehttp`) for one hour of credentials in the customer's read-only role, cached until 5 minutes
+  before they expire. Claims: `iss` `{TESSERA_PUBLIC_URL}/t/{slug}/aws`, `aud` `sts.amazonaws.com`,
+  `sub` `tessera:tenant:{tenant-id}:aws-connector:{connector-id}`, `jti`. The token is never
+  served; the only public documents are `GET /t/{slug}/aws/.well-known/openid-configuration` and
+  `.../jwks.json`. No error, audit event or log holds a token or temporary credentials.
+  Customer setup, in each account the connector reads (an IAM OIDC provider is per account; use a
+  StackSet for many):
+  1. Create an IAM OIDC provider: URL = the connector's `federation.issuer`, audience (client id)
+     `sts.amazonaws.com`.
+  2. Create the role (default `TesseraReader`) with the trust policy in the connector's
+     `federation.trust_policy` (`StringEquals` on `<issuer host/path>:aud` and `:sub`: only this
+     tenant's connector can assume it) and `awsorg.ReaderPolicy()` as its permissions policy: only
+     List and Read actions, verified against the action catalog (`CheckReadOnly`, tested).
+  3. Collect. There is no `sts:ExternalId` in this mode: the `sub` pin replaces it.
+
+  The issuer needs an https `TESSERA_PUBLIC_URL` that AWS can reach, with no port (prod refuses one). Cutover: an existing tenant gets its `aws_federation` key at the next start, and AWS caches the OIDC provider's JWKS, so tokens with the new kid may fail until AWS refetches it (re-save the provider's thumbprint or wait). **Stored-key mode** (a sealed
+  access key that signs `sts:AssumeRole`, with an `external_id`) remains only behind
+  `TESSERA_AWS_ALLOW_STATIC_KEYS`: default on in dev and test, off in prod, and prod refuses it
+  set to true (the server will not start). With it off, creating a keyed connector (directly or by a
+  governed connection's handover) is refused (`422 static_keys_disabled`, also when a secret is put on a governed `awsorg` connection) and a stored one is not
+  collected from; in prod, governed AWS connections (which hold a key) are not probed either. Existing connectors without `config.auth` are stored-key ones.
 - **Fail closed (design §3.3).** A stored policy that does not parse, a statement dropped as an
   ingest anomaly, and a read that fails (an account that refuses the role, a bucket policy that is
   denied, a list that fails) are never skipped: each is a *finding* with the scope of decisions it
@@ -5360,8 +5378,111 @@ jitter (honouring `Retry-After`); every `List*` follows its token to the last pa
 - **API** (connections permissions; writes need step-up): `GET|POST /api/aws/connectors`,
   `DELETE /api/aws/connectors/{id}`, `GET /api/aws/snapshots`, `GET /api/aws/snapshots/{id}`.
   `POST /api/aws/connectors` takes `{name, config: {regions, account_ids, management_account_id,
-  role_name, identity_center_region}, credentials: {access_key_id, secret_access_key}}`. Running a
-  collection (`awsorg.Service.Collect`) is not a route yet: a run can outlast the request timeout.
+  role_name, identity_center_region}}` and creates a federated connector; its response (and the
+  list) carry `auth` and `federation: {issuer, audience, subject, trust_policy}`. With
+  `TESSERA_AWS_ALLOW_STATIC_KEYS` it also accepts `credentials: {access_key_id, secret_access_key}`.
+- **Collection job** (issue #637). A collection reads every account, so it is a job of the durable
+  queue (kind `aws_collect`, shown under Jobs), not a request:
+
+  | Route | Permission | |
+  |---|---|---|
+  | `POST /api/aws/connectors/{id}/collect` | `connections.manage` + step-up | queues a run; `202 {run_id, connector_id, status: "queued"}`; `409 collection_in_progress` (with the active `run_id`) while one is queued or running; `503` without the AWS client or the catalog |
+  | `GET /api/aws/collection-runs?connector_id=&limit=` | `connections.read` | runs, newest first |
+  | `GET /api/aws/collection-runs/{id}` | `connections.read` | one run: poll it (`queued`, `running`, `succeeded`, `unchanged`, `failed`; `snapshot_id`, `changed`, counts in `result`, `error`) |
+
+  A worker runs `awsorg.Service.CollectAndMaterialize`: collect, then, when the estate changed,
+  `Materialize`. A schedule (`aws_collect`, every 6 hours, fires at once on a new tenant; pause it
+  under Admin > Jobs like any built-in schedule) does the same for every connector of the tenant.
+  AWS has no change feed for `GetAccountAuthorizationDetails`, so each run reads the estate; what is
+  incremental is the write. The snapshot id is the content hash, so an estate the connector already
+  collected *and evaluated* writes no snapshot rows, no audit event, runs no evaluation, and a
+  scheduled run leaves no run row or job run (the connector's `last_run_at` moves, nothing else). An
+  estate that returns to an earlier state, or whose evaluation failed (the connector is then
+  `failed`), is evaluated again. Runs are in `aws_collection_runs` (`schema/0914`, Postgres
+  `0932`); a run left queued or running for 2 hours (its worker stopped) is failed so it stops
+  blocking the connector. Audit events: `aws.collection.queued`, `aws.snapshot.collected`,
+  `aws.snapshot.materialized`, `aws.collection.failed`.
+- **Production shadow agreement** (issue #641, EP-6) is off until a tenant opts in. A job (`aws_shadow`,
+  hourly) then compares up to K of the evaluator's decisions a day (default 20, at most 200) with
+  `iam:SimulatePrincipalPolicy` in the customer account, called with the connector's reader role
+  (`iam:SimulatePrincipalPolicy` is now in `ReaderActions`: an existing reader role needs it added, or
+  the checks are recorded as `error`). Only decisions that are allow or deny at exact fidelity, with no
+  collection finding reaching them, are asked, with no context keys; half are permissions a principal
+  has, half are ones it lacks. A check is `agree`, `disagree` (allow against deny: the finding, open
+  until triaged), `inconclusive` (the simulator needed context keys) or `error`; only the first two
+  are in the rate. Rate limits: K a UTC day per tenant (the rows are the counter), 50 per run, a
+  pause between calls, and a run stops after three failed calls in a row. Tables `aws_shadow_settings`,
+  `aws_shadow_checks`, `aws_shadow_triage` (`schema/0916`, Postgres `0935`). The 30-day agreement
+  (`aws_shadow`: `rate`, `compared`, `open_disagreements`, ...) is on `GET /api/insights/deployment-health`
+  once a tenant has opted in or has checks, and is shown on the Deployment health page, where an
+  admin turns it on and triages disagreements. Audit events: `aws.shadow.settings`,
+  `aws.shadow.checked`, `aws.shadow.triaged`.
+
+  | Route | Permission | |
+  |---|---|---|
+  | `GET /api/aws/shadow` | `connections.read` | opt-in, today's quota, the agreement metric |
+  | `PUT /api/aws/shadow` | `connections.manage` + step-up | `{enabled, daily_k?}` |
+  | `GET /api/aws/shadow/checks?verdict=&triage=&limit=` | `connections.read` | comparisons, newest first |
+  | `GET /api/aws/shadow/checks/{id}` | `connections.read` | one comparison with its triage records |
+  | `POST /api/aws/shadow/checks/{id}/triage` | `connections.manage` | `{status: open\|investigating\|engine_bug\|expected\|resolved, note?}` on a disagreement |
+
+- **Usage ingest** (issue #644, LP-1). A connector whose config has `usage` also reads what its
+  principals *did*, in the same `aws_collect` job, after the estate (`awsorg.Service.CollectUsage`;
+  a failure shows as `usage_error` in the run's `result` and never fails the collection):
+
+  ```json
+  "usage": {"access_advisor": true, "advisor_per_run": 100,
+    "cloudtrail": {"bucket": "acme-trail-logs", "prefix": "trail", "region": "us-east-1",
+      "account_id": "111111111111", "organization_id": "o-abcde12345",
+      "trail_arn": "arn:aws:cloudtrail:us-east-1:111111111111:trail/org-trail",
+      "kms_key_arn": "arn:aws:kms:...", "backfill_days": 30, "max_objects_per_run": 2000}}
+  ```
+
+  - **CloudTrail** (S3, gzip JSON under `<prefix>/AWSLogs/[<org id>/]<account>/CloudTrail/<region>/yyyy/mm/dd/`).
+    The reader role of `account_id` lists and reads the log prefix; every request names that account
+    as the expected bucket owner. The cursor is the last key read per account and region, saved in
+    the same transaction as the counts it produced, so a file is counted once. A run reads at most
+    `max_objects_per_run` files (a backlog continues next run); the first run reads back
+    `backfill_days`. Limits: 16 MiB per file, 128 MiB inflated, 200,000 records; a file over a bound,
+    not gzip, or not a CloudTrail log is refused whole (no partial counts), recorded as a gap, and
+    passed over. A run holds at most 200,000 rows (it stops after the file that reaches them; the
+    next run goes on). A log key dated after tomorrow stops its prefix with an `implausible_key` gap
+    (the cursor never moves past it), and records dated after tomorrow or before the 400-day
+    retention are skipped. The state is written compare-and-swap with the rows, so two overlapping
+    runs of a connector cannot count the same files twice. Denied or errored calls are not usage. Role sessions are filed under their role;
+    services and federated users are not filed. A file delivered later than a later key (more than a
+    5-minute window late) is not read. For a trail encrypted with a KMS key the reader role needs
+    `kms:Decrypt` in the **key policy** (it is not a read action, so it is not in `ReaderPolicy`); a
+    denial is a gap that says so.
+  - **Access Advisor** (`GenerateServiceLastAccessedDetails` at `ACTION_LEVEL`, then
+    `GetServiceLastAccessedDetails`): for each user and role of the latest snapshot, up to
+    `advisor_per_run` per run, 0.5 s apart, with the client's backoff on throttling (a throttle that
+    outlasts it ends the run; the next run resumes at that principal). A run spends at most 30
+    minutes on Advisor, and three reports in a row that do not finish end it. A finished round rests a day.
+    Action-level rows are `service:Action`; where AWS tracks only the service the row is `service:*`.
+    Advisor rows have count 1 (last used that day): Advisor has no call counts.
+  - **Table** `aws_usage_daily` (`schema/0915`, Postgres `0933`): key (connector, principal ARN,
+    action, resource scope, day, source) with `count` and `last_seen`. Actions are in the evaluator's
+    spelling: CloudTrail event sources and names are mapped (`monitoring` is `cloudwatch`,
+    `HeadObject` is `s3:GetObject`, `ListObjectsV2` is `s3:ListBucket`, ...) and checked against the
+    action catalog; an action the catalog lacks is counted and listed in a gap, never guessed. The
+    resource scope is `*`, the event's resource ARN, or `arn:aws:s3:::bucket/*` for an object.
+    `aws_usage_state` holds the cursor, the days covered (`covered_from`, `covered_to`: how far the
+    slowest prefix has read) and `s3_data_events`; `aws_usage_gaps` records what could not be read
+    (`too_large`, `malformed`, `AccessDenied`, `rate_limited`, `unmapped_actions`, ...). Rows are
+    kept 400 days, gaps 180.
+  - **S3 data events.** `trail_arn` lets the connector read the trail's event selectors
+    (`cloudtrail:GetEventSelectors`). `s3_data_events` is `enabled` only when a selector logs every
+    bucket for reads and writes, `disabled` when none logs S3 objects, and `unknown` when it logs
+    some (or no `trail_arn` is set). The confidence model (#645) reads it to mark object actions
+    unknown. `leastpriv.UsedCallsFromUsage` turns rows into the `UsedCall`s `VerifyAWS` takes.
+  - **Read-only.** `ReaderActions` gains `iam:GenerateServiceLastAccessedDetails`,
+    `iam:GetServiceLastAccessedDetails` and `cloudtrail:GetEventSelectors` (all Read; `CheckReadOnly`
+    passes). `s3:ListBucket` and `s3:GetObject` on `*` would read every bucket, so they are not in it:
+    `awsorg.TrailReaderPolicy(cfg)` is the second policy for the bucket's account, scoped to that bucket's
+    log prefix, and `CheckReadOnly` accepts it too.
+  - **Not here.** CloudTrail Lake and EventBridge (near-real-time denials) are not ingested yet;
+    how much a gap weighs is #645.
 - **Tests** use `internal/aws/awstest` (test-only): `Replay` serves recorded responses from
   `internal/connectors/awsorg/testdata/http/<service>/<operation>/<n>.<ext>`, verifies every
   signature and reports calls with no recording. It does not enforce IAM; these are collection
@@ -5377,6 +5498,7 @@ evaluator routes answer `503 aws_catalog_unavailable` and nothing else changes.
 |---|---|---|
 | `GET /api/aws/can?principal=&action=&resource=&profile=&snapshot=` | `graph.read` | one decision with its trace and `explanation_id` |
 | `GET /api/aws/principals/{arn}/effective?service=&profile=&limit=&cursor=` | `graph.read` | what a principal can do, paged; a larger answer than 200,000 cells needs `service=` |
+| `GET /api/aws/principals/{arn}/least-privilege?connector=&unused_days=&service=&limit=&cursor=` | `graph.read` | each permission the principal holds, whether the usage ingest saw it used in the window, and a `confidence` (`high`, `medium`, `low`, `unknown`) with reasons: window coverage, data events (S3 object actions are `unknown` unless the trail logs them), log gaps (a `digest_*` gap code lowers it to `low`), identity age (IAM `CreateDate` from the snapshot; without it, at most `medium`) and sparse activity |
 | `GET /api/aws/resources/{arn}/who-can?action=&profile=` | `graph.read` | principals that can, with decisions |
 | `GET /api/aws/explanations/{id}` | `graph.read` | a trace by id (from the store, else the recent ones held in memory) |
 | `POST /api/aws/simulate-policy-change` | `graph.read` | `{changes, base_snapshot?, profile?, head?, comment?: {pull_number}}`: who gains or loses what, plus the PR comment text |
@@ -5400,14 +5522,14 @@ request with `comment.pull_number` posts, needs `connections.manage` and a fresh
 sign-in, goes through `internal/safehttp` to `api.github.com`, and is audited
 (`aws.pr_comment.posted` / `.failed`).
 
-`awsorg.Service.Materialize` (run by `Collect` when `Service.Eval` is set) evaluates a snapshot and
+`awsorg.Service.Materialize` (run by `Collect` when `Service.Eval` is set, and by the collection job) evaluates a snapshot and
 ingests what it confirms: accounts, role groups, permissions (action atom by resource atom) and
 `grants` edges with source `evaluator`, carrying explanation, outcome and fidelity
 (`schema/0321_aws_integration.sql`, a side table because there is no column migration), plus
 `can_assume` trust edges and the NHI trust flags `wildcard_oidc_trust`, `missing_external_id`,
 `public_trust`. Least privilege never recommends or applies a conditional, approximate or
 unsupported grant (`leastpriv.VerifyAWS` checks a candidate keeps the used calls and adds nothing).
-UI: Insights, AWS access.
+UI: Insights, AWS access (`/insights/aws`). Each answer shows an outcome badge, a fidelity badge (`EXACT`, `APPROXIMATE`, `UNSUPPORTED`, with the reasons) and a profile chip. **Why?** opens a side panel (`?why=<explanation_id>`) that loads `GET /api/aws/explanations/{id}` and lists each evaluation step: stage, result, policy, statement, matched values and condition results. A trace the server no longer holds answers 404; run the query again.
 
 ## Web UI
 

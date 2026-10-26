@@ -166,6 +166,11 @@ type Violation struct {
 	Message         string     `json:"message"`
 	Evidence        []string   `json:"evidence"`
 	Edges           [][]string `json:"edges"`
+	// ExplanationID names the AWS evaluator trace behind the finding; absent
+	// when no evaluated permission or edge is implicated. It is one trace, not
+	// both sides': permission a's if it has one, else b's, else the first
+	// evaluated implicated edge's.
+	ExplanationID string `json:"explanation_id,omitempty"`
 }
 
 // Env is what detection needs from the caller: the graph, and who a risk's
@@ -302,8 +307,19 @@ func violation(g *graph.Snapshot, r *Risk, n *graph.Node, i, j int, ha, hb []*gr
 		systems = append(systems, b.System)
 	}
 	sort.Strings(systems)
+	expl := ""
+	for _, ep := range []*graph.EffectivePermission{a, b} {
+		if expl == "" && len(ep.ExplanationIDs) > 0 {
+			expl = ep.ExplanationIDs[0]
+		}
+	}
+	edges := append(edA, edB...)
+	if expl == "" {
+		expl = g.EdgesExplanation(edges)
+	}
 	return Violation{
-		Key: key, RiskID: r.ID, RiskKey: r.Key, RiskName: r.Name, Priority: r.Priority, Ruleset: r.Ruleset,
+		ExplanationID: expl,
+		Key:           key, RiskID: r.ID, RiskKey: r.Key, RiskName: r.Name, Priority: r.Priority, Ruleset: r.Ruleset,
 		BusinessProcess: r.BusinessProcess, IdentityID: n.ID, IdentityName: n.Label,
 		Function1: ref(r.Functions[i]), Function2: ref(r.Functions[j]),
 		Entitlement: a.Action + " / " + b.Action, Systems: systems,

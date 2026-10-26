@@ -75,7 +75,7 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 |---|---|---|---|---|
 | ☐ | Role-based access control (RBAC) | Built (open PR) | Six platform roles and per-route permissions (`auth/rbac.go`, `rbac_routes_test.go`); business roles in the UI are Preview | Merge #146; business roles #161 |
 | ☐ | Attribute-based access control (ABAC) | Missing | Policies filter by identity type only; no attribute conditions | #162 (M2 AWS engine covers AWS conditions only) |
-| ☐ | Least-privilege access | Built | `leastpriv` recommendations from usage, `GET /api/least-privilege/recommendations`, `POST /api/least-privilege/revoke`; demo usage data, revoke changes the graph only | M2 real usage data, M3 write-back |
+| ☐ | Least-privilege access | Built | `leastpriv` recommendations from usage (AWS candidates are checked by `leastpriv.VerifyAWS` and never act on conditional, approximate or unsupported grants), `GET /api/least-privilege/recommendations`, `POST /api/least-privilege/revoke`; demo usage data, revoke changes the graph only | M2 real usage data, M3 write-back |
 | ☐ | Conditional access based on device, location or risk | Missing | Only step-up (fresh, phishing-resistant sign-in) exists | #163 (device, location); risk signals M3 SSF/CAEP #114 |
 | ☐ | Time-limited access | Built | `jit` with a 72 h maximum, `Sweep` removes expired grants (`jit_test.go`); in Tessera's graph only | M3 write-back |
 
@@ -96,7 +96,7 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 | ☐ | Create, update and remove application accounts | Missing | The connector interface is read-only; execute and revoke change the graph only | M3 write-back verified by re-read |
 | ☐ | Manage groups, roles and entitlements | Partial | Read and analyse only (`/api/groups`, `/api/accounts`, `/api/resources`); role editing is Preview | Knowledge rows 94, 95 |
 | ☐ | Support SCIM, APIs and directory connectors | Missing | No SCIM client or server; no real directory connector | M2 #20–#31, #82–#99; SCIM: knowledge row 85 |
-| ☐ | Integrate with cloud and on-premises applications | Demo | Simulated read-only Workday, Okta, AWS, GitHub, Snowflake and AD (`connectors/demo*.go`) | M2 |
+| ☐ | Integrate with cloud and on-premises applications | Partial | Simulated read-only Workday, Okta, GitHub, Snowflake and AD (`connectors/demo*.go`). AWS has a real read-only collector (`connectors/awsorg`: Organizations, IAM, resource policies, Identity Center; `/api/aws/connectors`, `/api/aws/snapshots`) tested against synthetic recordings only; `Service.Collect` is not wired to a route or job, and it stores a sealed access key, not federated credentials | M2; EP-1 #637 (collection job), EP-2 (federation) |
 | ☐ | Retry failed operations and reconcile actual access | Partial | Reconciliation runs on staged demo data (`reconcile/`, `/api/connections/{id}/dry-run`); there is no retry queue | M2, M3 |
 
 ## Identity governance (IGA)
@@ -123,7 +123,7 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 
 | ☐ | Item | Status | Evidence | Closes with |
 |---|---|---|---|---|
-| ☐ | Inventory service accounts and workload identities | Built | `nhi.Inventory` (service, ai_agent, secrets, agent delegations), `GET /api/nhi`; demo data | M2 real data |
+| ☐ | Inventory service accounts and workload identities | Built | `nhi.Inventory` (service, ai_agent, secrets, agent delegations), `GET /api/nhi`; demo data; AWS trust flags come from `awsorg.Materialize`, which runs only after a collection (none is scheduled) | M2 real data |
 | ☐ | Assign owners and purposes | Partial | `owner_id`, `description`, orphaned and owner-left flags; the leaver plan reassigns owners; no API or UI to set an owner (the form is Preview) | #167 |
 | ☐ | Manage secrets and certificates | Partial | Secrets are read-only metadata; certificates are a Preview page | Phases 2 and 4 certificate inventory |
 | ☐ | Rotate credentials and track expiration | Partial | Age and last-rotated tracking plus the 90-day stale-secret policy; no rotation, no expiry dates | M3 secret rotation |
@@ -143,7 +143,7 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 
 | ☐ | Item | Status | Evidence | Closes with |
 |---|---|---|---|---|
-| ☐ | Report who has access to what | Built | `/api/identities/{id}`, `/api/graph`, `/api/simulate`, `GraphExplorer.tsx`; demo data | M2 real data, exact AWS engine |
+| ☐ | Report who has access to what | Built | `/api/identities/{id}`, `/api/graph`, `/api/simulate`, `GraphExplorer.tsx`; demo data. For AWS, an evaluator (`internal/aws/*`, `internal/authz`) answers `/api/aws/can`, `/effective`, `/who-can` and `/explanations/{id}` with fidelity and a trace; UI is Insights, AWS access (no fidelity badges or trace viewer yet, EP-7 #642). Its agreement with real AWS has never been measured: all 12 harness cassettes are synthetic | M2 real data; EP-1 #637, EP-3 #28 (measured agreement) |
 | ☐ | Show who requested and approved access | Partial | JIT and review decisions are real and audited; general requests are Preview | #164 (general requests) |
 | ☐ | Retain access and policy-change history | Partial | Append-only ledger with proofs and checkpoints; no point-in-time policy history | M3 #111 |
 | ☐ | Export audit evidence | Partial | `GET /api/audit/export`, `/api/audit/verify`; no evidence packs | M3 #89, #110, #111 |

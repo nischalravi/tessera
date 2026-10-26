@@ -23,15 +23,16 @@ type Span = authz.Span
 type Principal struct {
 	ARN               string            `json:"arn"` // requester ARN (the session ARN for sessions)
 	Kind              PrincipalKind     `json:"kind"`
-	AccountID         string            `json:"account_id"`          // "" for service and anonymous
-	EntityARN         string            `json:"entity_arn"`          // role ARN for role sessions; the IAM user's ARN for federated sessions
-	UniqueID          string            `json:"unique_id"`           // AIDA…/AROA…, for trust-policy principal-ID matching
-	Path              string            `json:"path"`                // default "/"
-	IsServiceLinked   bool              `json:"is_service_linked"`   // role path /aws-service-role/
-	Tags              map[string]string `json:"tags"`                // entity tags
-	SessionTags       map[string]string `json:"session_tags"`        // override entity tags with the same key
-	TransitiveTagKeys []string          `json:"transitive_tag_keys"` // sorted, unique
-	SessionPolicyIDs  []string          `json:"session_policy_ids"`  // PolicyDoc ids (inline + PolicyArns)
+	AccountID         string            `json:"account_id"`            // "" for service and anonymous
+	EntityARN         string            `json:"entity_arn"`            // role ARN for role sessions; the IAM user's ARN for federated sessions
+	UniqueID          string            `json:"unique_id"`             // AIDA…/AROA…, for trust-policy principal-ID matching
+	CreateDate        string            `json:"create_date,omitempty"` // RFC 3339 UTC, from IAM; "" when not known (confidence model, LP-2)
+	Path              string            `json:"path"`                  // default "/"
+	IsServiceLinked   bool              `json:"is_service_linked"`     // role path /aws-service-role/
+	Tags              map[string]string `json:"tags"`                  // entity tags
+	SessionTags       map[string]string `json:"session_tags"`          // override entity tags with the same key
+	TransitiveTagKeys []string          `json:"transitive_tag_keys"`   // sorted, unique
+	SessionPolicyIDs  []string          `json:"session_policy_ids"`    // PolicyDoc ids (inline + PolicyArns)
 	SourceIdentity    string            `json:"source_identity"`
 	GroupARNs         []string          `json:"group_arns"`          // users only
 	BoundaryPolicyID  string            `json:"boundary_policy_id"`  // "" if no boundary

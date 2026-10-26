@@ -302,6 +302,14 @@ func awsCovered() map[string]bool {
 		"AddAWSFinding": true, "AWSFindings": true, "AddAWSTrustEdge": true, "AWSTrustEdges": true,
 		"AddAWSEffective": true, "ListAWSEffectiveByPrincipal": true, "PutAWSExplanation": true, "AWSExplanation": true,
 		"UpsertEvaluatorEdge": true, "AWSPRCommentSettings": true, "PutAWSPRCommentSettings": true,
+		"InsertAWSCollectionRun": true, "AWSCollectionRun": true, "AWSCollectionRuns": true, "ActiveAWSCollectionRun": true,
+		"StartAWSCollectionRun": true, "FinishAWSCollectionRun": true, "FailStaleAWSCollectionRuns": true,
+		"AWSShadowSettings": true, "PutAWSShadowSettings": true, "AWSShadowEnabled": true, "InsertAWSShadowCheck": true,
+		"AWSShadowCheck": true, "AWSShadowChecks": true, "AWSShadowSampledOn": true, "TriageAWSShadowCheck": true,
+		"AWSShadowTriage": true, "AWSShadowCounts": true,
+		// the usage tables: TestIsolation_AWSUsage
+		"AddAWSUsage": true, "SetAWSUsage": true, "AWSUsage": true, "PruneAWSUsage": true, "AWSUsageState": true, "AWSUsageStates": true,
+		"PutAWSUsageState": true, "SwapAWSUsageState": true, "PutAWSUsageGap": true, "ClearAWSUsageGap": true, "AWSUsageGaps": true, "PruneAWSUsageGaps": true,
 	}
 }
 
@@ -401,4 +409,274 @@ func TestAWSPRCommentSettingsDefaultOff(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// The collection runs (issue #637; schema/0914): a tenant's runs are its own,
+// another tenant's id looks nonexistent, writes that name it change nothing,
+// and the one-active-run rule is per tenant and connector.
+func TestIsolation_AWSCollectionRuns(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	const conn = "00000000-0000-4000-8000-0000000000c1" // the same connector id in both tenants
+	later := storetest.Now.Add(time.Hour)
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			return c.InsertAWSCollectionRun(&store.AWSCollectionRun{ID: "run-" + tn.Slug, ConnectorID: conn, Trigger: store.AWSRunManual,
+				Status: store.AWSRunQueued, RequestedBy: "u-" + tn.Slug, QueuedAt: storetest.Now})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if r, err := c.AWSCollectionRun("run-" + f.B.Slug); err != nil || r.RequestedBy != "u-"+f.B.Slug || r.Status != store.AWSRunQueued {
+			t.Errorf("AWSCollectionRun(B's) = %+v, %v", r, err)
+		}
+		if _, err := c.AWSCollectionRun("run-" + f.A.Slug); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("AWSCollectionRun(A's) = %v, want ErrNotFound", err)
+		}
+		if rs, err := c.AWSCollectionRuns("", 0); err != nil || len(rs) != 1 || rs[0].ID != "run-"+f.B.Slug {
+			t.Errorf("AWSCollectionRuns = %v, %v; want B's one", rs, err)
+		}
+		if r, err := c.ActiveAWSCollectionRun(conn); err != nil || r.ID != "run-"+f.B.Slug {
+			t.Errorf("ActiveAWSCollectionRun = %+v, %v; want B's", r, err)
+		}
+		// writes that name A's run change nothing
+		if err := c.StartAWSCollectionRun("run-"+f.A.Slug, later); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("StartAWSCollectionRun(A's) = %v, want ErrNotFound", err)
+		}
+		if err := c.FinishAWSCollectionRun("run-"+f.A.Slug, store.AWSRunFailed, "", false, nil, "x", later); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("FinishAWSCollectionRun(A's) = %v, want ErrNotFound", err)
+		}
+		// a second active run of the same connector is refused in this tenant
+		err := c.InsertAWSCollectionRun(&store.AWSCollectionRun{ID: "run-b2", ConnectorID: conn, Trigger: store.AWSRunSchedule,
+			Status: store.AWSRunQueued, RequestedBy: "x", QueuedAt: later})
+		if !errors.Is(err, store.ErrDuplicate) {
+			t.Errorf("second active run = %v, want ErrDuplicate", err)
+		}
+		return nil
+	})
+	// B failing stale runs leaves A's alone
+	inB(t, f, func(c *store.TenantTx) error {
+		n, err := c.FailStaleAWSCollectionRuns(later, later, "stale")
+		if err != nil || n != 1 {
+			t.Errorf("FailStaleAWSCollectionRuns = %d, %v; want B's one", n, err)
+		}
+		return nil
+	})
+	inA(t, f, func(c *store.TenantTx) error {
+		if r, err := c.AWSCollectionRun("run-" + f.A.Slug); err != nil || r.Status != store.AWSRunQueued || r.Error != "" {
+			t.Errorf("A's run = %+v, %v; B's writes changed it", r, err)
+		}
+		// the lifecycle in A: start, finish, then a new run may be queued
+		if err := c.StartAWSCollectionRun("run-"+f.A.Slug, later); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.FinishAWSCollectionRun("run-"+f.A.Slug, store.AWSRunSucceeded, "snap", true, json.RawMessage(`{"cells":3}`), "", later); err != nil {
+			t.Fatal(err)
+		}
+		r, err := c.AWSCollectionRun("run-" + f.A.Slug)
+		if err != nil || r.Status != store.AWSRunSucceeded || !r.Changed || r.SnapshotID != "snap" || string(r.Result) != `{"cells":3}` ||
+			r.StartedAt == nil || r.FinishedAt == nil {
+			t.Errorf("finished run = %+v, %v", r, err)
+		}
+		if _, err := c.ActiveAWSCollectionRun(conn); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("ActiveAWSCollectionRun after finish = %v, want ErrNotFound", err)
+		}
+		return c.InsertAWSCollectionRun(&store.AWSCollectionRun{ID: "run-a2", ConnectorID: conn, Trigger: store.AWSRunSchedule,
+			Status: store.AWSRunQueued, RequestedBy: "x", QueuedAt: later})
+	})
+}
+
+// The usage tables (issue #644; schema/0915): a tenant's usage rows, ingest
+// state and gaps are its own, even when both tenants have the same connector,
+// principal, action and day. Another tenant's writes never touch them.
+func TestIsolation_AWSUsage(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	const (
+		conn = "00000000-0000-4000-8000-0000000000c1" // the same connector id in both tenants
+		arn  = "arn:aws:iam::111122223333:role/deploy"
+		day  = "2026-10-20"
+	)
+	row := func(source string, n int64) *store.AWSUsageDay {
+		return &store.AWSUsageDay{ConnectorID: conn, PrincipalARN: arn, Action: "s3:GetObject", ResourceScope: "*", Day: day,
+			Source: source, Count: n, LastSeen: storetest.Now}
+	}
+	for i, tn := range []storetest.Tenant{f.A, f.B} {
+		n := int64(i + 1)
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			if err := c.AddAWSUsage(row(store.AWSUsageCloudTrail, n)); err != nil {
+				return err
+			}
+			if err := c.AddAWSUsage(row(store.AWSUsageCloudTrail, n)); err != nil { // adds: the day's count is a sum
+				return err
+			}
+			if err := c.SetAWSUsage(row(store.AWSUsageAccessAdvisor, 1)); err != nil {
+				return err
+			}
+			if err := c.PutAWSUsageState(&store.AWSUsageState{ConnectorID: conn, Source: store.AWSUsageCloudTrail,
+				Cursor: json.RawMessage(`{"owner":"` + tn.Slug + `"}`), CoveredFrom: day, CoveredTo: day,
+				S3DataEvents: store.AWSDataEventsEnabled, UpdatedAt: storetest.Now}); err != nil {
+				return err
+			}
+			return c.PutAWSUsageGap(&store.AWSUsageGap{ConnectorID: conn, Source: store.AWSUsageCloudTrail, Ref: "key-1", Code: "too_large",
+				Detail: tn.Slug, Day: day, RecordedAt: storetest.Now})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		rows, err := c.AWSUsage("", "", "2000-01-01", 0)
+		if err != nil || len(rows) != 2 {
+			t.Fatalf("AWSUsage = %d rows, %v; want B's two", len(rows), err)
+		}
+		for _, r := range rows {
+			if r.Source == store.AWSUsageCloudTrail && r.Count != 4 { // B added 2 twice
+				t.Errorf("B's cloudtrail count = %d, want 4", r.Count)
+			}
+		}
+		st, err := c.AWSUsageState(conn, store.AWSUsageCloudTrail)
+		if err != nil || string(st.Cursor) != `{"owner":"`+f.B.Slug+`"}` || st.S3DataEvents != store.AWSDataEventsEnabled {
+			t.Errorf("AWSUsageState = %+v, %v; want B's", st, err)
+		}
+		if _, err := c.AWSUsageState(conn, store.AWSUsageAccessAdvisor); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("AWSUsageState(advisor) = %v, want ErrNotFound", err)
+		}
+		if gs, err := c.AWSUsageGaps("", 0); err != nil || len(gs) != 1 || gs[0].Detail != f.B.Slug {
+			t.Errorf("AWSUsageGaps = %v, %v; want B's one", gs, err)
+		}
+		// a swap is against B's own state only: A's state (the same connector and source) is not a prior B can match
+		aPrior := &store.AWSUsageState{ConnectorID: conn, Source: store.AWSUsageCloudTrail,
+			Cursor: json.RawMessage(`{"owner":"` + f.A.Slug + `"}`), UpdatedAt: storetest.Now}
+		next := &store.AWSUsageState{ConnectorID: conn, Source: store.AWSUsageCloudTrail, Cursor: json.RawMessage(`{"owner":"b2"}`),
+			UpdatedAt: storetest.Now.Add(time.Minute)}
+		if err := c.SwapAWSUsageState(next, aPrior); !errors.Is(err, store.ErrAWSUsageStateMoved) {
+			t.Errorf("SwapAWSUsageState(A's prior) = %v, want ErrAWSUsageStateMoved", err)
+		}
+		if err := c.SwapAWSUsageState(next, nil); !errors.Is(err, store.ErrAWSUsageStateMoved) {
+			t.Errorf("SwapAWSUsageState(no prior) over B's state = %v, want ErrAWSUsageStateMoved", err)
+		}
+		if err := c.SwapAWSUsageState(next, st); err != nil {
+			t.Errorf("SwapAWSUsageState(B's prior) = %v", err)
+		}
+		if err := c.SwapAWSUsageState(next, st); !errors.Is(err, store.ErrAWSUsageStateMoved) {
+			t.Errorf("a second swap from the same prior = %v, want ErrAWSUsageStateMoved", err)
+		}
+		if err := c.SwapAWSUsageState(&store.AWSUsageState{ConnectorID: conn, Source: store.AWSUsageAccessAdvisor, UpdatedAt: storetest.Now}, nil); err != nil {
+			t.Errorf("SwapAWSUsageState creating B's advisor state = %v", err)
+		}
+		// B pruning and clearing touches only B
+		if n, err := c.PruneAWSUsage("2026-11-01"); err != nil || n != 2 {
+			t.Errorf("PruneAWSUsage = %d, %v; want B's two", n, err)
+		}
+		if err := c.ClearAWSUsageGap(conn, store.AWSUsageCloudTrail, "key-1"); err != nil {
+			t.Error(err)
+		}
+		if n, err := c.PruneAWSUsageGaps(storetest.Now.Add(time.Hour)); err != nil || n != 0 {
+			t.Errorf("PruneAWSUsageGaps = %d, %v; want 0 (B's gap was cleared)", n, err)
+		}
+		return nil
+	})
+	inA(t, f, func(c *store.TenantTx) error {
+		rows, err := c.AWSUsage(conn, arn, "2026-10-01", 0)
+		if err != nil || len(rows) != 2 {
+			t.Fatalf("A's usage = %d rows, %v; B's prune removed some", len(rows), err)
+		}
+		for _, r := range rows {
+			if r.Source == store.AWSUsageCloudTrail && r.Count != 2 {
+				t.Errorf("A's cloudtrail count = %d, want 2", r.Count)
+			}
+		}
+		if st, err := c.AWSUsageState(conn, store.AWSUsageCloudTrail); err != nil || string(st.Cursor) != `{"owner":"`+f.A.Slug+`"}` {
+			t.Errorf("A's state = %+v, %v", st, err)
+		}
+		if gs, err := c.AWSUsageGaps(conn, 0); err != nil || len(gs) != 1 {
+			t.Errorf("A's gaps = %v, %v; B's clear removed it", gs, err)
+		}
+		// the store refuses a malformed row
+		bad := row(store.AWSUsageCloudTrail, 1)
+		bad.Day = "yesterday"
+		if err := c.AddAWSUsage(bad); err == nil {
+			t.Error("a row with a bad day was accepted")
+		}
+		return nil
+	})
+}
+
+// The shadow agreement tables (issue #641; schema/0916): settings, checks and
+// triage records are a tenant's own, another tenant's check id looks
+// nonexistent, and a triage that names it changes nothing.
+func TestIsolation_AWSShadow(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	later := storetest.Now.Add(time.Hour)
+	day := storetest.Now.UTC().Format("2006-01-02")
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			if err := c.PutAWSShadowSettings(&store.AWSShadowSettings{Enabled: tn.Slug == f.B.Slug, DailyK: 5, UpdatedBy: "u-" + tn.Slug}, later); err != nil {
+				return err
+			}
+			// the same check ids in both tenants
+			for id, v := range map[string]string{"chk-1": store.AWSShadowDisagree, "chk-2": store.AWSShadowAgree} {
+				if err := c.InsertAWSShadowCheck(&store.AWSShadowCheck{ID: id, ConnectorID: "conn", SnapshotID: "snap", SampleDay: day,
+					PrincipalARN: "arn:aws:iam::111111111111:role/" + tn.Slug, Action: "s3:GetObject", ResourceARN: "arn:aws:s3:::b/x",
+					TesseraOutcome: "allow", TesseraFidelity: "EXACT", AWSDecision: "implicitDeny", Verdict: v, CheckedAt: storetest.Now}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if s, err := c.AWSShadowSettings(); err != nil || !s.Enabled || s.DailyK != 5 || s.UpdatedBy != "u-"+f.B.Slug {
+			t.Errorf("AWSShadowSettings = %+v, %v", s, err)
+		}
+		if on, err := c.AWSShadowEnabled(); err != nil || !on {
+			t.Errorf("AWSShadowEnabled = %v, %v", on, err)
+		}
+		if n, err := c.AWSShadowSampledOn(day); err != nil || n != 2 {
+			t.Errorf("AWSShadowSampledOn = %d, %v; want B's 2", n, err)
+		}
+		if xs, err := c.AWSShadowChecks("", "", 0); err != nil || len(xs) != 2 {
+			t.Errorf("AWSShadowChecks = %d, %v; want B's 2", len(xs), err)
+		}
+		x, err := c.AWSShadowCheck("chk-1")
+		if err != nil || x.PrincipalARN != "arn:aws:iam::111111111111:role/"+f.B.Slug || x.TriageStatus != store.AWSTriageOpen {
+			t.Errorf("AWSShadowCheck = %+v, %v", x, err)
+		}
+		if err := c.TriageAWSShadowCheck("chk-1", store.AWSTriageEngineBug, "ours", "pat", later); err != nil {
+			t.Fatal(err)
+		}
+		// an agreement is not triaged, and an unknown id is not found
+		if err := c.TriageAWSShadowCheck("chk-2", store.AWSTriageResolved, "", "pat", later); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("triage of an agreement = %v, want ErrNotFound", err)
+		}
+		if err := c.TriageAWSShadowCheck("nope", store.AWSTriageResolved, "", "pat", later); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("triage of an unknown check = %v, want ErrNotFound", err)
+		}
+		if ts, err := c.AWSShadowTriage("chk-1"); err != nil || len(ts) != 1 || ts[0].Status != store.AWSTriageEngineBug || ts[0].Actor != "pat" {
+			t.Errorf("AWSShadowTriage = %+v, %v", ts, err)
+		}
+		cn, err := c.AWSShadowCounts(storetest.Now.Add(-time.Hour))
+		if err != nil || cn.Agree != 1 || cn.Disagree != 1 || cn.OpenDisagreements != 0 || cn.LastCheckedAt == nil {
+			t.Errorf("AWSShadowCounts = %+v, %v", cn, err)
+		}
+		return nil
+	})
+	// B's triage left A's same-id check alone, and A sees its own settings and counts
+	inA(t, f, func(c *store.TenantTx) error {
+		if s, err := c.AWSShadowSettings(); err != nil || s.Enabled || s.UpdatedBy != "u-"+f.A.Slug {
+			t.Errorf("A's AWSShadowSettings = %+v, %v", s, err)
+		}
+		if x, err := c.AWSShadowCheck("chk-1"); err != nil || x.TriageStatus != store.AWSTriageOpen || x.PrincipalARN != "arn:aws:iam::111111111111:role/"+f.A.Slug {
+			t.Errorf("A's check = %+v, %v; B's triage changed it", x, err)
+		}
+		if ts, err := c.AWSShadowTriage("chk-1"); err != nil || len(ts) != 0 {
+			t.Errorf("A's triage records = %+v, %v; want none", ts, err)
+		}
+		if cn, err := c.AWSShadowCounts(storetest.Now.Add(-time.Hour)); err != nil || cn.OpenDisagreements != 1 {
+			t.Errorf("A's counts = %+v, %v", cn, err)
+		}
+		// the default: a tenant with no row is off with the default K
+		return nil
+	})
 }

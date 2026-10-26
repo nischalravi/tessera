@@ -2369,6 +2369,55 @@ CREATE POLICY tenant_isolation ON api_client_limits
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE aws_collection_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_collection_runs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_collection_runs;
+CREATE POLICY tenant_isolation ON aws_collection_runs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_usage_daily ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_usage_daily FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_usage_daily;
+CREATE POLICY tenant_isolation ON aws_usage_daily
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_usage_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_usage_state FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_usage_state;
+CREATE POLICY tenant_isolation ON aws_usage_state
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_usage_gaps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_usage_gaps FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_usage_gaps;
+CREATE POLICY tenant_isolation ON aws_usage_gaps
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_shadow_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_shadow_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_shadow_settings;
+CREATE POLICY tenant_isolation ON aws_shadow_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_shadow_checks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_shadow_checks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_shadow_checks;
+CREATE POLICY tenant_isolation ON aws_shadow_checks
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_shadow_triage ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_shadow_triage FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_shadow_triage;
+CREATE POLICY tenant_isolation ON aws_shadow_triage
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN

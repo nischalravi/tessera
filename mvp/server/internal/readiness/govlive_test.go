@@ -222,6 +222,7 @@ const govSecret = "gov-secret-value-4417"
 func govSvc(t *testing.T, opened *[]governed.Params, p stubProber) *Service {
 	t.Helper()
 	s := liveSvc(t)
+	s.AWSAllowStaticKeys = true // these tests seal a secret on every governed type
 	s.Runner.Gov = GovOptions{Client: &http.Client{}, DataDir: "/data", Prod: true,
 		Prober: func(gp governed.Params, _ governed.Net) (connectors.Prober, error) {
 			*opened = append(*opened, gp)

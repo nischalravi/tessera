@@ -165,3 +165,79 @@ type AWSExplanation struct {
 	ID    string
 	Trace json.RawMessage
 }
+
+// AWS collection run states and triggers (schema/0914_aws_collection_runs.sql).
+const (
+	AWSRunQueued    = "queued"
+	AWSRunRunning   = "running"
+	AWSRunSucceeded = "succeeded"
+	AWSRunUnchanged = "unchanged"
+	AWSRunFailed    = "failed"
+
+	AWSRunManual   = "manual"
+	AWSRunSchedule = "schedule"
+)
+
+// AWSCollectionRun is one collection of an AWS connector. Result is a JSON
+// summary (counts only); SnapshotID is the snapshot the run collected.
+type AWSCollectionRun struct {
+	ID          string
+	ConnectorID string
+	Trigger     string
+	Status      string
+	RequestedBy string
+	QueuedAt    time.Time
+	StartedAt   *time.Time
+	FinishedAt  *time.Time
+	SnapshotID  string
+	Changed     bool
+	Result      json.RawMessage
+	Error       string
+}
+
+// AWS usage sources and S3 data-event states (schema/0915_aws_usage.sql).
+const (
+	AWSUsageCloudTrail     = "cloudtrail"
+	AWSUsageAccessAdvisor  = "access_advisor"
+	AWSDataEventsEnabled   = "enabled"
+	AWSDataEventsDisabled  = "disabled"
+	AWSDataEventsUnknown   = "unknown"
+	AWSUsageScopeAnywhere  = "*"
+	MaxAWSUsageCursorBytes = 1 << 20
+)
+
+// AWSUsageDay is one row of aws_usage_daily: what a principal did on a day.
+// Day is YYYY-MM-DD (UTC).
+type AWSUsageDay struct {
+	ConnectorID   string
+	PrincipalARN  string
+	Action        string
+	ResourceScope string
+	Day           string
+	Source        string
+	Count         int64
+	LastSeen      time.Time
+}
+
+// AWSUsageState is a connector's ingest state for one source.
+type AWSUsageState struct {
+	ConnectorID  string
+	Source       string
+	Cursor       json.RawMessage
+	CoveredFrom  string
+	CoveredTo    string
+	S3DataEvents string
+	UpdatedAt    time.Time
+}
+
+// AWSUsageGap is something a source could not ingest. Ref names it (an S3 key,
+// a principal ARN, "trail"); Day is the day it affects, or "".
+type AWSUsageGap struct {
+	ConnectorID string
+	Source      string
+	Ref         string
+	Code        string
+	Detail      string
+	Day         string
+	RecordedAt  time.Time
+}

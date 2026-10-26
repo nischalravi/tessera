@@ -68,6 +68,13 @@ const (
 	ConnectorSync = "connector_sync"
 	ProvisionPush = "provision_push"
 
+	// AWSCollect collects the tenant's AWS connectors and evaluates what changed (issue #637).
+	AWSCollect = "aws_collect"
+
+	// AWSShadow compares a sample of the AWS evaluator's decisions with iam:SimulatePrincipalPolicy for
+	// the tenants that opted in (issue #641).
+	AWSShadow = "aws_shadow"
+
 	// ReviewTick launches the due review schedules of one tenant and progresses its open scheduled
 	// campaigns (issue #588: a schedule an admin sets the cadence of).
 	ReviewTick = "review_tick"
@@ -75,7 +82,7 @@ const (
 
 // Kinds lists every kind, for filters.
 var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor,
-	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, RoleMining, CertificateExpiry, ArchiveSweep, ConnectorSync, ProvisionPush, OAuthSync, VmsSync}
+	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, RoleMining, CertificateExpiry, ArchiveSweep, ConnectorSync, ProvisionPush, OAuthSync, VmsSync, AWSCollect, AWSShadow}
 
 // Idempotent reports whether running a kind again with the same input is
 // safe: it reads a source and converges, or re-checks. Provisioning is not:

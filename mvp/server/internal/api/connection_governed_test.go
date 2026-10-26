@@ -49,6 +49,17 @@ func TestGovernedConnections_CreateOverAPI(t *testing.T) {
 			t.Errorf("%s: %d checklist items", typ, len(cl["items"].([]any)))
 		}
 		// the credential is write-only, as for every type
+		if typ == "awsorg" {
+			// a stored AWS key is refused (static keys are off) and nothing is sealed (#675)
+			r := c.json("PUT", "/api/connections/"+id+"/credential", `{"secret":"a-secret-value"}`, http.StatusUnprocessableEntity)
+			if r["error"] != "static_keys_disabled" {
+				t.Errorf("awsorg secret: %v", r)
+			}
+			if raw := c.do("GET", "/api/connections/"+id, "").Body.String(); strings.Contains(raw, "sealed:") {
+				t.Errorf("awsorg: a refused secret left a sealed reference: %s", raw)
+			}
+			continue
+		}
 		c.json("PUT", "/api/connections/"+id+"/credential", `{"secret":"a-secret-value"}`, http.StatusOK)
 		if raw := c.do("GET", "/api/connections/"+id, "").Body.String(); strings.Contains(raw, "a-secret-value") {
 			t.Errorf("%s: the secret is in the connection view", typ)
@@ -174,7 +185,7 @@ func TestHandover_AWS(t *testing.T) {
 	var id string
 	testkit.Write(t, st, func(c *store.TenantTx) error {
 		var err error
-		id, err = handoverAWS(c, sealer, "AWS production", p, testkit.Now)
+		id, err = handoverAWS(c, sealer, true, "AWS production", p, testkit.Now)
 		return err
 	})
 	testkit.Read(t, st, func(c *store.TenantTx) error {
@@ -196,12 +207,12 @@ func TestHandover_AWS(t *testing.T) {
 		return nil
 	})
 	testkit.Write(t, st, func(c *store.TenantTx) error {
-		if _, err := handoverAWS(c, sealer, "AWS production", p, testkit.Now); !errors.Is(err, errHandoverExists) {
+		if _, err := handoverAWS(c, sealer, true, "AWS production", p, testkit.Now); !errors.Is(err, errHandoverExists) {
 			t.Errorf("second hand-over: %v", err)
 		}
 		bad := p
 		bad.Secret = `{"access_key_id":"x"}`
-		if _, err := handoverAWS(c, sealer, "Another", bad, testkit.Now); err == nil {
+		if _, err := handoverAWS(c, sealer, true, "Another", bad, testkit.Now); err == nil {
 			t.Error("bad keys accepted")
 		}
 		return nil

@@ -242,7 +242,7 @@ func SettingSpecs(typ string) []Setting {
 			{"account_ids", "Account ids", "Comma separated. Empty with a management account: every active account.", false},
 			{"management_account_id", "Management account id", "Set for an organization-wide read.", false},
 			{"identity_center_region", "Identity Center region", "Empty skips IAM Identity Center.", false},
-			{"external_id", "External id", "The sts:ExternalId in the reader role's trust policy.", true}}
+			{"external_id", "External id", "The sts:ExternalId in the reader role's trust policy. Stored-key connections only (not allowed in production); prefer a federated connector (docs: AWS connector).", true}}
 	}
 	return nil
 }

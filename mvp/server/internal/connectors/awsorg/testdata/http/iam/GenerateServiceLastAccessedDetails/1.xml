@@ -1,0 +1,6 @@
+<GenerateServiceLastAccessedDetailsResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GenerateServiceLastAccessedDetailsResult>
+    <JobId>examplea-1234-b567-cde8-90fg123abcd4</JobId>
+  </GenerateServiceLastAccessedDetailsResult>
+  <ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000010</RequestId></ResponseMetadata>
+</GenerateServiceLastAccessedDetailsResponse>
