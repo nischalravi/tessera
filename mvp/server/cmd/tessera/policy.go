@@ -102,7 +102,7 @@ func readBundleDir(dir string) (policybundle.Files, error) {
 	if err != nil {
 		return nil, err
 	}
-	if st, err := os.Stat(root); err != nil || !st.IsDir() {
+	if st, err := os.Stat(root); err != nil || !st.IsDir() { // #nosec G703 -- the operator's own policy repo on the operator's host; no API route calls this command
 		return nil, fmt.Errorf("%s is not a directory", dir)
 	}
 	want := map[string]bool{policybundle.ConfigFile: true, policybundle.SchemaFile: true}
@@ -113,7 +113,7 @@ func readBundleDir(dir string) (policybundle.Files, error) {
 	}
 	files := policybundle.Files{}
 	total := 0
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error { // #nosec G703 -- operator-chosen -dir; the walk follows no symbolic link and reads only bundle files
 		if err != nil {
 			return err
 		}
