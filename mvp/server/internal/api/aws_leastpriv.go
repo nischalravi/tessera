@@ -51,7 +51,9 @@ type awsLPView struct {
 // awsLeastPriv answers GET /api/aws/principals/{arn}/least-privilege
 // ?connector=&unused_days=&service=&limit=&cursor=&snapshot=&profile=
 //
-// connector defaults to the snapshot's own, and must be it when the snapshot names one. The identity's creation date is the
+// connector defaults to the snapshot's own, and must be it when the snapshot
+// names one; a snapshot with none takes no connector (422) and has no usage
+// evidence, so every level is unknown. The identity's creation date is the
 // snapshot's (IAM CreateDate); without it the level is capped at medium. A
 // permission counts as used when the principal's rows name its action in the
 // window, or name its service as a whole (Access Advisor): the finding is then
@@ -90,16 +92,19 @@ func (s *Server) awsLeastPriv(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	if connector == "" {
+	switch {
+	case ac.hdr.ConnectorID == "" && connector != "":
+		// a snapshot with no connector has no usage evidence of its own: any connector named here would be
+		// another source's logs, which would rate used permissions as unused (issue #693, as #688)
+		return 0, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "connector_unknown_for_snapshot",
+			Msg: "the snapshot has no connector, so no connector's usage is evidence for it"}
+	case connector == "":
 		connector = ac.hdr.ConnectorID
-	} else if ac.hdr.ConnectorID != "" && connector != ac.hdr.ConnectorID {
+	case connector != ac.hdr.ConnectorID:
 		// the usage evidence is the snapshot's own connector's: another connector's complete logs, which hold no
 		// rows for this principal, would rate its used permissions as unused with high confidence
 		return 0, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "connector_mismatch",
 			Msg: "connector is not the connector that collected the snapshot"}
-	}
-	if connector == "" {
-		return 0, nil, badRequest("invalid_connector", "connector is required: the snapshot has none of its own")
 	}
 	qr, _, err := s.awsQuerier(ac, q.Get("profile"))
 	if err != nil {
@@ -113,17 +118,20 @@ func (s *Server) awsLeastPriv(r *http.Request, p *params) (int, any, error) {
 	now := s.clock()
 	today := now.UTC().Truncate(24 * time.Hour)
 	since := today.AddDate(0, 0, -(days - 1)).Format("2006-01-02")
-	rows, err := tx.AWSUsage(connector, arn, since, 0)
-	if err != nil {
-		return 0, nil, err
-	}
-	states, err := tx.AWSUsageStates(connector)
-	if err != nil {
-		return 0, nil, err
-	}
-	gaps, err := tx.AWSUsageGaps(connector, 0)
-	if err != nil {
-		return 0, nil, err
+	// no connector: no usage evidence, so every confidence is unknown
+	var rows []*store.AWSUsageDay
+	var states []*store.AWSUsageState
+	var gaps []*store.AWSUsageGap
+	if connector != "" {
+		if rows, err = tx.AWSUsage(connector, arn, since, 0); err != nil {
+			return 0, nil, err
+		}
+		if states, err = tx.AWSUsageStates(connector); err != nil {
+			return 0, nil, err
+		}
+		if gaps, err = tx.AWSUsageGaps(connector, 0); err != nil {
+			return 0, nil, err
+		}
 	}
 	lastByAction := map[string]string{} // lower-cased action or "svc:*" -> latest day
 	var active []string
@@ -190,6 +198,11 @@ func (s *Server) awsLeastPriv(r *http.Request, p *params) (int, any, error) {
 		}
 		it := awsLPItem{Action: c.action, Resource: c.resource, Outcome: c.outcome, Fidelity: c.fidelity, Used: used,
 			Confidence: leastpriv.Assess(now, days, c.action, used, ev, facts)}
+		if connector == "" {
+			// the snapshot names no connector, so no source's usage is evidence for it (issue #693)
+			it.Confidence = leastpriv.Confidence{Level: leastpriv.ConfUnknown,
+				Reasons: []string{"the snapshot has no connector, so there is no usage evidence for it"}}
+		}
 		if used {
 			it.LastUsed = &la
 		}

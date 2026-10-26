@@ -90,7 +90,7 @@ func lpLevel(t *testing.T, items map[string]map[string]any, action string) strin
 }
 
 func TestAWSLeastPrivConfidence(t *testing.T) {
-	c := newAWSEvalDated(t, "2020-01-01T00:00:00Z")
+	c := newAWSEvalFor(t, "2020-01-01T00:00:00Z", "conn-1")
 	base := "/api/aws/principals/" + awstest.EstateAlice + "/least-privilege?connector=conn-1&limit=500"
 	path := base
 
@@ -119,7 +119,7 @@ func TestAWSLeastPrivConfidence(t *testing.T) {
 	}
 
 	// without a creation date in the snapshot, the level is capped at medium
-	undated := newAWSEval(t, nil)
+	undated := newAWSEvalFor(t, "", "conn-1")
 	seedUsage(t, undated, store.AWSDataEventsEnabled)
 	items = lpItems(t, undated.get(base, 200))
 	if got := lpLevel(t, items, "s3:GetObject"); got != "medium" {
@@ -141,22 +141,52 @@ func TestAWSLeastPrivConfidence(t *testing.T) {
 	}
 }
 
+// A snapshot with no connector has no usage evidence of its own (issue #693, as #688): naming a connector would
+// borrow another source's complete logs and rate used permissions as high-confidence unused, so it is refused, and
+// the answer without one is rated with no evidence, never high.
+func TestAWSLeastPrivNoConnectorSnapshotTakesNoEvidence(t *testing.T) {
+	c := newAWSEvalDated(t, "2020-01-01T00:00:00Z") // snapshot with no connector
+	seedUsage(t, c, store.AWSDataEventsEnabled)     // conn-1: complete logs, none naming the snapshot as its own
+	base := "/api/aws/principals/" + awstest.EstateAlice + "/least-privilege?limit=500"
+	rec := c.do("GET", base+"&connector=conn-1", "")
+	if rec.Code != 422 || !strings.Contains(rec.Body.String(), "connector_unknown_for_snapshot") {
+		t.Fatalf("connector on a snapshot with none: %d %.200s", rec.Code, rec.Body.String())
+	}
+	items := lpItems(t, c.get(base, 200))
+	for a, it := range items {
+		if lvl := it["confidence"].(map[string]any)["level"]; lvl == "high" {
+			t.Errorf("%s rated %v with no usage evidence", a, lvl)
+		}
+	}
+	if got := lpLevel(t, items, "s3:GetObject"); got != "unknown" {
+		t.Errorf("GetObject with no evidence = %v", got)
+	}
+	for a, it := range items {
+		reasons, _ := it["confidence"].(map[string]any)["reasons"].([]any)
+		if len(reasons) != 1 || !strings.Contains(reasons[0].(string), "no connector") {
+			t.Errorf("%s reasons = %v, want the no-connector reason", a, reasons)
+		}
+	}
+	if v := c.get(base, 200); v["connector"] != "" {
+		t.Errorf("view connector = %v, want \"\"", v["connector"])
+	}
+}
+
 func TestAWSLeastPrivRefusesBadInput(t *testing.T) {
-	c := newAWSEval(t, nil)
+	c := newAWSEvalFor(t, "2020-01-01T00:00:00Z", "c")
 	base := "/api/aws/principals/" + awstest.EstateAlice + "/least-privilege"
 	for name, tc := range map[string]struct {
 		path string
 		want int
 	}{
-		"no connector, none on the snapshot": {base, 422},
-		"bad unused_days":                    {base + "?connector=c&unused_days=0", 422},
-		"huge unused_days":                   {base + "?connector=c&unused_days=9999", 422},
-		"supplied created is refused":        {base + "?connector=c&created=2000-01-01", 422},
-		"bad service":                        {base + "?connector=c&service=S3:x", 422},
-		"bad limit":                          {base + "?connector=c&limit=0", 422},
-		"control character in connector":     {base + "?connector=c%0A", 422},
-		"unknown principal":                  {"/api/aws/principals/arn:aws:iam::111111111111:user/nobody/least-privilege?connector=c", 404},
-		"unknown snapshot":                   {base + "?connector=c&snapshot=" + strings.Repeat("0", 64), 404},
+		"bad unused_days":                {base + "?connector=c&unused_days=0", 422},
+		"huge unused_days":               {base + "?connector=c&unused_days=9999", 422},
+		"supplied created is refused":    {base + "?connector=c&created=2000-01-01", 422},
+		"bad service":                    {base + "?connector=c&service=S3:x", 422},
+		"bad limit":                      {base + "?connector=c&limit=0", 422},
+		"control character in connector": {base + "?connector=c%0A", 422},
+		"unknown principal":              {"/api/aws/principals/arn:aws:iam::111111111111:user/nobody/least-privilege?connector=c", 404},
+		"unknown snapshot":               {base + "?connector=c&snapshot=" + strings.Repeat("0", 64), 404},
 	} {
 		if rec := c.do("GET", tc.path, ""); rec.Code != tc.want {
 			t.Errorf("%s: %d, want %d: %.200s", name, rec.Code, tc.want, rec.Body.String())
