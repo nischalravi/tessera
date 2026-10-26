@@ -315,6 +315,8 @@ var tables = []string{
 	// workflow definitions, versions, assignments, runs and service-account stages and requests
 	// (schema/0480_workflows.sql, 0481_service_account_requests.sql, 0482_workflow_runs.sql)
 	"workflows", "workflow_versions", "workflow_assignments", "workflow_runs", "workflow_stages", "service_account_requests",
+	// per-tenant Cedar invariant sources and their history (schema/0917_policy_sources.sql)
+	"policy_sources", "policy_versions",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

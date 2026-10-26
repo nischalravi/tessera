@@ -6900,3 +6900,16 @@ never a violation. The loader is pure (`internal/archtest` `TestPolicyBundleIsOf
 `server/internal/policybundle/testdata/good`. Tests: `go test ./internal/policybundle ./cmd/tessera -run 'Policy|Load|Run'`
 (golden CLI output in `cmd/tessera/testdata/policy`, refresh with `-update-policy-golden`) and `go test ./internal/policybundle
 -fuzz FuzzLoad`.
+
+## Cedar invariants (`internal/policy`, AC-3)
+
+The YAML invariant types are ported to Cedar `forbid` policies over effective-permission facts (`policy.ToCedar`; examples in
+`server/internal/policy/testdata/cedar/`; design `docs/design/access-as-code-repo.md` sections 3.6 and 5). A fact is an action
+(`reach`, `exist`, `hold_credential`) with principal, resource and context built from the graph; a satisfied forbid is a violation.
+Per-tenant sources live in `policy_sources` (schema `0917_policy_sources.sql`, Postgres `0945_policy_sources.sql`) with an
+append-only `policy_versions`. A tenant's active invariant source replaces the embedded YAML policy of the same `@id` (and adds new
+ids); a tenant with none, or whose sources do not load (digest, parse, schema, duplicate `@id`), keeps the embedded YAML and the API
+logs why. `GET /api/policies` and `GET /api/violations` keep their shape (parity fixtures unchanged). A finding whose every basis is
+approximate, unsupported or conditional is reported but never blocks (`policy.Blocking`). `separation_of_duties` stays a SoD risk
+and a `subjects.condition` stays YAML. Tests: `go test ./internal/policy -run 'Cedar|Overlay|Invariant'` (`TestCedarPortMatchesYAML`
+and the generated-graph test check each YAML policy and its port give identical violations) and `-fuzz FuzzParseInvariants`.
