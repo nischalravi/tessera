@@ -144,11 +144,7 @@ func (l *lowerer) policy(f *File, rp *rawPolicy, idx int, ids map[string]bool) {
 	l.single(rp, "display", &f.Display)
 	l.single(rp, "owner", &f.Owner)
 	if v, ok := rp.annots["provision"]; ok {
-		for _, s := range v {
-			if !slicesContains(f.Provision, s) {
-				f.Provision = append(f.Provision, s)
-			}
-		}
+		l.provision(rp.annotPos["provision"], v, f)
 	}
 	if len(rp.whens)+len(rp.unlesses) == 0 {
 		l.add(rp.at, CodeInvalidPolicy, "a %s needs a when or unless condition: without one it would apply to every identity, which a group cannot list", rp.effect)
@@ -156,13 +152,18 @@ func (l *lowerer) policy(f *File, rp *rawPolicy, idx int, ids map[string]bool) {
 	}
 	var conds []Expr
 	pol := &Policy{ID: id, Effect: rp.effect, At: rp.at}
+	// Cedar's validator checks each when and unless clause on its own: a guard
+	// in one clause does not cover an attribute read in another (it would be a
+	// different meaning for `unless`, see the guards comment).
 	for _, w := range rp.whens {
 		if e := l.lower(w); e != nil {
+			l.guards(e, map[string]bool{})
 			conds = append(conds, e)
 		}
 	}
 	for _, u := range rp.unlesses {
 		if e := l.lower(u); e != nil {
+			l.guards(e, map[string]bool{})
 			conds = append(conds, Not{X: e, At: u.at()})
 		}
 	}
@@ -176,7 +177,6 @@ func (l *lowerer) policy(f *File, rp *rawPolicy, idx int, ids map[string]bool) {
 			pol.Cond = And{L: pol.Cond, R: c, At: c.pos()}
 		}
 	}
-	l.guards(pol.Cond, map[string]bool{})
 	f.Policies = append(f.Policies, pol)
 }
 
@@ -321,32 +321,10 @@ func (l *lowerer) lowerBin(x nBin) Expr {
 		if isPrincipal(x.l) {
 			return l.principalIn(x)
 		}
-		a, ok := principalAttr(x.l)
-		if !ok {
-			return l.badCompare(x)
+		if a, ok := principalAttr(x.l); ok {
+			return l.unsupported(x.p, fmt.Sprintf("'in' on an attribute is not Cedar (in is group membership): write [\"a\", \"b\"].contains(principal.%s)", a.name))
 		}
-		set, ok := x.r.(nSet)
-		if !ok {
-			return l.unsupported(x.p, "'in' compares an attribute with a list of string literals")
-		}
-		if !l.attr(a.p, a.name, "in") {
-			return nil
-		}
-		var vals []string
-		for _, e := range set.elems {
-			s, ok := e.(nStr)
-			if !ok {
-				return l.unsupported(e.at(), "the list holds string literals only")
-			}
-			if !l.value(s.p, s.val) {
-				return nil
-			}
-			vals = append(vals, s.val)
-		}
-		if len(vals) == 0 {
-			return l.unsupported(x.p, "the list is empty")
-		}
-		return AttrIn{Attr: a.name, Values: vals, At: x.p}
+		return l.badCompare(x)
 	case "!=":
 		return l.unsupported(x.p, "'!=' is not supported: write !(principal.attr == \"...\")")
 	case "<", "<=", ">", ">=":
@@ -454,6 +432,9 @@ func (l *lowerer) principalIn(x nBin) Expr {
 }
 
 func (l *lowerer) lowerCall(x nCall) Expr {
+	if set, ok := x.x.(nSet); ok && x.method == "contains" && len(x.args) == 1 {
+		return l.lowerListContains(x, set)
+	}
 	a, ok := principalAttr(x.x)
 	if !ok {
 		if msg := explain(x.x); msg != "" {
@@ -472,6 +453,51 @@ func (l *lowerer) lowerCall(x nCall) Expr {
 		return nil
 	}
 	return AttrContains{Attr: a.name, Value: s.val, At: x.p}
+}
+
+// lowerListContains lowers `["a", "b"].contains(principal.attr)`, Cedar's
+// spelling of "the string attribute is one of these".
+func (l *lowerer) lowerListContains(x nCall, set nSet) Expr {
+	a, ok := principalAttr(x.args[0])
+	if !ok {
+		return l.unsupported(x.p, "a list's contains takes principal.attribute: [\"a\", \"b\"].contains(principal.attr)")
+	}
+	if !l.attr(a.p, a.name, "in") {
+		return nil
+	}
+	var vals []string
+	for _, e := range set.elems {
+		s, ok := e.(nStr)
+		if !ok {
+			return l.unsupported(e.at(), "the list holds string literals only")
+		}
+		if !l.value(s.p, s.val) {
+			return nil
+		}
+		vals = append(vals, s.val)
+	}
+	if len(vals) == 0 {
+		return l.unsupported(x.p, "the list is empty")
+	}
+	return AttrIn{Attr: a.name, Values: vals, At: x.p}
+}
+
+// provision reads @provision. Cedar annotations take one string, so the targets
+// are one comma-separated string: @provision("ldap-main,entra").
+func (l *lowerer) provision(at Pos, v []string, f *File) {
+	if len(v) != 1 {
+		l.add(at, CodeInvalidPolicy, "@provision takes one string in Cedar: write the targets comma-separated, @provision(%q)", strings.Join(v, ","))
+		return
+	}
+	for _, s := range strings.Split(v[0], ",") {
+		if s = strings.TrimSpace(s); s == "" {
+			l.add(at, CodeInvalidPolicy, "@provision names a target between each pair of commas: @provision(\"ldap-main,entra\")")
+			return
+		}
+		if !slicesContains(f.Provision, s) {
+			f.Provision = append(f.Provision, s)
+		}
+	}
 }
 
 // attr checks an attribute against the schema and the operator against its type.
@@ -514,13 +540,18 @@ func (l *lowerer) value(at Pos, v string) bool {
 
 // guards enforces Cedar's rule for optional attributes: reading one is an error
 // when it is missing, so it must be dominated by `principal has attr` in a
-// conjunction to its left (Cedar's validator would reject the policy otherwise).
+// conjunction to its left within the same when or unless clause (Cedar's
+// validator would reject the policy otherwise; it does not carry a guard from a
+// when clause into the next clause). The migration for a `when { has x } unless
+// { x == "v" }` is the one clause `when { has x && !(x == "v") }`, which means
+// the same; `unless { has x && x == "v" }` does not (it admits an identity
+// without x).
 // With every read guarded, the engine's reading "a missing attribute is not equal
 // to anything" and Cedar's coincide.
 func (l *lowerer) guards(x Expr, guarded map[string]bool) {
 	read := func(attr string, at Pos) {
 		if d := l.schema.Attrs[attr]; !d.Required && !guarded[attr] {
-			l.add(at, CodeUnguardedAttr, "attribute %q is optional: guard it with `principal has %s && ...` (reading a missing attribute is an error in Cedar)", attr, attr)
+			l.add(at, CodeUnguardedAttr, "attribute %q is optional: guard it with `principal has %s && ...` in the same when or unless clause (reading a missing attribute is an error in Cedar, and a guard in another clause does not count: write `when { principal has %s && !(principal.%s == \"v\") }` rather than a when guard plus an unless)", attr, attr, attr, attr)
 		}
 	}
 	switch n := x.(type) {

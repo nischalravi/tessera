@@ -226,6 +226,9 @@ func lexString(l *lexer) string {
 				fail(start, CodeSyntax, "unknown escape \\%s in a string", string(e))
 			}
 		default:
+			if b < 0x20 && b != '\t' || b == 0x7f {
+				fail(start, CodeSyntax, "a string holds no raw control character: write it as an escape, such as \\n or \\u{...}")
+			}
 			sb.WriteByte(b)
 		}
 	}

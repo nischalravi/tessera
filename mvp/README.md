@@ -4441,7 +4441,7 @@ Cedar library, so the fragment's parser and its evaluator (the PDP of §8.6) are
 
 - The fragment (design §8.2): `permit`/`forbid` on `Tessera::Action::"member"` with resource
   `Tessera::Group::"<name>"`; conditions use only `principal in Tessera::Group::"x"`,
-  `principal.attr == "v"`, `principal.attr in ["a","b"]`, `principal.attr.contains("v")`,
+  `principal.attr == "v"`, `["a","b"].contains(principal.attr)`, `principal.attr.contains("v")`,
   `principal has attr`, `&&`, `||`, `!` and `unless`. Context, resource attributes, arithmetic, dates,
   extension functions, `like`, `is` and `if` are refused with a line and column. Attributes come from a
   schema (`DefaultSchema`: the identity's `type`, `status`, `department`, `title`, `source`); an optional
@@ -4449,6 +4449,13 @@ Cedar library, so the fragment's parser and its evaluator (the PDP of §8.6) are
   validator requires, which makes "missing attribute" mean the same in the engine and in Cedar. A permit or
   forbid needs a condition, and a result of the form "everyone except ..." is refused
   (`unbounded_negation`): a group lists members.
+- The fragment is Cedar's grammar, checked against cedar-go by a differential test (issue #698): an attribute
+  is tested with `["a","b"].contains(principal.attr)` (`principal.attr in [..]` is refused: Cedar's `in` is
+  group membership), `@provision` takes one string with comma-separated targets (`@provision("ldap,entra")`),
+  a guard (`principal has x &&`) must sit in the same `when` or `unless` clause as the read (write
+  `when { principal has x && !(principal.x == "v") }`, not a `when` guard plus an `unless`), and a string
+  holds no raw control character. `tessera admin check-group-policies -tenant slug` re-parses the stored
+  sources and lists the files an earlier release accepted and the next apply would refuse (exit 1).
 - Members are `(⋃ permits) − (⋃ forbids)`. Compilation hash-conses subtrees: identical ones, in any file,
   are one internal group `sys:policy:_n<hash>`; `principal.campus == "main"` is the group
   `sys:attr:campus:main`, a basic group whose direct members have `source = attribute`, kept current by the

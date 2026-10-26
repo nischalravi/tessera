@@ -43,21 +43,23 @@ namespace Tessera {
   entity Identity in [Group] = {
     type: String, status: String,            // identities.type / status
     department?: String, title?: String, location?: String,
-    attrs: Record,                            // identity attributes (abac.Attrs), open record
+    attrs: { a?: String, b?: String, ... },   // identity attributes (abac.Attrs): one optional String per attribute
+                                              // name the tenant uses, generated from its graph (see below)
     owner?: Identity, sponsor?: Identity,     // NHI owner, agent sponsor
     mfa_strength?: String, created_days: Long,   // strongest enrolled factor (internal/mfa)
   };
   entity Group = { system: String, name: String, privileged: Bool, requestable: Bool };   // an entitlement
   entity Resource = { system: String, environment?: String, tags: Set<String>, privileged: Bool };
   entity Credential = { kind: String, age_days: Long, holder: Identity };
-  entity Agent in [Group] = { source: String, kind: String, blueprint?: String };          // view of an ai_agent Identity
+  entity Agent in [Group] = { <every Identity attribute above>,                            // view of an ai_agent Identity
+                              source: String, kind: String, blueprint?: String };
 
   // ---- governed objects (authored)
   entity Role = { key: String, name: String, risk: String, requestable: Bool,
                   owner?: Identity, entitlements: Set<Group> };
   entity JitEligibility = { key: String, principals: Set<Group>, entitlements: Set<Group>,
                             max_hours: Long, approvers: Set<Group>, min_approvals: Long, step_up: Bool };
-  entity SodFunction = { key: String, selectors: Set<Record> };
+  entity SodFunction = { key: String, selectors: Set<{ system: String, permission: String }> };
   entity SodRisk = { key: String, priority: String, functions: Set<SodFunction>, ruleset: SodRuleset };
   entity SodRuleset = { key: String, enabled: Bool };
 
@@ -73,6 +75,8 @@ namespace Tessera {
   action hold_credential appliesTo { principal: Identity, resource: Credential };
 }
 ```
+
+Two points where the generated schema (`internal/cedarx/schema.go`, AC-1) is the reference and the text above is shorthand. `Agent` carries every `Identity` attribute as well as `source`, `kind` and `blueprint`: `reach` and `exist` apply to `[Identity, Agent]`, and an invariant such as `principal.type == "ai_agent"` fails validation for the `Agent` principal unless `type` and the rest exist on it. `attrs` is a closed record with one optional `String` per attribute name found in the tenant's graph (names only, never values), so `principal.attrs.cost_center` is valid exactly when the tenant has that attribute, and must be guarded with `has`. `SodFunction.selectors` is a set of `{ system, permission }` records.
 
 `reach` facts are rows of `graph.EffectivePermissions` (one per identity, action, resource); `context.fidelity` carries EXACT/APPROXIMATE/UNSUPPORTED so an invariant can refuse to fire on a guess. `action_class` is the AWS catalog access level (list, read, write, permissions_management, tagging) or `admin` for a graph permission marked privileged.
 

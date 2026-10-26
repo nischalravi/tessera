@@ -25,6 +25,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/samlsp"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/policygroups"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth/dpop"
@@ -43,6 +44,7 @@ import (
 //	tessera admin revoke-signing-key -tenant acme -kid <kid> -reason "..."
 //	tessera admin add-client    -tenant acme -name "ETL" -owner jane@acme.com -jwks-file pub.jwks -scope "tessera:read" -roles viewer
 //	tessera admin list-overprivileged-clients -tenant acme
+//	tessera admin check-group-policies -tenant acme
 //
 // Every command runs as the operator (the OS user) and is audited in the
 // tenant's chain. invite-admin and recover-tenant print a one-time URL; only
@@ -60,6 +62,8 @@ const adminUsage = `usage:
                               -scope "tessera:read ..." -roles viewer,operator,auditor [-dpop=false] [-db path]
   tessera admin list-overprivileged-clients -tenant slug [-db path]
                               (machine clients whose permissions exceed their approver's: they get no token; issue #522)
+  tessera admin check-group-policies -tenant slug [-db path]
+                              (stored policy group files the Cedar-aligned fragment now refuses; issue #698; exits 1 on any finding)
   (-db is a SQLite path or a postgres:// DSN)`
 
 // maxInviteTTL is the longest a bootstrap invitation may live (§15.3).
@@ -136,6 +140,9 @@ func adminCmd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	case "list-overprivileged-clients":
 		tenant := fset.String("tenant", "", "tenant slug")
 		run = func(e *adminEnv) error { return listOverprivilegedClients(e, *tenant) }
+	case "check-group-policies":
+		tenant := fset.String("tenant", "", "tenant slug")
+		run = func(e *adminEnv) error { return checkGroupPolicies(e, *tenant) }
 	default:
 		return fmt.Errorf("unknown admin command %q\n%s", sub, adminUsage)
 	}
@@ -677,4 +684,41 @@ func findOwner(tx *store.TenantTx, owner string) (*store.PlatformUser, error) {
 		}
 	}
 	return nil, fmt.Errorf("no user %q in this tenant", owner)
+}
+
+// checkGroupPolicies re-reads the policy group files stored for the tenant with the current fragment parser and
+// prints each finding (issue #698: the fragment is Cedar's grammar now, so a file with `attr in [..]`, a
+// multi-value @provision, a guard carried from a when into an unless, or a raw control character in a string is
+// refused on its next apply). Stored groups keep working: only the source is re-parsed, never the compiled policy.
+// It exits non-zero when any file has a finding, so a migration can gate on it.
+func checkGroupPolicies(e *adminEnv, slug string) error {
+	t, err := lookupTenant(e, slug)
+	if err != nil {
+		return err
+	}
+	files, bad := 0, 0
+	schema := policygroups.DefaultSchema()
+	if err := e.db.ReadTenant(e.ctx, t.ID, func(tx *store.TenantTx) error {
+		srcs, err := tx.GrpPolicySources("")
+		if err != nil {
+			return err
+		}
+		for _, s := range srcs {
+			files++
+			if _, diags := policygroups.ParseFile(s.Path, s.Cedar, schema); len(diags) > 0 {
+				bad++
+				for _, d := range diags {
+					fmt.Fprintln(e.stdout, d)
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("check-group-policies: %w", err)
+	}
+	fmt.Fprintf(e.stdout, "%d of %d stored policy group file(s) need a rewrite in %s\n", bad, files, t.Slug)
+	if bad > 0 {
+		return fmt.Errorf("check-group-policies: %d file(s) need a rewrite", bad)
+	}
+	return nil
 }

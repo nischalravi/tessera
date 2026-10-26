@@ -25,7 +25,7 @@ const designExample = `
 @group("app:foo:service:policy:foo_user")
 @display("Foo users")
 @owner("app:foo:security:fooAdmin")
-@provision("ldap-main", "entra")
+@provision("ldap-main,entra")
 @id("allow")
 permit (principal, action == Tessera::Action::"member", resource == Tessera::Group::"app:foo:service:policy:foo_user")
 when {
@@ -94,7 +94,13 @@ func TestFragment_RejectsUnsupported(t *testing.T) {
 		{"unsupported method", one(`principal.campus.isEmpty()`), CodeUnsupported, "is not supported"},
 		{"containsAll", one(`principal.affiliation.containsAll(["a"])`), CodeUnsupported, "is not supported"},
 		{"entity of another type", one(`principal in User::"x"`), CodeUnsupported, "names a group"},
-		{"in with a non-literal list", one(`principal.campus in [principal.title]`), CodeUnsupported, "string literals"},
+		{"in with a non-literal list", one(`[principal.title].contains(principal.campus)`), CodeUnsupported, "string literals"},
+		{"attribute in a list", one(`principal.campus in ["a", "b"]`), CodeUnsupported, `["a", "b"].contains(principal.campus)`},
+		{"list contains a literal", one(`["a"].contains("a")`), CodeUnsupported, "principal.attribute"},
+		{"multi-value provision", `@provision("a", "b") ` + one(`principal has campus`), CodeInvalidPolicy, `@provision("a,b")`},
+		{"empty provision target", `@provision("a,,b") ` + one(`principal has campus`), CodeInvalidPolicy, "between each pair"},
+		{"control character", one("principal.campus == \"a\x00b\""), CodeSyntax, "raw control character"},
+		{"guard in another clause", hdr + ` when { principal has department } unless { principal.department == "x" };`, CodeUnguardedAttr, "same when or unless clause"},
 		{"attribute compared with an attribute", one(`principal.campus == principal.title`), CodeUnsupported, "string literal"},
 		{"scope constraint", `permit (principal in Tessera::Group::"x", action == Tessera::Action::"member", resource == Tessera::Group::"g") when { principal has campus };`, CodeUnsupported, "principal constraint"},
 		{"wrong action", `permit (principal, action == Tessera::Action::"read", resource == Tessera::Group::"g") when { principal has campus };`, CodeInvalidPolicy, "member"},
@@ -110,7 +116,7 @@ func TestFragment_RejectsUnsupported(t *testing.T) {
 		{"guard under not", one(`!(principal has department) && principal.department == "x"`), CodeUnguardedAttr, "optional"},
 		{"empty value", one(`principal.campus == ""`), CodeInvalidValue, "not empty"},
 		{"long value", one(`principal.campus == "` + strings.Repeat("a", MaxValueBytes+1) + `"`), CodeInvalidValue, "at most"},
-		{"empty list", one(`principal.campus in []`), CodeUnsupported, "empty"},
+		{"empty list", one(`[].contains(principal.campus)`), CodeUnsupported, "empty"},
 		{"two groups in one file", one(`principal has campus`) + "\n" + strings.Replace(hdr, "app:foo:pol", "app:foo:other", 1) + ` when { principal has campus };`, CodeInvalidPolicy, "one group"},
 		{"@group disagrees", `@group("a:b") ` + one(`principal has campus`), CodeInvalidPolicy, "@group must name"},
 		{"unknown annotation", `@shoe("x") ` + one(`principal has campus`), CodeInvalidPolicy, "unknown annotation"},
@@ -152,7 +158,7 @@ func TestFragment_AcceptsTheFragment(t *testing.T) {
 		"group":              `principal in Tessera::Group::"a:b"`,
 		"group list":         `principal in [Tessera::Group::"a:b", Tessera::Group::"a:c"]`,
 		"required attribute": `principal.campus == "main"`,
-		"attribute in":       `principal.campus in ["a", "b"]`,
+		"attribute in":       `["a", "b"].contains(principal.campus)`,
 		"set contains":       `principal has affiliation && principal.affiliation.contains("faculty")`,
 		"guarded":            `principal has department && principal.department == "cs"`,
 		"guard dominates":    `principal has department && (principal.department == "cs" || principal.department == "math")`,
@@ -169,7 +175,7 @@ func TestFragment_AcceptsTheFragment(t *testing.T) {
 		})
 	}
 	// an unless clause is a negated condition, and it is checked like one
-	if f, diags := ParseFile("p.cedar", hdr+` when { principal has department } unless { principal.department == "x" };`, testSchema()); len(diags) > 0 || len(f.Policies) != 1 {
+	if f, diags := ParseFile("p.cedar", hdr+` when { principal has campus } unless { principal has department && principal.department == "x" };`, testSchema()); len(diags) > 0 || len(f.Policies) != 1 {
 		t.Errorf("unless: %v", diags)
 	}
 	if _, diags := ParseFile("p.cedar", hdr+` unless { principal.department == "x" };`, testSchema()); len(diags) == 0 {
