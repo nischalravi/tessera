@@ -77,7 +77,8 @@ func newViolation(p *Policy, iid int64, name, key, msg string, evidence []string
 		edges = [][]string{}
 	}
 	id := iid
-	return Violation{p.ID, p.Name, p.Severity, &id, name, key, msg, evidence, edges, ""}
+	return Violation{PolicyID: p.ID, PolicyName: p.Name, Severity: p.Severity, IdentityID: &id,
+		IdentityName: name, Key: key, Message: msg, Evidence: evidence, Edges: edges}
 }
 
 // ------------------------------------------------------------------ loading

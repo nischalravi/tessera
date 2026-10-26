@@ -47,7 +47,10 @@ var (
 		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant ORDER BY e.id`)
 	edgeExplanations = tq("aws_edge_evaluations.explanations", `
 		SELECT v.edge_id, v.explanation_id FROM aws_edge_evaluations v
-		WHERE v.tenant_id = @tenant AND v.explanation_id <> '' ORDER BY v.edge_id`)
+		WHERE v.tenant_id = @tenant AND v.explanation_id <> ''
+			AND v.edge_id IN (SELECT i.edge_id FROM review_items i
+				WHERE i.tenant_id = @tenant AND i.campaign_id = @campaign AND i.edge_id IS NOT NULL)
+		ORDER BY v.edge_id`)
 	edgesGet = tq("grant_edges.get", `
 		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant AND e.id = @id`)
 	edgesBetween = tq("grant_edges.between", `
@@ -123,9 +126,10 @@ func scanEdge(s scanner) (*GrantEdge, error) {
 func (tx *TenantTx) Edges() ([]*GrantEdge, error) { return collect(tx, scanEdge, edgesList) }
 
 // EdgeExplanations maps a grant edge id to the evaluator explanation id of its
-// evaluation, for the edges that have one (EP-8: findings link to the trace).
-func (tx *TenantTx) EdgeExplanations() (map[int64]string, error) {
-	rows, err := tx.query(edgeExplanations)
+// evaluation, for the edges of one campaign's review items that have one (EP-8:
+// findings link to the trace).
+func (tx *TenantTx) EdgeExplanations(campaignID int64) (map[int64]string, error) {
+	rows, err := tx.query(edgeExplanations, sql.Named("campaign", campaignID))
 	if err != nil {
 		return nil, err
 	}

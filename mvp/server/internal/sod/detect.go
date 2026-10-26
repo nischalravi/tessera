@@ -167,7 +167,9 @@ type Violation struct {
 	Evidence        []string   `json:"evidence"`
 	Edges           [][]string `json:"edges"`
 	// ExplanationID names the AWS evaluator trace behind the finding; absent
-	// when no evaluated permission or edge is implicated.
+	// when no evaluated permission or edge is implicated. It is one trace, not
+	// both sides': permission a's if it has one, else b's, else the first
+	// evaluated implicated edge's.
 	ExplanationID string `json:"explanation_id,omitempty"`
 }
 

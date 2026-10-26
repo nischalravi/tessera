@@ -1446,7 +1446,7 @@ func campaignView(c *store.TenantTx, cmp *store.ReviewCampaign, withItems bool) 
 		if err != nil {
 			return nil, err
 		}
-		expl, err := c.EdgeExplanations()
+		expl, err := c.EdgeExplanations(cmp.ID)
 		if err != nil {
 			return nil, err
 		}
