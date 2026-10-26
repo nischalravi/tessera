@@ -2,7 +2,6 @@ package policygroups
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -31,36 +30,9 @@ func cedarGroupsSchema(t testing.TB, s Schema) *cedarx.Schema {
 	return cs
 }
 
-// attrInList matches the fragment's `principal.attr in ["a", "b"]`.
-var attrInList = regexp.MustCompile(`(principal\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)\s+in\b\s*(\[[^\]]*\])`)
-
-// cedarSrc is src as stock Cedar reads it, where the fragment is a superset of
-// Cedar in two ways the differential finds (reported in the PR for AC-1):
-//   - @provision takes a list of strings (design §8.3); a Cedar annotation takes
-//     one value, so the list is joined with a comma;
-//   - `principal.attr in [..]` tests a string attribute against a list; in Cedar
-//     `in` is entity hierarchy membership and is a type error on strings, so it
-//     is the equivalent `[..].contains(principal.attr)`.
-func cedarSrc(src string) string {
-	src = attrInList.ReplaceAllString(src, "$2.contains($1)")
-	var out []string
-	for _, ln := range strings.Split(src, "\n") {
-		if t := strings.TrimSpace(ln); strings.HasPrefix(t, "@provision(") {
-			ln = "@provision(" + `"` + strings.Join(provisionTargets(t), ",") + `")`
-		}
-		out = append(out, ln)
-	}
-	return strings.Join(out, "\n")
-}
-
-func provisionTargets(line string) []string {
-	body := strings.TrimSuffix(strings.TrimPrefix(line, "@provision("), ")")
-	var out []string
-	for _, p := range strings.Split(body, ",") {
-		out = append(out, strings.Trim(strings.TrimSpace(p), `"`))
-	}
-	return out
-}
+// cedarSrc is src as stock Cedar reads it: the fragment is Cedar's grammar
+// (issue #698), so it is src itself.
+func cedarSrc(src string) string { return src }
 
 // checkAgainstCedar fails if the fragment accepts src and cedar-go does not.
 func checkAgainstCedar(t testing.TB, cs *cedarx.Schema, schema Schema, src string) {
@@ -68,18 +40,9 @@ func checkAgainstCedar(t testing.TB, cs *cedarx.Schema, schema Schema, src strin
 	if f == nil || len(diags) > 0 {
 		return
 	}
-	if _, err := cs.Check("p.cedar", []byte(cedarSrc(src))); err != nil && !unlessGuardDivergence(src, err) && !controlCharDivergence(src) {
+	if _, err := cs.Check("p.cedar", []byte(cedarSrc(src))); err != nil {
 		t.Fatalf("the fragment accepts what cedar-go refuses: %v\n%s", err, src)
 	}
-}
-
-// unlessGuardDivergence is the third known divergence: the fragment checks the
-// clauses of a policy as one conjunction, so a `when { principal has x }`
-// guards `unless { principal.x == .. }`; Cedar's validator checks each clause on
-// its own and refuses the unless as unguarded. Pinned by
-// TestCedar_UnlessGuardIsAnExtension.
-func unlessGuardDivergence(src string, err error) bool {
-	return strings.Contains(src, "unless") && strings.Contains(err.Error(), "unable to guarantee safety")
 }
 
 // TestCedar_FragmentIsValidCedar: the design example and 400 generated files.
@@ -142,61 +105,57 @@ func TestCedar_RejectionsAgree(t *testing.T) {
 	}
 }
 
-// TestCedar_AttrInListIsAnExtension pins the divergence: the fragment accepts a
-// string attribute `in` a list, Cedar rejects it, and cedarSrc's rewrite is valid.
-func TestCedar_AttrInListIsAnExtension(t *testing.T) {
+// The four forms the fragment once accepted and Cedar refuses (issue #698) are
+// refused by both now, with a finding that names the Cedar spelling.
+func TestCedar_FormerDivergencesAgree(t *testing.T) {
 	schema := testSchema()
 	cs := cedarGroupsSchema(t, schema)
-	src := one(`principal.campus in ["a", "b"]`)
-	if f, diags := ParseFile("p.cedar", src, schema); f == nil {
-		t.Fatalf("the fragment refuses it: %v", diags)
-	}
-	if _, err := cs.Check("p.cedar", []byte(src)); err == nil {
-		t.Error("cedar-go accepts `string in list`; the rewrite in cedarSrc is no longer needed")
-	}
-	if _, err := cs.Check("p.cedar", []byte(cedarSrc(src))); err != nil {
-		t.Errorf("the rewritten form is refused: %v", err)
+	for name, c := range map[string]struct {
+		src, hint string
+	}{
+		"string in list":        {one(`principal.campus in ["a", "b"]`), `.contains(principal.campus)`},
+		"multi-value provision": {`@provision("ldap", "entra") ` + one(`principal has campus`), `@provision("ldap,entra")`},
+		"guard into unless":     {hdr + ` when { principal has department } unless { principal.department == "x" };`, "same when or unless clause"},
+		"guard into when":       {hdr + ` when { principal has department } when { principal.department == "x" };`, "same when or unless clause"},
+		"NUL in a string":       {one("principal.campus == \"a\x00b\""), "control character"},
+		"newline in a string":   {one("principal.campus == \"a\nb\""), "control character"},
+		"bell in a string":      {one("principal.campus == \"a\x07b\""), "control character"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, diags := ParseFile("p.cedar", c.src, schema)
+			if f != nil || len(diags) == 0 || !strings.Contains(diags[0].Msg, c.hint) || diags[0].Line == 0 {
+				t.Errorf("the fragment: file = %v, diags = %v; want a finding with %q", f, diags, c.hint)
+			}
+			if _, err := cs.Check("p.cedar", []byte(c.src)); err == nil && !strings.Contains(name, "bell") {
+				t.Error("cedar-go accepts it; the finding is stricter than Cedar")
+			}
+		})
 	}
 }
 
-// controlCharDivergence is the fourth: the fragment's lexer lets a raw control
-// character (NUL, for one) into a string literal, which Cedar's lexer refuses.
-// Pinned by TestCedar_ControlCharacterIsAnExtension.
-func controlCharDivergence(src string) bool {
-	for i := 0; i < len(src); i++ {
-		if c := src[i]; c < 0x20 && c != '\n' && c != '\t' && c != '\r' || c == 0x7f {
-			return true
-		}
-	}
-	return false
-}
-
-func TestCedar_ControlCharacterIsAnExtension(t *testing.T) {
+// The Cedar spellings of those forms are accepted by both, with the same meaning.
+func TestCedar_CedarSpellingsAgree(t *testing.T) {
 	schema := testSchema()
 	cs := cedarGroupsSchema(t, schema)
-	src := one("principal.campus == \"a\x00b\"")
-	if f, _ := ParseFile("p.cedar", src, schema); f == nil {
-		t.Skip("the fragment now refuses control characters; drop controlCharDivergence")
+	for name, src := range map[string]string{
+		"list contains":      one(`["a", "b"].contains(principal.campus)`),
+		"one provision":      `@provision("ldap,entra") ` + one(`principal has campus`),
+		"guard in unless":    hdr + ` when { principal has department && !(principal.department == "x") };`,
+		"guard in an unless": hdr + ` when { principal has campus } unless { principal has department && principal.department == "x" };`,
+		"escaped newline":    one(`principal.campus == "a\nb"`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, diags := ParseFile("p.cedar", src, schema); len(diags) > 0 {
+				t.Errorf("the fragment: %v", diags)
+			}
+			if _, err := cs.Check("p.cedar", []byte(src)); err != nil {
+				t.Errorf("cedar-go: %v", err)
+			}
+		})
 	}
-	if _, err := cs.Check("p.cedar", []byte(src)); err == nil {
-		t.Error("cedar-go accepts a NUL in a string; drop controlCharDivergence")
-	}
-}
-
-// TestCedar_UnlessGuardIsAnExtension pins the divergence of a guard in `when`
-// covering an attribute read in `unless`; the fix is to put the guard in the
-// unless (`unless { principal has x && principal.x == .. }` is not equivalent,
-// so the author writes the whole condition in one when).
-func TestCedar_UnlessGuardIsAnExtension(t *testing.T) {
-	schema := testSchema()
-	cs := cedarGroupsSchema(t, schema)
-	src := hdr + ` when { principal has department } unless { principal.department == "x" };`
-	if f, diags := ParseFile("p.cedar", src, schema); f == nil {
-		t.Fatalf("the fragment refuses it: %v", diags)
-	}
-	_, err := cs.Check("p.cedar", []byte(src))
-	if err == nil || !unlessGuardDivergence(src, err) {
-		t.Errorf("cedar-go: err = %v; if it accepts now, drop unlessGuardDivergence", err)
+	f, diags := ParseFile("p.cedar", `@provision("ldap, entra,ldap") `+one(`principal has campus`), schema)
+	if len(diags) > 0 || strings.Join(f.Provision, "|") != "ldap|entra" {
+		t.Errorf("provision targets: %v %v", f, diags)
 	}
 }
 
@@ -273,6 +232,9 @@ func FuzzFragmentAgainstCedar(f *testing.F) {
 	f.Add(one(`principal in Tessera::Group::"a:b" && !(principal.campus == "x")`))
 	f.Add(one(`principal has department && principal.department == "cs"`))
 	f.Add(hdr + ` when { principal has department } unless { principal.department == "x" };`)
+	f.Add(one(`["a", "b"].contains(principal.campus)`))
+	f.Add(`@provision("a,b") ` + one(`principal has campus`))
+	f.Add(one("principal.campus == \"a\x00b\""))
 	f.Add(one(`principal has affiliation && principal.affiliation.contains("faculty")`))
 	f.Add(one(`principal.campus == "caf\u{e9}\n\"q\" \\"`))
 	for seed := int64(1); seed <= 8; seed++ {

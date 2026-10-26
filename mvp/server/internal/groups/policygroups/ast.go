@@ -70,7 +70,7 @@ type (
 		Attr, Value string
 		At          Pos
 	}
-	// AttrIn is `principal.attr in ["a", "b"]`.
+	// AttrIn is `["a", "b"].contains(principal.attr)` on a string attribute.
 	AttrIn struct {
 		Attr   string
 		Values []string
