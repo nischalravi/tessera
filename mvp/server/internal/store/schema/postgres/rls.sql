@@ -2418,6 +2418,20 @@ CREATE POLICY tenant_isolation ON aws_shadow_triage
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE policy_sources ENABLE ROW LEVEL SECURITY;
+ALTER TABLE policy_sources FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON policy_sources;
+CREATE POLICY tenant_isolation ON policy_sources
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE policy_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE policy_versions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON policy_versions;
+CREATE POLICY tenant_isolation ON policy_versions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN

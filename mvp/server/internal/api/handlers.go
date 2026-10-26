@@ -1165,8 +1165,15 @@ func (s *Server) listPolicies(_ http.ResponseWriter, r *http.Request, _ *params)
 		listed[pol.ID] = true
 	}
 	shown := append([]*policy.Policy{}, files...)
-	for _, pol := range a.policies { // SoD risks that no policy file defines
-		if pol.Type == policy.TypeSoDRisk && !listed[pol.ID] {
+	for i, pol := range shown { // a tenant's Cedar invariant replaces the file of the same id
+		for _, eff := range a.policies {
+			if eff.Cedar != nil && eff.ID == pol.ID {
+				shown[i] = eff
+			}
+		}
+	}
+	for _, pol := range a.policies { // SoD risks that no policy file defines, and invariants of the tenant's own
+		if (pol.Type == policy.TypeSoDRisk || pol.Cedar != nil) && !listed[pol.ID] {
 			shown = append(shown, pol)
 		}
 	}

@@ -783,7 +783,17 @@ func (s *Server) effectivePolicies(tx *store.TenantTx) ([]*policy.Policy, error)
 	if err != nil {
 		return nil, err
 	}
-	return policy.Effective(files, risks), nil
+	eff := policy.Effective(files, risks)
+	// the tenant's Cedar invariants replace the YAML of the same id; a bundle
+	// that does not load leaves the embedded YAML (access-as-code AC-3)
+	pols, unreadable, err := policy.TenantPolicies(tx, eff)
+	if err != nil {
+		return nil, err
+	}
+	if unreadable != nil {
+		s.log.Error("tenant invariant bundle unreadable; evaluating the embedded YAML policies", "tenant", tx.Tenant().String(), "err", unreadable)
+	}
+	return pols, nil
 }
 
 // ---------------------------------------------------------------- routing
