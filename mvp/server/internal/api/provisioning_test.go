@@ -111,7 +111,20 @@ func newProvHarness(t *testing.T, o fake.Options) *provHarness {
 
 func (h *provHarness) target(body string, want int) map[string]any {
 	h.t.Helper()
-	return h.c.json("PUT", "/api/provisioning/targets/"+h.conn, body, want).(map[string]any)
+	path := "/api/provisioning/targets/" + h.conn
+	rec := h.c.do("PUT", path, body)
+	if want == 200 && rec.Code == http.StatusConflict && strings.Contains(rec.Body.String(), "two_admin_change_required") {
+		// An edit that widens a write-back target goes through turning write-back off first (issue #569).
+		h.c.json("PUT", path, strings.Replace(body, `"write_back":true`, `"write_back":false`, 1), 200)
+	}
+	v := h.c.json("PUT", path, body, want).(map[string]any)
+	if v["write_back_pending"] == true {
+		// Enabling write-back waits for a second admin (issue #569). Tests that are not about that approval
+		// switch it on directly; TestProvisioning_WriteBackNeedsSecondAdmin goes through the real flow.
+		testkit.Write(h.t, h.st, func(c *store.TenantTx) error { return c.SetProvTargetWriteBack(h.conn, true, testkit.Now) })
+		v["write_back"], v["write_back_pending"] = true, nil
+	}
+	return v
 }
 
 func (h *provHarness) run() provision.Stats {

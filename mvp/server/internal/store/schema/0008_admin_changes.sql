@@ -65,7 +65,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     -- (internal/admin/change_alerts.go, issue #521)
     'alerts.rule.loosen',
     -- attesting a manual item of a vendor breach plan takes two admins (internal/admin/change_breach.go, issue #538)
-    'breach.item.attest')),
+    'breach.item.attest',
+    -- enabling write-back on a provisioning target takes two admins (internal/admin/change_provision.go, issue #569)
+    'provisioning.write_back.enable')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

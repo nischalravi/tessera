@@ -93,6 +93,9 @@ var (
 		SELECT `+provTargetCols+` FROM provisioning_targets t
 		JOIN connections c ON c.id = t.connection_id AND c.tenant_id = @tenant
 		WHERE t.tenant_id = @tenant ORDER BY t.created_at, t.rowid`)
+	provTargetSetWriteBack = tq("provisioning_targets.set_write_back", `
+		UPDATE provisioning_targets SET write_back = @write_back, updated_at = @now
+		WHERE tenant_id = @tenant AND connection_id = @connection_id`)
 	provTargetDelete = tq("provisioning_targets.delete", `
 		DELETE FROM provisioning_targets WHERE tenant_id = @tenant AND connection_id = @connection_id`)
 
@@ -227,6 +230,11 @@ func (tx *TenantTx) ProvTargetBySystem(system string) (*ProvTarget, error) {
 // ProvTargets lists the tenant's targets.
 func (tx *TenantTx) ProvTargets() ([]*ProvTarget, error) {
 	return collect(tx, scanProvTarget, provTargetList)
+}
+
+// SetProvTargetWriteBack switches a target's write-back flag and nothing else. ErrNotFound: no target.
+func (tx *TenantTx) SetProvTargetWriteBack(connectionID string, on bool, now time.Time) error {
+	return tx.execOne(provTargetSetWriteBack, sql.Named("connection_id", connectionID), sql.Named("write_back", B(on)), sql.Named("now", RT(now)))
 }
 
 // DeleteProvTarget removes a connection's target. ErrNotFound: none.

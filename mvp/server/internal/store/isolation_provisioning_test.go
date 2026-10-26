@@ -41,6 +41,9 @@ func TestIsolation_Provisioning(t *testing.T) {
 		if err := c.DeleteProvTarget(aConn); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("DeleteProvTarget(A's) = %v", err)
 		}
+		if err := c.SetProvTargetWriteBack(aConn, false, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetProvTargetWriteBack(A's) = %v", err)
+		}
 		if _, err := c.ProvOp("po-a"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("ProvOp(A's) = %v", err)
 		}
@@ -128,7 +131,7 @@ func TestIsolation_Provisioning(t *testing.T) {
 
 func provisioningCovered() map[string]bool {
 	out := map[string]bool{}
-	for _, k := range []string{"UpsertProvTarget", "ProvTarget", "ProvTargetBySystem", "ProvTargets", "DeleteProvTarget",
+	for _, k := range []string{"UpsertProvTarget", "ProvTarget", "ProvTargetBySystem", "ProvTargets", "DeleteProvTarget", "SetProvTargetWriteBack",
 		"InsertProvOp", "ProvOp", "ProvOpByKey", "ProvOps", "DueProvOps", "SetProvOpState", "RequeueStaleProvOps",
 		"ProvOpCounts", "InsertProvFinding", "ProvFindings", "ResolveProvFindings"} {
 		out[k] = true // TestIsolation_Provisioning
