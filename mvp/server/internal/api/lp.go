@@ -54,7 +54,7 @@ func (s *Server) registerLPRoutes() {
 	s.handle(P, "/api/lp/candidates", write, need(auth.PermLPManage), s.rd(s.lpPropose))
 	s.handle(P, "/api/lp/revocations/approve", write, needStepUp(auth.PermLPManage, auth.StepUpPolicy), s.rd(s.lpApprove))
 	s.handle(P, "/api/lp/revocations/{id}/object", write, need(auth.PermLPManage), s.rd(s.lpObject))
-	s.handle(P, "/api/lp/revocations/{id}/restore", write, need(auth.PermLPManage), s.rd(s.lpRestore))
+	s.handle(P, "/api/lp/revocations/{id}/restore", write, needStepUp(auth.PermLPManage, auth.StepUpPolicy), s.rd(s.lpRestore))
 	s.handle(G, "/api/lp/protected", read, need(auth.PermGraphRead), s.rd(s.lpProtectedList))
 	s.handle(P, "/api/lp/protected", write, need(auth.PermLPManage), s.rd(s.lpProtectedAdd))
 }
