@@ -147,6 +147,19 @@ func (c *CloudTrailConfig) logRoot() string {
 	return root
 }
 
+// partition is the AWS partition of the trail (aws, aws-cn, aws-us-gov), read
+// from TrailARN; "aws" when it is unset or names none that is known.
+func (c *CloudTrailConfig) partition() string {
+	if rest, ok := strings.CutPrefix(c.TrailARN, "arn:"); ok {
+		p, _, _ := strings.Cut(rest, ":")
+		switch p {
+		case "aws-cn", "aws-us-gov":
+			return p
+		}
+	}
+	return "aws"
+}
+
 // TrailARNParts returns the region and account of TrailARN ("" when unset).
 func (c *CloudTrailConfig) trailParts() (region, account string) {
 	m := trailARNRE.FindStringSubmatch(c.TrailARN)
@@ -163,17 +176,18 @@ func (c *CloudTrailConfig) trailParts() (region, account string) {
 // needs. CheckReadOnly accepts it.
 func TrailReaderPolicy(c CloudTrailConfig) []byte {
 	root := c.logRoot()
+	part := c.partition()
 	b, err := json.MarshalIndent(map[string]any{
 		"Version": "2012-10-17",
 		"Statement": []any{
 			map[string]any{
 				"Sid": "TesseraTrailList", "Effect": "Allow", "Action": []string{"s3:ListBucket"},
-				"Resource":  "arn:aws:s3:::" + c.Bucket,
+				"Resource":  "arn:" + part + ":s3:::" + c.Bucket,
 				"Condition": map[string]any{"StringLike": map[string]any{"s3:prefix": []string{root + "*"}}},
 			},
 			map[string]any{
 				"Sid": "TesseraTrailRead", "Effect": "Allow", "Action": []string{"s3:GetObject"},
-				"Resource": "arn:aws:s3:::" + c.Bucket + "/" + root + "*",
+				"Resource": "arn:" + part + ":s3:::" + c.Bucket + "/" + root + "*",
 			},
 		},
 	}, "", "  ")

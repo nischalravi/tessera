@@ -32,6 +32,7 @@ var (
 	maxLogObjectBytes   = 16 << 20  // compressed size of one log file
 	maxLogInflatedBytes = 128 << 20 // what one file may inflate to
 	maxLogRecords       = 200000    // records in one file
+	maxLogRecordBytes   = 4 << 20   // one record (CloudTrail's own cap is far lower): encoding/json buffers a whole one
 )
 
 const (
@@ -148,11 +149,19 @@ type ctEvent struct {
 // inflateLimit reads at most n bytes and then fails, so a small file cannot
 // inflate to an unbounded size.
 type inflateLimit struct {
-	r io.Reader
-	n int
+	r     io.Reader
+	n     int
+	total int64 // bytes read so far
+	// recFrom is the stream offset where the record being decoded starts, -1
+	// outside the Records array. Reading on past recFrom+maxLogRecordBytes means
+	// the record is too big to buffer.
+	recFrom int64
 }
 
 func (l *inflateLimit) Read(p []byte) (int, error) {
+	if l.recFrom >= 0 && l.total-l.recFrom > int64(maxLogRecordBytes) {
+		return 0, &refusal{"record_too_large", fmt.Sprintf("a record in the log file is larger than %d bytes", maxLogRecordBytes)}
+	}
 	if l.n <= 0 {
 		// a file of exactly the limit is accepted: only a byte past it refuses
 		var one [1]byte
@@ -172,6 +181,7 @@ func (l *inflateLimit) Read(p []byte) (int, error) {
 	}
 	n, err := l.r.Read(p)
 	l.n -= n
+	l.total += int64(n)
 	return n, err
 }
 
@@ -189,7 +199,8 @@ func parseLogFile(gz []byte, fn func(*ctEvent)) (records int, err error) {
 		return 0, &refusal{"malformed", "not a gzip file"}
 	}
 	defer zr.Close()
-	dec := json.NewDecoder(&inflateLimit{r: zr, n: maxLogInflatedBytes})
+	lim := &inflateLimit{r: zr, n: maxLogInflatedBytes, recFrom: -1}
+	dec := json.NewDecoder(lim)
 	bad := func(msg string) error { return &refusal{"malformed", msg} }
 	wrap := func(err error) error {
 		var rf *refusal
@@ -224,7 +235,10 @@ func parseLogFile(gz []byte, fn func(*ctEvent)) (records int, err error) {
 				return records, &refusal{"too_many_records", fmt.Sprintf("the log file has more than %d records", maxLogRecords)}
 			}
 			var ev ctEvent
-			if err := dec.Decode(&ev); err != nil {
+			lim.recFrom = dec.InputOffset()
+			err := dec.Decode(&ev)
+			lim.recFrom = -1
+			if err != nil {
 				return records, wrap(err)
 			}
 			records++
