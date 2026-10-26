@@ -1,0 +1,4 @@
+invariants/bad.cedar: validation: for policy `policy0`, attribute `nope` on entity type `Tessera::Identity` not found
+for policy `policy0`, attribute `nope` on entity type `Tessera::Agent` not found
+roles/payments-analyst.yaml: invalid_risk: risk is one of low, medium, high
+error: policy validate: 2 finding(s)

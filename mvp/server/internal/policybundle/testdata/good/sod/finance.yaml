@@ -1,0 +1,21 @@
+schema: tessera.sod/v1
+ruleset:
+  key: finance
+  name: Finance controls
+  enabled: true
+functions:
+  - key: create-vendor
+    name: Create vendor
+    selectors:
+      - system: erp
+        name_pattern: vendor-create*
+  - key: approve-payment
+    name: Approve payment
+    selectors:
+      - system: erp
+        name_pattern: payment-approve*
+risks:
+  - key: vendor-payment
+    name: Vendor creation and payment approval
+    priority: high
+    functions: [create-vendor, approve-payment]

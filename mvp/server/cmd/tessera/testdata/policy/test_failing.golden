@@ -1,0 +1,4 @@
+PASS tests/birthright.yaml: finance employee in cost center 4410 gets the role
+FAIL tests/birthright.yaml: sales employee does not: expected allow, got deny (decided by no policy)
+PASS tests/invariants.yaml: snapshot
+error: policy test: 1 of 3 failed

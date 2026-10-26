@@ -68,3 +68,27 @@ func TestCedarGoOnlyInCedarx(t *testing.T) {
 		t.Fatalf("%s has no Go files; the rule is vacuous", cedarxDir)
 	}
 }
+
+// TestPolicyBundleIsOffline: the bundle loader and test runner (AC-2) run in the
+// CLI with no tenant and no network, so, besides the purity rule (no os, net,
+// database/sql, clock), nothing it imports, directly or through other module
+// packages, may reach the store, the HTTP layer or the outbound client; its only
+// module dependency is internal/cedarx.
+func TestPolicyBundleIsOffline(t *testing.T) {
+	graph := moduleImports(t, moduleRoot(t))
+	const bundle = "internal/policybundle"
+	deps, ok := graph[bundle]
+	if !ok {
+		t.Fatalf("package %s not found; the test is not looking at the module", bundle)
+	}
+	for _, d := range deps {
+		if d != cedarxDir {
+			t.Errorf("%s imports %s; its only module dependency is %s", bundle, d, cedarxDir)
+		}
+	}
+	for _, banned := range []string{"internal/store", "internal/api", "internal/safehttp", "internal/sod"} {
+		if chain := reachable(graph, bundle, banned); chain != nil {
+			t.Errorf("%s reaches %s: %s", bundle, banned, strings.Join(chain, " -> "))
+		}
+	}
+}
