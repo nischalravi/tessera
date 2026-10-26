@@ -161,6 +161,9 @@ type call struct {
 	Header  http.Header
 	Body    []byte
 	Op      string // for errors, e.g. "GetAccountAuthorizationDetails"
+	// MaxBytes bounds the response (default maxResponseBytes): a log file is
+	// read with a limit of its own, far below what an IAM page can be.
+	MaxBytes int
 	// Unsigned sends the request without SigV4 (sts:AssumeRoleWithWebIdentity,
 	// which authenticates by the token in its body).
 	Unsigned bool
@@ -222,11 +225,15 @@ func (c *Client) once(ctx context.Context, creds sigv4.Credentials, cl call) ([]
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	limit := maxResponseBytes
+	if cl.MaxBytes > 0 && cl.MaxBytes < limit {
+		limit = cl.MaxBytes
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(body) > maxResponseBytes {
+	if len(body) > limit {
 		return nil, nil, safehttp.ErrTooLarge
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

@@ -1,0 +1,39 @@
+<GetServiceLastAccessedDetailsResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetServiceLastAccessedDetailsResult>
+    <JobStatus>COMPLETED</JobStatus>
+    <JobType>ACTION_LEVEL</JobType>
+    <IsTruncated>false</IsTruncated>
+    <ServicesLastAccessed>
+      <member>
+        <ServiceName>Amazon S3</ServiceName>
+        <ServiceNamespace>s3</ServiceNamespace>
+        <LastAuthenticated>2026-10-14T09:30:00Z</LastAuthenticated>
+        <LastAuthenticatedRegion>us-east-1</LastAuthenticatedRegion>
+        <TotalAuthenticatedEntities>1</TotalAuthenticatedEntities>
+        <TrackedActionsLastAccessed>
+          <member>
+            <ActionName>GetObject</ActionName>
+            <LastAccessedTime>2026-10-14T09:30:00Z</LastAccessedTime>
+            <LastAccessedRegion>us-east-1</LastAccessedRegion>
+          </member>
+          <member>
+            <ActionName>PutObject</ActionName>
+            <LastAccessedTime>2026-09-02T01:00:00Z</LastAccessedTime>
+          </member>
+        </TrackedActionsLastAccessed>
+      </member>
+      <member>
+        <ServiceName>AWS Lambda</ServiceName>
+        <ServiceNamespace>lambda</ServiceNamespace>
+        <LastAuthenticated>2026-10-01T00:00:00Z</LastAuthenticated>
+        <TotalAuthenticatedEntities>1</TotalAuthenticatedEntities>
+      </member>
+      <member>
+        <ServiceName>Amazon SQS</ServiceName>
+        <ServiceNamespace>sqs</ServiceNamespace>
+        <TotalAuthenticatedEntities>0</TotalAuthenticatedEntities>
+      </member>
+    </ServicesLastAccessed>
+  </GetServiceLastAccessedDetailsResult>
+  <ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000011</RequestId></ResponseMetadata>
+</GetServiceLastAccessedDetailsResponse>

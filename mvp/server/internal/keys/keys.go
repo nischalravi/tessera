@@ -63,7 +63,7 @@ const (
 )
 
 // TenantPurposes are the purposes EnsureKeys maintains for every tenant.
-var TenantPurposes = []string{store.KeyPurposeAccessToken, store.KeyPurposeIdPClientAuth}
+var TenantPurposes = []string{store.KeyPurposeAccessToken, store.KeyPurposeIdPClientAuth, store.KeyPurposeAWSFederation}
 
 // PlatformKIDPrefix prefixes platform key ids.
 const PlatformKIDPrefix = "platform"

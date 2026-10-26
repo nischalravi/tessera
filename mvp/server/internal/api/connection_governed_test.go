@@ -49,6 +49,17 @@ func TestGovernedConnections_CreateOverAPI(t *testing.T) {
 			t.Errorf("%s: %d checklist items", typ, len(cl["items"].([]any)))
 		}
 		// the credential is write-only, as for every type
+		if typ == "awsorg" {
+			// a stored AWS key is refused (static keys are off) and nothing is sealed (#675)
+			r := c.json("PUT", "/api/connections/"+id+"/credential", `{"secret":"a-secret-value"}`, http.StatusUnprocessableEntity)
+			if r["error"] != "static_keys_disabled" {
+				t.Errorf("awsorg secret: %v", r)
+			}
+			if raw := c.do("GET", "/api/connections/"+id, "").Body.String(); strings.Contains(raw, "sealed:") {
+				t.Errorf("awsorg: a refused secret left a sealed reference: %s", raw)
+			}
+			continue
+		}
 		c.json("PUT", "/api/connections/"+id+"/credential", `{"secret":"a-secret-value"}`, http.StatusOK)
 		if raw := c.do("GET", "/api/connections/"+id, "").Body.String(); strings.Contains(raw, "a-secret-value") {
 			t.Errorf("%s: the secret is in the connection view", typ)

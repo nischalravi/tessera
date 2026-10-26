@@ -40,6 +40,10 @@ type Service struct {
 	Env     string
 	LiveTTL time.Duration
 	Runner  RunnerOptions
+	// AWSAllowStaticKeys is TESSERA_AWS_ALLOW_STATIC_KEYS: false (always in prod)
+	// refuses a stored secret on an awsorg connection at SetCredential, so a long-lived
+	// AWS key is never sealed (issue #675). References (vault:, agent:) stay allowed.
+	AWSAllowStaticKeys bool
 
 	// extraEvidence lets in-package tests add evidence to a revision.
 	extraEvidence func(c *store.TenantTx, b *store.ConnectionRevision, ev *Evidence)
@@ -598,6 +602,9 @@ func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialI
 	b, _, err := s.pendingBundle(c, connID, actor, now)
 	if err != nil {
 		return nil, err
+	}
+	if b.Template.ID == "awsorg" && in.Secret != "" && !s.AWSAllowStaticKeys {
+		return nil, unprocessable("static_keys_disabled", "stored AWS access keys are disabled on this server; AWS reads with federated credentials")
 	}
 	// RACF and IBM i are read by a Directory Agent module only, so their
 	// credential is the one on the agent.

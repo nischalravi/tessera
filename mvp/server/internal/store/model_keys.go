@@ -11,6 +11,7 @@ import (
 const (
 	KeyPurposeAccessToken     = "access_token"
 	KeyPurposeIdPClientAuth   = "idp_client_auth"
+	KeyPurposeAWSFederation   = "aws_federation"
 	KeyPurposeAuditCheckpoint = "audit_checkpoint"
 
 	KeyNext    = "next"
@@ -24,7 +25,7 @@ const (
 type TenantSigningKey struct {
 	KID           string // "{slug}-{yyyymmdd}-{rand6}"
 	TenantID      tenancy.ID
-	Purpose       string // access_token | idp_client_auth
+	Purpose       string // access_token | idp_client_auth | aws_federation
 	Alg           string // ES256
 	PublicJWK     json.RawMessage
 	PrivateKeyEnc []byte `json:"-"`

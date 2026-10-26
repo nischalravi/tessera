@@ -39,6 +39,12 @@ import (
 // event, is not evaluated again, and a scheduled run leaves no run row or job
 // run (the connector's last-run time is the only write).
 //
+// A connector whose config has "usage" also ingests usage in the same job, after
+// the estate (issue #644; awsorg.Service.CollectUsage): the org CloudTrail's log
+// files since a per-connector cursor, and IAM Access Advisor, into aws_usage_daily.
+// A failure of the usage ingest is in the run's result (usage_error) and never
+// fails the collection; an unchanged estate with new usage still leaves no run row.
+//
 // Starting a collection changes what the evaluator answers and costs AWS API
 // calls in the customer's account, so it needs connections.manage and a fresh
 // sign-in, like creating the connector. Listing runs needs connections.read.
@@ -70,11 +76,13 @@ func (s *Server) awsCollector() (*awsorg.Service, error) {
 		return nil, err
 	}
 	cfg := &awsorg.EvalConfig{Index: cat.indexConfig}
+	var canonical func(string) (string, bool)
 	if v, ok := cat.Cat.(*catalog.EvalView); ok && v.C != nil {
 		cfg.Privileged = func(action string) bool { return v.C.AccessLevel(action) == catalog.AccessPermissionsManagement }
+		canonical = v.C.CanonicalAction // the usage ingest files only actions the catalog has
 	}
 	return &awsorg.Service{Sealer: s.cfg.Sealer, Client: &awsorg.Client{HTTP: s.cfg.AWSHTTP, Now: s.clock}, Clock: s.clock,
-		CatalogVersion: cat.Cat.Version(), Eval: cfg, AllowStaticKeys: s.cfg.AWSAllowStaticKeys,
+		CatalogVersion: cat.Cat.Version(), Eval: cfg, Canonical: canonical, AllowStaticKeys: s.cfg.AWSAllowStaticKeys,
 		Federation: &awsorg.Federation{DB: s.store, Sealer: s.cfg.Sealer, PublicURL: s.cfg.PublicURL, Clock: s.clock}}, nil
 }
 
@@ -218,10 +226,13 @@ type awsRunResult struct {
 	TrustEdges  int    `json:"trust_edges,omitempty"`
 	Pruned      int    `json:"pruned_edges,omitempty"`
 	Notes       int    `json:"notes,omitempty"`
+	// the usage ingest (issue #644), counts only
+	Usage      *awsorg.UsageStats `json:"usage,omitempty"`
+	UsageError string             `json:"usage_error,omitempty"`
 }
 
 func awsRunResultOf(res *awsorg.CollectResult) awsRunResult {
-	out := awsRunResult{SnapshotID: res.SnapshotID, Changed: res.Changed}
+	out := awsRunResult{SnapshotID: res.SnapshotID, Changed: res.Changed, Usage: res.Usage, UsageError: res.UsageError}
 	if m := res.Materialized; m != nil {
 		out.Permissions, out.TrustEdges, out.Pruned, out.Notes = m.Cells, m.Trust, m.Pruned, len(m.Notes)
 	}

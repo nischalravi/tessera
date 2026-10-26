@@ -45,6 +45,10 @@ type Service struct {
 	// the MVP's graph up to date with the result (Materialize, PR-11). Nil:
 	// a collection only stores the snapshot.
 	Eval *EvalConfig
+	// Canonical spells an action as the action catalog does and says whether
+	// the catalog has it (catalog.Catalog.CanonicalAction); the usage ingest
+	// files only actions it knows. Nil: events' actions are used as named.
+	Canonical func(action string) (string, bool)
 	// Federation mints the web identity tokens of federated connectors
 	// (required to collect from one).
 	Federation *Federation
@@ -300,6 +304,10 @@ type CollectResult struct {
 	// and evaluated: nothing was written but the connector's last-run time.
 	Changed      bool              `json:"changed"`
 	Materialized *MaterializeStats `json:"materialized,omitempty"`
+	// Usage is what the usage ingest did (nil when the connector has none), and
+	// UsageError why it failed: the estate collection stands either way.
+	Usage      *UsageStats `json:"usage,omitempty"`
+	UsageError string      `json:"usage_error,omitempty"`
 }
 
 // CollectAndMaterialize is the collection job: it collects the connector's
@@ -316,7 +324,19 @@ func (s *Service) CollectAndMaterialize(ctx context.Context, db *store.DB, tenan
 		return nil, err
 	}
 	res := &CollectResult{SnapshotID: hdr.ID, Changed: !unchanged}
+	// usage is read next to the estate, whether or not the estate changed, and
+	// whatever happens to it the collection's own outcome stands
+	withUsage := func() {
+		if ctx.Err() != nil {
+			return
+		}
+		var uerr error
+		if res.Usage, uerr = s.CollectUsage(ctx, db, tenant, connectorID, actor, hdr); uerr != nil {
+			res.UsageError = clip(uerr.Error(), 500)
+		}
+	}
 	if unchanged {
+		withUsage()
 		return res, nil
 	}
 	if res.Materialized, err = s.Materialize(ctx, db, tenant, hdr.ID, actor); err != nil {
@@ -337,6 +357,7 @@ func (s *Service) CollectAndMaterialize(ctx context.Context, db *store.DB, tenan
 	if err != nil {
 		return nil, err
 	}
+	withUsage()
 	return res, nil
 }
 
