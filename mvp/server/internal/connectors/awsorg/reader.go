@@ -19,7 +19,7 @@ import (
 //
 // The usage ingest (issue #644) adds the two Access Advisor calls (Generate
 // is a Read action: it starts a report and changes nothing) and the trail's
-// event selectors. Reading the trail's log files needs s3:ListBucket and
+// event selectors and the public keys that verify its digest files. Reading the trail's log files needs s3:ListBucket and
 // s3:GetObject, which are not here: on "*" they would read every object, so
 // TrailReaderPolicy grants them on the log prefix of the one bucket.
 //
@@ -31,6 +31,8 @@ var ReaderActions = []string{
 	"iam:GenerateServiceLastAccessedDetails",
 	"iam:GetServiceLastAccessedDetails",
 	"cloudtrail:GetEventSelectors",
+	"cloudtrail:GetTrail",       // whether the trail validates its log files (#680)
+	"cloudtrail:ListPublicKeys", // the keys that verify the log file digests (#680)
 	"organizations:DescribeOrganization",
 	"organizations:ListRoots",
 	"organizations:ListOrganizationalUnitsForParent",
