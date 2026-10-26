@@ -42,6 +42,7 @@ func (s *Server) registerAWSRoutes() {
 	s.registerAWSShadowRoutes()
 	s.registerAWSEvalRoutes()
 	s.registerAWSLeastPrivRoutes()
+	s.registerAWSRightSizeRoutes()
 }
 
 func (s *Server) awsService() *awsorg.Service {
