@@ -920,7 +920,7 @@ func TestCollectAndMaterialize_RunsUsageIngest(t *testing.T) {
 }
 
 // usageActions are the ReaderActions that only the usage ingest calls.
-var usageActions = map[string]bool{"iam:GenerateServiceLastAccessedDetails": true, "iam:GetServiceLastAccessedDetails": true, "cloudtrail:GetEventSelectors": true}
+var usageActions = map[string]bool{"iam:GenerateServiceLastAccessedDetails": true, "iam:GetServiceLastAccessedDetails": true, "cloudtrail:GetEventSelectors": true, "cloudtrail:ListPublicKeys": true}
 
 // Every call of the usage ingest is a read the customer allowed: the IAM and
 // CloudTrail ones are ReaderActions, and the S3 ones are what TrailReaderPolicy
@@ -928,7 +928,10 @@ var usageActions = map[string]bool{"iam:GenerateServiceLastAccessedDetails": tru
 func TestCollectUsage_UsesOnlyReaderActions(t *testing.T) {
 	e := newUsageEnv(t, &UsageConfig{CloudTrail: trailConfig(), AccessAdvisor: true, AdvisorPerRun: 1000})
 	e.collected(t)
-	e.bucket.put(trailKey("222222222222", "us-east-1", "2026-10-15", "20261015T0100Z"), gz(t, logBody(userCall("2026-10-15T01:00:00Z", "iam.amazonaws.com", "CreateUser"))))
+	ds := newDigestSigner(t)
+	ds.install(e)
+	lk, lb := putLog(t, e, 1)
+	ds.add(e, dAcct, "us-east-1", dEnd(3), digestOpt{listed: map[string]string{lk: lb}})
 	e.mustRun(t)
 	used := map[string]bool{}
 	for _, q := range e.re.Requests() {

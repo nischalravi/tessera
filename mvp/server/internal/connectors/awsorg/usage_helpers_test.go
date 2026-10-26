@@ -38,17 +38,18 @@ type fakeBucket struct {
 
 	mu       sync.Mutex
 	objects  map[string][]byte
-	sizes    map[string]int64 // a listed size different from the object's
-	status   map[string]int   // key -> status of its GET (403 ...)
-	listErr  int              // status of every list when set
-	listDeny map[string]int   // prefix substring -> status of the lists under it
+	sizes    map[string]int64  // a listed size different from the object's
+	status   map[string]int    // key -> status of its GET (403 ...)
+	sigs     map[string]string // key -> x-amz-meta-signature of a digest
+	listErr  int               // status of every list when set
+	listDeny map[string]int    // prefix substring -> status of the lists under it
 	gets     []string
 	lists    []string
 	bad      []string
 }
 
 func newFakeBucket(re *awsreplay.Replay) *fakeBucket {
-	return &fakeBucket{re: re, objects: map[string][]byte{}, sizes: map[string]int64{}, status: map[string]int{}}
+	return &fakeBucket{re: re, objects: map[string][]byte{}, sigs: map[string]string{}, sizes: map[string]int64{}, status: map[string]int{}}
 }
 
 func (f *fakeBucket) put(key string, b []byte) { f.objects[key] = b }
@@ -99,7 +100,11 @@ func (f *fakeBucket) Do(req *http.Request) (*http.Response, error) {
 	if !ok {
 		return respond(404, []byte("<Error><Code>NoSuchKey</Code><Message>no</Message></Error>"))
 	}
-	return respond(200, b)
+	resp, _ := respond(200, b)
+	if sig, ok := f.sigs[key]; ok {
+		resp.Header.Set("X-Amz-Meta-Signature", sig)
+	}
+	return resp, nil
 }
 
 type listXML struct {
