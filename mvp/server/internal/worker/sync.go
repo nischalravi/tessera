@@ -116,8 +116,18 @@ func ingestResults(tx *store.TenantTx, now time.Time, results []*connectors.Disc
 		// the deletion guard held status changes the sources reported (Admin → Held deletions)
 		out = append(out, ojson.KV{Key: "held_identities", Value: stats.HeldIdentities}, ojson.KV{Key: "held_accounts", Value: stats.HeldAccounts})
 	}
+	if len(stats.Pruned) > 0 {
+		out = append(out, ojson.KV{Key: "edges_pruned", Value: len(stats.Pruned)})
+	}
 	if err := tx.Audit(now, actor, "connectors.sync", out); err != nil {
 		return nil, err
+	}
+	for _, e := range stats.Pruned {
+		if err := tx.Audit(now, actor, "connectors.edge_pruned", ojson.Object{{Key: "system", Value: e.System},
+			{Key: "scope", Value: e.Scope}, {Key: "src", Value: e.Src}, {Key: "dst", Value: e.Dst}, {Key: "relation", Value: e.Relation},
+			{Key: "reason", Value: "the source no longer reports this grant in a read that covered its scope"}}); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := reconcile.RunDrift(tx, now, actor); err != nil {
 		return nil, err

@@ -245,15 +245,24 @@ type DiscoveryResult struct {
 	SourceID string
 	// Partial, when set, says the read was partial or failed part way (why): the deletion guard then
 	// holds every removal this result would cause (internal/deleteguard).
-	Partial     string
-	Identities  []IdentityRecord
-	Accounts    []AccountRecord
-	Groups      []GroupRecord
-	Resources   []ResourceRecord
-	Permissions []PermissionRecord
-	Edges       []EdgeRecord
-	Secrets     []SecretRecord
-	Delegations []DelegationRecord
+	Partial string
+	// EdgeSnapshotOf lists the systems whose permission edges (edges into a permission of the system)
+	// this result lists completely, so ingest may remove a stored edge the result no longer reports
+	// (issue #577). A complete read (Partial empty) covers every permission of the system; a Partial
+	// one covers only the permissions on the resources in EdgeScopesRead (the scopes read in full).
+	// Absence from a read that did not cover a scope is never evidence of removal.
+	EdgeSnapshotOf []string
+	// EdgeScopesRead are the external ids of the resources (scopes) whose grants were read in full:
+	// no denied call, failed page or truncation.
+	EdgeScopesRead []string
+	Identities     []IdentityRecord
+	Accounts       []AccountRecord
+	Groups         []GroupRecord
+	Resources      []ResourceRecord
+	Permissions    []PermissionRecord
+	Edges          []EdgeRecord
+	Secrets        []SecretRecord
+	Delegations    []DelegationRecord
 	// AuthMethods are the registered authentication methods of the accounts
 	// in AuthSource.System. Optional.
 	AuthMethods []AuthMethodRecord
