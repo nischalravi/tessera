@@ -133,6 +133,10 @@ type Config struct {
 	// token; no secret is stored). Default on in dev and test, off in prod, and
 	// prod refuses it on.
 	AWSAllowStaticKeys bool
+	// LPDisable (TESSERA_LP_DISABLE=1) is the operator-level kill switch of the least-privilege loop (issue #661,
+	// LP-5): no tenant gets a new announcement or revocation while it is set. Restores and the verification of what
+	// is already in flight still run. Allowed in prod: it only stops writes.
+	LPDisable bool
 	// BackupDir (TESSERA_BACKUP_DIR) turns on scheduled encrypted backups
 	// every BackupEveryMinutes, keeping the newest BackupKeep (issue #171).
 	BackupDir string
@@ -525,6 +529,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	if prod && c.AWSAllowStaticKeys {
 		bad("TESSERA_AWS_ALLOW_STATIC_KEYS must not be set with TESSERA_ENV=prod (the AWS connector reads with federated credentials, not stored access keys)")
 	}
+	c.LPDisable = boolean("TESSERA_LP_DISABLE", false, false)
 	c.FakeTarget = boolean("TESSERA_DEV_FAKE_TARGET", false, false)
 	c.DevOAuthFakeURL = strings.TrimRight(strings.TrimSpace(getenv("TESSERA_DEV_OAUTH_FAKE_URL")), "/")
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))

@@ -75,6 +75,11 @@ const (
 	// the tenants that opted in (issue #641).
 	AWSShadow = "aws_shadow"
 
+	// LPTick advances the tenant's staged revocations of unused AWS access: it computes each one again after its
+	// announce period, queues it through the AWS write target within the caps, verifies, finalizes and pauses the
+	// loop on a failure (issue #661, LP-5).
+	LPTick = "lp_tick"
+
 	// ReviewTick launches the due review schedules of one tenant and progresses its open scheduled
 	// campaigns (issue #588: a schedule an admin sets the cadence of).
 	ReviewTick = "review_tick"
@@ -82,7 +87,7 @@ const (
 
 // Kinds lists every kind, for filters.
 var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor,
-	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, RoleMining, CertificateExpiry, ArchiveSweep, ConnectorSync, ProvisionPush, OAuthSync, VmsSync, AWSCollect, AWSShadow}
+	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, RoleMining, CertificateExpiry, ArchiveSweep, ConnectorSync, ProvisionPush, OAuthSync, VmsSync, AWSCollect, AWSShadow, LPTick}
 
 // Idempotent reports whether running a kind again with the same input is
 // safe: it reads a source and converges, or re-checks. Provisioning is not:

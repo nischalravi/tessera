@@ -290,6 +290,9 @@ type Config struct {
 	// are federated (AssumeRoleWithWebIdentity) and creating a static one is
 	// refused.
 	AWSAllowStaticKeys bool
+	// LPDisabled is the operator switch of the least-privilege loop (config.Config.LPDisable, TESSERA_LP_DISABLE=1):
+	// no tenant gets a new announcement or revocation; restores still run.
+	LPDisabled bool
 	// GitHubAPIBase is where the access-diff comment is posted (default
 	// https://api.github.com). Tests point it at a local server.
 	GitHubAPIBase string
