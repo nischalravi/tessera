@@ -189,6 +189,9 @@ type Dashboard struct {
 	Tasks          []Task             `json:"tasks"` // Inbox tasks (source "connection"): degraded connections
 	Schedule       map[string]string  `json:"schedule"`
 	Scenario       string             `json:"scenario"`
+	// AWSShadow is the production shadow agreement of AWS decisions (issue #641); absent for a tenant that
+	// never opted in.
+	AWSShadow *ShadowAgreement `json:"aws_shadow,omitempty"`
 }
 
 // scored returns the revision a connection is scored on: the live one, or

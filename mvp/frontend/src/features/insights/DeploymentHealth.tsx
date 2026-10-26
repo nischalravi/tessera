@@ -15,6 +15,7 @@ import {
 import {
   Badge, Button, ButtonLink, Callout, DataTable, EmptyState, ErrorNote, InsightsTabs, Kpi, Loading, Page, Segmented, Sev, SidePanel, useSelected, useToast,
 } from "../../components";
+import { AwsShadowCard } from "./AwsShadowCard";
 import { BAND_LABEL, STATE_LABEL, ScoreCell, SimulatedBadge, StateBadge } from "../admin/connections/shared";
 
 const bandText = (b: Band | "") => (b ? BAND_LABEL[b] : "No score yet");
@@ -251,6 +252,7 @@ export function DeploymentHealthBody({ data, compact }: { data: Health; compact?
               </div>
             )}
           </div>
+          <AwsShadowCard />
           <div className="card">
             <div className="spread"><h2>Drift since activation</h2><Segmented label="Drift window" value={driftWindow} onChange={setDriftWindow} options={[["7", "7 days"], ["30", "30 days"], ["90", "90 days"]]} /></div>
             <p className="small muted mt-sm">

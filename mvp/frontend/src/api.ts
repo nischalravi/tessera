@@ -3540,6 +3540,8 @@ export interface DeploymentHealth {
   kpis: { accounts_correlated_pct?: number; orphans: number; dormant: number; privileged_accounts: number; open_critical_high: number; connections_in_setup: number; degraded: number };
   connections: ConnectionHealthRow[]; needs_attention: AttentionEntry[]; skipped: SkippedRow[]; drift: DriftView[]; tasks: ReadinessTask[];
   schedule: Record<string, string>; scenario: string;
+  /** The production shadow agreement of AWS decisions (EP-6); absent for a tenant that never opted in. */
+  aws_shadow?: AwsShadowAgreement | null;
 }
 
 export interface ScoreBreakdown {
@@ -3732,6 +3734,37 @@ export const awsSimulate = (changes: AwsPolicyChange[], head?: string, pullNumbe
     ...(head ? { head } : {}),
     ...(pullNumber ? { comment: { pull_number: pullNumber } } : {}),
   });
+
+// ---- production shadow agreement (EP-6, issue #641): sampled decisions compared with iam:SimulatePrincipalPolicy
+
+export interface AwsShadowAgreement {
+  enabled: boolean; daily_k: number; window_days: number;
+  compared: number; agree: number; disagree: number; inconclusive: number; errors: number;
+  /** agree / compared; null until one decision has been compared. */
+  rate: number | null;
+  open_disagreements: number; last_checked_at: string | null;
+}
+export interface AwsShadow {
+  enabled: boolean; daily_k: number; updated_by: string; updated_at: string | null;
+  today: { day: string; sampled: number; remaining: number };
+  agreement: AwsShadowAgreement | null;
+}
+export type AwsShadowVerdict = "agree" | "disagree" | "inconclusive" | "error";
+export type AwsShadowTriage = "none" | "open" | "investigating" | "engine_bug" | "expected" | "resolved";
+export interface AwsShadowCheck {
+  id: string; connector_id: string; snapshot_id: string; principal_arn: string; action: string; resource_arn: string;
+  tessera_outcome: string; tessera_fidelity: string; explanation_id: string; aws_decision: string;
+  verdict: AwsShadowVerdict; detail: string; checked_at: string; triage_status: AwsShadowTriage;
+}
+export const awsShadow = {
+  get: () => api<AwsShadow>("/aws/shadow"),
+  set: (enabled: boolean, daily_k?: number) => api<AwsShadow>("/aws/shadow", { enabled, ...(daily_k ? { daily_k } : {}) }, "PUT"),
+  checks: (verdict = "", triage = "", limit = 100) =>
+    api<{ items: AwsShadowCheck[] }>(`/aws/shadow/checks?${new URLSearchParams({ ...(verdict ? { verdict } : {}), ...(triage ? { triage } : {}), limit: String(limit) })}`),
+  triage: (id: string, status: Exclude<AwsShadowTriage, "none">, note: string) =>
+    api<AwsShadowCheck>(`/aws/shadow/checks/${encodeURIComponent(id)}/triage`, { status, note }),
+};
+
 // ------------------------------------------------------------------ conditional access (issue #163)
 
 export type AccessScope = "signin" | "privileged";

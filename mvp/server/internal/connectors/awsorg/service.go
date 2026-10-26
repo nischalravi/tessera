@@ -225,23 +225,9 @@ func (s *Service) collect(ctx context.Context, db *store.DB, tenant tenancy.ID, 
 	if err != nil {
 		return nil, false, s.fail(ctx, db, tenant, k, actor, "bad_config", err)
 	}
-	coll := &Collector{Client: s.Client, Config: cfg, ExternalID: k.ExternalID, Now: s.Clock}
-	switch cfg.Mode() {
-	case AuthFederated:
-		if s.Federation == nil {
-			return nil, false, s.fail(ctx, db, tenant, k, actor, "federation_unavailable", errors.New("awsorg: this server cannot issue federation tokens"))
-		}
-		coll.WebIdentity = s.Federation.Source(tenant, k.ID)
-	default:
-		if !s.AllowStaticKeys {
-			return nil, false, s.fail(ctx, db, tenant, k, actor, "static_keys_disabled",
-				errors.New("awsorg: stored AWS access keys are disabled on this server; recreate the connector as a federated one"))
-		}
-		creds, err := OpenCredentials(s.Sealer, tenant, k.ID, k.CredentialsEnc)
-		if err != nil {
-			return nil, false, s.fail(ctx, db, tenant, k, actor, "credentials_unreadable", err)
-		}
-		coll.Base = toSigV4(creds)
+	coll, code, err := s.collectorFor(tenant, k, cfg)
+	if err != nil {
+		return nil, false, s.fail(ctx, db, tenant, k, actor, code, err)
 	}
 	col, err := coll.Collect(ctx)
 	if err != nil {
@@ -284,6 +270,31 @@ func (s *Service) collect(ctx context.Context, db *store.DB, tenant tenancy.ID, 
 		return nil, false, err
 	}
 	return hdr, unchanged, nil
+}
+
+// collectorFor builds the Collector of a connector: federated (a token from
+// Federation) or, where the server allows it, with the connector's sealed key.
+// The code names what is missing when it fails (it is recorded on the connector).
+func (s *Service) collectorFor(tenant tenancy.ID, k *store.AWSConnector, cfg *Config) (*Collector, string, error) {
+	coll := &Collector{Client: s.Client, Config: cfg, ExternalID: k.ExternalID, Now: s.Clock}
+	switch cfg.Mode() {
+	case AuthFederated:
+		if s.Federation == nil {
+			return nil, "federation_unavailable", errors.New("awsorg: this server cannot issue federation tokens")
+		}
+		coll.WebIdentity = s.Federation.Source(tenant, k.ID)
+	default:
+		if !s.AllowStaticKeys {
+			return nil, "static_keys_disabled",
+				errors.New("awsorg: stored AWS access keys are disabled on this server; recreate the connector as a federated one")
+		}
+		creds, err := OpenCredentials(s.Sealer, tenant, k.ID, k.CredentialsEnc)
+		if err != nil {
+			return nil, "credentials_unreadable", err
+		}
+		coll.Base = toSigV4(creds)
+	}
+	return coll, "", nil
 }
 
 // CollectResult is what one run of CollectAndMaterialize did.

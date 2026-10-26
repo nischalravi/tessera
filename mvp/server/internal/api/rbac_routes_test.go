@@ -185,6 +185,11 @@ GET    /api/aws/principals/{arn}/least-privilege     graph.read         -  # iss
 GET    /api/aws/resources/{arn}/who-can              graph.read         -  # issue #30
 GET    /api/aws/explanations/{id}                    graph.read         -  # issue #30
 POST   /api/aws/simulate-policy-change               graph.read         -  # issue #30 (a comment post: connections.manage + STEP_UP_POLICY in the handler)
+GET    /api/aws/shadow                               connections.read   -  # issue #641
+PUT    /api/aws/shadow                               connections.manage STEP_UP_POLICY  # issue #641
+GET    /api/aws/shadow/checks                        connections.read   -  # issue #641
+GET    /api/aws/shadow/checks/{id}                   connections.read   -  # issue #641
+POST   /api/aws/shadow/checks/{id}/triage            connections.manage -  # issue #641
 GET    /api/aws/pr-comment                           connections.read   -  # issue #30
 PUT    /api/aws/pr-comment                           connections.manage STEP_UP_POLICY  # issue #30
 GET    /api/correlation/queue                        graph.read      -  # issue #160

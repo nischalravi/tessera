@@ -104,7 +104,14 @@ func (s *Server) dashboard(c *store.TenantTx, now time.Time) (*readiness.Dashboa
 	if err != nil {
 		return nil, err
 	}
-	return s.readiness.Dashboard(c, now, hr)
+	d, err := s.readiness.Dashboard(c, now, hr)
+	if err != nil {
+		return nil, err
+	}
+	if d.AWSShadow, err = readiness.ShadowAgreementOf(c, now); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 func (s *Server) deploymentHealth(r *http.Request, _ *params) (int, any, error) {
