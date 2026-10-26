@@ -21,6 +21,7 @@ import (
 // trust policy, not of the role.
 var ReaderActions = []string{
 	"iam:GetAccountAuthorizationDetails",
+	"iam:SimulatePrincipalPolicy", // the production shadow agreement (EP-6)
 	"organizations:DescribeOrganization",
 	"organizations:ListRoots",
 	"organizations:ListOrganizationalUnitsForParent",

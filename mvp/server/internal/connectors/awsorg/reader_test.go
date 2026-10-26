@@ -17,7 +17,7 @@ import (
 func readerCatalog(t *testing.T, extra map[string]catalog.AccessLevel) *catalog.Catalog {
 	t.Helper()
 	levels := map[string]catalog.AccessLevel{
-		"iam:GetAccountAuthorizationDetails": catalog.AccessRead,
+		"iam:GetAccountAuthorizationDetails": catalog.AccessRead, "iam:SimulatePrincipalPolicy": catalog.AccessRead,
 		"organizations:DescribeOrganization": catalog.AccessRead, "organizations:ListRoots": catalog.AccessList,
 		"organizations:ListOrganizationalUnitsForParent": catalog.AccessList, "organizations:ListAccountsForParent": catalog.AccessList,
 		"organizations:ListPolicies": catalog.AccessList, "organizations:DescribePolicy": catalog.AccessRead,

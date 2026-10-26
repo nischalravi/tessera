@@ -2376,6 +2376,27 @@ CREATE POLICY tenant_isolation ON aws_collection_runs
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE aws_shadow_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_shadow_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_shadow_settings;
+CREATE POLICY tenant_isolation ON aws_shadow_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_shadow_checks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_shadow_checks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_shadow_checks;
+CREATE POLICY tenant_isolation ON aws_shadow_checks
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_shadow_triage ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_shadow_triage FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_shadow_triage;
+CREATE POLICY tenant_isolation ON aws_shadow_triage
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN

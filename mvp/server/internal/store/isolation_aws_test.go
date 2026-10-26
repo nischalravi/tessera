@@ -304,6 +304,9 @@ func awsCovered() map[string]bool {
 		"UpsertEvaluatorEdge": true, "AWSPRCommentSettings": true, "PutAWSPRCommentSettings": true,
 		"InsertAWSCollectionRun": true, "AWSCollectionRun": true, "AWSCollectionRuns": true, "ActiveAWSCollectionRun": true,
 		"StartAWSCollectionRun": true, "FinishAWSCollectionRun": true, "FailStaleAWSCollectionRuns": true,
+		"AWSShadowSettings": true, "PutAWSShadowSettings": true, "AWSShadowEnabled": true, "InsertAWSShadowCheck": true,
+		"AWSShadowCheck": true, "AWSShadowChecks": true, "AWSShadowSampledOn": true, "TriageAWSShadowCheck": true,
+		"AWSShadowTriage": true, "AWSShadowCounts": true,
 	}
 }
 
@@ -477,5 +480,85 @@ func TestIsolation_AWSCollectionRuns(t *testing.T) {
 		}
 		return c.InsertAWSCollectionRun(&store.AWSCollectionRun{ID: "run-a2", ConnectorID: conn, Trigger: store.AWSRunSchedule,
 			Status: store.AWSRunQueued, RequestedBy: "x", QueuedAt: later})
+	})
+}
+
+// The shadow agreement tables (issue #641; schema/0916): settings, checks and
+// triage records are a tenant's own, another tenant's check id looks
+// nonexistent, and a triage that names it changes nothing.
+func TestIsolation_AWSShadow(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	later := storetest.Now.Add(time.Hour)
+	day := storetest.Now.UTC().Format("2006-01-02")
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			if err := c.PutAWSShadowSettings(&store.AWSShadowSettings{Enabled: tn.Slug == f.B.Slug, DailyK: 5, UpdatedBy: "u-" + tn.Slug}, later); err != nil {
+				return err
+			}
+			// the same check ids in both tenants
+			for id, v := range map[string]string{"chk-1": store.AWSShadowDisagree, "chk-2": store.AWSShadowAgree} {
+				if err := c.InsertAWSShadowCheck(&store.AWSShadowCheck{ID: id, ConnectorID: "conn", SnapshotID: "snap", SampleDay: day,
+					PrincipalARN: "arn:aws:iam::111111111111:role/" + tn.Slug, Action: "s3:GetObject", ResourceARN: "arn:aws:s3:::b/x",
+					TesseraOutcome: "allow", TesseraFidelity: "EXACT", AWSDecision: "implicitDeny", Verdict: v, CheckedAt: storetest.Now}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if s, err := c.AWSShadowSettings(); err != nil || !s.Enabled || s.DailyK != 5 || s.UpdatedBy != "u-"+f.B.Slug {
+			t.Errorf("AWSShadowSettings = %+v, %v", s, err)
+		}
+		if on, err := c.AWSShadowEnabled(); err != nil || !on {
+			t.Errorf("AWSShadowEnabled = %v, %v", on, err)
+		}
+		if n, err := c.AWSShadowSampledOn(day); err != nil || n != 2 {
+			t.Errorf("AWSShadowSampledOn = %d, %v; want B's 2", n, err)
+		}
+		if xs, err := c.AWSShadowChecks("", "", 0); err != nil || len(xs) != 2 {
+			t.Errorf("AWSShadowChecks = %d, %v; want B's 2", len(xs), err)
+		}
+		x, err := c.AWSShadowCheck("chk-1")
+		if err != nil || x.PrincipalARN != "arn:aws:iam::111111111111:role/"+f.B.Slug || x.TriageStatus != store.AWSTriageOpen {
+			t.Errorf("AWSShadowCheck = %+v, %v", x, err)
+		}
+		if err := c.TriageAWSShadowCheck("chk-1", store.AWSTriageEngineBug, "ours", "pat", later); err != nil {
+			t.Fatal(err)
+		}
+		// an agreement is not triaged, and an unknown id is not found
+		if err := c.TriageAWSShadowCheck("chk-2", store.AWSTriageResolved, "", "pat", later); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("triage of an agreement = %v, want ErrNotFound", err)
+		}
+		if err := c.TriageAWSShadowCheck("nope", store.AWSTriageResolved, "", "pat", later); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("triage of an unknown check = %v, want ErrNotFound", err)
+		}
+		if ts, err := c.AWSShadowTriage("chk-1"); err != nil || len(ts) != 1 || ts[0].Status != store.AWSTriageEngineBug || ts[0].Actor != "pat" {
+			t.Errorf("AWSShadowTriage = %+v, %v", ts, err)
+		}
+		cn, err := c.AWSShadowCounts(storetest.Now.Add(-time.Hour))
+		if err != nil || cn.Agree != 1 || cn.Disagree != 1 || cn.OpenDisagreements != 0 || cn.LastCheckedAt == nil {
+			t.Errorf("AWSShadowCounts = %+v, %v", cn, err)
+		}
+		return nil
+	})
+	// B's triage left A's same-id check alone, and A sees its own settings and counts
+	inA(t, f, func(c *store.TenantTx) error {
+		if s, err := c.AWSShadowSettings(); err != nil || s.Enabled || s.UpdatedBy != "u-"+f.A.Slug {
+			t.Errorf("A's AWSShadowSettings = %+v, %v", s, err)
+		}
+		if x, err := c.AWSShadowCheck("chk-1"); err != nil || x.TriageStatus != store.AWSTriageOpen || x.PrincipalARN != "arn:aws:iam::111111111111:role/"+f.A.Slug {
+			t.Errorf("A's check = %+v, %v; B's triage changed it", x, err)
+		}
+		if ts, err := c.AWSShadowTriage("chk-1"); err != nil || len(ts) != 0 {
+			t.Errorf("A's triage records = %+v, %v; want none", ts, err)
+		}
+		if cn, err := c.AWSShadowCounts(storetest.Now.Add(-time.Hour)); err != nil || cn.OpenDisagreements != 1 {
+			t.Errorf("A's counts = %+v, %v", cn, err)
+		}
+		// the default: a tenant with no row is off with the default K
+		return nil
 	})
 }

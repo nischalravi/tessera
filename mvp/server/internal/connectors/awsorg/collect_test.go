@@ -257,6 +257,9 @@ func TestCollect_UsesOnlyReaderActions(t *testing.T) {
 		used[action] = true
 	}
 	for _, a := range ReaderActions {
+		if a == "iam:SimulatePrincipalPolicy" {
+			continue // the shadow agreement's, not the collection's: TestSimulator_AsksTheAccountOfThePrincipal
+		}
 		if !used[a] {
 			t.Errorf("ReaderActions has %s, which the fixture run never calls", a)
 		}

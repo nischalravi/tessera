@@ -421,6 +421,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/aws/connectors/{id}/collect" || rt.Pattern == "/api/aws/collection-runs/{id}" {
 			continue // TestAWSCollectTenantIsolation, and store.TestIsolation_AWSCollectionRuns (UUIDs, not fixture ids)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/aws/shadow/checks/{id}") {
+			continue // TestAWSShadowTenantIsolation (UUIDs, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/evidence/packs/{pack_id}") {
 			continue // TestEvidenceAPI_CrossTenant (a UUID, not a fixture id)
 		}
@@ -599,6 +602,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if path == "/api/aws/collection-runs/{id}" {
 			continue // a UUID, not a fixture id: TestAWSCollectTenantIsolation
+		}
+		if path == "/api/aws/shadow/checks/{id}" {
+			continue // a UUID, not a fixture id: TestAWSShadowTenantIsolation
 		}
 		if strings.HasPrefix(path, "/api/aws/principals/") || strings.HasPrefix(path, "/api/aws/resources/") ||
 			path == "/api/aws/explanations/{id}" || path == "/api/aws/can" {

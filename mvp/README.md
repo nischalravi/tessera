@@ -5402,6 +5402,30 @@ jitter (honouring `Retry-After`); every `List*` follows its token to the last pa
   `0932`); a run left queued or running for 2 hours (its worker stopped) is failed so it stops
   blocking the connector. Audit events: `aws.collection.queued`, `aws.snapshot.collected`,
   `aws.snapshot.materialized`, `aws.collection.failed`.
+- **Production shadow agreement** (issue #641, EP-6) is off until a tenant opts in. A job (`aws_shadow`,
+  hourly) then compares up to K of the evaluator's decisions a day (default 20, at most 200) with
+  `iam:SimulatePrincipalPolicy` in the customer account, called with the connector's reader role
+  (`iam:SimulatePrincipalPolicy` is now in `ReaderActions`: an existing reader role needs it added, or
+  the checks are recorded as `error`). Only decisions that are allow or deny at exact fidelity, with no
+  collection finding reaching them, are asked, with no context keys; half are permissions a principal
+  has, half are ones it lacks. A check is `agree`, `disagree` (allow against deny: the finding, open
+  until triaged), `inconclusive` (the simulator needed context keys) or `error`; only the first two
+  are in the rate. Rate limits: K a UTC day per tenant (the rows are the counter), 50 per run, a
+  pause between calls, and a run stops after three failed calls in a row. Tables `aws_shadow_settings`,
+  `aws_shadow_checks`, `aws_shadow_triage` (`schema/0916`, Postgres `0934`). The 30-day agreement
+  (`aws_shadow`: `rate`, `compared`, `open_disagreements`, ...) is on `GET /api/insights/deployment-health`
+  once a tenant has opted in or has checks, and is shown on the Deployment health page, where an
+  admin turns it on and triages disagreements. Audit events: `aws.shadow.settings`,
+  `aws.shadow.checked`, `aws.shadow.triaged`.
+
+  | Route | Permission | |
+  |---|---|---|
+  | `GET /api/aws/shadow` | `connections.read` | opt-in, today's quota, the agreement metric |
+  | `PUT /api/aws/shadow` | `connections.manage` + step-up | `{enabled, daily_k?}` |
+  | `GET /api/aws/shadow/checks?verdict=&triage=&limit=` | `connections.read` | comparisons, newest first |
+  | `GET /api/aws/shadow/checks/{id}` | `connections.read` | one comparison with its triage records |
+  | `POST /api/aws/shadow/checks/{id}/triage` | `connections.manage` | `{status: open\|investigating\|engine_bug\|expected\|resolved, note?}` on a disagreement |
+
 - **Tests** use `internal/aws/awstest` (test-only): `Replay` serves recorded responses from
   `internal/connectors/awsorg/testdata/http/<service>/<operation>/<n>.<ext>`, verifies every
   signature and reports calls with no recording. It does not enforce IAM; these are collection
