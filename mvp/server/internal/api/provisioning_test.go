@@ -810,6 +810,41 @@ func TestProvisioning_DryRunShowsTheWritesAndSendsNone(t *testing.T) {
 	}
 }
 
+// Every kind of change shows its dry run without an error (issue #687): the held-back write is answered the way the
+// connector reads as done, so a create is not reported as "target answered HTTP 204". Nothing is sent but reads.
+func TestProvisioning_DryRunEveryKindReportsNoError(t *testing.T) {
+	h := newProvHarness(t, fake.Options{Token: "tok"})
+	h.seedTarget()
+	h.fake.AddGroup("ops", "ops") // a group alice is not in, so adding her is a write
+	h.target(`{"kind":"scim","base_url":"`+h.url+`","token":"tok","write_back":false}`, 200)
+	cases := []struct {
+		name, body string
+		writes     int
+	}{
+		{"create_account", `{"kind":"create_account","username":"new.hire","email":"new.hire@larkspur.example","display_name":"New Hire"}`, 1},
+		{"disable_account", `{"kind":"disable_account","username":"` + h.alice + `"}`, 1},
+		{"delete_account", `{"kind":"delete_account","username":"` + h.alice + `"}`, 1},
+		{"add_entitlement", `{"kind":"add_entitlement","username":"` + h.alice + `","group_name":"ops"}`, 1},
+		{"remove_entitlement", `{"kind":"remove_entitlement","username":"` + h.alice + `","group_name":"eng"}`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := h.c.json("POST", "/api/provisioning/targets/"+h.conn+"/dry-run", tc.body, 200).(map[string]any)
+			if out["error"] != "" {
+				t.Fatalf("dry run reports an error: %v", out["error"])
+			}
+			if w, _ := out["writes"].(float64); int(w) < tc.writes {
+				t.Errorf("writes = %v, want at least %d: %v", out["writes"], tc.writes, out)
+			}
+		})
+	}
+	for _, r := range h.fake.Requests() {
+		if !strings.HasPrefix(r, "GET ") {
+			t.Errorf("the target received %q", r)
+		}
+	}
+}
+
 // A Salesforce target (issue #555) takes a JSON credential (consumer key, integration user, private key), checked
 // before it is sealed, never echoed, and write-back stays off unless the request turns it on.
 func TestProvisioning_SalesforceTargetConfig(t *testing.T) {

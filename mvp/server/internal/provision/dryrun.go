@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -67,8 +68,12 @@ var dryRunKinds = map[string]bool{KindSCIM: true, KindFake: true, KindOkta: true
 
 type recorder struct {
 	inner http.RoundTripper
-	mu    sync.Mutex
-	steps []DryRunStep
+	// postStatus is the answer to a held-back POST. SCIM and Okta read a create (and an Okta
+	// lifecycle change) as done only on 200 or 201, not 204, so a create can show its dry run.
+	// Every other write, and the REST connector's marker (restgen.DryRunHeader), answers 204.
+	postStatus int
+	mu         sync.Mutex
+	steps      []DryRunStep
 }
 
 func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -94,7 +99,11 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	r.add(DryRunStep{Method: req.Method, URL: safehttp.RedactURL(req.URL.String()), Body: b})
 	// An empty answer that every connector reads as "done": SCIM and Okta writes
 	// answer 200/204 with an optional body.
-	return &http.Response{StatusCode: http.StatusNoContent, Status: "204 No Content", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+	code := http.StatusNoContent
+	if req.Method == http.MethodPost && r.postStatus != 0 {
+		code = r.postStatus
+	}
+	return &http.Response{StatusCode: code, Status: fmt.Sprintf("%d %s", code, http.StatusText(code)), Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
 		Header: http.Header{restgen.DryRunHeader: {"1"}}, Body: io.NopCloser(bytes.NewReader(nil)), ContentLength: 0, Request: req}, nil
 }
 
@@ -144,6 +153,9 @@ func (e *Engine) DryRun(ctx context.Context, t tenancy.ID, connID string, req ta
 		return nil, &Error{422, "mtls_unavailable", err.Error()}
 	}
 	rec := &recorder{inner: hc.Transport}
+	if pt.Kind == KindSCIM || pt.Kind == KindFake || pt.Kind == KindOkta {
+		rec.postStatus = http.StatusOK
+	}
 	if rec.inner == nil {
 		return nil, &Error{503, "dry_run_unavailable", "the outbound client has no transport"}
 	}
