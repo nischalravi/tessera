@@ -49,10 +49,10 @@ type awsLPView struct {
 }
 
 // awsLeastPriv answers GET /api/aws/principals/{arn}/least-privilege
-// ?connector=&unused_days=&created=&service=&limit=&cursor=&snapshot=&profile=
+// ?connector=&unused_days=&service=&limit=&cursor=&snapshot=&profile=
 //
-// connector defaults to the snapshot's own. created (RFC 3339 or YYYY-MM-DD) is
-// the identity's creation date; without it the level is capped at medium. A
+// connector defaults to the snapshot's own. The identity's creation date is the
+// snapshot's (IAM CreateDate); without it the level is capped at medium. A
 // permission counts as used when the principal's rows name its action in the
 // window, or name its service as a whole (Access Advisor): the finding is then
 // "used", never an unused one.
@@ -72,15 +72,10 @@ func (s *Server) awsLeastPriv(r *http.Request, p *params) (int, any, error) {
 			return 0, nil, badRequest("invalid_unused_days", "unused_days must be 1 to "+strconv.Itoa(awsLPMaxDays))
 		}
 	}
-	var created *time.Time
-	if v := q.Get("created"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			if t, err = time.Parse("2006-01-02", v); err != nil {
-				return 0, nil, badRequest("invalid_created", "created must be RFC 3339 or YYYY-MM-DD")
-			}
-		}
-		created = &t
+	if _, ok := q["created"]; ok {
+		// the creation date comes from the collected snapshot only: a caller-supplied
+		// date could inflate the confidence of a revocation recommendation
+		return 0, nil, badRequest("invalid_created", "created is not a parameter: the identity's creation date comes from the snapshot")
 	}
 	limit, cursor, err := awsPage(q)
 	if err != nil {
@@ -139,6 +134,12 @@ func (s *Server) awsLeastPriv(r *http.Request, p *params) (int, any, error) {
 		}
 	}
 	ev := leastpriv.AWSEvidence{States: states, Gaps: gaps}
+	var created *time.Time
+	if pr := ac.eng.snap.Principals[arn]; pr != nil && pr.CreateDate != "" {
+		if t, err := time.Parse(time.RFC3339, pr.CreateDate); err == nil {
+			created = &t
+		}
+	}
 	facts := leastpriv.PrincipalFacts{ARN: arn, Created: created, ActiveDays: active}
 
 	// count the cells before expanding them

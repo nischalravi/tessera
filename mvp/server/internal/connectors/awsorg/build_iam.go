@@ -4,6 +4,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -33,7 +34,7 @@ func (b *builder) addIAM(account string, d *authDetails) {
 	}
 
 	for _, u := range d.Users {
-		p := &model.Principal{ARN: u.ARN, Kind: model.IAMUser, AccountID: account, UniqueID: u.UserID, Path: pathOrRoot(u.Path),
+		p := &model.Principal{ARN: u.ARN, Kind: model.IAMUser, AccountID: account, UniqueID: u.UserID, Path: pathOrRoot(u.Path), CreateDate: createDate(u.CreateDate),
 			Tags: tagMap(u.Tags)}
 		b.snap.Principals[p.ARN] = p
 		b.snap.Resources[p.ARN] = &model.Resource{ARN: p.ARN, Type: "user", AccountID: account}
@@ -52,7 +53,7 @@ func (b *builder) addIAM(account string, d *authDetails) {
 	}
 
 	for _, r := range d.Roles {
-		p := &model.Principal{ARN: r.ARN, Kind: model.IAMRole, AccountID: account, UniqueID: r.RoleID, Path: pathOrRoot(r.Path),
+		p := &model.Principal{ARN: r.ARN, Kind: model.IAMRole, AccountID: account, UniqueID: r.RoleID, Path: pathOrRoot(r.Path), CreateDate: createDate(r.CreateDate),
 			IsServiceLinked: strings.HasPrefix(r.Path, "/aws-service-role/"), Tags: tagMap(r.Tags)}
 		b.snap.Principals[p.ARN] = p
 		b.snap.Resources[p.ARN] = &model.Resource{ARN: p.ARN, Type: "role", AccountID: account}
@@ -160,6 +161,16 @@ func (b *builder) trust(account string, r xmlRole) {
 	b.snap.ResourcePolicies[r.ARN] = append(b.snap.ResourcePolicies[r.ARN],
 		model.ResourcePolicy{ResourceARN: r.ARN, Kind: model.PolicyTrust, PolicyID: ref.id, RequiresExplicitAllow: true})
 	b.snap.Attachments = append(b.snap.Attachments, model.PolicyAttachment{PolicyID: ref.id, TargetARN: r.ARN, AttachmentType: model.AttachTrust})
+}
+
+// createDate normalizes an IAM CreateDate to RFC 3339 UTC; "" when absent or
+// unreadable (the confidence model then caps at medium).
+func createDate(s string) string {
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(s))
+	if err != nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 func pathOrRoot(p string) string {

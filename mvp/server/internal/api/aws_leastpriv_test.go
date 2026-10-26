@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/awstest"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/awsorg"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
 )
@@ -40,6 +41,29 @@ func seedUsage(t *testing.T, c awsClient, s3 string, gaps ...*store.AWSUsageGap)
 	}
 }
 
+// newAWSEvalDated is newAWSEval with the estate's alice created on the given date.
+func newAWSEvalDated(t *testing.T, create string) awsClient {
+	t.Helper()
+	c := newRD(t, withAWSCatalog)
+	snap, err := awstest.Estate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.Principals[awstest.EstateAlice].CreateDate = create
+	col := &awsorg.Collection{Snapshot: snap, AccountIDs: []string{awstest.EstateDev, awstest.EstateProd}}
+	if snap.ID, err = awsorg.ContentID(col); err != nil {
+		t.Fatal(err)
+	}
+	err = c.st.DB.InTenant(context.Background(), c.st.Tenant, func(tx *store.TenantTx) error {
+		_, err := awsorg.Persist(tx, col, awsorg.PersistInput{Source: store.AWSSourceConnector, CatalogVersion: "awstest-1"})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return awsClient{c, snap.ID}
+}
+
 func lpItems(t *testing.T, v map[string]any) map[string]map[string]any {
 	t.Helper()
 	out := map[string]map[string]any{}
@@ -60,9 +84,9 @@ func lpLevel(t *testing.T, items map[string]map[string]any, action string) strin
 }
 
 func TestAWSLeastPrivConfidence(t *testing.T) {
-	c := newAWSEval(t, nil)
+	c := newAWSEvalDated(t, "2020-01-01T00:00:00Z")
 	base := "/api/aws/principals/" + awstest.EstateAlice + "/least-privilege?connector=conn-1&limit=500"
-	path := base + "&created=2020-01-01"
+	path := base
 
 	// nothing ingested: unknown, never high
 	items := lpItems(t, c.get(path, 200))
@@ -88,8 +112,10 @@ func TestAWSLeastPrivConfidence(t *testing.T) {
 		t.Errorf("GetObject with data events on = %v: %v", got, items["s3:GetObject"])
 	}
 
-	// without a creation date, the level is capped at medium
-	items = lpItems(t, c.get(base, 200))
+	// without a creation date in the snapshot, the level is capped at medium
+	undated := newAWSEval(t, nil)
+	seedUsage(t, undated, store.AWSDataEventsEnabled)
+	items = lpItems(t, undated.get(base, 200))
 	if got := lpLevel(t, items, "s3:GetObject"); got != "medium" {
 		t.Errorf("no creation date = %v", got)
 	}
@@ -119,7 +145,7 @@ func TestAWSLeastPrivRefusesBadInput(t *testing.T) {
 		"no connector, none on the snapshot": {base, 422},
 		"bad unused_days":                    {base + "?connector=c&unused_days=0", 422},
 		"huge unused_days":                   {base + "?connector=c&unused_days=9999", 422},
-		"bad created":                        {base + "?connector=c&created=yesterday", 422},
+		"supplied created is refused":        {base + "?connector=c&created=2000-01-01", 422},
 		"bad service":                        {base + "?connector=c&service=S3:x", 422},
 		"bad limit":                          {base + "?connector=c&limit=0", 422},
 		"control character in connector":     {base + "?connector=c%0A", 422},
