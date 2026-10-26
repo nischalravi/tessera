@@ -875,7 +875,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET|POST /api/auth/dev-login` (dev and test only) ·
 `GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
 `POST /api/jobs/{job_id}/retry` ·
-`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` · `POST /api/provisioning/targets/{connection_id}/dry-run` · `POST /api/provisioning/targets/{connection_id}/discover` ·
+`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` (issue #569: for every target kind, a PUT with `write_back: true` saves the configuration with write-back still off and answers `write_back_pending: true` plus a `config_hash`; a different admin must approve an admin change request of type `provisioning.write_back.enable` `{connection_id, config_hash}`, applied at once on approval, self-approval 403 `self_approval_refused`, a target edited meanwhile 409 `stale_target`, audited as `provision.write_back_enabled`. Turning write-back off is one admin and immediate. On a target that already writes, an edit that widens it (another kind or origin, `on_deprovision: delete`, a new REST operation, any SQL/LDAP/agent/preset/dialect change) is 409 `two_admin_change_required`: turn write-back off, edit, request it on again) · `POST /api/provisioning/targets/{connection_id}/dry-run` · `POST /api/provisioning/targets/{connection_id}/discover` ·
 `GET /api/provisioning/ops[?status=&kind=&connection_id=&limit=]` · `GET /api/provisioning/ops/{op_id}` ·
 `POST /api/provisioning/ops/{op_id}/retry|cancel` · `POST /api/provisioning/run` ·
 `GET /api/provisioning/findings[?status=open|resolved]` ·

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
@@ -101,18 +102,24 @@ type targetView struct {
 	// Rest is a REST target's spec as saved (no base URL, no secret; issue #552).
 	Rest json.RawMessage `json:"rest,omitempty"`
 	// Discovery is the last read of a SCIM target's ServiceProviderConfig and ResourceTypes (issue #542).
-	Discovery     *provision.DiscoveryRecord `json:"discovery,omitempty"`
-	WriteBack     bool                       `json:"write_back"`
-	HasCredential bool                       `json:"has_credential"`
-	CredentialVer *string                    `json:"credential_version"`
-	UpdatedAt     string                     `json:"updated_at"`
+	Discovery *provision.DiscoveryRecord `json:"discovery,omitempty"`
+	WriteBack bool                       `json:"write_back"`
+	// WriteBackPending is set on the response of a PUT that asked for write-back: the configuration is saved with
+	// write-back still off, until a different admin approves a change request of type provisioning.write_back.enable
+	// naming ConfigHash (issue #569).
+	WriteBackPending bool `json:"write_back_pending,omitempty"`
+	// ConfigHash fingerprints the configuration a write-back approval covers (admin.ProvTargetConfigHash).
+	ConfigHash    string  `json:"config_hash"`
+	HasCredential bool    `json:"has_credential"`
+	CredentialVer *string `json:"credential_version"`
+	UpdatedAt     string  `json:"updated_at"`
 }
 
 func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, SQL: st.SQL, LDAP: st.LDAP, Discovery: st.Discovery, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, Preset: st.Preset, APIRoot: st.APIRoot, Fault: st.Fault, OnDeprovision: st.OnDeprovision, AgentID: st.AgentID, Rest: st.REST, SQL: st.SQL, LDAP: st.LDAP, Discovery: st.Discovery, WriteBack: t.WriteBack, ConfigHash: admin.ProvTargetConfigHash(t), HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -607,12 +614,27 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	case isUserSecretKind(in.Kind) && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "a vault or ERP target needs its credential as user:secret (client_id:client_secret for an ERP)")
 	}
+	// Enabling write-back, or widening what a target that already writes may write, is a two-admin change
+	// (issue #569). Turning it off, or narrowing, stays this one admin's call.
+	if in.WriteBack && existing && old.WriteBack && widensWrites(old, t, st) {
+		return 0, nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
+			Msg: "this widens what a write-back target may write (a new destination, operation, delete or scope): turn write-back off, make the edit, and " +
+				"enable write-back again through a change request of type " + admin.TypeProvWriteBackEnable + " for a different admin to approve",
+			Extra: map[string]any{"change_type": admin.TypeProvWriteBackEnable}}
+	}
+	pending := in.WriteBack && !(existing && old.WriteBack)
+	if pending {
+		t.WriteBack = false // the configuration is saved, inert; a different admin switches write-back on
+	}
 	if err := c.UpsertProvTarget(t, now); err != nil {
 		return 0, nil, err
 	}
 	detail := ojson.Object{{Key: "connection_id", Value: id},
-		{Key: "kind", Value: in.Kind}, {Key: "write_back", Value: in.WriteBack}, {Key: "dialect", Value: st.Dialect},
+		{Key: "kind", Value: in.Kind}, {Key: "write_back", Value: t.WriteBack}, {Key: "dialect", Value: st.Dialect},
 		{Key: "origin", Value: targetOrigin(t.BaseURL)}, {Key: "credential", Value: credential}}
+	if pending {
+		detail = append(detail, ojson.KV{Key: "write_back_requested", Value: true})
+	}
 	if in.AgentID != "" {
 		detail = append(detail, ojson.KV{Key: "agent_id", Value: in.AgentID})
 	}
@@ -627,7 +649,65 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	return http.StatusOK, viewTarget(saved, conn.Name), nil
+	v := viewTarget(saved, conn.Name)
+	v.WriteBackPending = pending
+	return http.StatusOK, v, nil
+}
+
+// widensWrites reports whether an edit to a target that already writes lets it write more, or elsewhere: another
+// kind or origin, delete on deprovision, or any change to the dialect, preset, API root, agent, SQL or LDAP settings
+// or REST spec other than dropping REST write operations (issue #569). It cannot prove any other change narrower,
+// so it counts it as wider.
+func widensWrites(old, next *store.ProvTarget, ns provision.Settings) bool {
+	var os provision.Settings
+	_ = json.Unmarshal([]byte(old.Settings), &os)
+	if old.Kind != next.Kind || targetOrigin(old.BaseURL) != targetOrigin(next.BaseURL) {
+		return true
+	}
+	if (ns.OnDeprovision == "delete" && os.OnDeprovision != "delete") || ns.Dialect != os.Dialect || ns.Preset != os.Preset ||
+		ns.APIRoot != os.APIRoot || ns.AgentID != os.AgentID {
+		return true
+	}
+	if !sameJSON(os.SQL, ns.SQL) || !sameJSON(os.LDAP, ns.LDAP) {
+		return true
+	}
+	return !restNarrows(os.REST, ns.REST)
+}
+
+func sameJSON(a, b any) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return string(x) == string(y)
+}
+
+// restNarrows is true when the new REST spec is the old one, or the old one with write operations removed.
+func restNarrows(old, next json.RawMessage) bool {
+	split := func(raw json.RawMessage) (top, ops map[string]json.RawMessage, ok bool) {
+		if len(raw) == 0 {
+			return nil, nil, true
+		}
+		if json.Unmarshal(raw, &top) != nil {
+			return nil, nil, false
+		}
+		if w, has := top["writes"]; has {
+			if json.Unmarshal(w, &ops) != nil {
+				return nil, nil, false
+			}
+			delete(top, "writes")
+		}
+		return top, ops, true
+	}
+	ot, oo, ok1 := split(old)
+	nt, no, ok2 := split(next)
+	if !ok1 || !ok2 || !sameJSON(ot, nt) {
+		return false
+	}
+	for k, v := range no {
+		if o, ok := oo[k]; !ok || string(o) != string(v) {
+			return false // a new or changed operation
+		}
+	}
+	return true
 }
 
 // sfURLRule is the fixed error text for a Salesforce URL that fails salesforce.CheckURL.
