@@ -181,6 +181,7 @@ GET    /api/aws/snapshots                            connections.read   -  # iss
 GET    /api/aws/snapshots/{id}                       connections.read   -  # issue #26
 GET    /api/aws/can                                  graph.read         -  # issue #30
 GET    /api/aws/principals/{arn}/effective           graph.read         -  # issue #30
+GET    /api/aws/principals/{arn}/least-privilege     graph.read         -  # issue #645
 GET    /api/aws/resources/{arn}/who-can              graph.read         -  # issue #30
 GET    /api/aws/explanations/{id}                    graph.read         -  # issue #30
 POST   /api/aws/simulate-policy-change               graph.read         -  # issue #30 (a comment post: connections.manage + STEP_UP_POLICY in the handler)
