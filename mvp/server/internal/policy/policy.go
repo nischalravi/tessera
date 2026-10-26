@@ -51,6 +51,10 @@ type Policy struct {
 	Spec        map[string]any
 	Source      string
 	Enabled     bool
+	// Cedar is set when the policy is a per-tenant Cedar invariant (AC-3). It
+	// is evaluated over effective-permission facts by evalCedar; Type then only
+	// names how the findings are worded. Nil for a YAML policy.
+	Cedar *CedarSpec
 }
 
 // Violation is one policy finding.
@@ -67,6 +71,11 @@ type Violation struct {
 	// ExplanationID names the AWS evaluator trace behind the finding
 	// (GET /api/aws/explanations/{id}); absent when no evaluated edge is implicated.
 	ExplanationID string `json:"explanation_id,omitempty"`
+	// LowFidelity marks a finding of a Cedar invariant whose only basis is an
+	// approximate, unsupported or conditional permission: it is reported, and
+	// never blocks (access-as-code design section 10, decision 6). The YAML
+	// engine does not set it.
+	LowFidelity bool `json:"low_fidelity,omitempty"`
 }
 
 func newViolation(p *Policy, iid int64, name, key, msg string, evidence []string, edges [][]string) Violation {
@@ -231,6 +240,7 @@ type Context struct {
 
 	idents []*graph.Node
 	byID   map[int64]*graph.Node
+	cf     *cedarFacts // what the Cedar invariants share (cedar.go)
 }
 
 // NewContext builds an evaluation context; conn may be nil.
@@ -418,61 +428,81 @@ func evalNoStanding(p *Policy, c *Context) ([]Violation, error) {
 	}
 	var out []Violation
 	for _, iid := range c.subjects(p.Spec) {
-		// one violation per standing grant (first hop from the account), listing what it exposes
-		var order [][2]string
-		byGrant := map[[2]string][]grantHit{}
+		var eps []*graph.EffectivePermission
 		for _, ep := range c.eff(iid).Values() {
-			if !(permMatches(ep, m) && ep.Standing) {
-				continue
-			}
-			for _, path := range ep.Paths {
-				if c.Graph.PathHasJIT(path) {
-					continue
-				}
-				fh, _ := graph.FirstHopEdge(path)
-				if _, ok := byGrant[fh]; !ok {
-					order = append(order, fh)
-				}
-				byGrant[fh] = append(byGrant[fh], grantHit{ep, path})
+			if permMatches(ep, m) && ep.Standing {
+				eps = append(eps, ep)
 			}
 		}
-		if len(order) == 0 {
-			continue
-		}
-		name := c.byID[iid].Label
-		for _, fh := range order {
-			hits := byGrant[fh]
-			set := map[string]bool{}
-			var actions []string
-			var evidence []string
-			for _, h := range hits {
-				a := h.ep.Action + " on " + h.ep.ResourceName
-				if !set[a] {
-					set[a] = true
-					actions = append(actions, a)
-				}
-			}
-			sort.Strings(actions)
-			for _, h := range hits {
-				t := c.Graph.PathText(h.path)
-				if !contains(toAny(evidence), t) {
-					evidence = append(evidence, t)
-				}
-			}
-			shown, more := actions, ""
-			if len(actions) > 3 {
-				shown, more = actions[:3], " …"
-			}
-			if len(evidence) > 4 {
-				evidence = evidence[:4]
-			}
-			out = append(out, newViolation(p, iid, name, fmt.Sprintf("%s:%d:%s->%s", p.ID, iid, fh[0], fh[1]),
-				fmt.Sprintf("%s has standing privileged prod access via %s: %s%s", name, c.Graph.Label(fh[1]),
-					strings.Join(shown, ", "), more),
-				evidence, [][]string{{fh[0], fh[1]}}))
-		}
+		out = append(out, noStandingViolations(p, c, iid, eps, false)...)
 	}
 	return out, nil
+}
+
+// noStandingViolations is one violation per standing grant (first hop from the
+// account) of the identity, listing what it exposes; eps are the permissions
+// that matched, in order. flagFidelity marks a grant whose every permission is
+// weak (Cedar invariants only).
+func noStandingViolations(p *Policy, c *Context, iid int64, eps []*graph.EffectivePermission, flagFidelity bool) []Violation {
+	var out []Violation
+	var order [][2]string
+	byGrant := map[[2]string][]grantHit{}
+	for _, ep := range eps {
+		for _, path := range ep.Paths {
+			if c.Graph.PathHasJIT(path) {
+				continue
+			}
+			fh, _ := graph.FirstHopEdge(path)
+			if _, ok := byGrant[fh]; !ok {
+				order = append(order, fh)
+			}
+			byGrant[fh] = append(byGrant[fh], grantHit{ep, path})
+		}
+	}
+	if len(order) == 0 {
+		return nil
+	}
+	name := c.byID[iid].Label
+	for _, fh := range order {
+		hits := byGrant[fh]
+		set := map[string]bool{}
+		var actions []string
+		var evidence []string
+		for _, h := range hits {
+			a := h.ep.Action + " on " + h.ep.ResourceName
+			if !set[a] {
+				set[a] = true
+				actions = append(actions, a)
+			}
+		}
+		sort.Strings(actions)
+		for _, h := range hits {
+			t := c.Graph.PathText(h.path)
+			if !contains(toAny(evidence), t) {
+				evidence = append(evidence, t)
+			}
+		}
+		shown, more := actions, ""
+		if len(actions) > 3 {
+			shown, more = actions[:3], " …"
+		}
+		if len(evidence) > 4 {
+			evidence = evidence[:4]
+		}
+		v := newViolation(p, iid, name, fmt.Sprintf("%s:%d:%s->%s", p.ID, iid, fh[0], fh[1]),
+			fmt.Sprintf("%s has standing privileged prod access via %s: %s%s", name, c.Graph.Label(fh[1]),
+				strings.Join(shown, ", "), more),
+			evidence, [][]string{{fh[0], fh[1]}})
+		if flagFidelity {
+			weak := true
+			for _, h := range hits {
+				weak = weak && h.ep.Weak()
+			}
+			v.LowFidelity = weak
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 func toAny(s []string) []any {
@@ -494,14 +524,18 @@ func evalForbidden(p *Policy, c *Context) ([]Violation, error) {
 			if !permMatches(ep, m) {
 				continue
 			}
-			n := c.byID[iid]
-			ev, edges := c.evidence(ep, false)
-			out = append(out, newViolation(p, iid, n.Label, fmt.Sprintf("%s:%d:%s", p.ID, iid, ep.PermKey),
-				fmt.Sprintf("%s (%s) can %s on %s [%s]", n.Label, n.Type, ep.Action, ep.ResourceName, strings.Join(ep.Tags, ", ")),
-				ev, edges))
+			out = append(out, forbiddenViolation(p, c, c.byID[iid], ep))
 		}
 	}
 	return out, nil
+}
+
+// forbiddenViolation words one identity reaching one forbidden permission.
+func forbiddenViolation(p *Policy, c *Context, n *graph.Node, ep *graph.EffectivePermission) Violation {
+	ev, edges := c.evidence(ep, false)
+	return newViolation(p, n.ID, n.Label, fmt.Sprintf("%s:%d:%s", p.ID, n.ID, ep.PermKey),
+		fmt.Sprintf("%s (%s) can %s on %s [%s]", n.Label, n.Type, ep.Action, ep.ResourceName, strings.Join(ep.Tags, ", ")),
+		ev, edges)
 }
 
 func evalTerminated(p *Policy, c *Context) ([]Violation, error) {
@@ -514,42 +548,53 @@ func evalTerminated(p *Policy, c *Context) ([]Violation, error) {
 		if eff.Len() == 0 {
 			continue
 		}
-		acctSet, edgeSet := map[string]bool{}, map[[2]string]bool{}
-		for _, ep := range eff.Values() {
-			for _, path := range ep.Paths {
-				acctSet[c.Graph.Label(path[1])] = true
-				fh, _ := graph.FirstHopEdge(path)
-				edgeSet[fh] = true
-			}
-		}
-		accts := make([]string, 0, len(acctSet))
-		for a := range acctSet {
-			accts = append(accts, a)
-		}
-		sort.Strings(accts)
-		keys := make([][2]string, 0, len(edgeSet))
-		for e := range edgeSet {
-			keys = append(keys, e)
-		}
-		sort.Slice(keys, func(i, j int) bool {
-			if keys[i][0] != keys[j][0] {
-				return keys[i][0] < keys[j][0]
-			}
-			return keys[i][1] < keys[j][1]
-		})
-		evidence := make([]string, len(accts))
-		for i, a := range accts {
-			evidence[i] = "active account: " + a
-		}
-		edges := make([][]string, len(keys))
-		for i, k := range keys {
-			edges[i] = []string{k[0], k[1]}
-		}
-		out = append(out, newViolation(p, n.ID, n.Label, fmt.Sprintf("%s:%d", p.ID, n.ID),
-			fmt.Sprintf("%s is terminated but retains %d effective permissions via %d active account(s)", n.Label, eff.Len(), len(accts)),
-			evidence, edges))
+		out = append(out, terminatedViolation(p, c, n, eff.Values(), false))
 	}
 	return out, nil
+}
+
+// terminatedViolation words a terminated identity that keeps eps (all of its
+// effective permissions, in the YAML policy). flagFidelity marks a finding
+// whose every permission is weak (Cedar invariants only).
+func terminatedViolation(p *Policy, c *Context, n *graph.Node, eps []*graph.EffectivePermission, flagFidelity bool) Violation {
+	acctSet, edgeSet := map[string]bool{}, map[[2]string]bool{}
+	weak := true
+	for _, ep := range eps {
+		weak = weak && ep.Weak()
+		for _, path := range ep.Paths {
+			acctSet[c.Graph.Label(path[1])] = true
+			fh, _ := graph.FirstHopEdge(path)
+			edgeSet[fh] = true
+		}
+	}
+	accts := make([]string, 0, len(acctSet))
+	for a := range acctSet {
+		accts = append(accts, a)
+	}
+	sort.Strings(accts)
+	keys := make([][2]string, 0, len(edgeSet))
+	for e := range edgeSet {
+		keys = append(keys, e)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i][0] != keys[j][0] {
+			return keys[i][0] < keys[j][0]
+		}
+		return keys[i][1] < keys[j][1]
+	})
+	evidence := make([]string, len(accts))
+	for i, a := range accts {
+		evidence[i] = "active account: " + a
+	}
+	edges := make([][]string, len(keys))
+	for i, k := range keys {
+		edges[i] = []string{k[0], k[1]}
+	}
+	v := newViolation(p, n.ID, n.Label, fmt.Sprintf("%s:%d", p.ID, n.ID),
+		fmt.Sprintf("%s is terminated but retains %d effective permissions via %d active account(s)", n.Label, len(eps), len(accts)),
+		evidence, edges)
+	v.LowFidelity = flagFidelity && weak
+	return v
 }
 
 func evalSecretAge(p *Policy, c *Context) ([]Violation, error) {
@@ -585,16 +630,21 @@ func evalSecretAge(p *Policy, c *Context) ([]Violation, error) {
 		if !ok || n.Status != "active" {
 			continue
 		}
-		rotated := "never"
-		if r.Secret.LastRotatedAt != nil {
-			rotated = timeutil.Date(*r.Secret.LastRotatedAt)
-		}
-		out = append(out, newViolation(p, n.ID, n.Label, fmt.Sprintf("%s:%d", p.ID, r.Secret.ID),
-			fmt.Sprintf("%s '%s' on %s:%s is %d days old (max %v)", r.Secret.Kind, r.Secret.Name, r.Account.System,
-				r.Account.Username, age, maxAge),
-			[]string{"created " + timeutil.Date(r.Secret.CreatedAt), "last rotated " + rotated}, nil))
+		out = append(out, secretViolation(p, n, r, age, maxAge))
 	}
 	return out, nil
+}
+
+// secretViolation words a secret older than the policy allows.
+func secretViolation(p *Policy, n *graph.Node, r store.SecretWithAccount, age int, maxAge any) Violation {
+	rotated := "never"
+	if r.Secret.LastRotatedAt != nil {
+		rotated = timeutil.Date(*r.Secret.LastRotatedAt)
+	}
+	return newViolation(p, n.ID, n.Label, fmt.Sprintf("%s:%d", p.ID, r.Secret.ID),
+		fmt.Sprintf("%s '%s' on %s:%s is %d days old (max %v)", r.Secret.Kind, r.Secret.Name, r.Account.System,
+			r.Account.Username, age, maxAge),
+		[]string{"created " + timeutil.Date(r.Secret.CreatedAt), "last rotated " + rotated}, nil)
 }
 
 func toFloat(v any) (float64, bool) {
@@ -635,10 +685,15 @@ func evalNHIOwnership(p *Policy, c *Context) ([]Violation, error) {
 		default:
 			continue
 		}
-		out = append(out, newViolation(p, i.ID, i.Name, fmt.Sprintf("%s:%d", p.ID, i.ID), msg,
-			[]string{fmt.Sprintf("%d effective permissions", c.eff(i.ID).Len())}, nil))
+		out = append(out, nhiViolation(p, c, i, msg))
 	}
 	return out, nil
+}
+
+// nhiViolation is a non-human identity without an active owner.
+func nhiViolation(p *Policy, c *Context, i *store.Identity, msg string) Violation {
+	return newViolation(p, i.ID, i.Name, fmt.Sprintf("%s:%d", p.ID, i.ID), msg,
+		[]string{fmt.Sprintf("%d effective permissions", c.eff(i.ID).Len())}, nil)
 }
 
 // evalMFARequired flags privileged people whose strongest registered method is
@@ -671,23 +726,27 @@ func evalMFARequired(p *Policy, c *Context) ([]Violation, error) {
 		if v == nil || !v.Privileged || v.Best == mfa.Unknown || v.Best.Rank() >= required.Rank() {
 			continue
 		}
-		name := c.byID[iid].Label
-		state := "has no MFA method registered"
-		if v.Best != mfa.None {
-			state = "their strongest MFA method is " + strings.ToLower(v.Best.Label())
-		}
-		msg := fmt.Sprintf("%s has privileged access (%s) but %s; policy requires %s MFA", name, v.PrivilegedVia[0], state,
-			strings.ToLower(required.Label()))
-		evidence := []string{}
-		for _, m := range v.Methods {
-			evidence = append(evidence, fmt.Sprintf("%s: %s (%s)", m.System, m.Kind, m.Strength.Label()))
-		}
-		if len(evidence) == 0 {
-			evidence = append(evidence, "no registered authentication method in "+strings.Join(v.Systems, ", "))
-		}
-		out = append(out, newViolation(p, iid, name, fmt.Sprintf("%s:%d", p.ID, iid), msg, evidence, nil))
+		out = append(out, mfaViolation(p, c.byID[iid].Label, iid, v, required))
 	}
 	return out, nil
+}
+
+// mfaViolation words a privileged person whose strongest method is below required.
+func mfaViolation(p *Policy, name string, iid int64, v *mfa.Identity, required mfa.Strength) Violation {
+	state := "has no MFA method registered"
+	if v.Best != mfa.None {
+		state = "their strongest MFA method is " + strings.ToLower(v.Best.Label())
+	}
+	msg := fmt.Sprintf("%s has privileged access (%s) but %s; policy requires %s MFA", name, v.PrivilegedVia[0], state,
+		strings.ToLower(required.Label()))
+	evidence := []string{}
+	for _, m := range v.Methods {
+		evidence = append(evidence, fmt.Sprintf("%s: %s (%s)", m.System, m.Kind, m.Strength.Label()))
+	}
+	if len(evidence) == 0 {
+		evidence = append(evidence, "no registered authentication method in "+strings.Join(v.Systems, ", "))
+	}
+	return newViolation(p, iid, name, fmt.Sprintf("%s:%d", p.ID, iid), msg, evidence, nil)
 }
 
 // Evaluators maps policy types to evaluator functions.
@@ -710,6 +769,9 @@ func Evaluate(policies []*Policy, c *Context) ([]Violation, error) {
 			continue
 		}
 		fn, ok := Evaluators[p.Type]
+		if p.Cedar != nil {
+			fn, ok = evalCedar, true
+		}
 		if !ok {
 			return nil, fmt.Errorf("unknown policy type %q in policy %s", p.Type, p.ID)
 		}
