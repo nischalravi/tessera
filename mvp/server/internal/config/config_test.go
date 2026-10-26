@@ -112,6 +112,7 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"public URL plain http", []string{"TESSERA_PUBLIC_URL", "http://tessera.example.com"}, "TESSERA_PUBLIC_URL must be https"},
 		{"public URL missing", []string{"TESSERA_PUBLIC_URL", "<unset>"}, "TESSERA_PUBLIC_URL is required"},
 		{"public URL with userinfo", []string{"TESSERA_PUBLIC_URL", "https://u:p@tessera.example.com"}, "TESSERA_PUBLIC_URL"},
+		{"public URL with a port", []string{"TESSERA_PUBLIC_URL", "https://tessera.example.com:8443"}, "must not have a port"},
 		{"cookie not secure", []string{"TESSERA_COOKIE_SECURE", "false"}, "TESSERA_COOKIE_SECURE must be true"},
 		{"AWS static keys allowed", []string{"TESSERA_AWS_ALLOW_STATIC_KEYS", "true"}, "TESSERA_AWS_ALLOW_STATIC_KEYS must not be set"},
 		{"no KEK", []string{"TESSERA_KEK", "<unset>"}, "a KEK is required"},

@@ -542,6 +542,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		bad("TESSERA_PUBLIC_URL must be https with TESSERA_ENV=prod (got %s)", pub.Scheme)
 	case prod && DevOnlyURL(c.PublicURL) != "":
 		bad("TESSERA_PUBLIC_URL must not be %s with TESSERA_ENV=prod", DevOnlyURL(c.PublicURL))
+	case prod && pub.Port() != "":
+		// AWS refuses an IAM OIDC provider URL with a port, and the AWS federation issuer is {PUBLIC_URL}/t/{slug}/aws.
+		bad("TESSERA_PUBLIC_URL must not have a port with TESSERA_ENV=prod (AWS rejects an OIDC provider URL with one; got :%s)", pub.Port())
 	}
 	// §11: the insecure-cookie fallback (Safari on http://localhost) only in
 	// dev, and only for a localhost public URL.

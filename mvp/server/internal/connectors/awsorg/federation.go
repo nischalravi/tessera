@@ -109,7 +109,7 @@ func (f *Federation) Token(ctx context.Context, t tenancy.ID, connectorID string
 			return err
 		}
 		slug = rec.Slug
-		key, err = keys.ActiveSigningKey(c, store.KeyPurposeAccessToken, f.Sealer)
+		key, err = keys.ActiveSigningKey(c, store.KeyPurposeAWSFederation, f.Sealer)
 		return err
 	}); err != nil {
 		return "", fmt.Errorf("awsorg: federation token: %w", err)

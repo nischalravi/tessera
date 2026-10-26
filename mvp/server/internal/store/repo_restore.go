@@ -29,13 +29,13 @@ var (
 	// consumed invitations are history; an unconsumed code is a live credential
 	credsDeleteInvitations = tq("restore.delete_invitations", `
 		DELETE FROM bootstrap_invitations WHERE tenant_id = @tenant AND consumed_at IS NULL`)
-	// access tokens are verified against the tenant's published access_token
+	// access tokens and AWS federation tokens are verified against the tenant's published access_token and aws_federation
 	// keys; revoking them all makes every token signed before the restore fail
 	// (EnsureKeys mints fresh ones at the next start). idp_client_auth keys are
 	// registered with the IdP and are left alone.
-	credsRevokeKeys = tq("restore.revoke_access_token_keys", `
+	credsRevokeKeys = tq("restore.revoke_signing_keys", `
 		UPDATE tenant_signing_keys SET status = 'revoked', retired_at = COALESCE(retired_at, @at)
-		WHERE tenant_id = @tenant AND purpose = 'access_token' AND status IN ('next', 'active', 'retired')`)
+		WHERE tenant_id = @tenant AND purpose IN ('access_token', 'aws_federation') AND status IN ('next', 'active', 'retired')`)
 )
 
 // InvalidateCredentials revokes every active session of this tenant, drops

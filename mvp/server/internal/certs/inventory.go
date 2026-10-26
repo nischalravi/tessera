@@ -100,7 +100,7 @@ func Inventory(tx *store.TenantTx, now time.Time) ([]Entry, error) {
 		}
 		out = append(out, e)
 	}
-	for _, purpose := range []string{"access_token", "idp_client_auth"} {
+	for _, purpose := range []string{"access_token", "idp_client_auth", "aws_federation"} {
 		ks, err := tx.SigningKeys(purpose)
 		if err != nil {
 			return nil, err
@@ -111,8 +111,11 @@ func Inventory(tx *store.TenantTx, now time.Time) ([]Entry, error) {
 			}
 			sum := sha256.Sum256(k.PublicJWK)
 			use := "Signs access tokens Tessera issues; the public key is in the tenant JWKS"
-			if purpose == "idp_client_auth" {
+			switch purpose {
+			case "idp_client_auth":
 				use = "Signs client assertions to identity providers (private_key_jwt)"
+			case "aws_federation":
+				use = "Signs the web identity tokens AWS federation exchanges for read-only roles; the public key is in the AWS issuer JWKS"
 			}
 			out = append(out, Entry{ID: "key:" + k.KID, Source: SourceSigningKey, Purpose: store.CertSigning, Label: k.KID, Status: k.Status,
 				UsedBy: use, Subject: "JWK " + k.KID, Fingerprint: hex.EncodeToString(sum[:]), KeyAlgorithm: k.Alg})
