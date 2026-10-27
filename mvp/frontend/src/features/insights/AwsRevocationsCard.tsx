@@ -5,6 +5,7 @@
  */
 import { useState } from "react";
 import { LpRevocation, LpSettings, LpState, fmtDate, lpLoop, refetchAll, useApi } from "../../api";
+import { useSession } from "../../app/auth";
 import { Badge, Button, EmptyState, Loading, useToast } from "../../components";
 
 const TONE: Record<LpState, "info" | "warning" | "critical" | "ok" | "neutral"> = {
@@ -49,6 +50,7 @@ export function AwsRevocationsCard() {
   const s = useApi<LpSettings>("/lp/settings");
   const list = useApi<{ items: LpRevocation[] }>("/lp/revocations?limit=50");
   const toast = useToast();
+  const { can } = useSession();
   const [busy, setBusy] = useState(false);
   if (s.error) return null; // no permission, or no AWS write target on this server: nothing to show
   if (!s.data || !list.data) return <Loading kind="block" />;
@@ -77,7 +79,7 @@ export function AwsRevocationsCard() {
             {d.paused && ` Paused${d.paused_by ? ` by ${d.paused_by}` : ""}: resuming needs a second admin (change request lp.settings.update).`}
           </div>
         </div>
-        <Button disabled={busy || d.paused} onClick={pause}>Pause the loop</Button>
+        {can("lp.manage") && <Button disabled={busy || d.paused} onClick={pause}>Pause the loop</Button>}
       </div>
       {list.data.items.length === 0 ? <EmptyState title="No revocations">Candidates appear when a verified right-size is proposed in staged mode.</EmptyState> : (
         <div className="table-scroll">

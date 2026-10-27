@@ -94,10 +94,13 @@ func withDefaultVersion(t *testing.T, snap *model.Snapshot, policyARN, version s
 
 // newAWSWB is a tenant with a federated AWS connector that collected the estate (alice used one object of S3Read),
 // a connection for the provisioning target, and an engine whose connectors are the stub.
-func newAWSWB(t *testing.T) *awsWB {
+func newAWSWB(t *testing.T) *awsWB { return newAWSWBWith(t, withLeveledCatalog) }
+
+// newAWSWBWith is newAWSWB with the server configured by opt (which sets the AWS catalog).
+func newAWSWBWith(t *testing.T, opt func(*Config)) *awsWB {
 	t.Helper()
 	st := testkit.Demo(t)
-	srv := newTestAPIServerWith(t, st, withAWSCatalog)
+	srv := newTestAPIServerWith(t, st, opt)
 	w := &awsWB{t: t, st: st, srv: srv, c: client{t, asLinkedAdmin(t, srv, st.DB, st.Tenant, testkit.Now).Handler()}, stub: &awsStub{}}
 	l := signIn(t, st.DB, st.Tenant, authtest.User{Email: "second.admin@larkspur.example", Display: "Second Admin",
 		Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, testkit.Now)
