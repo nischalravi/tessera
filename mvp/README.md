@@ -6806,6 +6806,35 @@ through the safehttp AWS client.
   widened in place, `DB.upgradeProvTargetKinds` / `DB.upgradeProvOpKinds` rebuild an existing SQLite database, Postgres
   `0944_prov_aws_kinds.sql`). No new table.
 
+### Staged revocation of unused AWS access (issue #661, LP-5)
+
+The least-privilege loop (`internal/lp`, `internal/api/lp.go`; design `docs/design/least-privilege-loop.md` sections 3, 5, 11)
+revokes unused AWS access in stages, only through the LP-4 write target. Modes: `off` (default), `suggest`, `staged`, `auto`;
+only `staged` and `auto` build candidates. A candidate is a *verified*, EXACT right-size (LP-3) of a policy attached to one
+principal, with high or medium confidence; privileged (permissions-management) removals, `tessera:protected` principals,
+service-linked roles, the protected list, exempt grants and a tenant with an open evaluator disagreement are refused.
+
+- **State machine** (`lp_revocations`, `lp_revocation_events`, one event per step, each audited `lp.revocation.*`):
+  `candidate` > `announced` (7 days) > `revoking` > `revoked` (restorable 30 days) > `finalized`; side exits `restoring` >
+  `restored`, `exempted` (an owner's objection: 180 days), `failed`, `superseded` (the right-size moved or the candidate went stale).
+- **Approval.** High confidence with at least 90 unused days is `auto` eligible and approved as a batch; everything else
+  (medium, or fewer days) is approved item by item. Silence is consent once announced. Just before revoking, the right-size is
+  computed again and any change supersedes the revocation.
+- **Caps** per run 25, per day 100, per AWS account per day 10, per principal 1; a cap that is hit holds the rest for the next pass.
+  A tripwire pauses the loop on three restores in an hour, a 7-day restore rate above 2 percent, or an evaluator
+  disagreement triaged as an engine bug.
+- **Kill switch.** `POST /api/lp/pause` (one person) stops new announcements and executions at once; a failed step pauses the loop too.
+  `TESSERA_LP_DISABLE=1` is the operator-level switch (restores and verification still run). Resuming, a stronger mode, larger caps
+  or shorter periods are the admin change `lp.settings.update` (two people, self-approval refused, #569); tightening is one admin.
+- **Routes** (`lp.manage`, approve needs step-up; reads need `graph.read`): `GET /api/lp/settings`, `POST /api/lp/pause`,
+  `GET /api/lp/revocations[?state=&limit=]`, `GET /api/lp/revocations/{id}`, `POST /api/lp/candidates {principal, policy_arn,
+  candidate_sha256, ...}` (the `document_sha256` of the right-size the person reviewed), `POST /api/lp/revocations/approve
+  {batch, items}`, `POST /api/lp/revocations/{id}/object {reason}`, `POST /api/lp/revocations/{id}/restore {trigger?}`,
+  `GET|POST /api/lp/protected`. The `lp_tick` job (every 5 minutes) advances the states; it queues nothing for a tenant in mode off.
+- **Schema.** `0921_lp_revocations.sql` (Postgres `0949`, `0950` for the change type): `lp_settings`, `lp_revocations`,
+  `lp_revocation_events`, `lp_protected`, `lp_exemptions`, with cross-tenant guard triggers and RLS.
+- **UI.** Insights > Least privilege shows the loop, its caps, the pause button and the revocations with announce, object and restore.
+
 ### LDAP and Active Directory provisioning (issue #586)
 
 - **Target kinds `ldap` and `ad`** (`PUT /api/provisioning/targets/{connection}` with an `ldap` settings object; the bind
@@ -6871,3 +6900,16 @@ never a violation. The loader is pure (`internal/archtest` `TestPolicyBundleIsOf
 `server/internal/policybundle/testdata/good`. Tests: `go test ./internal/policybundle ./cmd/tessera -run 'Policy|Load|Run'`
 (golden CLI output in `cmd/tessera/testdata/policy`, refresh with `-update-policy-golden`) and `go test ./internal/policybundle
 -fuzz FuzzLoad`.
+
+## Cedar invariants (`internal/policy`, AC-3)
+
+The YAML invariant types are ported to Cedar `forbid` policies over effective-permission facts (`policy.ToCedar`; examples in
+`server/internal/policy/testdata/cedar/`; design `docs/design/access-as-code-repo.md` sections 3.6 and 5). A fact is an action
+(`reach`, `exist`, `hold_credential`) with principal, resource and context built from the graph; a satisfied forbid is a violation.
+Per-tenant sources live in `policy_sources` (schema `0917_policy_sources.sql`, Postgres `0945_policy_sources.sql`) with an
+append-only `policy_versions`. A tenant's active invariant source replaces the embedded YAML policy of the same `@id` (and adds new
+ids); a tenant with none, or whose sources do not load (digest, parse, schema, duplicate `@id`), keeps the embedded YAML and the API
+logs why. `GET /api/policies` and `GET /api/violations` keep their shape (parity fixtures unchanged). A finding whose every basis is
+approximate, unsupported or conditional is reported but never blocks (`policy.Blocking`). `separation_of_duties` stays a SoD risk
+and a `subjects.condition` stays YAML. Tests: `go test ./internal/policy -run 'Cedar|Overlay|Invariant'` (`TestCedarPortMatchesYAML`
+and the generated-graph test check each YAML policy and its port give identical violations) and `-fuzz FuzzParseInvariants`.

@@ -290,6 +290,9 @@ type Config struct {
 	// are federated (AssumeRoleWithWebIdentity) and creating a static one is
 	// refused.
 	AWSAllowStaticKeys bool
+	// LPDisabled is the operator switch of the least-privilege loop (config.Config.LPDisable, TESSERA_LP_DISABLE=1):
+	// no tenant gets a new announcement or revocation; restores still run.
+	LPDisabled bool
 	// GitHubAPIBase is where the access-diff comment is posted (default
 	// https://api.github.com). Tests point it at a local server.
 	GitHubAPIBase string
@@ -783,7 +786,17 @@ func (s *Server) effectivePolicies(tx *store.TenantTx) ([]*policy.Policy, error)
 	if err != nil {
 		return nil, err
 	}
-	return policy.Effective(files, risks), nil
+	eff := policy.Effective(files, risks)
+	// the tenant's Cedar invariants replace the YAML of the same id; a bundle
+	// that does not load leaves the embedded YAML (access-as-code AC-3)
+	pols, unreadable, err := policy.TenantPolicies(tx, eff)
+	if err != nil {
+		return nil, err
+	}
+	if unreadable != nil {
+		s.log.Error("tenant invariant bundle unreadable; evaluating the embedded YAML policies", "tenant", tx.Tenant().String(), "err", unreadable)
+	}
+	return pols, nil
 }
 
 // ---------------------------------------------------------------- routing

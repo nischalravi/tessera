@@ -613,6 +613,9 @@ func (e *Engine) process(ctx context.Context, t tenancy.ID, op *store.ProvOp, co
 		return st, e.fail(ctx, t, op, err, &st)
 	}
 	if op.Status == Sent {
+		if held, err := e.cancelIfWriteBackOff(ctx, t, op); held || err != nil {
+			return st, err
+		}
 		agentID, err := e.agentOf(ctx, t, op.ConnectionID, agents)
 		if err != nil {
 			if target.Retryable(err) {
@@ -653,6 +656,54 @@ func (e *Engine) process(ctx context.Context, t tenancy.ID, op *store.ProvOp, co
 		op.Status = PendingVerification
 	}
 	return st, e.verify(ctx, t, op, conn, req, &st)
+}
+
+// cancelIfWriteBackOff stops a claimed operation from being sent when its
+// target's write-back is off now, whatever it was when the operation was queued
+// (issue #706: disabling is immediate). The target is re-read and the operation
+// cancelled in one transaction, with an audit event. Restores of a verified AWS
+// change are still sent: they only put back what that change took.
+func (e *Engine) cancelIfWriteBackOff(ctx context.Context, t tenancy.ID, op *store.ProvOp) (bool, error) {
+	if isAWSRestore(op.Kind) {
+		return false, nil
+	}
+	cancelled := false
+	err := e.DB.InTenant(ctx, t, func(tx *store.TenantTx) error {
+		pt, err := tx.ProvTarget(op.ConnectionID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil // connector() reports a missing target
+		}
+		if err != nil || pt.WriteBack {
+			return err
+		}
+		now := e.now()
+		to := store.ProvOpState{Status: Cancelled, Attempts: max(0, op.Attempts-1), VerifyAttempts: op.VerifyAttempts,
+			NextAttemptAt: now, LastError: sp("write_back_disabled: write-back was turned off on the target before this change was sent"),
+			CompletedAt: &now}
+		if err := tx.SetProvOpState(op.ID, Sent, to, now); err != nil {
+			return err
+		}
+		if _, err := tx.CancelAgentJobsForOp(op.ID, "write-back was turned off", now); err != nil {
+			return err
+		}
+		cancelled = true
+		return tx.Audit(now, WorkerActor, "provision.cancelled_write_back_off", ojson.Object{{Key: "op_id", Value: op.ID},
+			{Key: "kind", Value: op.Kind}, {Key: "target", Value: op.TargetRef}, {Key: "reason", Value: "write_back_disabled"}})
+	})
+	if err != nil {
+		cancelled = false
+	}
+	return cancelled, err
+}
+
+// isAWSRestore reports whether kind is one of the AWS kinds that undo a revoke.
+func isAWSRestore(kind string) bool {
+	for _, k := range target.AWSKinds {
+		if target.AWSRestoreKind(k) == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // set moves an operation between statuses in one transaction, with its audit event.
