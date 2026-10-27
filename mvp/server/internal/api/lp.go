@@ -15,6 +15,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/catalog"
+	"github.com/nischalravi/tessera/mvp/server/internal/aws/eval"
 	"github.com/nischalravi/tessera/mvp/server/internal/leastpriv"
 	"github.com/nischalravi/tessera/mvp/server/internal/lp"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -334,7 +335,7 @@ func (s *Server) lpPropose(r *http.Request, _ *params) (int, any, error) {
 		return refuse("grant_protected", why)
 	}
 	if a := s.lpPrivilegedRemoved(ac, v); a != "" {
-		return refuse("privileged_suggest_only", "the right-size removes "+a+", a permissions-management action: privileged permissions are suggested, never revoked by the loop")
+		return refuse("privileged_suggest_only", "the right-size removes "+a+", which is or may be a permissions-management action: privileged permissions are suggested, never revoked by the loop")
 	}
 	prior := string(res.doc.RawJSON)
 	payload, err := json.Marshal(lpPayload{PolicyARN: in.PolicyARN, Document: v.Document, Prior: prior, PriorSHA256: target.DocDigest(prior),
@@ -375,19 +376,39 @@ func lpProtectedByTag(ac *awsCtx, arn string) string {
 	return ""
 }
 
-// lpPrivilegedRemoved returns a permissions-management action the right-size takes from the principal ("" if none),
-// from the catalog's access levels. A list of removed actions cut short counts as privileged: it cannot be vouched for.
+// lpAccessLevels answers an action's access level: the compiled catalog does, and so does a test double.
+type lpAccessLevels interface {
+	AccessLevel(action string) catalog.AccessLevel
+}
+
+func lpLevelsOf(c eval.Catalog) lpAccessLevels {
+	if v, ok := c.(*catalog.EvalView); ok {
+		if v.C == nil {
+			return nil
+		}
+		return v.C
+	}
+	l, _ := c.(lpAccessLevels)
+	return l
+}
+
+// lpPrivilegedRemoved says why a right-size must stay a suggestion ("" if the loop may act on it): it removes a
+// permissions-management action, or that cannot be vouched for. It fails closed (design §4, §11 decision 3): a
+// catalog without access levels, an action of unknown level, a missing diff and a list cut short all count as privileged.
 func (s *Server) lpPrivilegedRemoved(ac *awsCtx, v *awsRightSizeView) string {
-	cv, ok := ac.cat.Cat.(*catalog.EvalView)
-	if !ok || cv.C == nil || v.Diff == nil {
-		return ""
+	lv := lpLevelsOf(ac.cat.Cat)
+	switch {
+	case lv == nil:
+		return "the catalog has no access levels, so privileged actions cannot be told apart"
+	case v.Diff == nil:
+		return "the diff of removed actions is unavailable"
 	}
 	for _, c := range v.Diff.Changes {
 		if c.Kind != "lost" {
 			continue
 		}
 		for _, a := range c.Actions {
-			if cv.C.AccessLevel(a) == catalog.AccessPermissionsManagement {
+			if l := lv.AccessLevel(a); l == catalog.AccessPermissionsManagement || l == catalog.AccessUnknown {
 				return a
 			}
 		}
