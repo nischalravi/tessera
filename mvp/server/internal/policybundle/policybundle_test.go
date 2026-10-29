@@ -124,6 +124,20 @@ func TestLoadFindings(t *testing.T) {
 	}
 }
 
+// A group reference is system:name; the name may hold spaces, as group names in Workday, Entra and Okta do
+// (issue #729), but no control character and no leading or trailing whitespace.
+func TestEntitlementReference(t *testing.T) {
+	for ref, ok := range map[string]bool{
+		"workday:AP Clerk": true, "okta:eng": true, "aws:arn:aws:iam::1:role/x": true, "snowflake:FINANCE_ANALYST": true,
+		"nocolon": false, "okta:": false, ":eng": false, "okta: eng": false, "okta:eng ": false, "okta:a\tb": false,
+		"okta:a\nb": false, "okta:a\x00b": false, "ok ta:eng": false,
+	} {
+		if got := entRE.MatchString(ref); got != ok {
+			t.Errorf("%q: valid = %v, want %v", ref, got, ok)
+		}
+	}
+}
+
 func TestLoadLimits(t *testing.T) {
 	big := Files{}
 	for i := 0; i <= MaxFiles; i++ {
