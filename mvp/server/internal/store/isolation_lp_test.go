@@ -22,6 +22,8 @@ func lpCovered() map[string]bool {
 		// restore on denial (schema/0922, TestIsolation_LPDenials)
 		"LPDenialHook": true, "PutLPDenialHook": true, "LPDenialSeen": true, "InsertLPDenial": true, "LPDenials": true,
 		"LPRevokedForPrincipal": true,
+		// false positives (schema/0923, TestIsolation_LPFalsePositives)
+		"InsertLPFalsePositive": true, "LPLabelled": true, "LPCalibration": true, "LPRevokedForGrant": true,
 	}
 }
 
@@ -235,6 +237,63 @@ func TestIsolation_LeastPrivLoop(t *testing.T) {
 	})
 	// a tenant with no row is off with the defaults
 	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The false-positive labels (schema/0923, issue #663): a label and the calibration counts are a tenant's own, the
+// same revocation id is labelled separately in each tenant, and a label cannot point at another tenant's revocation.
+func TestIsolation_LPFalsePositives(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	principal := "arn:aws:iam::111122223333:role/shared"
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			r := lpRev("rev-1", principal)
+			if err := c.InsertLPRevocation(r); err != nil {
+				return err
+			}
+			r.State, r.ExecutedAt = store.LPRevoked, &storetest.Now
+			if err := c.UpdateLPRevocation(r, store.LPCandidate, storetest.Now); err != nil {
+				return err
+			}
+			if tn.Slug != f.A.Slug {
+				return nil
+			}
+			return c.InsertLPFalsePositive(&store.LPFalsePositive{RevocationID: "rev-1", Source: store.LPFPJIT, Ref: "7", Principal: principal,
+				PolicyARN: r.PolicyARN, Confidence: "high", CreatedAt: storetest.Now})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if ok, err := c.LPLabelled("rev-1"); err != nil || ok {
+			t.Errorf("B sees A's label = %v, %v", ok, err)
+		}
+		rows, err := c.LPCalibration(storetest.Now.Add(-time.Hour))
+		if err != nil || rows[0].Revocations != 1 || rows[0].FalsePositives != 0 {
+			t.Errorf("B's calibration = %+v, %v", rows, err)
+		}
+		if err := c.InsertLPFalsePositive(&store.LPFalsePositive{RevocationID: "rev-nope", Source: store.LPFPJIT, Principal: principal,
+			PolicyARN: "p", Confidence: "high", CreatedAt: storetest.Now}); err == nil {
+			t.Error("a label for a revocation that does not exist in B was accepted")
+		}
+		if err := c.InsertLPFalsePositive(&store.LPFalsePositive{RevocationID: "rev-1", Source: store.LPFPJIT, Principal: principal,
+			PolicyARN: "p", Confidence: "high", CreatedAt: storetest.Now}); err != nil {
+			t.Errorf("B's own label = %v", err)
+		}
+		if err := c.InsertLPFalsePositive(&store.LPFalsePositive{RevocationID: "rev-1", Source: "owner", Principal: principal,
+			PolicyARN: "p", Confidence: "high", CreatedAt: storetest.Now}); !errors.Is(err, store.ErrDuplicate) {
+			t.Errorf("a second label = %v, want ErrDuplicate", err)
+		}
+		return nil
+	})
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		rows, err := c.LPCalibration(storetest.Now.Add(-time.Hour))
+		if err != nil || rows[0].Revocations != 1 || rows[0].FalsePositives != 1 {
+			t.Errorf("A's calibration = %+v, %v", rows, err)
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

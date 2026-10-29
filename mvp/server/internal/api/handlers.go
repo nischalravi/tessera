@@ -1359,6 +1359,9 @@ func (s *Server) jitCreate(_ http.ResponseWriter, r *http.Request, p *params) (a
 	if err != nil {
 		return nil, asJitError(err)
 	}
+	if err := s.lpOnJITRequest(c, rq); err != nil { // a request for revoked access labels the revoke a false positive (LP-7)
+		return nil, err
+	}
 	return reqView(c, rq, hours.JSON())
 }
 

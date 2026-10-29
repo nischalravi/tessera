@@ -2481,6 +2481,13 @@ CREATE POLICY tenant_isolation ON lp_denials
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE lp_false_positives ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lp_false_positives FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON lp_false_positives;
+CREATE POLICY tenant_isolation ON lp_false_positives
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN

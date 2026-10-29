@@ -611,6 +611,10 @@ func Run(tx *store.TenantTx, now time.Time, ex Executor, disabled bool, rechecks
 				Reason: "restored (" + r.RestoreTrigger + ")", RevocationID: r.ID, Until: now.AddDate(0, 0, ExemptionDays), CreatedBy: ActorTick, CreatedAt: now}); err != nil {
 				return nil, err
 			}
+			// and it feeds the calibration, once per revocation (a JIT request may have labelled it already)
+			if _, err := LabelFalsePositive(tx, now, r, r.RestoreTrigger, r.RestoreOpID); err != nil {
+				return nil, err
+			}
 			t.Restored++
 		case opFailed, opMismatch, opCancelled:
 			r.Reason = "the restoring operation " + st
