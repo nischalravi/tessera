@@ -6835,6 +6835,30 @@ service-linked roles, the protected list, exempt grants and a tenant with an ope
   `lp_revocation_events`, `lp_protected`, `lp_exemptions`, with cross-tenant guard triggers and RLS.
 - **UI.** Insights > Least privilege shows the loop, its caps, the pause button and the revocations with announce, object and restore.
 
+### Restore on denial (issue #662, LP-6)
+
+A CloudTrail `AccessDenied` (or an IdP denial) for a principal with a `revoked` grant restores that grant automatically
+(`internal/lp/denial.go`, `internal/api/lp_denial.go`; design section 5.2 and 6.2). The event is only a trigger.
+
+- **Receiver.** `POST /api/lp/denial-hook` (`lp.manage`, step-up) creates or rotates the tenant's credential and shows the secret
+  once (`lpd_...`; only its SHA-256 is stored); `GET /api/lp/denial-hook` shows whether it exists and the URL path. The customer's
+  EventBridge rule (`errorCode` `AccessDenied` or `UnauthorizedOperation`) delivers by API destination to
+  `POST /public/t/{slug}/lp/denials` with `Authorization: Bearer <secret>`; no session, no AWS permission added. The body is the
+  EventBridge event, or `{source: cloudtrail|idp, event_id, principal, action, resource?, time?}` for an IdP denial.
+  Unknown tenant, no credential and a wrong secret all answer the same 401. Redeliveries (same event id) are no-ops.
+- **What restores.** The principal (the role behind an assumed-role session, or an IAM user) must have a `revoked` row, and the
+  denied call must be one the revocation removed: an Allow statement of the policy as recorded at the revoke covers the action
+  on the resource and the replacement document does not. A right-size that only narrows resources keeps the action, so a
+  denial whose event names no resource (CloudTrail `resources`, or S3 `bucketName`/`key`) restores only when the action is gone
+  altogether. Finalized revocations are not restored (an ordinary access request).
+- **Restore.** The ordinary one: payload digest checked, AWS write target, verified by re-reading the target; no second person,
+  never blocked by a pause or `TESSERA_LP_DISABLE`; trigger `denial`; the grant is exempt for 180 days after. People holding
+  `lp.manage` get a security alert (mapping an AWS principal to its owning person is not built).
+- **Evidence.** `GET /api/lp/denials[?limit=]` lists events that named a revoked principal with the outcome, the restore state
+  and the latency from arrival to verified restore (`within_slo`: 15 minutes). The `lp_tick` job (every 5 minutes) verifies
+  the restore, so it lands within the engine's send time plus one tick.
+- **Schema.** `0922_lp_denials.sql` (Postgres `0951`): `lp_denial_hooks`, `lp_denials`, with RLS.
+
 ### LDAP and Active Directory provisioning (issue #586)
 
 - **Target kinds `ldap` and `ad`** (`PUT /api/provisioning/targets/{connection}` with an `ldap` settings object; the bind

@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,78 @@ func lpCovered() map[string]bool {
 		"LPRevocationsToAdvance": true, "UpdateLPRevocation": true, "LPExecutedSince": true, "LPRestoredSince": true,
 		"LPOpenForGrant": true, "InsertLPEvent": true, "LPEvents": true, "InsertLPProtected": true, "LPProtected": true,
 		"DeleteLPProtected": true, "InsertLPExemption": true, "LPExempted": true, "LPExemptions": true,
+		// restore on denial (schema/0922, TestIsolation_LPDenials)
+		"LPDenialHook": true, "PutLPDenialHook": true, "LPDenialSeen": true, "InsertLPDenial": true, "LPDenials": true,
+		"LPRevokedForPrincipal": true,
+	}
+}
+
+// The denial tables (schema/0922, issue #662): the hook credential and the denial events are a tenant's own. The
+// same event id is a different event in each tenant, A's secret digest is not B's, and a principal revoked in A is
+// not revoked in B.
+func TestIsolation_LPDenials(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	digest := func(c string) string { return strings.Repeat(c, 64) }
+	principal := "arn:aws:iam::111122223333:role/shared"
+	for _, tn := range []struct {
+		t storetest.Tenant
+		c string
+	}{{f.A, "a"}, {f.B, "b"}} {
+		if err := f.DB.InTenant(context.Background(), tn.t.ID, func(c *store.TenantTx) error {
+			if err := c.PutLPDenialHook(&store.LPDenialHook{SecretSHA256: digest(tn.c), CreatedBy: "u", CreatedAt: storetest.Now, RotatedAt: storetest.Now}); err != nil {
+				return err
+			}
+			if tn.t.Slug == f.A.Slug { // only A has a revoked grant for the principal
+				r := lpRev("rev-1", principal)
+				if err := c.InsertLPRevocation(r); err != nil {
+					return err
+				}
+				r.State = store.LPRevoked
+				if err := c.UpdateLPRevocation(r, store.LPCandidate, storetest.Now); err != nil {
+					return err
+				}
+			}
+			return c.InsertLPDenial(&store.LPDenial{Source: store.LPDenialCloudTrail, EventID: "evt-1", Principal: principal, Action: "s3:GetObject",
+				ArrivedAt: storetest.Now, Outcome: store.LPDenialActionNotRemoved, RevocationID: "rev-" + tn.c})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if h, err := c.LPDenialHook(); err != nil || h.SecretSHA256 != digest("b") {
+			t.Errorf("B's hook = %+v, %v; A's digest leaked", h, err)
+		}
+		if err := c.PutLPDenialHook(&store.LPDenialHook{SecretSHA256: digest("c"), CreatedBy: "later", CreatedAt: storetest.Now.Add(time.Hour), RotatedAt: storetest.Now.Add(time.Hour)}); err != nil {
+			t.Errorf("rotate: %v", err)
+		}
+		if seen, err := c.LPDenialSeen(store.LPDenialCloudTrail, "evt-1"); err != nil || !seen {
+			t.Errorf("B's own event seen = %v, %v", seen, err)
+		}
+		if seen, err := c.LPDenialSeen(store.LPDenialIdP, "evt-1"); err != nil || seen {
+			t.Errorf("another source's event seen = %v, %v", seen, err)
+		}
+		if err := c.InsertLPDenial(&store.LPDenial{Source: store.LPDenialCloudTrail, EventID: "evt-1", Principal: principal, Action: "s3:GetObject",
+			ArrivedAt: storetest.Now, Outcome: store.LPDenialActionNotRemoved}); !errors.Is(err, store.ErrDuplicate) {
+			t.Errorf("a redelivered event = %v, want ErrDuplicate", err)
+		}
+		if ds, err := c.LPDenials(0); err != nil || len(ds) != 1 || ds[0].RevocationID != "rev-b" {
+			t.Errorf("LPDenials = %+v, %v; want B's one", ds, err)
+		}
+		if xs, err := c.LPRevokedForPrincipal(principal); err != nil || len(xs) != 0 {
+			t.Errorf("B sees %d of A's revoked grants, %v", len(xs), err)
+		}
+		return nil
+	})
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		if h, err := c.LPDenialHook(); err != nil || h.SecretSHA256 != digest("a") {
+			t.Errorf("A's hook = %+v, %v; B's rotation leaked", h, err)
+		}
+		if xs, err := c.LPRevokedForPrincipal(principal); err != nil || len(xs) != 1 {
+			t.Errorf("A's revoked for the principal = %d, %v", len(xs), err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
