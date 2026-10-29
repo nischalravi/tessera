@@ -53,6 +53,11 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
   a request with an `Authorization` header is counted like one with a session cookie, so only a token that fails to
   authenticate costs it), so its own bucket is the limit that applies and its bursts never refuse people signed in from the
   same address (issue #608).
+* Terraform provider (issue #719): `terraform-provider-tessera/` is a separate Go module (no dependency on `server/`) that signs in as a
+  machine client (client credentials, private-key JWT, optional DPoP) and manages `tessera_review_schedule` plus the `tessera_identities`,
+  `tessera_entitlements` and `tessera_connectors` data sources. What a machine client cannot change non-interactively (connectors,
+  catalog, roles, SoD, workflows, alerts, SIEM, transport) is left out; see its `README.md`. Tests: `cd terraform-provider-tessera && go test ./...`,
+  and `TF_ACC=1 go test ./internal/provider -run Acc` against a real `tessera serve`.
 * Dev IdP: http://127.0.0.1:8001 (see [Signing in](#signing-in))
 
 Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`
