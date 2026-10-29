@@ -6864,6 +6864,24 @@ A CloudTrail `AccessDenied` (or an IdP denial) for a principal with a `revoked` 
   the restore, so it lands within the engine's send time plus one tick.
 - **Schema.** `0922_lp_denials.sql` (Postgres `0951`): `lp_denial_hooks`, `lp_denials`, with RLS.
 
+### Restore on JIT re-request (issue #663, LP-7)
+
+A JIT request for access the loop revoked, before the revocation is final, shows the revoke was wrong
+(`internal/lp/jit.go`, `internal/api/lp_jit.go`; design sections 9 to 11). Per the approved decision 5 it does **not** restore
+the standing grant: the person gets the ordinary time-bound JIT grant (approved and expiring like any other) and the standing
+grant stays `revoked`. Putting it back stays the explicit restore (`POST /api/lp/revocations/{id}/restore`) until the
+revocation is final. This differs from the issue's "restores it" wording; the design decision wins.
+
+- **Match.** On `POST /api/jit/requests`, in the same transaction: a `revoked` row whose principal is the external id of one of
+  the requester's accounts and whose policy ARN is the requested group's external id. Finalized revocations do not match.
+- **Label.** The revocation is labelled a **false positive** (`lp_false_positives`, one row per revocation, source `jit`, the
+  request id as reference) and audited (`lp.jit.false_positive`). A restore verified by the loop labels it too (source = the
+  trigger), once, so the counters never double count.
+- **Calibration.** `GET /api/lp/calibration` (`graph.read`) gives, per confidence level (`high`, `medium`), the revocations
+  carried out and the false positives labelled in the last 60 days, the percentage, and `review: true` when `high` is over 1%
+  (the rule goes to a person; no self-tuning). The flag is reported, not yet wired to an automatic pause.
+- **Schema.** `0923_lp_false_positives.sql` (Postgres `0952`): `lp_false_positives`, with RLS and a cross-tenant trigger.
+
 ### LDAP and Active Directory provisioning (issue #586)
 
 - **Target kinds `ldap` and `ad`** (`PUT /api/provisioning/targets/{connection}` with an `ldap` settings object; the bind
