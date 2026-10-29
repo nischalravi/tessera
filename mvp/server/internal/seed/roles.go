@@ -52,6 +52,7 @@ func seedRoles(c *store.TenantTx, now time.Time) error {
 	for _, p := range people {
 		byName[p.Name], byID[p.ID] = p, p
 	}
+	keys := map[string]bool{}
 	for _, d := range demoRoles {
 		var ents []int64
 		for _, e := range d.ents {
@@ -66,8 +67,9 @@ func seedRoles(c *store.TenantTx, now time.Time) error {
 		if len(ents) != len(d.ents) {
 			continue // not the demo company
 		}
-		r := &store.BusinessRole{ID: uuid.NewString(), Name: d.name, Description: d.desc, Risk: d.risk,
+		r := &store.BusinessRole{ID: uuid.NewString(), Key: store.RoleKeySlug(d.name, func(k string) bool { return keys[k] }), Name: d.name, Description: d.desc, Risk: d.risk,
 			Requestable: d.requestable, Status: store.RoleActive, Version: 1, CreatedAt: now, UpdatedAt: now}
+		keys[r.Key] = true
 		if o := byName[d.owner]; o != nil {
 			r.OwnerIdentityID = &o.ID
 		}

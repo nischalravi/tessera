@@ -22,11 +22,17 @@
 -- business_role_requests: requests for a role through the catalog
 -- (pending, approved, denied, cancelled); approval assigns the role.
 --
+-- business_roles.key is the role's stable key in a policy repository (issue #650, design access-as-code-repo.md
+-- section 5; schema/0951_role_keys.sql makes it unique per tenant); business_role_versions.policy_ref is the JSON
+-- {commit, path, bundle_sha256} of the repository change that made the version. Both are added to an older SQLite
+-- database by DB.upgradeRoleKeys.
+--
 -- Tenant-owned: guard triggers at the end refuse references to another
 -- tenant's rows.
 CREATE TABLE IF NOT EXISTS business_roles (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
+  key TEXT,
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   owner_identity_id INTEGER REFERENCES identities (id),
@@ -60,6 +66,7 @@ CREATE TABLE IF NOT EXISTS business_role_versions (
   changed_by TEXT REFERENCES platform_users (id),
   actor TEXT NOT NULL,
   changed_at TEXT NOT NULL,
+  policy_ref TEXT,
   UNIQUE (tenant_id, role_id, version)
 );
 

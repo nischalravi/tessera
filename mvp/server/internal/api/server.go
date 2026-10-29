@@ -132,6 +132,8 @@ type Config struct {
 	Env string
 	// ClientRate is the default rate limit of every machine client (clientlimit.go).
 	ClientRate ClientRate
+	// PolicyMaxSteps is the most grant steps one roles-as-code apply may make (0: rolesascode.DefaultMaxSteps).
+	PolicyMaxSteps int
 	// Deprecations announce the removal of /api/v1 routes (Deprecation and Sunset
 	// headers; at least 6 months' notice, enforced at startup).
 	Deprecations []Deprecation
@@ -481,7 +483,7 @@ func New(cfg Config) *Server {
 		}
 	}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
-		Prod: cfg.Env == "prod", Log: cfg.Logger}
+		Prod: cfg.Env == "prod", Log: cfg.Logger, PolicyMaxSteps: cfg.PolicyMaxSteps}
 	if cfg.RPID != "" && cfg.PublicOrigin != "" {
 		// the ceremony runs on the public origin (and, in dev, the CORS origins)
 		origins := s.csrfOrigins()
@@ -585,6 +587,7 @@ func New(cfg Config) *Server {
 	s.registerActivityRoutes()
 	s.registerRoleRoutes()
 	s.registerRoleMiningRoutes()
+	s.registerPolicyRoleRoutes()
 	s.registerAbacRoutes()
 	s.registerSodRoutes()
 	s.registerSodControlRoutes()
