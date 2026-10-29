@@ -307,7 +307,7 @@ func (s *Service) Submit(ctx context.Context, p *auth.Principal, in SubmitInput)
 	if d := auth.Check(p, auth.PermAdminChangeReq, &auth.StepUpAdmin, s.now()); d != nil {
 		return nil, denied(d)
 	}
-	return s.submit(ctx, p, in)
+	return s.submit(ctx, p, in, "")
 }
 
 // SubmitChecked files a groups.loader.save or groups.folder.delete_recursive
@@ -322,10 +322,12 @@ func (s *Service) SubmitChecked(ctx context.Context, p *auth.Principal, in Submi
 	if p == nil || p.UserID == nil {
 		return nil, newErr(http.StatusForbidden, "forbidden", "a signed-in user is required")
 	}
-	return s.submit(ctx, p, in)
+	return s.submit(ctx, p, in, "")
 }
 
-func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput) (*store.AdminChange, error) {
+// submit records a request. clientID is the machine client that proposes it (SubmitProposal): the request is then
+// filed in the name of the client's owner and the proposer is recorded before the submitted event is written.
+func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput, clientID string) (*store.AdminChange, error) {
 	now := s.now()
 	typ, err := lookupType(in.Type)
 	if err != nil {
@@ -340,7 +342,16 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput)
 	}
 	var ch *store.AdminChange
 	err = s.DB.InTenant(ctx, p.TenantID, func(tx *store.TenantTx) error {
-		e := s.env(tx, now, *p.UserID)
+		requester := uuid.Nil
+		if clientID != "" {
+			var err error
+			if requester, err = s.env(tx, now, uuid.Nil).proposerUser(clientID); err != nil {
+				return err
+			}
+		} else {
+			requester = *p.UserID
+		}
+		e := s.env(tx, now, requester)
 		pl, err := typ.plan(e, v)
 		if err != nil {
 			return err
@@ -366,7 +377,7 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput)
 		}
 		ch = &store.AdminChange{ID: id, TenantID: p.TenantID, Type: typ.name, Payload: canon, PayloadHash: HashPayload(canon),
 			SecretEnc: sealed, TargetID: pl.target, Status: store.ChangePendingApproval, TwoPerson: pl.twoPerson,
-			CoolingOffSeconds: int64(pl.cooling / time.Second), RequestedBy: *p.UserID, RequestedAt: now,
+			CoolingOffSeconds: int64(pl.cooling / time.Second), RequestedBy: requester, RequestedAt: now,
 			ExpiresAt: now.Add(ApprovalWindow)}
 		if !pl.twoPerson {
 			// no approver: the change waits only its own cooling-off
@@ -376,6 +387,11 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput)
 		}
 		if err := tx.InsertAdminChange(ch); err != nil {
 			return err
+		}
+		if clientID != "" {
+			if err := tx.InsertAdminChangeProposal(ch.ID, clientID, now); err != nil {
+				return err
+			}
 		}
 		if typ.afterSubmit != nil {
 			if err := typ.afterSubmit(e, ch, v); err != nil {
@@ -764,11 +780,20 @@ func changeDetail(ch *store.AdminChange, by string) ojson.Object {
 // notifications, in the transaction that made the transition (design §15.2:
 // every transition writes an audit event and queues a notification).
 func (e *env) transition(ch *store.AdminChange, trans, by string) error {
+	detail := changeDetail(ch, by)
+	// a change a machine client proposed carries the client id in every event: proposal, approval and apply
+	client, err := e.tx.AdminChangeProposer(ch.ID)
+	if err != nil {
+		return err
+	}
+	if client != "" {
+		detail = append(detail, ojson.KV{Key: "client_id", Value: client})
+	}
 	outcome := store.OutcomeSuccess
 	if trans == TransFailed {
 		outcome = store.OutcomeFailure
 	}
-	if _, err := audit.Record(e.tx.Context(), e.tx, "admin.change."+trans, changeDetail(ch, by), audit.At(e.now),
+	if _, err := audit.Record(e.tx.Context(), e.tx, "admin.change."+trans, detail, audit.At(e.now),
 		audit.Target("admin_change", ch.ID.String()), audit.Outcome(outcome)); err != nil {
 		return err
 	}

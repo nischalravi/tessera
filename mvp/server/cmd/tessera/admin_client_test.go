@@ -92,6 +92,7 @@ func TestAdminAddClient(t *testing.T) {
 		"an unknown role":         with(base, "-roles", "root"),
 		"no roles":                with(base, "-roles", ""),
 		"an unknown scope":        with(base, "-scope", "tessera:everything"),
+		"the proposal scope":      with(base, "-scope", "tessera:read config.propose"), // only two admins grant it (issue #721)
 		"no scope":                with(base, "-scope", ""),
 		"no owner":                with(base, "-owner", ""),
 		"an owner who is no user": with(base, "-owner", "nobody@acme.example"),

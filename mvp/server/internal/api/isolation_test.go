@@ -469,6 +469,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/breach/plans/{id}") {
 			continue // TestBreachAPI_CrossTenant (UUIDs, not fixture ids: tenant A gets 404 on B's plan)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/proposals/") {
+			continue // TestProposalsAPI_* (UUIDs and ids of one tenant's rows; a client sees only its own proposals)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/oauth-apps/") {
 			continue // TestOAuthAppsAPI (UUIDs, not fixture ids: tenant B gets 404 on A's app and grants)
 		}
@@ -636,6 +639,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if strings.HasPrefix(path, "/api/role-mining/") && strings.Contains(path, "{") {
 			continue // TestRoleMiningAPI_Flow (UUIDs, not fixture ids)
+		}
+		if path == "/api/proposals/{change_id}" {
+			continue // TestProposalsAPI_* (a UUID, readable only by the client that proposed it)
 		}
 		if path == "/api/request-drafts/{draft_id}" {
 			continue // TestRequestDraftsAPI (a UUID, private to its user)

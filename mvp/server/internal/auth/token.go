@@ -155,7 +155,7 @@ func ScopeSetOf(scopes []string) ScopeSet {
 	out := ScopeSet{}
 	for _, s := range scopes {
 		switch sc := Scope(s); sc {
-		case ScopeRead, ScopeWrite, ScopeAudit, ScopeAdmin, ScopeEmailDSN:
+		case ScopeRead, ScopeWrite, ScopeAudit, ScopeAdmin, ScopeEmailDSN, ScopeConfigPropose:
 			out[sc] = true
 		}
 	}
@@ -189,6 +189,8 @@ func ClientExceedsApprover(tx *store.TenantTx, cl *store.APIClient, scopes []str
 	}
 	_, active, _ := MachineRoles(cl.Roles)
 	want := EffectivePermissions(&Principal{ActiveRoles: active, Scopes: ScopeSetOf(scopes)})
+	// config.propose is vouched for by its own two-admin grant (api_client.propose.grant), not by what one approver holds
+	delete(want, PermConfigPropose)
 	have := PermissionSet{PermAuthenticated: true}
 	u, err := tx.PlatformUser(*who)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {

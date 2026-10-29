@@ -409,6 +409,13 @@ GET    /api/email/suppressions                       email.read      -  # Admin 
 POST   /api/email/suppressions                       email.manage    -
 DELETE /api/email/suppressions/{address}             email.manage    -
 POST   /api/email/dsn                                email.dsn       -  # a delivery status report (RFC 3464)
+POST   /api/proposals/catalog-items/{group_id}       config.propose  -  # issue #721 (files a change request; a person approves with step-up)
+POST   /api/proposals/roles                          config.propose  -  # issue #721
+POST   /api/proposals/roles/{role_id}                config.propose  -  # issue #721
+POST   /api/proposals/sod-rulesets                   config.propose  -  # issue #721
+POST   /api/proposals/sod-rulesets/{ruleset_id}      config.propose  -  # issue #721
+POST   /api/proposals/alert-rules/{rule_id}          config.propose  -  # issue #721
+GET    /api/proposals/{change_id}                    config.propose  -  # issue #721 (a client's own proposals only)
 POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
 POST   /api/identities/{identity_id}/disable         identities.contain STEP_UP_POLICY  # wire-previews: containment, then disabled
