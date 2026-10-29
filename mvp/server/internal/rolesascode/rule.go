@@ -102,6 +102,7 @@ func compileRule(ps *cedarx.Policies, id, role string) (*compiledRule, error) {
 		return nil, err
 	}
 	var pol struct {
+		Effect     string `json:"effect"`
 		Principal  node   `json:"principal"`
 		Action     node   `json:"action"`
 		Resource   node   `json:"resource"`
@@ -110,7 +111,10 @@ func compileRule(ps *cedarx.Policies, id, role string) (*compiledRule, error) {
 	if err := json.Unmarshal(raw, &pol); err != nil {
 		return nil, bad("the policy cannot be read: %v", err)
 	}
-	if op, _ := pol.Principal["op"].(string); op == "==" || op == "in" {
+	if pol.Effect != "permit" {
+		return nil, bad("a birthright rule is a permit policy; forbid is not supported")
+	}
+	if !everyIdentity(pol.Principal) {
 		return nil, bad("a birthright rule is for every identity: scope the principal with `principal is Tessera::Identity` or `principal`")
 	}
 	if !entityIs(pol.Action, "Tessera::Action", "birthright") {
@@ -132,6 +136,7 @@ func compileRule(ps *cedarx.Policies, id, role string) (*compiledRule, error) {
 	out := &compiledRule{}
 	lists := map[string]*[]string{"department": &out.Rule.Department, "type": &out.Rule.Type, "title": &out.Rule.Title}
 	seen := map[string]bool{}
+	var has []string
 	active := false
 	for _, l := range leaves {
 		switch {
@@ -140,6 +145,7 @@ func compileRule(ps *cedarx.Policies, id, role string) (*compiledRule, error) {
 			if attr == "" || lists[attr] == nil {
 				return nil, bad("`has` is supported on principal.department, principal.type and principal.title only")
 			}
+			has = append(has, attr)
 		case l["=="] != nil:
 			left, right := operands(l["=="])
 			attr := attrOf(left, "principal")
@@ -172,7 +178,26 @@ func compileRule(ps *cedarx.Policies, id, role string) (*compiledRule, error) {
 	if !active {
 		return nil, bad(`a birthright rule must require principal.status == "active"`)
 	}
+	for _, attr := range has {
+		if !seen[attr] {
+			// the rule keeps lists only, so a lone `has` would be dropped and the rule would match more than it says
+			return nil, bad("`principal has %s` is supported only next to a test of principal.%s", attr, attr)
+		}
+	}
 	return out, nil
+}
+
+// everyIdentity says whether a principal scope is `principal` or `principal is Tessera::Identity`: the rule
+// keeps no scope, so a narrower one (another type, or `is ... in` a group) would be dropped and widen the rule.
+func everyIdentity(scope node) bool {
+	switch op, _ := scope["op"].(string); op {
+	case "All":
+		return true
+	case "is":
+		_, in := scope["in"]
+		return scope["entity_type"] == "Tessera::Identity" && !in
+	}
+	return false
 }
 
 func setList(seen map[string]bool, lists map[string]*[]string, attr string, vals []string) error {

@@ -60,6 +60,11 @@ func TestCompileRuleRefusals(t *testing.T) {
 		{"negation", scope + ` when { principal.status == "active" && !(principal.type == "service") };`, "conjunction"},
 		{"twice", scope + ` when { principal.status == "active" && principal.type == "human" && ["service"].contains(principal.type) };`, "twice"},
 		{"inactive", scope + ` when { principal.status == "inactive" };`, "comparisons"},
+		// issue #730: each of these used to compile to a rule wider than its text
+		{"forbid", `forbid (principal is Tessera::Identity, action == Tessera::Action::"birthright", resource == Tessera::Role::"r") when { principal.status == "active" && ["Eng"].contains(principal.department) };`, "permit"},
+		{"another type", `permit (principal is Tessera::Group, action == Tessera::Action::"birthright", resource == Tessera::Role::"r") when { principal.status == "active" };`, "every identity"},
+		{"is in a group", `permit (principal is Tessera::Identity in Tessera::Group::"g", action == Tessera::Action::"birthright", resource == Tessera::Role::"r") when { principal.status == "active" };`, "every identity"},
+		{"lone has", scope + ` when { principal.status == "active" && ["Eng"].contains(principal.department) && principal has title };`, "principal has title"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
