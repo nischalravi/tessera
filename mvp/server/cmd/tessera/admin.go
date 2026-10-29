@@ -448,7 +448,7 @@ func recoverTenant(e *adminEnv, in recoverFlags) error {
 	if err != nil {
 		return fmt.Errorf("recover-tenant: -connection %q is not a connection id", in.connection)
 	}
-	svc := &admin.Service{DB: e.db, Clock: func() time.Time { return e.now }, Sealer: e.sealer, Prod: e.cfg.IsProd()}
+	svc := &admin.Service{DB: e.db, Clock: func() time.Time { return e.now }, Sealer: e.sealer, Prod: e.cfg.IsProd(), PolicyMaxSteps: e.cfg.PolicyMaxSteps}
 	res, err := svc.RequestRecovery(e.ctx, admin.RecoveryRequest{Tenant: t.ID,
 		Operator:   admin.Operator{ID: in.operator, PhishingResistant: in.operatorPhr},
 		CoOperator: admin.Operator{ID: in.coOperator, PhishingResistant: in.coOperatorPhr},

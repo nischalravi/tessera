@@ -32,7 +32,7 @@ func seedRoles(t *testing.T, f *storetest.Fixture) (map[tenancy.ID]string, map[t
 			if err := c.InsertPlatformUser(u); err != nil {
 				return err
 			}
-			if err := c.InsertBusinessRole(&store.BusinessRole{ID: id, Name: "Platform " + tn.Slug, Description: desc,
+			if err := c.InsertBusinessRole(&store.BusinessRole{ID: id, Key: "platform-" + tn.Slug, Name: "Platform " + tn.Slug, Description: desc,
 				Risk: "low", Requestable: true, Status: store.RoleActive, Version: 1, CreatedAt: storetest.Now,
 				UpdatedAt: storetest.Now}); err != nil {
 				return err

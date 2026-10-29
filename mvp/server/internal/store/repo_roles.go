@@ -10,6 +10,7 @@ import (
 // BusinessRole is a bundle of entitlements with its metadata.
 type BusinessRole struct {
 	ID              string
+	Key             string // stable key in a policy repository, unique per tenant ("" only for a row never given one)
 	Name            string
 	Description     string
 	OwnerIdentityID *int64
@@ -45,6 +46,9 @@ type RoleVersion struct {
 	ChangedBy *string
 	Actor     string
 	ChangedAt time.Time
+	// PolicyRef is the JSON {commit, path, bundle_sha256} of the repository change that made the version
+	// (access as code, issue #650); nil for a change made in the UI or API.
+	PolicyRef *string
 }
 
 // RoleMember is a person holding a role.
@@ -87,7 +91,7 @@ type RoleRequestFilter struct {
 	InvolvingIdentity int64  // ... or for this identity
 }
 
-const brCols = `r.id, r.name, r.description, r.owner_identity_id, r.risk, r.requestable, r.birthright, r.status, r.version,
+const brCols = `r.id, r.key, r.name, r.description, r.owner_identity_id, r.risk, r.requestable, r.birthright, r.status, r.version,
 	r.created_at, r.updated_by, r.updated_at`
 
 const rrCols = `q.id, q.role_id, q.beneficiary_id, q.requested_by, q.justification, q.status, q.requested_at,
@@ -102,10 +106,12 @@ var (
 		SELECT `+brCols+` FROM business_roles r WHERE r.tenant_id = @tenant AND r.id = @id`)
 	brByName = tq("business_roles.by_name", `
 		SELECT `+brCols+` FROM business_roles r WHERE r.tenant_id = @tenant AND r.name = @name`)
+	brByKey = tq("business_roles.by_key", `
+		SELECT `+brCols+` FROM business_roles r WHERE r.tenant_id = @tenant AND r.key = @key`)
 	brInsert = tq("business_roles.insert", `
-		INSERT INTO business_roles (id, tenant_id, name, description, owner_identity_id, risk, requestable, birthright,
+		INSERT INTO business_roles (id, tenant_id, key, name, description, owner_identity_id, risk, requestable, birthright,
 			status, version, created_at, updated_by, updated_at)
-		VALUES (@id, @tenant, @name, @description, @owner_identity_id, @risk, @requestable, @birthright, @status,
+		VALUES (@id, @tenant, @key, @name, @description, @owner_identity_id, @risk, @requestable, @birthright, @status,
 			@version, @created_at, @updated_by, @updated_at)`)
 	brSave = tq("business_roles.save", `
 		UPDATE business_roles SET name = @name, description = @description, owner_identity_id = @owner_identity_id,
@@ -125,10 +131,11 @@ var (
 		INSERT INTO business_role_entitlements (tenant_id, role_id, group_id) VALUES (@tenant, @role_id, @group_id)`)
 
 	rvInsert = tq("business_role_versions.insert", `
-		INSERT INTO business_role_versions (tenant_id, role_id, version, snapshot, note, changed_by, actor, changed_at)
-		VALUES (@tenant, @role_id, @version, @snapshot, @note, @changed_by, @actor, @changed_at)`)
+		INSERT INTO business_role_versions (tenant_id, role_id, version, snapshot, note, changed_by, actor, changed_at,
+			policy_ref)
+		VALUES (@tenant, @role_id, @version, @snapshot, @note, @changed_by, @actor, @changed_at, @policy_ref)`)
 	rvForRole = tq("business_role_versions.for_role", `
-		SELECT v.id, v.role_id, v.version, v.snapshot, v.note, v.changed_by, v.actor, v.changed_at
+		SELECT v.id, v.role_id, v.version, v.snapshot, v.note, v.changed_by, v.actor, v.changed_at, v.policy_ref
 		FROM business_role_versions v WHERE v.tenant_id = @tenant AND v.role_id = @role_id ORDER BY v.version DESC`)
 
 	rmList = tq("business_role_members.list", `
@@ -172,13 +179,14 @@ func scanBusinessRole(s scanner) (*BusinessRole, error) {
 	var r BusinessRole
 	var owner sql.NullInt64
 	var req int
-	var birth, by sql.NullString
+	var birth, by, key sql.NullString
 	var created, updated nullTime
-	if err := s.Scan(&r.ID, &r.Name, &r.Description, &owner, &r.Risk, &req, &birth, &r.Status, &r.Version, &created,
+	if err := s.Scan(&r.ID, &key, &r.Name, &r.Description, &owner, &r.Risk, &req, &birth, &r.Status, &r.Version, &created,
 		&by, &updated); err != nil {
 		return nil, err
 	}
 	r.OwnerIdentityID, r.Requestable, r.Birthright, r.UpdatedBy = intp(owner), req != 0, strp(birth), strp(by)
+	r.Key = key.String
 	var err error
 	if r.CreatedAt, err = created.val(); err != nil {
 		return nil, err
@@ -194,12 +202,12 @@ func scanRoleEntitlement(s scanner) (*RoleEntitlement, error) {
 
 func scanRoleVersion(s scanner) (*RoleVersion, error) {
 	var v RoleVersion
-	var note, by sql.NullString
+	var note, by, ref sql.NullString
 	var at nullTime
-	if err := s.Scan(&v.ID, &v.RoleID, &v.Version, &v.Snapshot, &note, &by, &v.Actor, &at); err != nil {
+	if err := s.Scan(&v.ID, &v.RoleID, &v.Version, &v.Snapshot, &note, &by, &v.Actor, &at, &ref); err != nil {
 		return nil, err
 	}
-	v.Note, v.ChangedBy = strp(note), strp(by)
+	v.Note, v.ChangedBy, v.PolicyRef = strp(note), strp(by), strp(ref)
 	var err error
 	v.ChangedAt, err = at.val()
 	return &v, err
@@ -240,6 +248,11 @@ func (tx *TenantTx) BusinessRoles() ([]*BusinessRole, error) {
 	return collect(tx, scanBusinessRole, brList)
 }
 
+// BusinessRoleByKey returns the role with the policy-repository key, or ErrNotFound.
+func (tx *TenantTx) BusinessRoleByKey(key string) (*BusinessRole, error) {
+	return one(tx, scanBusinessRole, brByKey, sql.Named("key", key))
+}
+
 // BusinessRole returns one role, or ErrNotFound.
 func (tx *TenantTx) BusinessRole(id string) (*BusinessRole, error) {
 	return one(tx, scanBusinessRole, brGet, sql.Named("id", id))
@@ -260,7 +273,11 @@ func roleArgs(r *BusinessRole) []sql.NamedArg {
 
 // InsertBusinessRole creates a role.
 func (tx *TenantTx) InsertBusinessRole(r *BusinessRole) error {
-	_, err := tx.exec(brInsert, append(roleArgs(r), sql.Named("created_at", T(r.CreatedAt)))...)
+	var key *string
+	if r.Key != "" {
+		key = &r.Key
+	}
+	_, err := tx.exec(brInsert, append(roleArgs(r), sql.Named("created_at", T(r.CreatedAt)), sql.Named("key", SP(key)))...)
 	return err
 }
 
@@ -311,7 +328,7 @@ func (tx *TenantTx) SetRoleEntitlements(roleID string, groups []int64) error {
 func (tx *TenantTx) AddRoleVersion(v *RoleVersion) error {
 	_, err := tx.exec(rvInsert, sql.Named("role_id", v.RoleID), sql.Named("version", v.Version),
 		sql.Named("snapshot", v.Snapshot), sql.Named("note", SP(v.Note)), sql.Named("changed_by", SP(v.ChangedBy)),
-		sql.Named("actor", v.Actor), sql.Named("changed_at", T(v.ChangedAt)))
+		sql.Named("actor", v.Actor), sql.Named("changed_at", T(v.ChangedAt)), sql.Named("policy_ref", SP(v.PolicyRef)))
 	return err
 }
 

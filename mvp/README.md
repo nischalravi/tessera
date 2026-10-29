@@ -950,7 +950,7 @@ when a second reviewer is needed) ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
 `POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
-(changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
+(changes take `?dry_run=1`) · `GET /api/policy/roles/export` · `POST /api/policy/roles/validate|plan|apply` (roles and birthright rules as code, below) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
 `GET|POST /api/role-mining/runs` · `GET /api/role-mining/runs/{id}` · `GET /api/role-mining/candidates/{id}` ·
 `POST /api/role-mining/candidates/{id}/accept|dismiss` (role mining, below) ·
 `GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
@@ -1774,6 +1774,37 @@ Changing roles needs `roles.manage` (policy admins) and a fresh phishing-resista
 Members, versions and drift need `graph.read`. The seed creates the demo company's six roles.
 Rule members are seeded only where people already hold every entitlement, so seeding grants
 nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103).
+
+#### Roles as code
+
+Business roles and their birthright rules can live in a policy repository (issue #650, AC-4; design
+`docs/design/access-as-code-repo.md`, `internal/rolesascode`). Each role has a stable **key**
+(`business_roles.key`, unique per tenant, the slug of its name for roles that predate it; the name may change, the
+key does not). A bundle is `tessera.yaml` (`tenant` must equal the signed-in tenant, `manage: {roles: partial}`),
+`roles/<key>.yaml` (`schema: tessera.role/v1`: name, description, `owner` as an identity external id, risk,
+requestable, `entitlements` as `system:name`) and, for a role with a rule, `birthright/<key>.cedar`. A rule is the
+restricted Cedar fragment: `principal.status == "active"` and set tests on `department`, `type` and `title`;
+a condition on `principal.attrs` is an attribute policy the file names with `@abac("<policy name>")`. Anything else
+is refused with a diagnostic.
+
+- `GET /api/policy/roles/export` writes the tenant's active roles as such a bundle; loading it and planning it
+  against the same state changes nothing (the round trip is tested).
+- `POST /api/policy/roles/validate` and `/plan` (`roles.manage`, change nothing) take `{files: {path: text}}`. The plan runs every role through
+  `roles.Create` or `roles.Update` as a dry run, so it is the plan the UI shows for the same change: per role `create`,
+  `update` or `unchanged`, with the member and grant steps and a `plan_sha256` (the first 200 steps of a role are
+  listed, the digest covers all). Findings come back together as `422 invalid_bundle` with `diagnostics` (path,
+  line, code, message).
+- `POST /api/policy/roles/apply` `{commit, files}` plans the bundle and files an admin change request of type
+  `roles.bundle.apply` (`admin.change.request` + step-up). **Every apply takes two people**: a different admin approves
+  what the payload hash names, and the apply plans again in its own transaction and refuses `409 stale_plan` if the
+  plan is not the approved one. Each version it writes carries `policy_ref` `{commit, path, bundle_sha256}`.
+  Audit: `policy.roles.applied` plus each role's own `role.create` or `role.update`.
+- **Large applies are refused outright**, with no override: a plan over `TESSERA_POLICY_MAX_STEPS` grant steps
+  (default 20000) is `413 plan_too_large`, and one whose grant removals pass the deletion guard's `group_members`
+  limit is `409 deletion_guard`. Split the change.
+- v1 is partial mode: roles absent from the bundle are left alone (nothing is retired by a bundle), and
+  `manage.roles: full` is refused. The other kinds in a bundle (JIT, SoD, agents, invariants) are not applied yet.
+  Not yet: the `managed_by` lock on UI edits, one pending apply per tenant, the blast-radius summary (AC-8).
 
 #### Role mining
 

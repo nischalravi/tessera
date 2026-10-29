@@ -34,15 +34,16 @@ func seedRoleRows(t *testing.T, db *store.DB, tn storetest.Tenant, tag string) r
 			return err
 		}
 		uid := r.user.ID.String()
-		if err := c.InsertBusinessRole(&store.BusinessRole{ID: r.role, Name: "Engineer " + tag, Risk: "low",
+		if err := c.InsertBusinessRole(&store.BusinessRole{ID: r.role, Key: "engineer", Name: "Engineer " + tag, Risk: "low",
 			Status: store.RoleActive, Version: 1, CreatedAt: storetest.Now, UpdatedBy: &uid, UpdatedAt: storetest.Now}); err != nil {
 			return err
 		}
 		if err := c.SetRoleEntitlements(r.role, []int64{r.group}); err != nil {
 			return err
 		}
+		ref := `{"commit":"c-` + tag + `"}`
 		if err := c.AddRoleVersion(&store.RoleVersion{RoleID: r.role, Version: 1, Snapshot: "{}", ChangedBy: &uid,
-			Actor: "x", ChangedAt: storetest.Now}); err != nil {
+			Actor: "x", ChangedAt: storetest.Now, PolicyRef: &ref}); err != nil {
 			return err
 		}
 		if err := c.InsertRoleRequest(&store.RoleRequest{ID: r.req, RoleID: r.role, BeneficiaryID: r.alice,
@@ -81,6 +82,16 @@ func TestIsolation_RoleReads(t *testing.T) {
 		}
 		if _, err := c.BusinessRoleByName("Engineer a"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("BusinessRoleByName(A's) = %v", err)
+		}
+		// the same key in two tenants is two roles: each tenant resolves it to its own
+		if r, err := c.BusinessRoleByKey("engineer"); err != nil || r.ID != b.role {
+			t.Errorf("BusinessRoleByKey(engineer) = %v, %v; want B's role", r, err)
+		}
+		if _, err := c.BusinessRoleByKey("nope"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("BusinessRoleByKey(nope) = %v", err)
+		}
+		if vs, err := c.RoleVersions(b.role); err != nil || len(vs) != 1 || vs[0].PolicyRef == nil || *vs[0].PolicyRef != `{"commit":"c-b"}` {
+			t.Errorf("RoleVersions(B's) policy_ref = %v, %v", vs, err)
 		}
 		if es, err := c.AllRoleEntitlements(); err != nil || len(es) != 1 || es[0].RoleID != b.role {
 			t.Errorf("AllRoleEntitlements = %v, %v", es, err)
@@ -252,10 +263,32 @@ func rolesCovered() map[string]bool {
 	for k := range roleMutations {
 		out[k] = true
 	}
-	for _, k := range []string{"BusinessRoles", "BusinessRole", "BusinessRoleByName", "AllRoleEntitlements",
+	for _, k := range []string{"BusinessRoles", "BusinessRole", "BusinessRoleByName", "BusinessRoleByKey", "AllRoleEntitlements",
 		"RoleEntitlements", "RoleVersions", "AllRoleMembers", "RoleMembers", "IdentityRoles", "RoleRequest",
 		"RoleRequests", "EdgesTo"} {
 		out[k] = true // TestIsolation_RoleReads
 	}
 	return out
+}
+
+// A role key is unique within a tenant: a second role with it is refused, a role with no key is not
+// constrained, and the same key in another tenant is fine (roleFixture gives both tenants "engineer").
+func TestIsolation_RoleKeyUniquePerTenant(t *testing.T) {
+	f, _, _ := roleFixture(t)
+	err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		return c.InsertBusinessRole(&store.BusinessRole{ID: "dup", Key: "engineer", Name: "Dup", Risk: "low",
+			Status: store.RoleActive, Version: 1, CreatedAt: storetest.Now, UpdatedAt: storetest.Now})
+	})
+	if err == nil {
+		t.Error("a second role with the key engineer was saved in one tenant")
+	}
+	inA(t, f, func(c *store.TenantTx) error {
+		for _, id := range []string{"n1", "n2"} {
+			if err := c.InsertBusinessRole(&store.BusinessRole{ID: id, Name: "No key " + id, Risk: "low", Status: store.RoleActive,
+				Version: 1, CreatedAt: storetest.Now, UpdatedAt: storetest.Now}); err != nil {
+				t.Errorf("a role without a key was refused: %v", err)
+			}
+		}
+		return nil
+	})
 }

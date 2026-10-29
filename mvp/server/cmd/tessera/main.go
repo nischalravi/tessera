@@ -665,9 +665,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, Agents: agents, AuditAnchor: anchorURL,
 		Siem: siemSvc, Alerts: alertSvc, AWSCatalog: awsCatalogLoader(cfg), AWSHTTP: awsHTTP, AWSAllowStaticKeys: cfg.AWSAllowStaticKeys, LPDisabled: cfg.LPDisable,
-		SoD:          sod.Settings{MaxDays: cfg.SoDMaxMitigationDays, WarnDays: cfg.SoDWarnDays},
-		ClientRate:   api.ClientRate{Burst: cfg.ClientRateBurst, PerMinute: cfg.ClientRatePerMinute},
-		RotationFake: cfg.RotationFakeAdapters, StepUpAllowWeaker: cfg.StepUpAllowWeaker,
+		SoD:            sod.Settings{MaxDays: cfg.SoDMaxMitigationDays, WarnDays: cfg.SoDWarnDays},
+		ClientRate:     api.ClientRate{Burst: cfg.ClientRateBurst, PerMinute: cfg.ClientRatePerMinute},
+		PolicyMaxSteps: cfg.PolicyMaxSteps,
+		RotationFake:   cfg.RotationFakeAdapters, StepUpAllowWeaker: cfg.StepUpAllowWeaker,
 		StepUpBypass: cfg.StepUpBypass})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {

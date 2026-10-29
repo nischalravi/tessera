@@ -198,6 +198,9 @@ type Config struct {
 	// the limit off). A client's own limit (POST /api/admin/api-clients/{id}/rate-limit) replaces it.
 	ClientRateBurst     int
 	ClientRatePerMinute int
+	// PolicyMaxSteps is the most grant steps one roles-as-code apply may make (TESSERA_POLICY_MAX_STEPS,
+	// default 20000); a larger plan is refused with 413 plan_too_large and the author splits it.
+	PolicyMaxSteps int
 	// MetricsAddr is TESSERA_METRICS_ADDR: where the internal /metrics
 	// listener binds (host:port). Empty means no metrics listener. Dev and
 	// test default to MetricsDefaultAddr (loopback); production defaults to
@@ -484,6 +487,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.SoDWarnDays = integer("TESSERA_SOD_WARN_DAYS", 14, 1, 365)
 	c.ClientRateBurst = integer("TESSERA_API_CLIENT_RATE_BURST", 120, 1, 100000)
 	c.ClientRatePerMinute = integer("TESSERA_API_CLIENT_RATE_PER_MINUTE", 600, 0, 600000)
+	c.PolicyMaxSteps = integer("TESSERA_POLICY_MAX_STEPS", 20000, 1, 1000000)
 	// no limit at all on machine clients is a dev and load-test setting; production needs an explicit override
 	if prod && c.ClientRatePerMinute == 0 && !boolean("TESSERA_API_CLIENT_RATE_ALLOW_OFF", false, false) {
 		bad("TESSERA_API_CLIENT_RATE_PER_MINUTE=0 turns machine-client rate limits off, which needs TESSERA_API_CLIENT_RATE_ALLOW_OFF=true with TESSERA_ENV=prod")
