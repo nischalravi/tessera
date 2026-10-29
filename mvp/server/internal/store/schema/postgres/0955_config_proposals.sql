@@ -1,5 +1,7 @@
 -- Postgres variant of 0952_config_proposals.sql (issue #721). The composite foreign key stands in for the
 -- cross-tenant triggers.
+
+-- +goose Up
 CREATE TABLE admin_change_proposals (
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
   change_id TEXT NOT NULL,
