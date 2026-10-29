@@ -196,6 +196,11 @@ POST   /api/lp/revocations/{id}/object               lp.manage          -  # iss
 POST   /api/lp/revocations/{id}/restore              lp.manage          STEP_UP_POLICY  # issue #661 (LP-5: re-grants access, so step-up like LP-4's restore)
 GET    /api/lp/protected                             graph.read         -  # issue #661 (LP-5)
 POST   /api/lp/protected                             lp.manage          -  # issue #661 (LP-5)
+GET    /api/lp/denial-hook                           graph.read         -  # issue #662 (LP-6)
+POST   /api/lp/denial-hook                           lp.manage          STEP_UP_POLICY  # issue #662 (LP-6: creates the secret that can trigger restores)
+GET    /api/lp/denials                               graph.read         -  # issue #662 (LP-6)
+POST   /public/t/{slug}/lp/denials                   public             # issue #662 (LP-6: bearer secret, EventBridge API destination)
+GET    /api/lp/calibration                           graph.read         -  # issue #663 (LP-7)
 POST   /api/aws/changes/{op_id}/restore              provisioning.manage STEP_UP_POLICY  # issue #660 (LP-4: queues the restore of a verified change)
 POST   /api/aws/simulate-policy-change               graph.read         -  # issue #30 (a comment post: connections.manage + STEP_UP_POLICY in the handler)
 GET    /api/aws/shadow                               connections.read   -  # issue #641
