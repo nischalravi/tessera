@@ -333,6 +333,11 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 	if err != nil {
 		return nil, err
 	}
+	if typ.name == TypeConfigProposal && clientID == "" {
+		// a config.proposal is filed only by a machine client through SubmitProposal, which names it; a person's
+		// request of this type would carry the "Proposed by a machine client" label with no client behind it (issue #740)
+		return nil, invalid("type %s is filed by a machine client through POST /api/proposals/...", TypeConfigProposal)
+	}
 	if len(in.Payload) == 0 {
 		return nil, invalid("payload is required")
 	}

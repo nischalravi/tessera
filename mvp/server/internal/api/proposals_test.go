@@ -237,6 +237,11 @@ func TestProposalsAPI_ScopeIsNotRegistrable(t *testing.T) {
 	if rec.Code != 422 || !strings.Contains(rec.Body.String(), "invalid_scopes") {
 		t.Errorf("registering a client with config.propose: %d %s", rec.Code, rec.Body)
 	}
+	// a person cannot file a config.proposal: only a machine client does, through /api/proposals (issue #740)
+	direct := `{"type":"config.proposal","payload":{"kind":"alert_rule","id":"mfa_bypass","body":{"enabled":false,"severity":"low","threshold":1,"window_minutes":60}}}`
+	if rec := serve(e.h, authed(admin, "POST", "/api/admin/change-requests", direct)); rec.Code != 422 {
+		t.Errorf("a person filing a config.proposal: %d %s", rec.Code, rec.Body)
+	}
 	// and the grant refuses a first-party client
 	grant := `{"type":"api_client.propose.grant","payload":{"client_id":"tessera-cli"}}`
 	if rec := serve(e.h, authed(admin, "POST", "/api/admin/change-requests", grant)); rec.Code != 404 && rec.Code != 409 && rec.Code != 422 {
