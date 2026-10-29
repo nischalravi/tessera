@@ -86,6 +86,27 @@ func TestSchemaParity_SQLiteAndPostgres(t *testing.T) {
 	}
 }
 
+// TestPostgresMigrationsAnnotated: goose refuses a migration without "-- +goose Up" and the whole
+// migration then fails, which only a live database showed (issue #736). rls.sql is applied on its own.
+func TestPostgresMigrationsAnnotated(t *testing.T) {
+	ents, err := pgSchemaFS.ReadDir("schema/postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if e.Name() == pgRLSFile || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		b, err := pgSchemaFS.ReadFile("schema/postgres/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !regexp.MustCompile(`(?m)^-- \+goose Up\s*$`).Match(b) {
+			t.Errorf("schema/postgres/%s has no \"-- +goose Up\" line", e.Name())
+		}
+	}
+}
+
 // TestSchemaParity_TenantScoped: the tables with tenant_id are the same in
 // both dialects and exactly the non-global ones, so the generated RLS covers
 // what TestIsolation_EveryTableScopedOrAllowlisted enforces on SQLite.

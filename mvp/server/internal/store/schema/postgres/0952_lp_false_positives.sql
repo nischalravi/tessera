@@ -1,5 +1,7 @@
 -- Postgres variant of 0923_lp_false_positives.sql (issue #663, LP-7). The composite foreign key stands in for the
 -- cross-tenant triggers.
+
+-- +goose Up
 CREATE TABLE lp_false_positives (
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
   id TEXT NOT NULL,
