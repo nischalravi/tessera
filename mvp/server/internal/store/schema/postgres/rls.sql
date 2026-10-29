@@ -2488,6 +2488,13 @@ CREATE POLICY tenant_isolation ON lp_false_positives
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE admin_change_proposals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE admin_change_proposals FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON admin_change_proposals;
+CREATE POLICY tenant_isolation ON admin_change_proposals
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN

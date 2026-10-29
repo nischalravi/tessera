@@ -49,4 +49,6 @@ provider "tessera" {
 - `private_key` (String, Sensitive) The client's PEM private key (ES256 P-256 or EdDSA Ed25519); the matching public key is registered with the client. Env: `TESSERA_PRIVATE_KEY`. Prefer `private_key_file` or the env var over a literal in configuration.
 - `private_key_file` (String) Path to the PEM private key. Env: `TESSERA_PRIVATE_KEY_FILE`. Exactly one of `private_key` and `private_key_file`.
 - `scope` (String) Space-separated scopes to request (`tessera:read`, `tessera:write`, `tessera:audit`). Default: every scope the client holds.
+- `poll_interval` (String) How often a waiting resource asks whether the change was approved, as a duration such as `5s` (at least `100ms`). Default `5s`. Env: `TESSERA_POLL_INTERVAL`.
 - `tenant` (String) The tenant slug. Env: `TESSERA_TENANT`.
+- `wait_timeout` (String) How long a resource that proposes a change (`tessera_alert_rule`, `tessera_catalog_item`, `tessera_business_role`, `tessera_sod_ruleset`) waits for a person to approve it, as a duration such as `30m`. Default `30m`. On a timeout the apply fails with the change's URL; the proposal stays open for 72 hours. Env: `TESSERA_WAIT_TIMEOUT`.

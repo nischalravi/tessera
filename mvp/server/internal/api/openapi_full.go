@@ -143,12 +143,13 @@ func (s *Server) securitySchemes() oamap {
 
 func scopeDescriptions() oamap {
 	return oamap{
-		string(auth.ScopeRead):     "Read the graph, connections, jobs, provisioning and drift.",
-		string(auth.ScopeWrite):    "Change data: requests, reviews, connections, roles, groups, workflows.",
-		string(auth.ScopeAudit):    "Read and verify the audit ledger, alerts and SIEM feeds.",
-		string(auth.ScopeAdmin):    "Administration: change requests, sessions, config transport, break-glass.",
-		string(auth.ScopeEmailDSN): "Deliver mail delivery status reports; nothing else.",
-		oauth.ScopeIntrospect:      "Call the token introspection endpoint.",
+		string(auth.ScopeRead):          "Read the graph, connections, jobs, provisioning and drift.",
+		string(auth.ScopeWrite):         "Change data: requests, reviews, connections, roles, groups, workflows.",
+		string(auth.ScopeAudit):         "Read and verify the audit ledger, alerts and SIEM feeds.",
+		string(auth.ScopeAdmin):         "Administration: change requests, sessions, config transport, break-glass.",
+		string(auth.ScopeEmailDSN):      "Deliver mail delivery status reports; nothing else.",
+		string(auth.ScopeConfigPropose): "Propose configuration changes for a human admin to approve; nothing else. Held only after a two-admin approved grant.",
+		oauth.ScopeIntrospect:           "Call the token introspection endpoint.",
 	}
 }
 

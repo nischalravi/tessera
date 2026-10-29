@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -38,6 +39,8 @@ type providerModel struct {
 	DPoP           types.Bool   `tfsdk:"dpop"`
 	CAFile         types.String `tfsdk:"ca_file"`
 	InsecureTLS    types.Bool   `tfsdk:"insecure_skip_verify"`
+	WaitTimeout    types.String `tfsdk:"wait_timeout"`
+	PollInterval   types.String `tfsdk:"poll_interval"`
 }
 
 func (p *tesseraProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -72,6 +75,15 @@ func (p *tesseraProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 			"ca_file": schema.StringAttribute{Optional: true, Description: "A PEM file of extra trusted CA certificates, for a private PKI. Env: `TESSERA_CA_FILE`."},
 			"insecure_skip_verify": schema.BoolAttribute{Optional: true,
 				Description: "Skip TLS certificate verification. For throwaway test servers only; verification is on by default."},
+			"wait_timeout": schema.StringAttribute{Optional: true,
+				Description: "How long a resource that proposes a change (`tessera_alert_rule`, `tessera_catalog_item`, `tessera_business_role`, " +
+					"`tessera_sod_ruleset`) waits for a person to approve it, as a duration such as `30m`. Default `30m`. On a timeout the apply fails " +
+					"with the change's URL; the proposal stays open for 72 hours. Env: `TESSERA_WAIT_TIMEOUT`.",
+				Validators: []validator.String{durationValidator{min: time.Second}}},
+			"poll_interval": schema.StringAttribute{Optional: true,
+				Description: "How often a waiting resource asks whether the change was approved, as a duration such as `5s` (at least `100ms`). Default `5s`. " +
+					"Env: `TESSERA_POLL_INTERVAL`.",
+				Validators: []validator.String{durationValidator{min: 100 * time.Millisecond}}},
 		},
 	}
 }
@@ -106,6 +118,18 @@ func (p *tesseraProvider) Configure(ctx context.Context, req provider.ConfigureR
 		Scope: m.Scope.ValueString(), CAFile: envOr(m.CAFile, "TESSERA_CA_FILE"),
 		SkipTLSVerify: m.InsecureTLS.ValueBool(), UserAgent: "terraform-provider-tessera/" + p.version,
 		DPoP: m.DPoP.ValueBool() || (m.DPoP.IsNull() && isTrue(os.Getenv("TESSERA_DPOP"))),
+	}
+	for name, d := range map[string]*time.Duration{"wait_timeout": &cfg.WaitTimeout, "poll_interval": &cfg.PollInterval} {
+		raw := envOr(map[string]types.String{"wait_timeout": m.WaitTimeout, "poll_interval": m.PollInterval}[name], "TESSERA_"+strings.ToUpper(name))
+		if raw == "" {
+			continue
+		}
+		v, err := time.ParseDuration(raw)
+		if err != nil || v <= 0 {
+			resp.Diagnostics.AddAttributeError(path.Root(name), "Invalid "+name, "Use a duration such as 30m or 5s.")
+			continue
+		}
+		*d = v
 	}
 	for name, v := range map[string]string{"endpoint": cfg.Endpoint, "tenant": cfg.Tenant, "client_id": cfg.ClientID} {
 		if strings.TrimSpace(v) == "" {
@@ -143,7 +167,8 @@ type attrValue interface{ IsUnknown() bool }
 func isTrue(s string) bool { return s == "1" || strings.EqualFold(s, "true") }
 
 func (p *tesseraProvider) Resources(context.Context) []func() resource.Resource {
-	return []func() resource.Resource{NewReviewScheduleResource}
+	return []func() resource.Resource{NewReviewScheduleResource, NewAlertRuleResource, NewCatalogItemResource, NewBusinessRoleResource,
+		NewSoDRulesetResource}
 }
 
 func (p *tesseraProvider) DataSources(context.Context) []func() datasource.DataSource {
@@ -154,3 +179,19 @@ func (p *tesseraProvider) DataSources(context.Context) []func() datasource.DataS
 func oneOf(v ...string) validator.String { return stringvalidator.OneOf(v...) }
 
 func nonEmptyString() []validator.String { return []validator.String{stringvalidator.LengthAtLeast(1)} }
+
+// durationValidator accepts a Go duration of at least min.
+type durationValidator struct{ min time.Duration }
+
+func (v durationValidator) Description(context.Context) string {
+	return "a duration such as 30m or 5s, at least " + v.min.String()
+}
+func (v durationValidator) MarkdownDescription(ctx context.Context) string { return v.Description(ctx) }
+func (v durationValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	if d, err := time.ParseDuration(req.ConfigValue.ValueString()); err != nil || d < v.min {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid duration", "Use a duration such as 30m or 5s, at least "+v.min.String()+".")
+	}
+}

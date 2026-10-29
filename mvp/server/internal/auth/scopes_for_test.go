@@ -17,7 +17,8 @@ func TestScopesFor(t *testing.T) {
 		{auth.PermAuditRead, []auth.Scope{auth.ScopeAudit}},
 		{auth.PermAdminRead, []auth.Scope{auth.ScopeAdmin}},
 		{auth.PermEmailDSN, []auth.Scope{auth.ScopeEmailDSN}},
-		{auth.PermAuthenticated, []auth.Scope{auth.ScopeRead, auth.ScopeWrite, auth.ScopeAudit, auth.ScopeAdmin, auth.ScopeEmailDSN}},
+		{auth.PermConfigPropose, []auth.Scope{auth.ScopeConfigPropose}},
+		{auth.PermAuthenticated, []auth.Scope{auth.ScopeRead, auth.ScopeWrite, auth.ScopeAudit, auth.ScopeAdmin, auth.ScopeEmailDSN, auth.ScopeConfigPropose}},
 		{auth.Permission("no.such"), nil},
 	} {
 		if got := auth.ScopesFor(tc.perm); !slices.Equal(got, tc.want) {

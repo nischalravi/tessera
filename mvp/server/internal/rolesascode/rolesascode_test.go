@@ -188,6 +188,35 @@ func TestRoundTrip(t *testing.T) {
 	})
 }
 
+// A role granting a group whose name has a space exports to a bundle that loads and plans back as unchanged
+// (issue #729: "workday:AP Clerk" was refused as a reference).
+func TestRoundTripGroupNameWithSpace(t *testing.T) {
+	w := newWorld(t)
+	var gid int64
+	w.tx(func(c *store.TenantTx) error {
+		if err := c.UpsertGroup(&store.Group{TenantID: w.f.B.ID, System: "workday", ExternalID: "ap-clerk", Name: "AP Clerk", Kind: "group"}); err != nil {
+			return err
+		}
+		g, err := c.GroupByXID("workday", "ap-clerk")
+		if err == nil {
+			gid = g.ID
+		}
+		return err
+	})
+	w.create(roles.Spec{Name: "Finance operations", Risk: "high", Entitlements: []int64{gid, w.gid("okta:payments-clerks")}})
+	files := w.export()
+	if _, diags := policybundle.Load(files, nil); len(diags) > 0 {
+		t.Fatalf("the export does not load: %v\n%s", diags, files["roles/finance-operations.yaml"])
+	}
+	p, err := w.plan(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Unchanged != 1 || p.Created+p.Updated != 0 || p.Steps != 0 {
+		t.Fatalf("round trip plan = %+v", p)
+	}
+}
+
 func keys(f policybundle.Files) []string {
 	var out []string
 	for k := range f {

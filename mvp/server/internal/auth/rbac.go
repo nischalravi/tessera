@@ -144,6 +144,10 @@ const (
 	// PermEmailDSN lets a caller post delivery status reports (POST /api/email/dsn). A mailbox collector holds it
 	// through the tessera:email-dsn scope alone, with no role (issue #513).
 	PermEmailDSN Permission = "email.dsn"
+	// PermConfigPropose lets a machine client file a configuration change for a human admin to approve (issue #721).
+	// No role holds it: it comes only from the config.propose scope, which a client gets only through an approved
+	// api_client.propose.grant change (two admins). It never applies a change and never approves one.
+	PermConfigPropose Permission = "config.propose"
 
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
@@ -237,12 +241,20 @@ var rolePermissions = map[Role][]Permission{
 // RolePermissions returns a copy of the permissions of r.
 func RolePermissions(r Role) []Permission { return slices.Clone(rolePermissions[r]) }
 
-// AllPermissions lists every permission granted by some role, plus PermAuthenticated.
+// AllPermissions lists every permission granted by some role or by a scope alone, plus PermAuthenticated.
 func AllPermissions() []Permission {
 	seen := map[Permission]bool{PermAuthenticated: true}
 	out := []Permission{PermAuthenticated}
 	for _, r := range AllRoles() {
 		for _, p := range rolePermissions[r] {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	for _, sc := range []Scope{ScopeEmailDSN, ScopeConfigPropose} {
+		for _, p := range scopeOnlyPermissions[sc] {
 			if !seen[p] {
 				seen[p] = true
 				out = append(out, p)
@@ -310,10 +322,13 @@ const (
 	ScopeAdmin Scope = "tessera:admin"
 	// ScopeEmailDSN is a narrow machine scope: it grants PermEmailDSN and nothing else, and needs no role.
 	ScopeEmailDSN Scope = "tessera:email-dsn"
+	// ScopeConfigPropose is a narrow machine scope: it grants PermConfigPropose and nothing else (issue #721). It is
+	// never registered directly (no UI, CLI or API accepts it for a new client); an approved two-admin change adds it.
+	ScopeConfigPropose Scope = "config.propose"
 )
 
 // scopeOnlyPermissions are granted by a token's scope alone, without a role: effective = (roles ∩ scopes) ∪ these.
-var scopeOnlyPermissions = map[Scope][]Permission{ScopeEmailDSN: {PermEmailDSN}}
+var scopeOnlyPermissions = map[Scope][]Permission{ScopeEmailDSN: {PermEmailDSN}, ScopeConfigPropose: {PermConfigPropose}}
 
 var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead},
@@ -331,7 +346,7 @@ var scopePermissions = map[Scope][]Permission{
 // has none.
 func ScopesFor(p Permission) []Scope {
 	var out []Scope
-	for _, sc := range []Scope{ScopeRead, ScopeWrite, ScopeAudit, ScopeAdmin, ScopeEmailDSN} {
+	for _, sc := range []Scope{ScopeRead, ScopeWrite, ScopeAudit, ScopeAdmin, ScopeEmailDSN, ScopeConfigPropose} {
 		if p == PermAuthenticated || slices.Contains(scopePermissions[sc], p) || slices.Contains(scopeOnlyPermissions[sc], p) {
 			out = append(out, sc)
 		}

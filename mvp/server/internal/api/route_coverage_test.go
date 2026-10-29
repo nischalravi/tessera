@@ -183,6 +183,9 @@ func TestEveryCallAudited(t *testing.T) {
 		if rt.Pattern == "/api/health" || (rt.Method == http.MethodGet && strings.Contains(rt.Pattern, "/.well-known/")) {
 			continue // excluded from http.request (§13.4, audit.DefaultExcluded): TestOAuth_WellKnownNotAudited
 		}
+		if rt.Perm == auth.PermConfigPropose {
+			continue // only a machine token holds config.propose, never a session: TestProposalsAPI_*
+		}
 		t.Run(rt.Method+" "+rt.Pattern, func(t *testing.T) {
 			// a fresh session per route: logout and session revocation end theirs
 			l := signIn(t, f.DB, f.B.ID, linkedAdmin(t, f.DB, f.B.ID, storetest.Now), authtest.Phr, storetest.Now)

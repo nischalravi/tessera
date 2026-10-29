@@ -54,6 +54,10 @@ type Config struct {
 	CAFile        string // extra trusted CA (PEM) for a private PKI
 	SkipTLSVerify bool   // never the default
 	UserAgent     string
+	// WaitTimeout and PollInterval govern how a proposal waits for a person to approve it (zero: DefaultWaitTimeout and
+	// DefaultPollInterval).
+	WaitTimeout  time.Duration
+	PollInterval time.Duration
 }
 
 // APIError is a non-2xx answer.
@@ -78,6 +82,17 @@ func (e *APIError) Error() string {
 func IsNotFound(err error) bool {
 	var ae *APIError
 	return errors.As(err, &ae) && ae.Status == http.StatusNotFound
+}
+
+// IsForbidden reports a 403.
+func IsForbidden(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.Status == http.StatusForbidden
+}
+
+// Waits is how long a proposal waits for approval and how often it polls.
+func (c *Client) Waits() (timeout, interval time.Duration) {
+	return c.cfg.WaitTimeout, c.cfg.PollInterval
 }
 
 // Client is safe for concurrent use (Terraform applies resources in parallel).

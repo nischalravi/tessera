@@ -42,8 +42,22 @@ Checked against the route table and by calling the routes with a machine token:
 | transport package export/import | `/api/config/*` | `config.transport` needs the admin scope and role; import apply needs step-up |
 | group folders and groups (not in the issue) | `/api/groups*` | a machine client holds no group privilege (not even create on the root folder): 403 `privilege_required` |
 
-These are left out rather than faked. They become possible when the server offers a non-interactive path for them (for example an
-approved, scoped machine role for configuration changes, or change requests a person approves); that is a server-side decision.
+Those writes are reached another way: **proposals** (server issue #721). A machine client that holds the `config.propose` scope files a
+change request instead of writing, a person approves it with a step-up sign-in, and only then does the server apply it. The client
+never holds an admin role and never passes a step-up, so it cannot approve or apply anything itself.
+
+* `config.propose` is not a registration option (the UI, the API and `tessera admin add-client` refuse it). Two admins grant it: one files a
+  change request of type `api_client.propose.grant` for the client (admin center, or `POST /api/admin/change-requests`), a different one approves it
+  with a step-up sign-in. The client then gets a new token that carries the scope.
+* A proposal (`POST /api/v1/proposals/...`) is a change request in the existing admin workflow, filed in the name of the client's owner, so the
+  owner cannot approve it either (nor can any admin who is the same person). It answers `202` with a change id and URL, waits at most
+  72 hours, and every submitted, approved and applied event in the audit trail carries the client id.
+* The provider files the proposal and **waits** (provider settings `wait_timeout`, default 30m, and `poll_interval`, default 5s). The resource
+  returns once the change is applied. On a refusal, a withdrawal, an expiry, a failed apply or a timeout, the apply fails with the change id and
+  the URL a person opens; a timed-out proposal stays open, and applying again files a new one. Plan stays read-only.
+* Proposable today: alert rules, catalog items, business roles and SoD rulesets (create and update; the server has no proposal for retire or
+  delete, so destroy only removes the resource from state and warns). Connectors, approval policies, SIEM sinks, transport and group folders
+  stay out.
 
 In:
 
@@ -53,6 +67,10 @@ In:
 | data source | `tessera_identities` | `/api/v1/identities` |
 | data source | `tessera_entitlements` | `/api/v1/groups` |
 | data source | `tessera_connectors` | `/api/v1/connections` (needs the auditor role too) |
+| resource | `tessera_alert_rule` | `/api/v1/proposals/alert-rules/{rule_id}` (needs `config.propose`; read with `tessera:audit` and the auditor role) |
+| resource | `tessera_catalog_item` | `/api/v1/proposals/catalog-items/{group_id}` (needs `config.propose`; no read) |
+| resource | `tessera_business_role` | `/api/v1/proposals/roles` (needs `config.propose`; read with `tessera:read`) |
+| resource | `tessera_sod_ruleset` | `/api/v1/proposals/sod-rulesets` (needs `config.propose`; read with `tessera:read`) |
 
 `tessera_roles` is not offered: the route is refused for tokens. `tessera_review_schedule` supports import (by UUID), plan-time
 validation (ranges, enums, `reminder_days < duration_days`, `escalate` needs a reviewer, RFC 3339 times) and server validation errors
@@ -70,7 +88,8 @@ TF_ACC=1 go test ./internal/provider -run Acc -v             # acceptance tests 
 
 The acceptance tests (`TestAcc_*`) build `../server/cmd/tessera` (or use `TESSERA_BIN`), seed a SQLite database in a temp dir, register
 two machine clients (Bearer and DPoP) with `tessera admin add-client`, start `tessera serve` on a free port from 8400, and stop that
-process by its PID at the end. They drive the provider through the Terraform plugin protocol in process (configure, plan, apply, refresh,
+process by its PID at the end. `TestAcc_Proposals` also builds and starts the dev IdP (`TESSERA_DEVIDP_BIN`) and signs two admins in with a
+passkey, who grant the client `config.propose` and approve, reject or ignore its proposals while the provider waits. They drive the provider through the Terraform plugin protocol in process (configure, plan, apply, refresh,
 import, destroy), so they need no `terraform` binary. `TestAccCLI_ReviewSchedule` runs the same lifecycle through the real `terraform`
 CLI (terraform-plugin-testing); it also needs `TF_ACC=1` and a terraform binary.
 

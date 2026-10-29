@@ -223,7 +223,7 @@ func adminChangeView(tx *store.TenantTx, ch *store.AdminChange, names map[uuid.U
 	if ch.TargetID != "" {
 		target = ch.TargetID
 	}
-	return ojson.Object{{Key: "id", Value: ch.ID.String()}, {Key: "type", Value: ch.Type},
+	out := ojson.Object{{Key: "id", Value: ch.ID.String()}, {Key: "type", Value: ch.Type},
 		{Key: "summary", Value: admin.Summarize(tx, ch, now)}, {Key: "status", Value: ch.Status},
 		{Key: "target_id", Value: target}, {Key: "two_person", Value: ch.TwoPerson},
 		{Key: "cooling_off_seconds", Value: ch.CoolingOffSeconds},
@@ -234,6 +234,11 @@ func adminChangeView(tx *store.TenantTx, ch *store.AdminChange, names map[uuid.U
 		{Key: "applied_at", Value: opt(ch.AppliedAt)}, {Key: "failure", Value: failure},
 		{Key: "test_login_at", Value: opt(ch.TestLoginAt)}, {Key: "payload_hash", Value: ch.PayloadHash},
 		{Key: "payload", Value: payload}}
+	// a change a machine client proposed names the client (issue #721); a person's change has no such key
+	if client, err := tx.AdminChangeProposer(ch.ID); err == nil && client != "" {
+		out = append(out, ojson.KV{Key: "proposed_by_client", Value: client})
+	}
+	return out
 }
 
 func userNames(tx *store.TenantTx) (map[uuid.UUID]string, error) {
