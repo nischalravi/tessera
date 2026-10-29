@@ -82,6 +82,8 @@ var publicRoutes = []string{
 	"POST /api/auth/break-glass/verify",
 	// SSF push delivery (RFC 8935): authenticated by the stream's bearer secret (ssf.go).
 	"POST /public/t/{slug}/ssf/{transmitter_id}/events",
+	// least-privilege loop denial events (LP-6): authenticated by the tenant's bearer secret (lp_denial.go).
+	"POST /public/t/{slug}/lp/denials",
 	"GET /t/{slug}/.well-known/oauth-authorization-server",
 	"GET /t/{slug}/.well-known/jwks.json",
 	"GET /.well-known/oauth-protected-resource",

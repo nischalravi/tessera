@@ -45,6 +45,8 @@ const (
 const (
 	ActorTick = "lp.worker"
 	ActorAuto = "lp.auto"
+	// ActorDenial restores on a denial event (LP-6).
+	ActorDenial = "lp.denial"
 )
 
 // Error is a refusal with the API's status and code.
@@ -482,6 +484,11 @@ func Object(tx *store.TenantTx, now time.Time, actor, id, reason string) (*store
 // until the revocation is finalized, needs no second person and is never blocked by a pause or the operator switch.
 // The payload is refused when its digest is not the one recorded.
 func Restore(tx *store.TenantTx, now time.Time, actor, trigger, id string, ex Executor) (*store.LPRevocation, error) {
+	return restore(tx, now, actor, trigger, "restore requested ("+trigger+")", id, ex)
+}
+
+// restore is Restore with the detail the transition's event records (a denial names its event there).
+func restore(tx *store.TenantTx, now time.Time, actor, trigger, detail, id string, ex Executor) (*store.LPRevocation, error) {
 	r, err := tx.LPRevocation(id)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, refuse(404, "not_found", "no such revocation")
@@ -505,7 +512,7 @@ func Restore(tx *store.TenantTx, now time.Time, actor, trigger, id string, ex Ex
 		return nil, err
 	}
 	r.RestoreOpID, r.RestoreTrigger, r.RestoreRequestedAt = opID, trigger, &now
-	return r, Move(tx, now, r, store.LPRestoring, actor, "restore requested ("+trigger+")")
+	return r, Move(tx, now, r, store.LPRestoring, actor, detail)
 }
 
 // Recheck is what the API found when it computed the right-size again just before the revoke.

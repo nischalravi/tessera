@@ -45,6 +45,7 @@ func (s *Server) registerAWSRoutes() {
 	s.registerAWSRightSizeRoutes()
 	s.registerAWSWriteRoutes()
 	s.registerLPRoutes()
+	s.registerLPDenialRoutes()
 }
 
 func (s *Server) awsService() *awsorg.Service {
