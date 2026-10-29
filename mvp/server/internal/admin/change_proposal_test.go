@@ -306,3 +306,15 @@ func TestProposal_BodyIsCanonical(t *testing.T) {
 		t.Fatalf("the same body spelled two ways gives two payloads:\n%s\n%s", a, b)
 	}
 }
+
+// TestProposal_PersonCannotFileOne: a config.proposal comes only from a machine client (issue #740). A person's request
+// of that type is refused, so the "Proposed by a machine client" label always has a client behind it.
+func TestProposal_PersonCannotFileOne(t *testing.T) {
+	h := newHarness(t)
+	ad := h.admins("adm1", "adm2")
+	payload := `{"kind":"alert_rule","id":"signin_failures","body":` + alertBody + `}`
+	_, err := h.submit(h.as(ad[0]), admin.TypeConfigProposal, payload)
+	wantErr(t, err, http.StatusUnprocessableEntity, "invalid_payload")
+	_, err = h.svc.SubmitChecked(h.ctx, h.as(ad[0]), admin.SubmitInput{Type: admin.TypeConfigProposal, Payload: json.RawMessage(payload)})
+	wantErr(t, err, http.StatusUnprocessableEntity, "invalid_payload")
+}
