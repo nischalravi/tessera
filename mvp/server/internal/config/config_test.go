@@ -1124,6 +1124,17 @@ func TestClientRate(t *testing.T) {
 	if err != nil || c.ClientRateBurst != 10 || c.ClientRatePerMinute != 0 {
 		t.Errorf("set = %d/%d, %v; want 10/0 (off)", c.ClientRateBurst, c.ClientRatePerMinute, err)
 	}
+	if c, err = config.Load(env(dev)); err != nil || c.PolicyMaxSteps != 20000 {
+		t.Errorf("TESSERA_POLICY_MAX_STEPS default = %d, %v; want 20000", c.PolicyMaxSteps, err)
+	}
+	if c, err = config.Load(env(with(dev, "TESSERA_POLICY_MAX_STEPS", "500"))); err != nil || c.PolicyMaxSteps != 500 {
+		t.Errorf("TESSERA_POLICY_MAX_STEPS = %d, %v; want 500", c.PolicyMaxSteps, err)
+	}
+	for _, v := range []string{"0", "-1", "lots", "1000001"} {
+		if _, err := config.Load(env(with(dev, "TESSERA_POLICY_MAX_STEPS", v))); err == nil {
+			t.Errorf("TESSERA_POLICY_MAX_STEPS=%q was accepted", v)
+		}
+	}
 	for k, bad := range map[string][]string{"TESSERA_API_CLIENT_RATE_BURST": {"0", "-1", "many", "100001"},
 		"TESSERA_API_CLIENT_RATE_PER_MINUTE": {"-1", "fast", "600001"}} {
 		for _, v := range bad {

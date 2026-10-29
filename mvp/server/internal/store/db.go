@@ -187,6 +187,10 @@ var tables = []string{
 	"aws_shadow_settings", "aws_shadow_checks", "aws_shadow_triage",
 	// least-privilege loop: settings, staged revocations and their events, protected list, exemptions (schema/0921_lp_revocations.sql)
 	"lp_settings", "lp_revocations", "lp_revocation_events", "lp_protected", "lp_exemptions",
+	// restore on denial: the per-tenant hook secret digest and the denial events (schema/0922_lp_denials.sql)
+	"lp_denial_hooks", "lp_denials",
+	// false positives of the loop, which feed the calibration (schema/0923_lp_false_positives.sql)
+	"lp_false_positives",
 	// AWS usage (schema/0915_aws_usage.sql)
 	"aws_usage_daily", "aws_usage_state", "aws_usage_gaps",
 	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
@@ -511,6 +515,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 		return err
 	}
 	if err := d.upgradeSecurityControls(ctx); err != nil {
+		return err
+	}
+	if err := d.upgradeRoleKeys(ctx); err != nil {
 		return err
 	}
 	files, err := fs.Glob(schemaFS, "schema/*.sql")

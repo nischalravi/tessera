@@ -41,6 +41,16 @@ func (p *Policies) Only(id string) *Policies {
 	return &Policies{set: ps}
 }
 
+// JSON is the policy with the given id in Cedar's JSON policy format, for a
+// caller that compiles a restricted fragment of Cedar (internal/rolesascode).
+func (p *Policies) JSON(id string) ([]byte, error) {
+	pol := p.set.Get(cedar.PolicyID(id))
+	if pol == nil {
+		return nil, errf("unknown_policy", 0, "no policy %q", id)
+	}
+	return pol.MarshalJSON()
+}
+
 // Ref is an entity reference as an attribute value.
 type Ref UID
 

@@ -662,6 +662,9 @@ func TestRestore(t *testing.T) {
 		if ex, err := tx.LPExempted(r.Principal, r.PolicyARN, at.AddDate(0, 0, 179)); err != nil || !ex {
 			t.Errorf("exemption after restore = %v, %v", ex, err)
 		}
+		if ok, err := tx.LPLabelled(r.ID); err != nil || !ok {
+			t.Errorf("a restored revocation is labelled a false positive = %v, %v", ok, err)
+		}
 		if ev := events(t, tx, r.ID); !slices.Contains(ev, "revoked>restoring") || !slices.Contains(ev, "restoring>restored") {
 			t.Errorf("events = %v", ev)
 		}

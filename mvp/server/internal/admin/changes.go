@@ -97,6 +97,9 @@ type Service struct {
 	// WebAuthn runs the break-glass ceremonies (NewWebAuthn). Nil: break-glass
 	// registration and sign-in answer 503 break_glass_unavailable.
 	WebAuthn *webauthn.WebAuthn
+	// PolicyMaxSteps is the most grant steps one roles.bundle.apply may make (TESSERA_POLICY_MAX_STEPS); 0 is
+	// rolesascode.DefaultMaxSteps.
+	PolicyMaxSteps int
 }
 
 func (s *Service) now() time.Time {

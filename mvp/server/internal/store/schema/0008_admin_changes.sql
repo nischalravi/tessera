@@ -69,7 +69,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     -- enabling write-back on a provisioning target takes two admins (internal/admin/change_provision.go, issue #569)
     'provisioning.write_back.enable',
     -- changing the least-privilege loop's mode, caps or kill switch: loosening takes two admins (internal/admin/change_lp.go, issue #661)
-    'lp.settings.update')),
+    'lp.settings.update',
+    -- applying roles and birthright rules from a policy repository takes two admins, always (internal/admin/change_roles_bundle.go, issue #650)
+    'roles.bundle.apply')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

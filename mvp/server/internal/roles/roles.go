@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -51,6 +52,7 @@ const (
 	MaxDescription  = 2000
 	MaxEntitlements = 100
 	MaxRuleValues   = 50
+	MaxPolicyRef    = 1024
 	MaxReason       = requests.MaxReason
 	MaxJustify      = requests.MaxJustification
 )
@@ -103,6 +105,9 @@ func (r *Rule) normalized() *Rule {
 	}
 	return n
 }
+
+// Normalized is the rule with its lists trimmed, de-duplicated and sorted; nil when it has no condition.
+func (r *Rule) Normalized() *Rule { return r.normalized() }
 
 // Matches reports whether the identity is active and matches every list. A
 // rule that names a policy never matches here (use Match with its condition).
@@ -157,6 +162,9 @@ func ruleJSON(r *Rule) (*string, error) {
 
 // Spec is a role's editable content.
 type Spec struct {
+	// Key is the role's stable key in a policy repository (issue #650). Create takes it, or the slug of the
+	// name when empty; Update refuses a different one (a key never changes).
+	Key             string
 	Name            string
 	Description     string
 	OwnerIdentityID *int64
@@ -165,7 +173,13 @@ type Spec struct {
 	Birthright      *Rule
 	Entitlements    []int64 // group ids
 	Note            string  // why the change was made (kept in the version)
+	// PolicyRef is the JSON {commit, path, bundle_sha256} of the repository change that makes this one; it is
+	// kept in the version. Empty for a change made in the UI or API.
+	PolicyRef string
 }
+
+// KeyPattern is what a role key looks like (the policy repository's key pattern).
+var KeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`)
 
 func (w *world) validate(s *Spec, selfID string) error {
 	s.Name, s.Description, s.Note = strings.TrimSpace(s.Name), strings.TrimSpace(s.Description), strings.TrimSpace(s.Note)
@@ -200,6 +214,20 @@ func (w *world) validate(s *Spec, selfID string) error {
 		for _, t := range r.Type {
 			if !slices.Contains(requests.IdentityTypes, t) {
 				return refuse(422, "invalid_rule", "unknown identity type %q", t)
+			}
+		}
+	}
+	s.Key = strings.TrimSpace(s.Key)
+	if s.Key != "" && !KeyPattern.MatchString(s.Key) {
+		return refuse(422, "invalid_key", "a role key is 1 to %d letters, digits, '.', '_', ':' or '-'", store.RoleKeyMax)
+	}
+	if len(s.PolicyRef) > MaxPolicyRef {
+		return refuse(422, "invalid_policy_ref", "the policy reference is at most %d bytes", MaxPolicyRef)
+	}
+	if s.Key != "" {
+		for _, o := range w.roles {
+			if o.Key == s.Key && o.ID != selfID {
+				return refuse(409, "key_taken", "a role with the key %q exists", s.Key)
 			}
 		}
 	}
@@ -794,7 +822,7 @@ func Snapshot(r *store.BusinessRole, ents []int64) (string, error) {
 	return string(b), err
 }
 
-func (w *world) version(r *store.BusinessRole, note string, by Actor) error {
+func (w *world) version(r *store.BusinessRole, note, policyRef string, by Actor) error {
 	snap, err := Snapshot(r, w.ents[r.ID])
 	if err != nil {
 		return err
@@ -803,8 +831,12 @@ func (w *world) version(r *store.BusinessRole, note string, by Actor) error {
 	if note != "" {
 		n = &note
 	}
+	var ref *string
+	if policyRef != "" {
+		ref = &policyRef
+	}
 	return w.tx.AddRoleVersion(&store.RoleVersion{RoleID: r.ID, Version: r.Version, Snapshot: snap, Note: n,
-		ChangedBy: uidp(by), Actor: by.Display, ChangedAt: w.now})
+		ChangedBy: uidp(by), Actor: by.Display, ChangedAt: w.now, PolicyRef: ref})
 }
 
 func roleDetail(r *store.BusinessRole, p *Plan) ojson.Object {
@@ -826,7 +858,17 @@ func Create(tx *store.TenantTx, s Spec, by Actor, dryRun bool, now time.Time) (*
 	if err != nil {
 		return nil, err
 	}
-	r := &store.BusinessRole{ID: uuid.NewString(), Name: s.Name, Description: s.Description, OwnerIdentityID: s.OwnerIdentityID,
+	if s.Key == "" {
+		s.Key = store.RoleKeySlug(s.Name, func(k string) bool {
+			for _, o := range w.roles {
+				if o.Key == k {
+					return true
+				}
+			}
+			return false
+		})
+	}
+	r := &store.BusinessRole{ID: uuid.NewString(), Key: s.Key, Name: s.Name, Description: s.Description, OwnerIdentityID: s.OwnerIdentityID,
 		Risk: s.Risk, Requestable: s.Requestable, Birthright: rule, Status: store.RoleActive, Version: 1, CreatedAt: now,
 		UpdatedBy: uidp(by), UpdatedAt: now}
 	w.roles[r.ID], w.ents[r.ID] = r, s.Entitlements
@@ -851,7 +893,7 @@ func Create(tx *store.TenantTx, s Spec, by Actor, dryRun bool, now time.Time) (*
 	if err := w.finish(before, p); err != nil {
 		return nil, err
 	}
-	if err := w.version(r, s.Note, by); err != nil {
+	if err := w.version(r, s.Note, s.PolicyRef, by); err != nil {
 		return nil, err
 	}
 	return w.result(r, p), tx.Audit(now, by.Display, "role.create", roleDetail(r, p))
@@ -890,6 +932,10 @@ func Update(tx *store.TenantTx, id string, version int, s Spec, by Actor, dryRun
 	if version != old.Version {
 		return nil, refuse(409, "version_conflict", "the role changed since version %d (now %d); reload it", version, old.Version)
 	}
+	if s.Key != "" && old.Key != "" && strings.TrimSpace(s.Key) != old.Key {
+		return nil, refuse(422, "key_immutable", "the key of role %s is %q and does not change", old.Name, old.Key)
+	}
+	s.Key = ""
 	if err := w.validate(&s, id); err != nil {
 		return nil, err
 	}
@@ -930,7 +976,7 @@ func Update(tx *store.TenantTx, id string, version int, s Spec, by Actor, dryRun
 	if err := w.finish(before, p); err != nil {
 		return nil, err
 	}
-	if err := w.version(&r, s.Note, by); err != nil {
+	if err := w.version(&r, s.Note, s.PolicyRef, by); err != nil {
 		return nil, err
 	}
 	return w.result(&r, p), tx.Audit(now, by.Display, "role.update", roleDetail(&r, p))
@@ -996,7 +1042,7 @@ func Retire(tx *store.TenantTx, id, reason string, by Actor, dryRun bool, now ti
 			return nil, err
 		}
 	}
-	if err := w.version(&r, *rp, by); err != nil {
+	if err := w.version(&r, *rp, "", by); err != nil {
 		return nil, err
 	}
 	d := append(roleDetail(&r, p), ojson.KV{Key: "reason", Value: *rp}, ojson.KV{Key: "requests_denied", Value: len(pend)})

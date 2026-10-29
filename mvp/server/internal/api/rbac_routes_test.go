@@ -196,6 +196,11 @@ POST   /api/lp/revocations/{id}/object               lp.manage          -  # iss
 POST   /api/lp/revocations/{id}/restore              lp.manage          STEP_UP_POLICY  # issue #661 (LP-5: re-grants access, so step-up like LP-4's restore)
 GET    /api/lp/protected                             graph.read         -  # issue #661 (LP-5)
 POST   /api/lp/protected                             lp.manage          -  # issue #661 (LP-5)
+GET    /api/lp/denial-hook                           graph.read         -  # issue #662 (LP-6)
+POST   /api/lp/denial-hook                           lp.manage          STEP_UP_POLICY  # issue #662 (LP-6: creates the secret that can trigger restores)
+GET    /api/lp/denials                               graph.read         -  # issue #662 (LP-6)
+POST   /public/t/{slug}/lp/denials                   public             # issue #662 (LP-6: bearer secret, EventBridge API destination)
+GET    /api/lp/calibration                           graph.read         -  # issue #663 (LP-7)
 POST   /api/aws/changes/{op_id}/restore              provisioning.manage STEP_UP_POLICY  # issue #660 (LP-4: queues the restore of a verified change)
 POST   /api/aws/simulate-policy-change               graph.read         -  # issue #30 (a comment post: connections.manage + STEP_UP_POLICY in the handler)
 GET    /api/aws/shadow                               connections.read   -  # issue #641
@@ -322,6 +327,10 @@ POST   /api/roles/{role_id}/members/{identity_id}/remove roles.manage STEP_UP_PO
 GET    /api/roles/{role_id}/exclusions               graph.read      -  # issue #214
 POST   /api/roles/{role_id}/exclusions/{identity_id}/remove roles.manage STEP_UP_POLICY  # issue #214
 GET    /api/roles/{role_id}/flags                    graph.read      -  # issue #214
+GET    /api/policy/roles/export                      graph.read      -  # issue #650 (AC-4)
+POST   /api/policy/roles/validate                    roles.manage    -  # issue #650 (AC-4: changes nothing)
+POST   /api/policy/roles/plan                        roles.manage    -  # issue #650 (AC-4: changes nothing)
+POST   /api/policy/roles/apply                       admin.change.request  STEP_UP_ADMIN  # issue #650 (AC-4: files a roles.bundle.apply change request; a different admin approves)
 GET    /api/abac/policies                            graph.read      -  # issue #162
 POST   /api/abac/policies                            roles.manage    STEP_UP_POLICY  # issue #162
 GET    /api/abac/policies/{policy_id}                graph.read      -  # issue #162
