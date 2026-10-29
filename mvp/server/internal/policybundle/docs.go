@@ -28,8 +28,10 @@ const (
 const maxJitHours = 72
 
 var (
-	keyRE  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`)
-	entRE  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*:[^\s:][^\s]*$`)
+	keyRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`)
+	// entRE is a system:name group reference. The name may hold spaces ("workday:AP Clerk", issue #729) but no
+	// control character, and does not start or end with whitespace.
+	entRE  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*:[^\s:](?:[^\x00-\x1f\x7f]*[^\s])?$`)
 	slugRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 )
 
