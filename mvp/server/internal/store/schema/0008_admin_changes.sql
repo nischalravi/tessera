@@ -71,7 +71,10 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     -- changing the least-privilege loop's mode, caps or kill switch: loosening takes two admins (internal/admin/change_lp.go, issue #661)
     'lp.settings.update',
     -- applying roles and birthright rules from a policy repository takes two admins, always (internal/admin/change_roles_bundle.go, issue #650)
-    'roles.bundle.apply')),
+    'roles.bundle.apply',
+    -- a config write proposed by a machine client holding config.propose, and the two-admin grant of that scope
+    -- (internal/admin/change_proposal.go, issue #721)
+    'config.proposal','api_client.propose.grant')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

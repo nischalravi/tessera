@@ -286,6 +286,8 @@ var tables = []string{
 	"agent_blueprints", "agent_links",
 	// per-client API rate limit overrides (schema/0913_api_client_limits.sql)
 	"api_client_limits",
+	// the machine client that proposed a config change request (schema/0952_config_proposals.sql)
+	"admin_change_proposals",
 	// MCP resource bindings to an issuer and audience (schema/0700_mcp_resource_bindings.sql)
 	"mcp_resource_bindings",
 	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)

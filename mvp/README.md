@@ -55,9 +55,21 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
   same address (issue #608).
 * Terraform provider (issue #719): `terraform-provider-tessera/` is a separate Go module (no dependency on `server/`) that signs in as a
   machine client (client credentials, private-key JWT, optional DPoP) and manages `tessera_review_schedule` plus the `tessera_identities`,
-  `tessera_entitlements` and `tessera_connectors` data sources. What a machine client cannot change non-interactively (connectors,
-  catalog, roles, SoD, workflows, alerts, SIEM, transport) is left out; see its `README.md`. Tests: `cd terraform-provider-tessera && go test ./...`,
+  `tessera_entitlements` and `tessera_connectors` data sources, and, through config proposals (issue #721), `tessera_alert_rule`,
+  `tessera_catalog_item`, `tessera_business_role` and `tessera_sod_ruleset`; see its `README.md`. Tests: `cd terraform-provider-tessera && go test ./...`,
   and `TF_ACC=1 go test ./internal/provider -run Acc` against a real `tessera serve`.
+* Config proposals by machine clients (issue #721): a machine client never holds an admin role and can never pass a step-up, so it cannot write
+  configuration. With the `config.propose` scope it can instead *propose* a change, and a person approves it. The scope is not a registration
+  option (the UI, the API and `tessera admin add-client` refuse it); two admins grant it with a change request of type `api_client.propose.grant`
+  (`POST /api/admin/change-requests`; one requests, a different one approves, both with a step-up). Then:
+  `POST /api/proposals/catalog-items/{group_id}`, `/roles[/{role_id}]`, `/sod-rulesets[/{ruleset_id}]` and `/alert-rules/{rule_id}` take the body of
+  the matching write route and answer `202 {change_id, status, url, payload_hash}`; `GET /api/proposals/{change_id}` (the client's own proposals only)
+  returns the status (`pending_approval`, `applied`, `rejected`, `cancelled`, `expired`, `failed`), `failure` and `result_id`. A proposal is an ordinary
+  `config.proposal` change request (two-person, no cooling-off, 72 hour window) filed in the name of the client's owner, so neither the client nor its owner
+  can approve it; an admin approves it at `POST /api/admin/change-requests/{id}/approve` (`admin.change.approve`, fresh step-up, echoing the payload hash)
+  and only then is it applied, with the approving admin as the actor of the domain event. Every `admin.change.*` event of a proposal carries `client_id`,
+  and the admin view shows `proposed_by_client`. Table `admin_change_proposals` (schema `0952`) names the client. Not proposable yet: retiring or
+  deleting anything, SoD risks and functions, connectors, workflows, SIEM, transport.
 * Dev IdP: http://127.0.0.1:8001 (see [Signing in](#signing-in))
 
 Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`

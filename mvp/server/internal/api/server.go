@@ -647,6 +647,7 @@ func New(cfg Config) *Server {
 	s.registerAdminRoutes()
 	s.registerBreakGlassRoutes()
 	s.registerAdminClientRoutes()
+	s.registerProposalRoutes()
 	s.registerClientLimitRoutes()
 	s.registerOpsRoutes()
 	s.checkPublicRoutes()

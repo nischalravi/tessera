@@ -34,6 +34,7 @@ type testServer struct {
 	DPoPID    string // a client that requires DPoP
 	KeyID     string
 	DataDir   string
+	IdPURL    string // the dev IdP, when the server was started with one (startTestServerWithIdP)
 	serveProc *exec.Cmd
 }
 
@@ -69,7 +70,13 @@ func run(t *testing.T, env []string, name string, args ...string) string {
 	return out.String()
 }
 
-func startTestServer(t *testing.T) *testServer {
+func startTestServer(t *testing.T) *testServer { return startServer(t, false) }
+
+// startTestServerWithIdP also starts the dev IdP (tessera-devidp, on a free port from 8400), so a test can sign people in:
+// the proposals need a person to approve them with a step-up sign-in.
+func startTestServerWithIdP(t *testing.T) *testServer { return startServer(t, true) }
+
+func startServer(t *testing.T, withIdP bool) *testServer {
 	t.Helper()
 	requireAcc(t)
 	dir := t.TempDir()
@@ -86,9 +93,17 @@ func startTestServer(t *testing.T) *testServer {
 			t.Fatalf("building the server: %v\n%s", err, out)
 		}
 	}
+	idpURL := ""
+	if withIdP {
+		idpURL = startDevIdP(t, dir)
+	}
 	port := freePort(t)
-	ts := &testServer{URL: fmt.Sprintf("http://127.0.0.1:%d", port), Tenant: "larkspur", KeyID: "tf-test", DataDir: dir}
+	ts := &testServer{URL: fmt.Sprintf("http://127.0.0.1:%d", port), Tenant: "larkspur", KeyID: "tf-test", DataDir: dir, IdPURL: idpURL}
 	env := []string{"TESSERA_ENV=dev", "TESSERA_PUBLIC_URL=" + ts.URL}
+	if idpURL != "" {
+		// people sign in over plain http on loopback: the insecure-cookie fallback exists for that (dev and localhost only)
+		env = append(env, "TESSERA_DEV_IDP_URL="+idpURL, "TESSERA_COOKIE_SECURE=false")
+	}
 	db := filepath.Join(dir, "tessera.db")
 
 	// the client's key pair: only the public half is registered
@@ -156,4 +171,54 @@ func startTestServer(t *testing.T) *testServer {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return ts
+}
+
+// startDevIdP builds (or uses TESSERA_DEVIDP_BIN) and starts the dev IdP on a free port, and stops that process by its own handle.
+func startDevIdP(t *testing.T, dir string) string {
+	t.Helper()
+	bin := os.Getenv("TESSERA_DEVIDP_BIN")
+	if bin == "" {
+		bin = filepath.Join(dir, "tessera-devidp")
+		serverDir, err := filepath.Abs("../../../server")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("go", "build", "-o", bin, "./cmd/tessera-devidp") // #nosec G204
+		cmd.Dir = serverDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("building the dev IdP: %v\n%s", err, out)
+		}
+	}
+	port := freePort(t)
+	url := fmt.Sprintf("http://127.0.0.1:%d", port)
+	logFile, err := os.Create(filepath.Join(dir, "devidp.log")) // #nosec G304 -- a temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "-addr", fmt.Sprintf("127.0.0.1:%d", port), "-issuer", url, "-key-dir", filepath.Join(dir, "devidp")) // #nosec G204
+	cmd.Env = append(os.Environ(), "TESSERA_ENV=dev")
+	cmd.Stdout, cmd.Stderr = logFile, logFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill() // this test's own process, by handle
+		_, _ = cmd.Process.Wait()
+		_ = logFile.Close()
+	})
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		res, err := http.Get(url + "/.well-known/openid-configuration") // #nosec G107 G704 -- loopback test server
+		if err == nil {
+			_ = res.Body.Close()
+			if res.StatusCode == http.StatusOK {
+				return url
+			}
+		}
+		if time.Now().After(deadline) {
+			log, _ := os.ReadFile(logFile.Name())
+			t.Fatalf("the dev IdP did not start:\n%s", log)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

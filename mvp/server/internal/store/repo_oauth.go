@@ -32,6 +32,8 @@ var (
 		UPDATE api_clients SET approved_by = @approved_by WHERE tenant_id = @tenant AND client_id = @client_id AND kind = 'machine'`)
 	clientsSetStatus = tq("api_clients.set_status", `
 		UPDATE api_clients SET status = @status WHERE tenant_id = @tenant AND client_id = @client_id AND kind = 'machine'`)
+	clientsAddScope = tq("api_clients.add_scope", `
+		UPDATE api_clients SET allowed_scopes = @allowed_scopes WHERE tenant_id = @tenant AND client_id = @client_id AND kind = 'machine'`)
 	clientsTouch = tq("api_clients.touch", `
 		UPDATE api_clients SET last_used_at = @at WHERE tenant_id = @tenant AND client_id = @client_id`)
 )
@@ -141,6 +143,16 @@ func (tx *TenantTx) SetAPIClientApprover(clientID, approvedBy string) error {
 // disabled client gets no new token, and the tokens it holds stop working at once.
 func (tx *TenantTx) SetAPIClientStatus(clientID, status string) error {
 	return tx.execOne(clientsSetStatus, sql.Named("status", status), sql.Named("client_id", clientID))
+}
+
+// SetAPIClientScopes replaces the scopes this tenant's machine client may be granted (ErrNotFound as for SetAPIClientKeys).
+// Only the two-admin config.propose grant (internal/admin) calls it.
+func (tx *TenantTx) SetAPIClientScopes(clientID string, scopes []string) error {
+	list, err := jsonList(scopes)
+	if err != nil {
+		return err
+	}
+	return tx.execOne(clientsAddScope, sql.Named("allowed_scopes", list), sql.Named("client_id", clientID))
 }
 
 // TouchAPIClient records a use of the client.
