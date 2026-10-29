@@ -57,6 +57,10 @@ var (
 func ensureWithinCreator(r *http.Request, roles, scopes []string) error {
 	_, active, _ := auth.MachineRoles(roles)
 	want := auth.EffectivePermissions(&auth.Principal{ActiveRoles: active, Scopes: auth.ScopeSetOf(scopes)})
+	// config.propose is vouched for by its own two-admin grant (api_client.propose.grant), as in auth.ClientExceedsApprover:
+	// no person holds it, so without this nobody could rotate a proposer client's keys (issue #739). Registration still
+	// refuses the scope (machineClientScopes).
+	delete(want, auth.PermConfigPropose)
 	have := auth.EffectivePermissions(principal(r))
 	var missing []string
 	for _, p := range want.Sorted() {
