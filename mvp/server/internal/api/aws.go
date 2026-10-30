@@ -47,6 +47,7 @@ func (s *Server) registerAWSRoutes() {
 	s.registerLPRoutes()
 	s.registerLPDenialRoutes()
 	s.registerLPJITRoutes()
+	s.registerLPEvidenceRoutes()
 }
 
 func (s *Server) awsService() *awsorg.Service {

@@ -280,6 +280,16 @@ func TestLPAPI_CrossTenant(t *testing.T) {
 	if rec := b("GET", "/api/lp/revocations", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"items":[]`) {
 		t.Errorf("B list = %d %s", rec.Code, rec.Body.String())
 	}
+	// the evidence of LP-10: A reads its own, B gets a 404 for it and an empty export
+	if rec := a("GET", "/api/lp/revocations/"+id+"/evidence", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"revocation_id":"`+id+`"`) {
+		t.Errorf("A evidence = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := b("GET", "/api/lp/revocations/"+id+"/evidence", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("B evidence of A's = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := b("GET", "/api/lp/evidence?from=2026-01-01&to=2027-01-01", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"items":[]`) {
+		t.Errorf("B evidence export = %d %s", rec.Code, rec.Body.String())
+	}
 	if rec := a("GET", "/api/lp/revocations/"+id, ""); !strings.Contains(rec.Body.String(), `"state":"candidate"`) {
 		t.Errorf("A's revocation changed: %s", rec.Body.String())
 	}

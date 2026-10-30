@@ -112,20 +112,22 @@ func (tx *TenantTx) LPDenials(limit int) ([]*LPDenial, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	return collect(tx, func(s scanner) (*LPDenial, error) {
-		var d LPDenial
-		var occurred sql.NullString
-		var arrived string
-		if err := s.Scan(&d.ID, &d.Source, &d.EventID, &d.Principal, &d.Action, &d.Resource, &occurred, &arrived, &d.Outcome, &d.RevocationID, &d.Detail); err != nil {
-			return nil, err
-		}
-		var err error
-		if d.OccurredAt, err = rtp(occurred); err != nil {
-			return nil, err
-		}
-		d.ArrivedAt, err = ParseRT(arrived)
-		return &d, err
-	}, lpDenialList, sql.Named("limit", limit))
+	return collect(tx, scanLPDenial, lpDenialList, sql.Named("limit", limit))
+}
+
+func scanLPDenial(s scanner) (*LPDenial, error) {
+	var d LPDenial
+	var occurred sql.NullString
+	var arrived string
+	if err := s.Scan(&d.ID, &d.Source, &d.EventID, &d.Principal, &d.Action, &d.Resource, &occurred, &arrived, &d.Outcome, &d.RevocationID, &d.Detail); err != nil {
+		return nil, err
+	}
+	var err error
+	if d.OccurredAt, err = rtp(occurred); err != nil {
+		return nil, err
+	}
+	d.ArrivedAt, err = ParseRT(arrived)
+	return &d, err
 }
 
 // LPRevokedForPrincipal lists the revoked (not yet final) revocations of one principal: the ones a denial can restore.
