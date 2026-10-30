@@ -26,7 +26,65 @@ func lpCovered() map[string]bool {
 		"InsertLPFalsePositive": true, "LPLabelled": true, "LPCalibration": true, "LPRevokedForGrant": true,
 		// the automatic policy (schema/0953, TestIsolation_LPAutoPolicy)
 		"LPAutoPolicy": true, "PutLPAutoPolicy": true, "LPApprovedBySince": true,
+		// evidence and metrics reads (issue #666, TestIsolation_LPEvidenceReads)
+		"LPExecutedBetween": true, "LPFalsePositive": true, "LPDenialsFor": true,
 	}
+}
+
+// The evidence reads (issue #666) see only the tenant's own rows: the same revocation id exists in both tenants, and
+// what A executed, labelled and was denied is not B's.
+func TestIsolation_LPEvidenceReads(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	at := storetest.Now.Add(time.Hour)
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			r := lpRev("rev-1", "arn:aws:iam::111122223333:role/"+tn.Slug)
+			if err := c.InsertLPRevocation(r); err != nil {
+				return err
+			}
+			if tn.Slug != f.A.Slug { // only A executed, labelled and was denied
+				return nil
+			}
+			r.State, r.ExecutedAt = store.LPRevoked, &at
+			if err := c.UpdateLPRevocation(r, store.LPCandidate, at); err != nil {
+				return err
+			}
+			if err := c.InsertLPFalsePositive(&store.LPFalsePositive{RevocationID: "rev-1", Source: "denial", Principal: r.Principal,
+				PolicyARN: r.PolicyARN, Confidence: "high", CreatedAt: at}); err != nil {
+				return err
+			}
+			return c.InsertLPDenial(&store.LPDenial{Source: store.LPDenialCloudTrail, EventID: "evt-1", Principal: r.Principal, Action: "s3:GetObject",
+				ArrivedAt: at, Outcome: store.LPDenialRestoreRequested, RevocationID: "rev-1"})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		if rs, err := c.LPExecutedBetween(storetest.Now, at.Add(time.Hour), 0); err != nil || len(rs) != 1 {
+			t.Errorf("A's executed = %d, %v", len(rs), err)
+		}
+		if fp, err := c.LPFalsePositive("rev-1"); err != nil || fp.Source != "denial" {
+			t.Errorf("A's label = %+v, %v", fp, err)
+		}
+		if ds, err := c.LPDenialsFor("rev-1"); err != nil || len(ds) != 1 {
+			t.Errorf("A's denials = %d, %v", len(ds), err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if rs, err := c.LPExecutedBetween(storetest.Now, at.Add(time.Hour), 0); err != nil || len(rs) != 0 {
+			t.Errorf("B sees %d of A's executed revocations, %v", len(rs), err)
+		}
+		if _, err := c.LPFalsePositive("rev-1"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("B reads A's label: %v", err)
+		}
+		if ds, err := c.LPDenialsFor("rev-1"); err != nil || len(ds) != 0 {
+			t.Errorf("B sees %d of A's denials, %v", len(ds), err)
+		}
+		return nil
+	})
 }
 
 // The denial tables (schema/0922, issue #662): the hook credential and the denial events are a tenant's own. The

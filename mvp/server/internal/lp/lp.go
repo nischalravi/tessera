@@ -110,6 +110,14 @@ func Move(tx *store.TenantTx, now time.Time, r *store.LPRevocation, to, actor, d
 	if detail != "" {
 		d = append(d, ojson.KV{Key: "detail", Value: detail})
 	}
+	if to == store.LPRevoked || to == store.LPFinalized || to == store.LPRestored {
+		// LP-10: the digest of the evidence record as of this transition, so the export can be checked against the chain
+		ev, err := EvidenceFor(tx, r.ID)
+		if err != nil {
+			return err
+		}
+		d = append(d, ojson.KV{Key: "evidence_sha256", Value: ev.SHA256})
+	}
 	return tx.Audit(now, actor, "lp.revocation."+to, d)
 }
 
@@ -605,16 +613,17 @@ func Run(tx *store.TenantTx, now time.Time, ex Executor, disabled bool, rechecks
 		switch st {
 		case opVerified:
 			r.RestoredAt = &now
+			// a restored grant feeds the calibration, once per revocation (a JIT request may have labelled it already);
+			// labelled before the move so the evidence digest of the audit event covers the label (LP-10)
+			if _, err := LabelFalsePositive(tx, now, r, r.RestoreTrigger, r.RestoreOpID); err != nil {
+				return nil, err
+			}
 			if err := Move(tx, now, r, store.LPRestored, ActorTick, "verified by re-reading the target"); err != nil {
 				return nil, err
 			}
 			// a restored grant was a false positive: it is not proposed again for 180 days
 			if err := tx.InsertLPExemption(&store.LPExemption{Principal: r.Principal, PolicyARN: r.PolicyARN, Source: store.LPExemptRestore,
 				Reason: "restored (" + r.RestoreTrigger + ")", RevocationID: r.ID, Until: now.AddDate(0, 0, ExemptionDays), CreatedBy: ActorTick, CreatedAt: now}); err != nil {
-				return nil, err
-			}
-			// and it feeds the calibration, once per revocation (a JIT request may have labelled it already)
-			if _, err := LabelFalsePositive(tx, now, r, r.RestoreTrigger, r.RestoreOpID); err != nil {
 				return nil, err
 			}
 			t.Restored++
