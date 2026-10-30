@@ -201,6 +201,9 @@ POST   /api/lp/denial-hook                           lp.manage          STEP_UP_
 GET    /api/lp/denials                               graph.read         -  # issue #662 (LP-6)
 POST   /public/t/{slug}/lp/denials                   public             # issue #662 (LP-6: bearer secret, EventBridge API destination)
 GET    /api/lp/calibration                           graph.read         -  # issue #663 (LP-7)
+GET    /api/lp/auto-policy                           graph.read         -  # issue #664 (LP-8)
+POST   /api/lp/auto-policy/validate                  lp.manage          -  # issue #664 (LP-8: changes nothing)
+POST   /api/lp/auto-policy/apply                     admin.change.request  STEP_UP_ADMIN  # issue #664 (LP-8: files an lp.auto_policy.apply change request; a different admin approves)
 POST   /api/aws/changes/{op_id}/restore              provisioning.manage STEP_UP_POLICY  # issue #660 (LP-4: queues the restore of a verified change)
 POST   /api/aws/simulate-policy-change               graph.read         -  # issue #30 (a comment post: connections.manage + STEP_UP_POLICY in the handler)
 GET    /api/aws/shadow                               connections.read   -  # issue #641

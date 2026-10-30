@@ -24,6 +24,8 @@ func lpCovered() map[string]bool {
 		"LPRevokedForPrincipal": true,
 		// false positives (schema/0923, TestIsolation_LPFalsePositives)
 		"InsertLPFalsePositive": true, "LPLabelled": true, "LPCalibration": true, "LPRevokedForGrant": true,
+		// the automatic policy (schema/0953, TestIsolation_LPAutoPolicy)
+		"LPAutoPolicy": true, "PutLPAutoPolicy": true, "LPApprovedBySince": true,
 	}
 }
 
