@@ -315,6 +315,44 @@ func Validate(tx *store.TenantTx, files policybundle.Files, opt Options) error {
 	return err
 }
 
+// Proposed is the set of active scopes the tenant would hold after the bundle is applied: the stored active
+// scopes, those the bundle writes in their place, and (full mode) without those it retires. Sorted by key. It writes
+// nothing; run it in a read transaction.
+func Proposed(tx *store.TenantTx, files policybundle.Files, opt Options) ([]*agentscope.Doc, error) {
+	p, err := prepare(tx, files, opt)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.AgentScopes()
+	if err != nil {
+		return nil, err
+	}
+	docs := map[string]*agentscope.Doc{}
+	for _, r := range rows {
+		if r.Status != store.AgentScopeActive {
+			continue
+		}
+		d, err := agentscope.FromJSON(r.Doc)
+		if err != nil {
+			return nil, err
+		}
+		docs[r.Key] = d
+	}
+	for _, it := range p.items {
+		if it.doc == nil {
+			delete(docs, it.key)
+		} else {
+			docs[it.key] = it.doc
+		}
+	}
+	out := make([]*agentscope.Doc, 0, len(docs))
+	for _, d := range docs {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
+}
+
 // Build plans a bundle against the tenant. It writes nothing; run it in a read transaction.
 func Build(tx *store.TenantTx, files policybundle.Files, opt Options) (*Plan, error) {
 	p, err := prepare(tx, files, opt)

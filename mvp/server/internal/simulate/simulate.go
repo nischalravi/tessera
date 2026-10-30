@@ -33,8 +33,11 @@ type Request struct {
 type Inputs struct {
 	Now      time.Time
 	Policies []*policy.Policy
-	Usage    *usage.Index
-	Base     *graph.Snapshot
+	// AfterPolicies, when set, are the policies evaluated on the simulated graph, where the change itself
+	// alters the policies (a proposed agent scope or SoD rule); nil evaluates Policies on both sides.
+	AfterPolicies []*policy.Policy
+	Usage         *usage.Index
+	Base          *graph.Snapshot
 }
 
 // Removed describes a permission an identity would lose.
@@ -193,7 +196,11 @@ func Run(c *store.TenantTx, req Request, in Inputs) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("simulate: evaluate before: %w", err)
 	}
-	vAfter, err := policy.Evaluate(in.Policies, policy.NewContext(after, c, in.Now))
+	afterPolicies := in.Policies
+	if in.AfterPolicies != nil {
+		afterPolicies = in.AfterPolicies
+	}
+	vAfter, err := policy.Evaluate(afterPolicies, policy.NewContext(after, c, in.Now))
 	if err != nil {
 		return nil, fmt.Errorf("simulate: evaluate after: %w", err)
 	}

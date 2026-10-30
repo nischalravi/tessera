@@ -28,7 +28,7 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 ./run.sh build       # build the Go server, then tsc + vite production build
 ./run.sh seed        # (re)seed the database only
 ./run.sh devidp      # run only the dev IdP (mock OIDC issuer for local sign-in)
-./run.sh bench       # Go benchmarks + end-to-end latency, startup and memory of the server
+./run.sh bench       # Go benchmarks (graph; the blast-radius preview at 10,000 identities) + end-to-end latency, startup and memory of the server
 ./run.sh backup      # encrypted online backup now (-dir /backups; see "Backup and restore")
 ./run.sh restore F   # verify backup F and restore it over the database (stop the server first)
 ./run.sh bench groups  # the groups scale gate: a synthetic university tenant, every target of the groups design 6.7 (slow)
@@ -1955,6 +1955,61 @@ owner_ceiling: true         # default; false lets the agent hold what its owner 
   `policy.agent_scopes.applied`. Schema `0956_agent_scopes.sql` (Postgres 0963 and 0964).
 - Not done yet: scopes for MCP tokens and delegation depth limits (`max_delegation_depth`), and the Cedar `action_class`
   fact using the same classes.
+
+#### Unified blast-radius preview (AC-8)
+
+`POST /api/policy/diff` (issue #654, `internal/blast`; design `docs/design/access-as-code-repo.md` section 8) answers
+"who gains and loses access if this change lands?" for a policy bundle and AWS operations together. It changes nothing:
+one read transaction, no table, no stored snapshot. It needs `graph.read` with a fresh `STEP_UP_POLICY` sign-in, like
+the plan routes. Body (`files` and `operations` may each be empty, not both):
+
+```json
+{"files": {"tessera.yaml": "...", "roles/engineer.yaml": "...", "agents/hb.yaml": "..."},
+ "operations": [{"op": "put_policy_version", "target_arn": "arn:aws:iam::1111:policy/S3Read",
+                 "document": "{...}", "source": "terraform:aws_iam_policy.s3_read"}],
+ "base_snapshot": "", "profile": "default"}
+```
+
+- **Bundle.** The same files the as-code routes take (roles, agent scopes, SoD rules, JIT eligibility). Each kind present
+  (or managed in `tessera.yaml`) is planned exactly as its plan route does, with the same diagnostics (`422
+  invalid_bundle`, `tenant_mismatch`, `unknown_agent`). The roles plan's grant steps become graph edits (an added grant is
+  an edge from the person's account to the group, a removed one an edge id) that `internal/simulate` replays; the agent
+  scopes and SoD rules the bundle leaves in force are evaluated as the policies *after*, so violations include the two
+  agent-scope invariants (`agent-out-of-scope`, `agent-exceeds-owner`). JIT eligibility adds no standing grant, so it is
+  counted in `kinds` and moves nothing else. Invariants (Cedar) in a bundle are not part of the preview yet.
+- **AWS operations.** The closed op set of `POST /api/aws/simulate-policy-change`, each with an optional `source` label.
+  `blast.Operation` is that `snapshot.PolicyChange` plus the label, so a Terraform plan reader (AC-9) only has to produce
+  operations. They go through `snapshot.Apply` and `query.Diff` against `base_snapshot` (default: the newest) under
+  `profile`; a bad operation is `422 invalid_change` with `change_index`, no snapshot `404 no_snapshot`.
+- **The join.** AWS principals reach identities through the `aws` accounts the collector materialized (account external
+  id = principal ARN, owned by an identity). A principal with no owner is counted in `summary.unlinked_principals`,
+  never dropped; changes that only alter conditions or fidelity are counted in `summary.approximate`, not as gains.
+- **Answer.** `summary` (exact counts: identities gaining and losing, agents among them, graph permissions, AWS paths),
+  `by_identity_type` (`human`, `service`, `ai_agent`), `by_resource` ("N identities gain a path to bucket X; k are
+  agents": `identities_gaining`, `agents_gaining`, `identities_losing`, top actions), `identities` (biggest changes first),
+  `violations` (`before`, `after`, `introduced`, `resolved` and the agent-scope share), `kinds` (each plan's counts and
+  `plan_sha256`) and `aws` (snapshots, operations echoed without documents, groups recomputed). Lists are cut at 200
+  identities, 100 resources and 100 violations (`*_omitted` says how many more); counts are never cut.
+- **Deterministic.** Everything is sorted, so the same change gives the same bytes; `diff_sha256` is the digest of the
+  answer with that field empty, for a pull request comment to compare (AC-10). The request's audit event carries the
+  totals (`policy_diff_identities_gaining`, `policy_diff_agents_gaining`, `policy_diff_violations_introduced`, the bundle
+  and diff digests); nothing from the bundle or the operations' documents is logged.
+- **Ceiling.** The bundle's writes plus the AWS operations over `TESSERA_POLICY_MAX_STEPS` (default 20,000) is `413
+  plan_too_large`, before anything is replayed. Per-file and per-bundle limits are the loader's (256 KiB, 4 MiB, 2,000
+  files). Every read is the session's tenant: another tenant's identities, accounts, groups and snapshots cannot appear.
+- **Cost.** `./run.sh bench` includes `BenchmarkBlastRadius`: a tenant of 10,000 identities (each owning an AWS principal
+  in one of 50 accounts, 50,000 resources, ten principals per permission set), a role-like change of 1,000 added and 200
+  removed grants and one managed policy that opens a bucket to reading, with a cold memo each time; it fails if p95 is
+  60 s or more (with under 20 samples the slowest stands in for p95) and logs wall time, CPU-seconds and the graph, AWS
+  and join phases of each run. Measured on a shared 4-vCPU machine: p95 41.7 s (runs of 36.5 to 41.7 s, about 150
+  CPU-seconds, of which the graph simulation is under 2.5 s and the join under 0.3 s). The cost is the AWS evaluator's:
+  each principal whose policy changes is recomputed in full (about 10 to 12 CPU-seconds each), so a policy held by
+  hundreds of principals costs proportionally more; a `"Resource": "*"` edit on an action every principal can reach
+  (`TESSERA_BLAST_WIDE=1`) asks every principal's cells and took about 250 CPU-seconds, which is what the AWS design's
+  16-vCPU worker is sized for. `BLAST_IDENTITIES`, `BLAST_ACCOUNTS` and `BLAST_N` resize the run. The suite runs the same
+  pipeline on 300 identities (`TestBlastRadiusScale`). The first request after a snapshot is collected also pays the
+  index build, as every AWS route does.
+- No UI yet: the admin center has no policy plan view to hang a "Blast radius" panel on, so this is API only.
 
 #### Role mining
 

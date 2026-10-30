@@ -22,6 +22,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/agent"
+	"github.com/nischalravi/tessera/mvp/server/internal/agentscope"
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/archive"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
@@ -591,6 +592,7 @@ func New(cfg Config) *Server {
 	s.registerPolicyJitRoutes()
 	s.registerPolicySodRoutes()
 	s.registerPolicyAgentRoutes()
+	s.registerPolicyDiffRoutes()
 	s.registerLPAutoRoutes()
 	s.registerAbacRoutes()
 	s.registerSodRoutes()
@@ -782,17 +784,25 @@ func (s *Server) policies() ([]*policy.Policy, error) { return s.cfg.Policies.Lo
 // other than separation of duties, plus one policy per SoD risk of its enabled
 // rulesets (or of its legacy YAML SoD policies while it has no rulesets).
 func (s *Server) effectivePolicies(tx *store.TenantTx) ([]*policy.Policy, error) {
+	return s.effectivePoliciesWith(tx, nil, nil)
+}
+
+// effectivePoliciesWith is effectivePolicies for a change that is not applied yet: non-nil risks replace the SoD
+// risks the tenant is checked against, and non-nil scopes replace its active agent scopes (the blast-radius
+// preview evaluates the policies a bundle would leave in place).
+func (s *Server) effectivePoliciesWith(tx *store.TenantTx, risks []*sod.Risk, scopes *[]*agentscope.Doc) ([]*policy.Policy, error) {
 	files, err := s.policies()
 	if err != nil {
 		return nil, err
 	}
-	legacy, err := policy.LegacyBundle(files, false)
-	if err != nil {
-		return nil, err
-	}
-	risks, err := sod.Load(tx, legacy)
-	if err != nil {
-		return nil, err
+	if risks == nil {
+		legacy, err := policy.LegacyBundle(files, false)
+		if err != nil {
+			return nil, err
+		}
+		if risks, err = sod.Load(tx, legacy); err != nil {
+			return nil, err
+		}
 	}
 	eff := policy.Effective(files, risks)
 	// the tenant's Cedar invariants replace the YAML of the same id; a bundle
@@ -805,6 +815,9 @@ func (s *Server) effectivePolicies(tx *store.TenantTx) ([]*policy.Policy, error)
 		s.log.Error("tenant invariant bundle unreadable; evaluating the embedded YAML policies", "tenant", tx.Tenant().String(), "err", unreadable)
 	}
 	// the tenant's agent scopes become two more invariants (access-as-code AC-7)
+	if scopes != nil {
+		return policy.WithScopeDocs(pols, *scopes), nil
+	}
 	return policy.WithAgentScopes(tx, pols)
 }
 

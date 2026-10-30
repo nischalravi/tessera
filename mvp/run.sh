@@ -185,6 +185,11 @@ case "${1:-}" in
     cd "$SERVER"
     echo "==> Go benchmarks (graph and effective permissions)"
     "$GO" test -run '^$' -bench . -benchmem ./internal/graph/
+    # the blast-radius preview gate (AC-8): p95 under 60 s at 10,000 identities and 50 accounts. Slow to set up
+    # (a minute or more); BLAST_IDENTITIES and BLAST_ACCOUNTS resize it, BLAST_N is the number of samples.
+    echo "==> Go benchmark: unified blast-radius preview (POST /api/policy/diff)"
+    TESSERA_BLAST_IDENTITIES="${BLAST_IDENTITIES:-10000}" TESSERA_BLAST_ACCOUNTS="${BLAST_ACCOUNTS:-50}" \
+      "$GO" test -run '^$' -bench BlastRadius -benchtime "${BLAST_N:-3}x" -timeout 60m ./internal/blast/
     echo "==> end-to-end server measurements"
     args=(-go-bin "$BIN" -port "${BENCH_PORT:-8100}" -n "${BENCH_N:-100}")
     if [ -n "${PYTHON:-}" ] && [ -n "${PY_BACKEND:-}" ]; then
