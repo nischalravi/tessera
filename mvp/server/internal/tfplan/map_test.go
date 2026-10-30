@@ -225,6 +225,9 @@ func TestMap_NoEstate(t *testing.T) {
 // plan builds a one-resource plan for the cases below.
 func plan(typ, name string, actions []string, before, after, unknown any) []byte {
 	raw, _ := json.Marshal(map[string]any{"format_version": "1.2", "planned_values": map[string]any{}, "resource_changes": []any{
+		// a change that anchors the plan in the prod account, so names resolve in a two-account estate
+		map[string]any{"address": "aws_iam_policy.anchor", "mode": "managed", "type": "aws_iam_policy", "name": "anchor",
+			"change": map[string]any{"actions": []string{"no-op"}, "before": map[string]any{"arn": awstest.EstateS3Read}, "after": map[string]any{"arn": awstest.EstateS3Read}, "after_unknown": map[string]any{}}},
 		map[string]any{"address": typ + "." + name, "mode": "managed", "type": typ, "name": name,
 			"change": map[string]any{"actions": actions, "before": before, "after": after, "after_unknown": unknown}}}})
 	return raw
@@ -440,6 +443,7 @@ func TestStripIndex(t *testing.T) {
 // a policy that a module creates and attaches by reference resolves through the module path.
 func TestMap_ReferenceInModule(t *testing.T) {
 	raw := `{"format_version":"1.2","planned_values":{},"resource_changes":[
+	 {"address":"aws_iam_policy.anchor","mode":"managed","type":"aws_iam_policy","name":"anchor","change":{"actions":["no-op"],"before":{"arn":"arn:aws:iam::111111111111:policy/S3Read"},"after":{"arn":"arn:aws:iam::111111111111:policy/S3Read"},"after_unknown":{}}},
 	 {"address":"module.iam.aws_iam_policy.p[0]","module_address":"module.iam","mode":"managed","type":"aws_iam_policy","name":"p","index":0,
 	  "change":{"actions":["create"],"before":null,"after":{"name":"mod","path":"/","policy":"{\"Version\":\"2012-10-17\",\"Statement\":[]}"},"after_unknown":{"arn":true}}},
 	 {"address":"module.iam.aws_iam_role_policy_attachment.a","module_address":"module.iam","mode":"managed","type":"aws_iam_role_policy_attachment","name":"a",
@@ -453,8 +457,8 @@ func TestMap_ReferenceInModule(t *testing.T) {
 	_, e := estate(t)
 	r := Map(p, e, 0)
 	got := opLines(r.Operations)
-	// the estate has two accounts and the plan names none, so the new policy has a placeholder ARN, and the attachment finds it by reference
-	if len(got) != 2 || !strings.HasPrefix(got[1], "attach "+awstest.EstateEngineer+" arn:aws:iam::000000000000:policy/tessera-plan/module_iam") || strings.Fields(got[0])[1] != strings.Fields(got[1])[2] {
+	// the anchor names the prod account, so the new policy has the ARN its name gives, and the attachment finds it by reference
+	if len(got) != 2 || !strings.HasPrefix(got[1], "attach "+awstest.EstateEngineer+" arn:aws:iam::111111111111:policy/mod") || strings.Fields(got[0])[1] != strings.Fields(got[1])[2] {
 		t.Errorf("operations = %v findings = %v", got, findings(r))
 	}
 }

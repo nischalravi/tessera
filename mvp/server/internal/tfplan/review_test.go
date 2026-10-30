@@ -23,6 +23,10 @@ const (
 
 type rc map[string]any
 
+// anchorRC is a change that anchors a plan in the prod account (the account of a policy it names), so names resolve in a
+// two-account estate.
+var anchorRC = res("", "aws_iam_policy", "anchor", []string{"no-op"}, rc{"arn": awstest.EstateS3Read}, rc{"arn": awstest.EstateS3Read}, rc{})
+
 // res builds one resource change; module is "" for the root.
 func res(module, typ, name string, actions []string, before, after, unknown any) rc {
 	addr := typ + "." + name
@@ -182,20 +186,83 @@ func TestReview_AccountResolution(t *testing.T) {
 	if len(r.Operations) != 0 || r.Count(StatusUnresolved) != 1 {
 		t.Errorf("cross-account fallback: operations %v findings %v", opLines(r.Operations), findings(r))
 	}
-	// no ARN names an account: one provider configuration is fine, two are not
-	cfg := func(keys ...string) any {
+	// no ARN names an account and the estate has two: no name resolves, with one provider configuration or several
+	inline := res("", "aws_iam_role_policy", "p", []string{"update"}, rc{"role": "DataEngineer", "name": "decrypt", "policy": docNarrow},
+		rc{"role": "DataEngineer", "name": "decrypt", "policy": docOpen}, rc{})
+	for _, keys := range [][]string{{"aws"}, {"aws", "aws.dev"}} {
 		var rs []rc
 		for i, k := range keys {
-			rs = append(rs, rc{"address": fmt.Sprintf("aws_iam_role_policy_attachment.a%d", i), "mode": "managed", "provider_config_key": k, "expressions": rc{}})
+			rs = append(rs, rc{"address": fmt.Sprintf("aws_iam_role_policy.p%d", i), "mode": "managed", "provider_config_key": k, "expressions": rc{}})
 		}
-		return rc{"root_module": rc{"resources": rs}}
+		r = mapPlan(t, planOf(rc{"root_module": rc{"resources": rs}}, inline), snap, 0)
+		if len(r.Operations) != 0 || r.Count(StatusUnresolved) != 1 {
+			t.Errorf("providers %v: operations %v findings %v", keys, opLines(r.Operations), findings(r))
+		}
 	}
-	if r := mapPlan(t, planOf(cfg("aws"), attach), snap, 0); len(r.Operations) != 1 {
-		t.Errorf("one provider: %v", findings(r))
+	// a one-account estate needs no ARN
+	one := *snap
+	one.Principals = map[string]*model.Principal{}
+	for k, p := range snap.Principals {
+		if p.AccountID == awstest.EstateProd {
+			one.Principals[k] = p
+		}
 	}
-	r = mapPlan(t, planOf(cfg("aws", "aws.dev"), attach), snap, 0)
-	if len(r.Operations) != 0 || r.Count(StatusUnresolved) != 1 {
-		t.Errorf("two providers: operations %v findings %v", opLines(r.Operations), findings(r))
+	if r := mapPlan(t, planOf(nil, inline), &one, 0); len(r.Operations) != 1 {
+		t.Errorf("one account: %v", findings(r))
+	}
+}
+
+// M1: a role the plan creates is a new entity: it is never mapped onto the role of the snapshot with its name, nor
+// are the policies the plan puts on it, whatever the accounts.
+func TestReview_CreatedRoleIsNotTheExistingOne(t *testing.T) {
+	snap := baseEstate(t)
+	const trustAny = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"*"},"Action":"sts:AssumeRole"}]}`
+	raw := planOf(nil,
+		res("", "aws_iam_policy", "anchor", []string{"no-op"}, rc{"arn": awstest.EstateS3Read}, rc{"arn": awstest.EstateS3Read}, rc{}),
+		res("", "aws_iam_role", "r", []string{"create"}, nil, rc{"name": "DataEngineer", "path": "/", "assume_role_policy": trustAny}, rc{"arn": true}),
+		res("", "aws_iam_role_policy", "p", []string{"create"}, nil, rc{"role": "DataEngineer", "name": "all", "policy": docOpen}, rc{}),
+		res("", "aws_iam_role_policy_attachment", "a", []string{"create"}, nil, rc{"role": "DataEngineer", "policy_arn": awstest.EstateS3Read}, rc{}))
+	r := mapPlan(t, raw, snap, 0)
+	if len(r.Operations) != 0 || r.Count(StatusUnresolved) != 3 || !r.Conditional() {
+		t.Errorf("operations %v findings %v", opLines(r.Operations), findings(r))
+	}
+	// the same plan replacing the role (delete and create) leaves its ARN, which the snapshot holds
+	raw = planOf(nil,
+		res("", "aws_iam_role", "r", []string{"delete", "create"}, rc{"arn": awstest.EstateEngineer, "name": "DataEngineer", "assume_role_policy": docNarrow},
+			rc{"name": "DataEngineer", "path": "/", "assume_role_policy": trustAny}, rc{"arn": true}))
+	if r := mapPlan(t, raw, snap, 0); len(r.Operations) != 1 {
+		t.Errorf("a replaced role: %v %v", opLines(r.Operations), findings(r))
+	}
+}
+
+// H3: unsupported resources of services that grant access are access relevant, by type and by carrying a policy.
+func TestReview_AccessRelevantByTypeAndAttribute(t *testing.T) {
+	for _, typ := range []string{"aws_identitystore_group_membership", "aws_eks_access_entry", "aws_cognito_identity_pool_roles_attachment", "aws_lambda_function_url"} {
+		if r := mapPlan(t, planOf(nil, res("", typ, "x", []string{"create"}, nil, rc{}, rc{})), baseEstate(t), 0); !r.Conditional() {
+			t.Errorf("%s does not make the answer conditional", typ)
+		}
+	}
+	for _, tc := range []struct{ typ, attr string }{{"aws_sns_topic", "policy"}, {"aws_sqs_queue", "policy"}, {"aws_opensearch_domain", "access_policies"},
+		{"aws_vpc_endpoint", "policy"}, {"aws_api_gateway_rest_api", "policy"}, {"aws_secretsmanager_secret", "policy"}, {"aws_thing", "resource_policy"}} {
+		after := rc{"name": "x", tc.attr: docOpen}
+		if r := mapPlan(t, planOf(nil, res("", tc.typ, "x", []string{"update"}, rc{"name": "x"}, after, rc{})), baseEstate(t), 0); !r.Conditional() || !r.Findings[0].AccessRelevant {
+			t.Errorf("%s with %s does not make the answer conditional", tc.typ, tc.attr)
+		}
+	}
+	// no policy attribute, no relevant type
+	if r := mapPlan(t, planOf(nil, res("", "aws_sns_topic", "x", []string{"update"}, rc{"name": "x"}, rc{"name": "y"}, rc{})), baseEstate(t), 0); r.Conditional() {
+		t.Errorf("a topic rename is conditional: %v", findings(r))
+	}
+}
+
+// An empty inline_policy block on a role removes its inline policies.
+func TestReview_EmptyInlineBlockRemovesAll(t *testing.T) {
+	raw := planOf(nil, res("", "aws_iam_role", "r", []string{"update"},
+		rc{"arn": awstest.EstateEngineer, "name": "DataEngineer", "assume_role_policy": docNarrow, "inline_policy": []any{rc{"name": "decrypt", "policy": docNarrow}}},
+		rc{"arn": awstest.EstateEngineer, "name": "DataEngineer", "assume_role_policy": docNarrow, "inline_policy": []any{rc{"name": nil, "policy": nil}}}, rc{}))
+	r := mapPlan(t, raw, baseEstate(t), 0)
+	if got := opLines(r.Operations); len(got) != 1 || !strings.HasPrefix(got[0], "delete_inline "+awstest.EstateEngineer+" decrypt") || len(r.Findings) != 0 {
+		t.Errorf("operations %v findings %v", got, findings(r))
 	}
 }
 
@@ -210,12 +277,12 @@ func TestReview_ReferenceAttributes(t *testing.T) {
 			"expressions": rc{"policy_arn": rc{"references": refs}}}}}}
 	}
 	// policy_arn built from the policy's name is not its ARN
-	r := mapPlan(t, planOf(cfg("aws_iam_policy.x.name", "aws_iam_policy.x"), policy, attach), snap, 0)
+	r := mapPlan(t, planOf(cfg("aws_iam_policy.x.name", "aws_iam_policy.x"), anchorRC, policy, attach), snap, 0)
 	if got := opLines(r.Operations); len(got) != 1 || !strings.HasPrefix(got[0], "put_policy_version") {
 		t.Errorf("a name used as an ARN was resolved: %v %v", got, findings(r))
 	}
 	// the bare attribute resolves, with the caveat
-	r = mapPlan(t, planOf(cfg("aws_iam_policy.x.arn", "aws_iam_policy.x"), policy, attach), snap, 0)
+	r = mapPlan(t, planOf(cfg("aws_iam_policy.x.arn", "aws_iam_policy.x"), anchorRC, policy, attach), snap, 0)
 	if len(r.Operations) != 2 || !r.Conditional() {
 		t.Fatalf("operations %v findings %v", opLines(r.Operations), findings(r))
 	}
@@ -229,7 +296,7 @@ func TestReview_ReferenceAttributes(t *testing.T) {
 	// a decoy: the same references as replace(aws_iam_policy.x.arn, ...) look just like the bare attribute, hence the caveat;
 	// but a reference to a second resource is refused
 	decoy := res("", "aws_iam_policy", "decoy", []string{"create"}, nil, rc{"name": "decoy", "path": "/", "policy": docNarrow}, rc{"arn": true})
-	r = mapPlan(t, planOf(cfg("aws_iam_policy.x.arn", "aws_iam_policy.decoy.arn"), policy, decoy, attach), snap, 0)
+	r = mapPlan(t, planOf(cfg("aws_iam_policy.x.arn", "aws_iam_policy.decoy.arn"), anchorRC, policy, decoy, attach), snap, 0)
 	if len(r.Operations) != 2 {
 		t.Errorf("two candidate policies: %v", opLines(r.Operations))
 	}
@@ -260,7 +327,7 @@ func TestReview_SetsAndCeiling(t *testing.T) {
 		t.Errorf("operations = %d", len(r.Operations))
 	}
 	// the ceiling
-	var changes []rc
+	changes := []rc{anchorRC}
 	for i := 0; i < 50; i++ {
 		changes = append(changes, res("", "aws_iam_user_policy", fmt.Sprintf("p%d", i), []string{"create"}, nil, rc{"user": "alice", "name": fmt.Sprintf("n%d", i), "policy": docNarrow}, rc{}))
 	}

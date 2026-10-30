@@ -2037,10 +2037,11 @@ fetched, and the preview needs a collected snapshot (`404 no_snapshot` otherwise
   attachment or inline policy (a bucket policy moved between modules), or one attaches what another detaches, both are
   `conditional` findings: which comes last is not in the plan.
 - **Resolved against the snapshot.** Names become ARNs from the snapshot's users, roles and groups. The account is the
-  one the plan's own IAM ARNs name, else the estate's only account; with the account known, only that account's entity
-  is used (no cross-account fallback); with it unknown and several accounts in the estate, a name is used only if one
-  entity has it and the plan's configuration uses a single provider configuration (`provider_config_key`), else it is
-  `unresolved`. A value computed from another resource of the plan (`policy_arn = aws_iam_policy.x.arn`) follows the
+  one the plan's own IAM ARNs name (a resource's `arn`, or the customer-managed `policy_arn` of an attachment), else the
+  estate's only account; with the account known, only that account's entity is used (no cross-account fallback); with
+  it unknown and several accounts in the estate, no name resolves (`unresolved`). A user, role or group the plan
+  creates (actions exactly `create`) is a new entity: it is never mapped onto the one of the snapshot with its name,
+  and neither are the inline policies and attachments the plan puts on it (all `unresolved`). A value computed from another resource of the plan (`policy_arn = aws_iam_policy.x.arn`) follows the
   configuration's references when they name exactly one resource and only the attribute expected there (`arn` or `id`
   for a policy, `name` or `id` for a role, user or group, `bucket` or `id` for a bucket, `id` for an organization policy).
   Terraform lists the same references for `replace(aws_iam_policy.x.arn, ...)`, so every resolution by reference adds a
@@ -2057,8 +2058,10 @@ fetched, and the preview needs a collected snapshot (`404 no_snapshot` otherwise
   into operations (an address, a type, the actions and a fixed reason; never a plan value), with a status. `unsupported`:
   any other resource type, a role deletion, an organization policy of another type. An unsupported change that can
   alter who has access (`access_relevant: true`: any `aws_iam_*`, `aws_organizations_*`, `aws_kms_*`, `aws_s3_*`,
-  `aws_lambda_permission`, `*_policy` or `*_permission` resource, so group membership, access keys, login profiles and
-  role deletion) makes `terraform.conditional` true; an `aws_instance` does not. `conditional`: a value the plan
+  `aws_lambda_permission`, `aws_lambda_function_url`, `aws_identitystore_*`, `aws_eks_*`, `aws_cognito_*`, `*_policy` or
+  `*_permission` resource, or any resource with a `policy`, `access_policies` or `*_policy` attribute such as an SNS
+  topic, SQS queue, OpenSearch domain, VPC endpoint, API Gateway REST API or secret; so also group membership, access
+  keys, login profiles and role deletion) makes `terraform.conditional` true; an `aws_instance` does not. `conditional`: a value the plan
   leaves unknown until apply (a computed policy document, a name from `name_prefix`, an attachment of a new policy by a
   `var`), a resolution by reference, or an order-dependent change; an unknown value is not applied and
   `terraform.conditional` is true, so the answer is neither allow nor deny for it.

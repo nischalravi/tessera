@@ -100,6 +100,7 @@ type mapper struct {
 	seen    map[string]bool
 
 	refCache     map[string]*Change // "<resource>|<attribute>" -> what its expression refers to (nil: nothing usable)
+	newEntity    map[string]bool    // "<kind>|<name>" of the users, roles and groups the plan creates ("<kind>|*": a name not known yet)
 	groupsMoving bool               // the plan creates a group or changes who belongs to one
 }
 
@@ -115,10 +116,21 @@ type mop struct {
 // cannot make it do unbounded work.
 func Map(p *Plan, e *Estate, maxOps int) *Result {
 	m := &mapper{p: p, e: e, res: &Result{}, byBase: map[string][]*Change{}, orgByID: map[string]*Change{}, polARN: map[string]string{},
-		created: map[string]bool{}, pairs: map[string]bool{}, touched: map[string]bool{}, seen: map[string]bool{}, refCache: map[string]*Change{}}
+		created: map[string]bool{}, pairs: map[string]bool{}, touched: map[string]bool{}, seen: map[string]bool{}, refCache: map[string]*Change{}, newEntity: map[string]bool{}}
 	for _, c := range p.Changes {
 		if c.Mode != "managed" {
 			continue
+		}
+		if len(c.Actions) == 1 && c.Actions[0] == "create" {
+			if kind, ok := strings.CutPrefix(c.Type, "aws_iam_"); ok && (kind == "user" || kind == "role" || kind == "group") {
+				if v := c.get(true, "name"); v.st == stOK {
+					if n, ok := v.v.(string); ok {
+						m.newEntity[kind+"|"+n] = true
+					}
+				} else {
+					m.newEntity[kind+"|*"] = true
+				}
+			}
 		}
 		if !ignored(c) {
 			switch c.Type {
@@ -229,7 +241,7 @@ func (m *mapper) dispatch(c *Change) {
 	case "aws_organizations_policy_attachment":
 		m.orgAttachment(c)
 	default:
-		m.noteUnsupported(c, "the resource type is not mapped to an AWS operation; its effect on access is not in this preview", accessRelevant(c.Type))
+		m.noteUnsupported(c, "the resource type is not mapped to an AWS operation; its effect on access is not in this preview", accessRelevant(c.Type) || hasPolicyAttribute(c))
 	}
 }
 
@@ -238,12 +250,25 @@ func (m *mapper) dispatch(c *Change) {
 // accessRelevant reports whether a resource type that is not mapped can change who has access: an IAM or Organizations
 // resource, a policy of any service, a KMS, Lambda permission or S3 resource.
 func accessRelevant(t string) bool {
-	for _, p := range []string{"aws_iam_", "aws_organizations_", "aws_kms_", "aws_lambda_permission", "aws_s3_", "aws_ssoadmin_", "aws_sts_", "aws_ram_"} {
+	for _, p := range []string{"aws_iam_", "aws_organizations_", "aws_kms_", "aws_lambda_permission", "aws_s3_", "aws_ssoadmin_", "aws_sts_", "aws_ram_", "aws_identitystore_", "aws_eks_", "aws_cognito_", "aws_lambda_function_url"} {
 		if strings.HasPrefix(t, p) {
 			return true
 		}
 	}
 	return strings.HasSuffix(t, "_policy") || strings.Contains(t, "_policy_") || strings.Contains(t, "_permission")
+}
+
+// hasPolicyAttribute reports whether a resource carries a policy document of its own (an SNS topic, an SQS queue, an
+// OpenSearch domain, a VPC endpoint, an API Gateway REST API, a secret): a change to it can alter who has access.
+func hasPolicyAttribute(c *Change) bool {
+	for _, obj := range []map[string]any{c.Before, c.After} {
+		for k := range obj {
+			if k == "policy" || k == "access_policies" || strings.HasSuffix(k, "_policy") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (m *mapper) noteUnsupported(c *Change, reason string, relevant bool) {
@@ -662,8 +687,12 @@ func (m *mapper) account() string {
 			continue
 		}
 		for _, after := range []bool{false, true} {
-			if s, ok := c.get(after, "arn").v.(string); ok && strings.HasPrefix(s, "arn:") && accountRE.MatchString(accountOf(s)) {
-				set[accountOf(s)] = true
+			// the ARN of the resource itself, and the policy a customer-managed attachment names (it can only be attached
+			// inside its own account; an AWS managed policy's account is "aws")
+			for _, key := range []string{"arn", "policy_arn"} {
+				if s, ok := c.get(after, key).v.(string); ok && strings.HasPrefix(s, "arn:") && accountRE.MatchString(accountOf(s)) {
+					set[accountOf(s)] = true
+				}
 			}
 		}
 	}
@@ -738,13 +767,17 @@ func (m *mapper) policyARNOf(c *Change) string {
 
 // lookup finds a user, role or group of the snapshot by name.
 func (m *mapper) lookup(kind, name string) (string, *issue) {
-	// With the account known, only that account's entity counts. With it unknown and several accounts in the estate, a
-	// name is used only when one entity has it and the plan uses one provider configuration.
-	acct := m.account()
-	arn, n := m.e.find(kind, name, acct)
-	if acct == "" && n == 1 && len(m.e.accounts) > 1 && len(m.p.providers) > 1 {
-		return "", unresolved("the plan uses several provider configurations and does not say which account holds this " + kind)
+	// A user, role or group the plan creates is a new entity, never the one of the snapshot that has its name.
+	if m.newEntity[kind+"|"+name] || m.newEntity[kind+"|*"] {
+		return "", unresolved("the plan creates this " + kind + "; a new entity is not the one of the snapshot with the same name, so its policies are not evaluated")
 	}
+	// With the account known, only that account's entity counts. With it unknown and several accounts in the estate, no
+	// name is used: the same name in another account would be the wrong entity.
+	acct := m.account()
+	if acct == "" && len(m.e.accounts) > 1 {
+		return "", unresolved("the plan does not say which account holds this " + kind + " and the estate has several")
+	}
+	arn, n := m.e.find(kind, name, acct)
 	switch {
 	case n == 1:
 		return arn, nil
@@ -982,6 +1015,11 @@ func (m *mapper) iamRole(c *Change) {
 		m.noteUnsupported(c, "deleting a role is not an AWS operation this preview models", true)
 		return
 	}
+	if len(c.Actions) == 1 && c.Actions[0] == "create" {
+		// a new role is never the role of the snapshot that has its name
+		m.report(c, unresolved("the plan creates this role; the preview edits roles the snapshot holds, so a new role's trust policy and policies are not evaluated"))
+		return
+	}
 	var arn string
 	if v := c.get(true, "arn"); v.st == stOK {
 		if s, ok := v.v.(string); ok && m.e.hasPrincipal(s) {
@@ -1037,6 +1075,9 @@ func inlineSet(c *Change, after bool) (out map[string]string, unknown bool, drop
 	for _, x := range list {
 		o, ok := x.(map[string]any)
 		name, _ := o["name"].(string)
+		if p, _ := o["policy"].(string); ok && name == "" && p == "" {
+			continue // an empty inline_policy block: the role has no inline policy
+		}
 		switch {
 		case !ok || !inlineNameRE.MatchString(name) || len(out) >= maxSetEntries:
 			dropped++
