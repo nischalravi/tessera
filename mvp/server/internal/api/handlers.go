@@ -1332,6 +1332,8 @@ func asJitError(err error) error {
 		status = http.StatusNotFound
 	case je.Kind == jit.KindConflict:
 		status = http.StatusConflict
+	case je.Kind == jit.KindForbidden:
+		status = http.StatusForbidden
 	case je.Code != "":
 		status = http.StatusUnprocessableEntity // a field-specific refusal, like badRequest
 	}

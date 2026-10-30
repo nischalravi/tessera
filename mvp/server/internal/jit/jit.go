@@ -38,6 +38,7 @@ const (
 	KindInvalid Kind = iota
 	KindNotFound
 	KindConflict
+	KindForbidden // 403: the caller may not decide this request (eligibility approvers, issue #651)
 )
 
 // Stable codes of the errors that carry one.
@@ -140,7 +141,12 @@ func CreateRequest(c *store.TenantTx, now time.Time, identityID, groupID int64, 
 	if ident.Status != "active" {
 		return nil, jitErr("identity is not active")
 	}
-	if !g.Requestable {
+	// Once the tenant applies JIT eligibility rules, they decide (deny by default); until then groups.requestable does.
+	enforced, err := Enforced(c)
+	if err != nil {
+		return nil, err
+	}
+	if !enforced && !g.Requestable {
 		return nil, jitErr("%s is not eligible for just-in-time access", g.Name)
 	}
 	if !(hours.N > 0 && hours.N <= MaxHours) {
@@ -153,6 +159,11 @@ func CreateRequest(c *store.TenantTx, now time.Time, identityID, groupID int64, 
 	if utf8.RuneCountInString(justification) > MaxJustification {
 		return nil, &Error{Msg: fmt.Sprintf("justification must be at most %d characters", MaxJustification),
 			Code: CodeJustificationTooLong}
+	}
+	if enforced {
+		if err := checkEligible(c, now, ident, g, hours.N); err != nil {
+			return nil, err
+		}
 	}
 	acct, err := AccountFor(c, identityID, g)
 	if err != nil {
@@ -232,6 +243,13 @@ func Approve(c *store.TenantTx, requestID int64, by store.UserRef, now, createdA
 		}
 		if *u.IdentityID == req.IdentityID {
 			return nil, ErrSelfApproval
+		}
+		if enforced, err := Enforced(c); err != nil {
+			return nil, err
+		} else if enforced {
+			if err := checkApprover(c, now, req, *u.IdentityID); err != nil {
+				return nil, err
+			}
 		}
 	}
 	src, dst := graph.Key("account", req.AccountID), graph.Key("group", req.GroupID)

@@ -2502,6 +2502,34 @@ CREATE POLICY tenant_isolation ON lp_auto_policy
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE jit_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE jit_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON jit_settings;
+CREATE POLICY tenant_isolation ON jit_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE jit_eligibility ENABLE ROW LEVEL SECURITY;
+ALTER TABLE jit_eligibility FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON jit_eligibility;
+CREATE POLICY tenant_isolation ON jit_eligibility
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE jit_eligibility_groups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE jit_eligibility_groups FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON jit_eligibility_groups;
+CREATE POLICY tenant_isolation ON jit_eligibility_groups
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE jit_eligibility_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE jit_eligibility_versions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON jit_eligibility_versions;
+CREATE POLICY tenant_isolation ON jit_eligibility_versions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN

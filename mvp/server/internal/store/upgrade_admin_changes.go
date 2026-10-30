@@ -22,6 +22,7 @@ var adminChangeNewTypes = [][2]string{
 	{"'config.proposal'", "'roles.bundle.apply'"},
 	{"'api_client.propose.grant'", "'config.proposal'"},
 	{"'lp.auto_policy.apply'", "'api_client.propose.grant'"},
+	{"'jit.bundle.apply'", "'lp.auto_policy.apply'"},
 }
 
 // upgradeAdminChangeTypes widens the type CHECK of admin_change_requests in a SQLite database created before

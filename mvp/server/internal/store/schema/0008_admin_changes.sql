@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     -- a config write proposed by a machine client holding config.propose, and the two-admin grant of that scope
     -- (internal/admin/change_proposal.go, issue #721)
     'config.proposal','api_client.propose.grant',
+    -- applying JIT eligibility rules from a policy repository takes two admins, always (internal/admin/change_jit_bundle.go, issue #651)
+    'jit.bundle.apply',
     -- the automatic least-privilege policy from the access-as-code repository (internal/admin/change_lp_auto.go, issue #664)
     'lp.auto_policy.apply')),
 
