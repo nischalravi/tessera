@@ -88,6 +88,8 @@ func TestLoadFindings(t *testing.T) {
 		{"unknown field", map[string]string{"tessera.yaml": "schema: tessera.repo/v1\ntenant: a\nextra: 1\n"}, "tessera.yaml|invalid"},
 		{"alias refused", map[string]string{"tessera.yaml": "schema: tessera.repo/v1\ntenant: &t a\nmanage: {}\n"}, "tessera.yaml|invalid"},
 		{"two documents", map[string]string{"tessera.yaml": "schema: tessera.repo/v1\ntenant: a\n---\nx: 1\n"}, "tessera.yaml|invalid"},
+		{"merge key refused", map[string]string{"tessera.yaml": "schema: tessera.repo/v1\ntenant: a\nmanage: {<<: {roles: full}, roles: partial}\n"}, "tessera.yaml|invalid"},
+		{"role merge key refused", map[string]string{"roles/zeta.yaml": "schema: tessera.role/v1\nkey: zeta\nname: Z\n<<: {risk: high}\nrisk: low\n"}, "roles/zeta.yaml|invalid"},
 		{"role risk", map[string]string{"roles/payments-analyst.yaml": "schema: tessera.role/v1\nkey: payments-analyst\nname: P\nrisk: extreme\n"}, "roles/payments-analyst.yaml|invalid_risk"},
 		{"role entitlement form", map[string]string{"roles/payments-analyst.yaml": "schema: tessera.role/v1\nkey: payments-analyst\nname: P\nrisk: low\nentitlements: [nocolon]\n"}, "roles/payments-analyst.yaml|invalid_entitlements"},
 		{"duplicate role key", map[string]string{"roles/zeta.yaml": "schema: tessera.role/v1\nkey: payments-analyst\nname: Q\nrisk: low\n"}, "roles/zeta.yaml|duplicate_key"},
