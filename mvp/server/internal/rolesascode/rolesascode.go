@@ -259,7 +259,14 @@ type Plan struct {
 	Leaves       int        `json:"members_removed"`
 	// PlanSHA256 is the digest of the plan with every step; the approver approves it and the apply refuses any other.
 	PlanSHA256 string `json:"plan_sha256"`
+
+	// all is every step of every role, before the per-role lists are cut to stepsShown (AllSteps).
+	all []roles.Step
 }
+
+// AllSteps is every member and grant step of the plan, in role order, not cut to the few a response lists. The
+// blast-radius preview turns the grant steps into graph edits. The slice must not be modified.
+func (p *Plan) AllSteps() []roles.Step { return p.all }
 
 type item struct {
 	path     string
@@ -486,6 +493,7 @@ func compute(tx *store.TenantTx, p *prepared, opt Options, now time.Time) (*Plan
 			plan.Unchanged++
 		}
 		plan.Steps += len(rp.Steps)
+		plan.all = append(plan.all, rp.Steps...)
 		plan.Adds, plan.Removes, plan.Members, plan.Leaves = plan.Adds+rp.Adds, plan.Removes+rp.Removes, plan.Members+rp.Members, plan.Leaves+rp.Leaves
 		plan.Roles = append(plan.Roles, rp)
 	}

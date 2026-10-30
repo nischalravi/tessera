@@ -65,8 +65,14 @@ func WithAgentScopes(tx *store.TenantTx, base []*Policy) ([]*Policy, error) {
 		}
 		docs = append(docs, d)
 	}
+	return WithScopeDocs(base, docs), nil
+}
+
+// WithScopeDocs appends the two agent scope invariants for docs to base (base itself when there are none). The
+// blast-radius preview uses it to evaluate the scopes a bundle would leave in place.
+func WithScopeDocs(base []*Policy, docs []*agentscope.Doc) []*Policy {
 	if len(docs) == 0 {
-		return base, nil
+		return base
 	}
 	mk := func(id, name, typ, desc string) *Policy {
 		return &Policy{ID: id, Name: name, Type: typ, Severity: "high", Description: desc, Spec: map[string]any{},
@@ -77,7 +83,7 @@ func WithAgentScopes(tx *store.TenantTx, base []*Policy) ([]*Policy, error) {
 			"An AI agent with a declared scope holds an effective permission whose action class or resource the scope does not allow."),
 		mk(PolicyAgentExceedsOwner, "Agent holds access its owner does not", TypeAgentExceedsOwner,
 			"An AI agent with a declared scope holds an effective permission that its owner does not hold."),
-	), nil
+	)
 }
 
 // scoped maps an identity id to the scopes that apply to it, by key: the agent's own scopes, or its blueprint's when

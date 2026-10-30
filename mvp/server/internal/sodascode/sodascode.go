@@ -353,6 +353,42 @@ func Validate(tx *store.TenantTx, files policybundle.Files, opt Options) error {
 	return err
 }
 
+// Proposed is the risks checked after the bundle is applied, given those checked now: a risk the bundle lists
+// replaces the one of its key, and a ruleset the bundle retires (or, in full mode, a listed ruleset's risk that it no
+// longer lists) drops out. Functions are the ones the file of each risk defines. It writes nothing; run it in a read
+// transaction.
+func Proposed(tx *store.TenantTx, files policybundle.Files, opt Options, current []*sod.Risk) ([]*sod.Risk, error) {
+	p, err := prepare(tx, files, opt)
+	if err != nil {
+		return nil, err
+	}
+	dropKey, dropRuleset := map[string]bool{}, map[string]bool{}
+	for _, it := range p.items {
+		if it.doc == nil {
+			dropRuleset[it.key] = true
+			continue
+		}
+		if p.mode == "full" {
+			dropRuleset[it.key] = true
+		}
+		for _, r := range it.doc.Risks {
+			dropKey[r.Key] = true
+		}
+	}
+	out := []*sod.Risk{} // never nil: an empty set is a change, nil means no change
+	for _, r := range current {
+		if !dropKey[r.Key] && !dropRuleset[r.Ruleset.Key] {
+			out = append(out, r)
+		}
+	}
+	for _, it := range p.items {
+		if it.doc != nil {
+			out = append(out, sod.CompileBundle(it.doc)...)
+		}
+	}
+	return out, nil
+}
+
 // Build plans a bundle against the tenant. It writes nothing; run it in a read transaction.
 func Build(tx *store.TenantTx, files policybundle.Files, opt Options) (*Plan, error) {
 	p, err := prepare(tx, files, opt)
