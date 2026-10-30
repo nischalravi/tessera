@@ -32,6 +32,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/abac"
+	"github.com/nischalravi/tessera/mvp/server/internal/agentscope"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/mfa"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -55,6 +56,9 @@ type Policy struct {
 	// is evaluated over effective-permission facts by evalCedar; Type then only
 	// names how the findings are worded. Nil for a YAML policy.
 	Cedar *CedarSpec
+	// AgentScopes are the tenant's active agent scopes (AC-7) on the two invariants WithAgentScopes builds; nil
+	// on every other policy.
+	AgentScopes []*agentscope.Doc
 }
 
 // Violation is one policy finding.

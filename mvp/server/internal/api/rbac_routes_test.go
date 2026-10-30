@@ -342,6 +342,10 @@ GET    /api/policy/sod/export                        graph.read      -  # issue 
 POST   /api/policy/sod/validate                      sod.manage      STEP_UP_POLICY  # issue #652 (AC-6: changes nothing)
 POST   /api/policy/sod/plan                          sod.manage      STEP_UP_POLICY  # issue #652 (AC-6: changes nothing)
 POST   /api/policy/sod/apply                         admin.change.request  STEP_UP_ADMIN  # issue #652 (AC-6: files a sod.bundle.apply change request; a different admin approves)
+GET    /api/policy/agents/export                     graph.read      -  # issue #653 (AC-7)
+POST   /api/policy/agents/validate                   agents.manage   STEP_UP_POLICY  # issue #653 (AC-7: changes nothing)
+POST   /api/policy/agents/plan                       agents.manage   STEP_UP_POLICY  # issue #653 (AC-7: changes nothing)
+POST   /api/policy/agents/apply                      admin.change.request  STEP_UP_ADMIN  # issue #653 (AC-7: files an agent_scopes.bundle.apply change request; a different admin approves)
 GET    /api/abac/policies                            graph.read      -  # issue #162
 POST   /api/abac/policies                            roles.manage    STEP_UP_POLICY  # issue #162
 GET    /api/abac/policies/{policy_id}                graph.read      -  # issue #162

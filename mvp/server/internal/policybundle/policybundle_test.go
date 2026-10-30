@@ -63,7 +63,7 @@ func TestLoadGood(t *testing.T) {
 	if len(diags) > 0 {
 		t.Fatalf("diags: %v", diags)
 	}
-	if len(b.Roles) != 1 || len(b.Jit) != 1 || len(b.Sod) != 1 || len(b.Birthright) != 1 || len(b.Agents) != 1 || len(b.Invariants) != 2 || len(b.Tests) != 2 {
+	if len(b.Roles) != 1 || len(b.Jit) != 1 || len(b.Sod) != 1 || len(b.Birthright) != 1 || len(b.Agents) != 1 || len(b.AgentScopes) != 1 || len(b.Invariants) != 2 || len(b.Tests) != 2 {
 		t.Errorf("counts: %d roles %d jit %d sod %d birthright %d agents %d invariants %d tests",
 			len(b.Roles), len(b.Jit), len(b.Sod), len(b.Birthright), len(b.Agents), len(b.Invariants), len(b.Tests))
 	}
@@ -106,6 +106,13 @@ func TestLoadFindings(t *testing.T) {
 		{"birthright no role", map[string]string{"birthright/x.cedar": `@id("x") permit (principal, action == Tessera::Action::"birthright", resource);`}, "birthright/x.cedar|missing_role"},
 		{"two birthright rules for a role", map[string]string{"birthright/x.cedar": `@id("x") @role("payments-analyst") permit (principal, action == Tessera::Action::"birthright", resource);`}, "birthright/x.cedar|duplicate_birthright"},
 		{"agent scope without agent", map[string]string{"agents/x.cedar": `@id("x") permit (principal, action == Tessera::Action::"reach", resource);`}, "agents/x.cedar|missing_agent"},
+		{"agent scope unknown field", map[string]string{"agents/billing-bot.yaml": string(good(t)["agents/billing-bot.yaml"]) + "extra: 1\n"}, "agents/billing-bot.yaml|invalid_document"},
+		{"agent scope duplicate key in file", map[string]string{"agents/billing-bot.yaml": string(good(t)["agents/billing-bot.yaml"]) + "name: Again\n"}, "agents/billing-bot.yaml|invalid_document"},
+		{"agent scope anchor", map[string]string{"agents/billing-bot.yaml": strings.Replace(string(good(t)["agents/billing-bot.yaml"]), "key: billing-bot", "key: &k billing-bot", 1)}, "agents/billing-bot.yaml|invalid_document"},
+		{"agent scope class", map[string]string{"agents/billing-bot.yaml": strings.Replace(string(good(t)["agents/billing-bot.yaml"]), "[read]", "[read, execute]", 1)}, "agents/billing-bot.yaml|invalid_actions"},
+		{"agent scope duplicate key", map[string]string{"agents/zeta.yaml": string(good(t)["agents/billing-bot.yaml"])}, "agents/zeta.yaml|duplicate_key"},
+		{"agent scope too large", map[string]string{"agents/big.yaml": strings.Repeat("a", 300<<10)}, "agents/big.yaml|too_large"},
+		{"agent file of another kind", map[string]string{"agents/readme.txt": "hi"}, "agents/readme.txt|unexpected_file"},
 		{"stray file", map[string]string{"roles/readme.txt": "hi"}, "roles/readme.txt|unexpected_file"},
 		{"schema syntax", map[string]string{"schema/tessera.cedarschema": "entity"}, "schema/tessera.cedarschema|schema"},
 		{"test bad expect", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\ncases:\n  - {name: a, principal: 'Tessera::Identity::\"a\"', action: birthright, resource: 'Tessera::Role::\"r\"', expect: maybe}\n"}, "tests/b.yaml|invalid_case"},

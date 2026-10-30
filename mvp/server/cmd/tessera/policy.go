@@ -75,7 +75,7 @@ func policyCmd(args []string, stdout, stderr io.Writer) error {
 	}
 	if sub == "validate" {
 		fmt.Fprintf(stdout, "%d roles, %d jit eligibilities, %d sod rulesets, %d birthright, %d agent scope, %d invariant files, %d test files\npolicy bundle OK\n",
-			len(b.Roles), len(b.Jit), len(b.Sod), len(b.Birthright), len(b.Agents), len(b.Invariants), len(b.Tests))
+			len(b.Roles), len(b.Jit), len(b.Sod), len(b.Birthright), len(b.Agents)+len(b.AgentScopes), len(b.Invariants), len(b.Tests))
 		return nil
 	}
 	failed := 0

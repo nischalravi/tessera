@@ -590,6 +590,7 @@ func New(cfg Config) *Server {
 	s.registerPolicyRoleRoutes()
 	s.registerPolicyJitRoutes()
 	s.registerPolicySodRoutes()
+	s.registerPolicyAgentRoutes()
 	s.registerLPAutoRoutes()
 	s.registerAbacRoutes()
 	s.registerSodRoutes()
@@ -803,7 +804,8 @@ func (s *Server) effectivePolicies(tx *store.TenantTx) ([]*policy.Policy, error)
 	if unreadable != nil {
 		s.log.Error("tenant invariant bundle unreadable; evaluating the embedded YAML policies", "tenant", tx.Tenant().String(), "err", unreadable)
 	}
-	return pols, nil
+	// the tenant's agent scopes become two more invariants (access-as-code AC-7)
+	return policy.WithAgentScopes(tx, pols)
 }
 
 // ---------------------------------------------------------------- routing

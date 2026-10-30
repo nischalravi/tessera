@@ -195,6 +195,8 @@ var tables = []string{
 	"jit_settings", "jit_eligibility", "jit_eligibility_groups", "jit_eligibility_versions",
 	// the repository change behind each SoD ruleset an apply wrote (schema/0955_sod_policy_refs.sql)
 	"sod_policy_refs",
+	// agent scopes as code: what an AI agent may hold, and their versions (schema/0956_agent_scopes.sql)
+	"agent_scopes", "agent_scope_versions",
 	// the automatic policy from the access-as-code repository (schema/0953_lp_auto_policy.sql)
 	"lp_auto_policy",
 	// AWS usage (schema/0915_aws_usage.sql)

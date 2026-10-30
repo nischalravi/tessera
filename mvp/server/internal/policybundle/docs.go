@@ -12,6 +12,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/agentscope"
 	"github.com/nischalravi/tessera/mvp/server/internal/cedarx"
 )
 
@@ -21,7 +22,9 @@ const (
 	TagRole = "tessera.role/v1"
 	TagJit  = "tessera.jit/v1"
 	TagSod  = "tessera.sod/v1" // reused unchanged from internal/sod
-	TagTest = "tessera.test/v1"
+	// TagAgentScope is the document of agents/<key>.yaml (AC-7), defined by internal/agentscope.
+	TagAgentScope = agentscope.Tag
+	TagTest       = "tessera.test/v1"
 )
 
 // maxJitHours mirrors jit.MaxHours (72); a test keeps them equal.
@@ -434,4 +437,35 @@ func (l *loader) buildEntities() {
 		return
 	}
 	l.b.entities = set
+}
+
+// AgentScopeFile is agents/<key>.yaml: internal/agentscope's tessera.agentscope/v1 document, checked with its own
+// strict reader (unknown fields, anchors and a second document are refused).
+type AgentScopeFile struct {
+	Path string
+	Doc  *agentscope.Doc
+}
+
+func isYAML(p string) bool { return strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml") }
+
+func (l *loader) loadAgentScopes() {
+	keys := map[string]string{}
+	for _, p := range l.paths(DirAgents) {
+		if !isYAML(p) {
+			continue
+		}
+		d, fs := agentscope.Parse(l.files[p])
+		for _, f := range fs {
+			l.add(p, 0, f.Code, "%s", f.Msg)
+		}
+		if d == nil {
+			continue
+		}
+		if q := keys[d.Key]; q != "" {
+			l.add(p, 0, "duplicate_key", "agent scope %q is also defined in %s", d.Key, q)
+		} else if d.Key != "" {
+			keys[d.Key] = p
+		}
+		l.b.AgentScopes = append(l.b.AgentScopes, AgentScopeFile{Path: p, Doc: d})
+	}
 }

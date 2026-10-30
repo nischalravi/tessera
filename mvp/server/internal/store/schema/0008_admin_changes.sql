@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     'jit.bundle.apply',
     -- applying SoD rulesets, functions and risks from a policy repository takes two admins, always (internal/admin/change_sod_bundle.go, issue #652)
     'sod.bundle.apply',
+    -- applying agent scopes (what an AI agent may hold) from a policy repository takes two admins, always (internal/admin/change_agent_scopes_bundle.go, issue #653)
+    'agent_scopes.bundle.apply',
     -- the automatic least-privilege policy from the access-as-code repository (internal/admin/change_lp_auto.go, issue #664)
     'lp.auto_policy.apply')),
 
