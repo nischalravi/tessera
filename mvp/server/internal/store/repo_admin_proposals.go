@@ -17,6 +17,11 @@ var (
 		VALUES (@tenant, @change_id, @client_id, @proposed_at)`)
 	proposalClient = tq("admin_change_proposals.client", `
 		SELECT client_id FROM admin_change_proposals WHERE tenant_id = @tenant AND change_id = @change_id`)
+	proposalOpenOf = tq("admin_change_proposals.open_of", `
+		SELECT `+adminChangeCols+` FROM admin_change_requests r
+		JOIN admin_change_proposals pr ON pr.tenant_id = @tenant AND pr.change_id = r.id
+		WHERE r.tenant_id = @tenant AND pr.client_id = @client_id AND r.status IN ('pending_approval','cooling_off')
+		ORDER BY r.requested_at, r.rowid`)
 )
 
 // InsertAdminChangeProposal records that the machine client clientID proposed the change request changeID.
@@ -38,4 +43,10 @@ func (tx *TenantTx) AdminChangeProposer(changeID uuid.UUID) (string, error) {
 		return "", nil
 	}
 	return id, err
+}
+
+// OpenAdminChangesOfProposer lists the requests the machine client proposed that are still pending approval or
+// cooling off, oldest first.
+func (tx *TenantTx) OpenAdminChangesOfProposer(clientID string) ([]*AdminChange, error) {
+	return collect(tx, scanAdminChange, proposalOpenOf, sql.Named("client_id", clientID))
 }

@@ -114,7 +114,11 @@ var (
 		WHERE tenant_id = @tenant AND id = @id AND status = 'cooling_off' AND effective_at <= @at`)
 	adminChangeFailed = tq("admin_change_requests.failed", `
 		UPDATE admin_change_requests SET status = 'failed', failure = @failure, secret_enc = NULL
-		WHERE tenant_id = @tenant AND id = @id AND status = 'cooling_off'`)
+		WHERE tenant_id = @tenant AND id = @id AND status IN ('pending_approval','cooling_off')`)
+	adminChangeCancelWhy = tq("admin_change_requests.cancel_why", `
+		UPDATE admin_change_requests SET status = 'cancelled', decided_by_user_id = @by, decided_at = @at,
+			failure = @reason, secret_enc = NULL
+		WHERE tenant_id = @tenant AND id = @id AND status IN ('pending_approval','cooling_off')`)
 	adminChangeTestLogin = tq("admin_change_requests.test_login", `
 		UPDATE admin_change_requests SET test_login_at = @at
 		WHERE tenant_id = @tenant AND type = 'idp_connection.create' AND status = 'applied' AND target_id = @target
@@ -276,7 +280,15 @@ func (tx *TenantTx) MarkAdminChangeApplied(id uuid.UUID, at time.Time) error {
 	return tx.adminTransition(adminChangeApplied, sql.Named("id", id.String()), sql.Named("at", RT(at)))
 }
 
-// MarkAdminChangeFailed records that the applier of a cooling-off request failed.
+// CancelAdminChangeWhy cancels a pending or cooling-off request and records the reason (the failure column, which a
+// cancelled request otherwise leaves empty), for a cancellation the system makes: by is the person whose action caused it.
+func (tx *TenantTx) CancelAdminChangeWhy(id, by uuid.UUID, at time.Time, reason string) error {
+	return tx.adminTransition(adminChangeCancelWhy, sql.Named("id", id.String()), sql.Named("by", by.String()),
+		sql.Named("at", RT(at)), sql.Named("reason", reason))
+}
+
+// MarkAdminChangeFailed records that a pending or cooling-off request failed: its applier, or a check made at
+// approval or apply (the proposer was revoked, the stored payload was altered).
 func (tx *TenantTx) MarkAdminChangeFailed(id uuid.UUID, failure string) error {
 	return tx.adminTransition(adminChangeFailed, sql.Named("id", id.String()), sql.Named("failure", failure))
 }

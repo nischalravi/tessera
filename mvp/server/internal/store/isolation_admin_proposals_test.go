@@ -57,6 +57,44 @@ func TestIsolation_AdminChangeProposals(t *testing.T) {
 	}
 }
 
+// A proposer's open requests and the reasoned cancellation are the tenant's own: the same client id in B lists none of
+// A's, and B cannot cancel A's request.
+func TestIsolation_CancelProposalsOf(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	a, b := seedAdminRows(t, f)
+	now := storetest.Now
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		return c.InsertAdminChangeProposal(a.pending.ID, "tsc_shared", now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if got, err := c.OpenAdminChangesOfProposer("tsc_shared"); err != nil || len(got) != 0 {
+			t.Errorf("B lists A's proposals: %v, %v", got, err)
+		}
+		if err := c.CancelAdminChangeWhy(a.pending.ID, b.pending.RequestedBy, now, "proposer_revoked"); !errors.Is(err, store.ErrAdminChangeState) {
+			t.Errorf("B cancelling A's request = %v, want ErrAdminChangeState", err)
+		}
+		return nil
+	})
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		got, err := c.OpenAdminChangesOfProposer("tsc_shared")
+		if err != nil || len(got) != 1 || got[0].ID != a.pending.ID {
+			t.Errorf("A lists %v, %v", got, err)
+		}
+		if err := c.CancelAdminChangeWhy(a.pending.ID, a.pending.RequestedBy, now, "proposer_revoked"); err != nil {
+			return err
+		}
+		ch, err := c.AdminChange(a.pending.ID)
+		if err == nil && (ch.Status != store.ChangeCancelled || ch.Failure != "proposer_revoked") {
+			t.Errorf("cancelled request = %s %q", ch.Status, ch.Failure)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // SetAPIClientScopes changes only the calling tenant's machine client: B cannot widen A's client, and the
 // first-party CLI client's scopes are never rewritten.
 func TestIsolation_SetAPIClientScopes(t *testing.T) {
@@ -104,5 +142,6 @@ func TestIsolation_SetAPIClientScopes(t *testing.T) {
 }
 
 func adminProposalsCovered() map[string]bool {
-	return map[string]bool{"InsertAdminChangeProposal": true, "AdminChangeProposer": true, "SetAPIClientScopes": true} // the tests above
+	return map[string]bool{"InsertAdminChangeProposal": true, "AdminChangeProposer": true, "SetAPIClientScopes": true,
+		"OpenAdminChangesOfProposer": true, "CancelAdminChangeWhy": true} // the tests above
 }

@@ -225,6 +225,85 @@ func (e *env) proposerUser(clientID string) (uuid.UUID, error) {
 	return u.ID, nil
 }
 
+// Reasons a proposal ends without applying, stored as the request's failure text and carried by the audit event.
+const (
+	ReasonProposerRevoked = "proposer_revoked"
+	ReasonPayloadTampered = "payload_tampered"
+)
+
+// proposerStillValid is the re-check at approve and apply (issue #743): the client that filed the proposal is still an
+// active machine client holding config.propose with an active owner, the same test as at submit. A proposal filed by a
+// credential the tenant has since withdrawn is refused, 409 proposer_revoked, and the caller marks the request failed.
+func (e *env) proposerStillValid(ch *store.AdminChange) error {
+	if ch.Type != TypeConfigProposal {
+		return nil
+	}
+	client, err := e.tx.AdminChangeProposer(ch.ID)
+	if err != nil {
+		return err
+	}
+	revoked := conflict(ReasonProposerRevoked, "the client that filed this proposal is revoked, lost %s or has no active owner", auth.ScopeConfigPropose)
+	if client == "" {
+		return revoked
+	}
+	if _, err := e.proposerUser(client); err != nil {
+		var ae *Error
+		if errors.As(err, &ae) {
+			return revoked
+		}
+		return err
+	}
+	return nil
+}
+
+// CancelProposalsOf cancels the open proposals of a machine client that was revoked or lost config.propose, in the
+// caller's transaction: each request ends cancelled with reason proposer_revoked and an admin.change.cancelled event
+// naming the client. by is the admin who revoked it; it returns how many were cancelled.
+func (s *Service) CancelProposalsOf(tx *store.TenantTx, clientID string, by *uuid.UUID, display string) (int, error) {
+	open, err := tx.OpenAdminChangesOfProposer(clientID)
+	if err != nil {
+		return 0, err
+	}
+	now := s.now()
+	for _, ch := range open {
+		who := ch.RequestedBy
+		if by != nil {
+			who = *by
+		}
+		if err := tx.CancelAdminChangeWhy(ch.ID, who, now, ReasonProposerRevoked); err != nil {
+			return 0, err
+		}
+		if ch, err = tx.AdminChange(ch.ID); err != nil {
+			return 0, err
+		}
+		e := s.env(tx, now, ch.RequestedBy)
+		if err := e.ended(ch); err != nil {
+			return 0, err
+		}
+		if err := e.transition(ch, TransCancelled, display); err != nil {
+			return 0, err
+		}
+	}
+	return len(open), nil
+}
+
+// SetClientScopes replaces a machine client's scopes. Dropping config.propose cancels the client's open proposals in the
+// same transaction.
+func (s *Service) SetClientScopes(tx *store.TenantTx, clientID string, scopes []string, by *uuid.UUID, display string) error {
+	cl, err := tx.APIClientByClientID(clientID)
+	if err != nil {
+		return err
+	}
+	if err := tx.SetAPIClientScopes(clientID, scopes); err != nil {
+		return err
+	}
+	had, has := slices.Contains(cl.AllowedScopes, string(auth.ScopeConfigPropose)), slices.Contains(scopes, string(auth.ScopeConfigPropose))
+	if had && !has {
+		_, err = s.CancelProposalsOf(tx, clientID, by, display)
+	}
+	return err
+}
+
 // SubmitProposal files a config.proposal in the name of the machine client p. The client needs the config.propose
 // scope (checked here against the token, and in proposerUser against the stored client) and no role. The request
 // waits for a human admin: only POST /api/admin/change-requests/{id}/approve (admin.change.approve, step-up) moves it.
@@ -340,6 +419,9 @@ func proposalErr(err error) error {
 func applyProposal(e *env, ch *store.AdminChange, v *proposalPayload) error {
 	if ch.ApprovedBy == nil {
 		return conflict("invalid_state", "a proposal is applied only after a person approved it")
+	}
+	if err := e.proposerStillValid(ch); err != nil {
+		return err
 	}
 	if _, err := planProposal(e, v); err != nil {
 		return err

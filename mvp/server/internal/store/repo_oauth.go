@@ -146,7 +146,7 @@ func (tx *TenantTx) SetAPIClientStatus(clientID, status string) error {
 }
 
 // SetAPIClientScopes replaces the scopes this tenant's machine client may be granted (ErrNotFound as for SetAPIClientKeys).
-// Only the two-admin config.propose grant (internal/admin) calls it.
+// Only internal/admin calls it (the two-admin config.propose grant, and SetClientScopes, which cancels proposals).
 func (tx *TenantTx) SetAPIClientScopes(clientID string, scopes []string) error {
 	list, err := jsonList(scopes)
 	if err != nil {
