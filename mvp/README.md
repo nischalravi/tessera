@@ -967,7 +967,7 @@ when a second reviewer is needed) ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
 `POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
-(changes take `?dry_run=1`) · `GET /api/policy/roles/export` · `POST /api/policy/roles/validate|plan|apply` (roles and birthright rules as code, below) · `GET /api/policy/jit/export` · `POST /api/policy/jit/validate|plan|apply` (JIT eligibility as code, below) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
+(changes take `?dry_run=1`) · `GET /api/policy/roles/export` · `POST /api/policy/roles/validate|plan|apply` (roles and birthright rules as code, below) · `GET /api/policy/jit/export` · `POST /api/policy/jit/validate|plan|apply` (JIT eligibility as code, below) · `GET /api/policy/sod/export` · `POST /api/policy/sod/validate|plan|apply` (SoD rules as code, below) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
 (changes take `?dry_run=1`) · `GET /api/policy/roles/export` · `POST /api/policy/roles/validate|plan|apply` (roles and birthright rules as code, below) · `GET /api/lp/auto-policy` · `POST /api/lp/auto-policy/validate|apply` (auto least-privilege mode as code) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
 `GET|POST /api/role-mining/runs` · `GET /api/role-mining/runs/{id}` · `GET /api/role-mining/candidates/{id}` ·
 `POST /api/role-mining/candidates/{id}/accept|dismiss` (role mining, below) ·
@@ -1854,6 +1854,35 @@ state who may ask for what, for how long and who approves, as `jit/<key>.yaml` i
   and retirements that an apply removes count against the deletion guard's `group_members` limit (`409
   deletion_guard`), and an apply of more than `TESSERA_POLICY_MAX_STEPS` writes is `413 plan_too_large`; both are
   refused outright with no override.
+
+#### SoD rules as code
+
+Issue #652 (AC-6; `internal/sodascode`, schema `0955_sod_policy_refs.sql`, Postgres `0961` and `0962`; table
+`sod_policy_refs`). SoD rulesets, functions and risks live in the policy repository as `sod/<ruleset-key>.yaml`, the
+`tessera.sod/v1` document of `internal/sod` unchanged (the file name is the ruleset key). Detection stays in
+`internal/sod`; this adds import and export through the same two-person path as roles and JIT.
+
+- **Bundle.** `tessera.yaml` with `manage: {sod: partial}` or `full`, and one file per ruleset: the ruleset, its
+  `functions` (selectors) and its `risks` (functions by key, subjects, remediation, owner by identity external id).
+  Rules are YAML data, never Cedar (anything but `.yaml` under `sod/` is refused). Each file goes through
+  `sod.ParseYAML` (unknown fields, a second document, a selector or subject condition outside the grammar are refused
+  with the file and a code) and the plan runs `sod.Writer.Import` in dry-run. A function used by two files must be
+  defined the same way in both; a risk key may appear once; a retired ruleset, function or risk key cannot be reused.
+- **Routes**, as for JIT: `GET /api/policy/sod/export` (`graph.read`), `POST /api/policy/sod/validate` and `/plan`
+  (`sod.manage` + step-up like every `sod.manage` route, change nothing; the plan lists each ruleset as `create`, `update`, `retire` or `unchanged` with the
+  `function`/`risk` entries behind it, adoptions, and `plan_sha256`) and `POST /api/policy/sod/apply`
+  (`admin.change.request` + step-up, files a `sod.bundle.apply` change request). **Every apply takes two people**; the
+  apply plans again and refuses `409 stale_plan` if the plan moved. Exporting and applying the export plans as no
+  change, so the risks compiled (and the violations found) are the same.
+- **Provenance.** Every ruleset an apply writes gets a `sod_policy_refs` row (`{commit, path, bundle_sha256}`, version
+  after the write); the existing `sod_versions` and `sod.*` audit events are written as for any change, plus
+  `policy.sod.applied`. A ruleset made in the UI is adopted by the first apply that names it (the plan says so).
+- **Full mode** retires (keeps, never deletes) the risks a listed ruleset no longer lists, and the rulesets an earlier
+  apply wrote that the bundle no longer lists; rulesets made in the UI are never retired. Retirements count against
+  the deletion guard's `group_members` limit (`409 deletion_guard`), and an apply of more than
+  `TESSERA_POLICY_MAX_STEPS` writes is `413 plan_too_large`; both are refused outright with no override.
+- Not done yet: the ownership lock (`409 policy_managed` for UI edits of repository-managed rulesets) of design
+  section 6.3, which no kind has yet.
 
 #### Role mining
 
