@@ -123,7 +123,9 @@ The loader also emits one fixed policy (`permit … jit_request … when { princ
 
 Exactly `sod.Bundle` (`tessera.sod/v1`): ruleset, functions with selectors, risks with functions, subjects and remediation. The loader maps it to `SodFunction`/`SodRisk`/`SodRuleset` entities for validation and cross-references. Pairwise conflicts are not expressible as a per-fact Cedar `forbid`, so detection stays in `internal/sod` (D2).
 
-### 3.5 AgentScope (`agents/<key>.cedar`)
+### 3.5 AgentScope (`agents/<key>.yaml`)
+
+**Implemented in AC-7 (#653) as YAML, not Cedar.** The server applies `agents/<key>.yaml` (`tessera.agentscope/v1`, `internal/agentscope`): an agent or blueprint selector, `allow.actions` (classes `read`, `write`, `admin`, `delegate`) and `allow.resources` (classes by system, environment, tag and sensitivity), default deny, and an owner ceiling (an agent may not hold what its owner does not). It is compiled into the graph invariants `agent-out-of-scope` and `agent-exceeds-owner` in `internal/policy`. A Cedar `permit` file in `agents/` (below) is still checked by the offline CLI but the server refuses to apply it. Reasons: the selector must be resolved against the tenant's discovered agents at evaluation time, the owner ceiling needs a comparison with another identity's effective permissions (not a per-fact `forbid`), and the action class needs a classifier that Cedar facts do not have. Details in `mvp/README.md` "Agent scopes as code". The original Cedar form follows.
 
 ```cedar
 @id("support-bot")  @agent("entra:7f3c…")        // agent_profiles (source, external_id) or a blueprint app id

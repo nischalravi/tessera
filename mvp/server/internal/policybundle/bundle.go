@@ -65,9 +65,11 @@ type Bundle struct {
 	Sod        []SodFile
 	Birthright []PolicyFile
 	Agents     []PolicyFile
-	Invariants []PolicyFile
-	Tests      []TestFile
-	entities   *cedarx.Entities // roles and eligibilities as entities
+	// AgentScopes are the agents/<key>.yaml documents (AC-7); Agents are the Cedar files of the same folder.
+	AgentScopes []AgentScopeFile
+	Invariants  []PolicyFile
+	Tests       []TestFile
+	entities    *cedarx.Entities // roles and eligibilities as entities
 }
 
 // PolicyFile is a Cedar file of a folder.
@@ -154,6 +156,7 @@ func (l *loader) run(attrs []string) {
 	l.loadSod()
 	l.b.Birthright = l.loadCedar(DirBirthright, "permit")
 	l.b.Agents = l.loadCedar(DirAgents, "permit")
+	l.loadAgentScopes()
 	l.b.Invariants = l.loadCedar(DirInvariants, "forbid")
 	l.crossCheck()
 	l.loadTests()
@@ -188,9 +191,16 @@ func (l *loader) loadSchema(attrs []string) {
 func (l *loader) loadCedar(dir, effect string) []PolicyFile {
 	var out []PolicyFile
 	ids := map[string]string{}
+	holds := ".cedar files"
+	if dir == DirAgents {
+		holds = ".cedar files and .yaml agent scopes"
+	}
 	for _, p := range l.paths(dir) {
+		if dir == DirAgents && isYAML(p) {
+			continue // an agent scope document (loadAgentScopes)
+		}
 		if !strings.HasSuffix(p, ".cedar") {
-			l.add(p, 0, "unexpected_file", "%s/ holds .cedar files only", dir)
+			l.add(p, 0, "unexpected_file", "%s/ holds %s only", dir, holds)
 			continue
 		}
 		ps, err := l.b.Schema.Check(p, l.files[p])

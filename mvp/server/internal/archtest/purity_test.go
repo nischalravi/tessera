@@ -19,6 +19,7 @@ import (
 // pureDirs are the module-relative directories under the rule.
 var pureDirs = []string{
 	"internal/aws/eval",
+	"internal/agentscope",
 	"internal/cedarx",
 	"internal/policybundle",
 	"internal/aws/glob",

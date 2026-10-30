@@ -17,6 +17,7 @@ import (
 const (
 	cedarGoModule  = "github.com/cedar-policy/cedar-go"
 	cedarxDir      = "internal/cedarx"
+	agentscopeDir  = "internal/agentscope"
 	moduleInternal = "github.com/nischalravi/tessera/mvp/server/"
 )
 
@@ -73,7 +74,8 @@ func TestCedarGoOnlyInCedarx(t *testing.T) {
 // CLI with no tenant and no network, so, besides the purity rule (no os, net,
 // database/sql, clock), nothing it imports, directly or through other module
 // packages, may reach the store, the HTTP layer or the outbound client; its only
-// module dependency is internal/cedarx.
+// module dependencies are internal/cedarx and internal/agentscope (AC-7: the agent
+// scope document, itself pure and importing no module package).
 func TestPolicyBundleIsOffline(t *testing.T) {
 	graph := moduleImports(t, moduleRoot(t))
 	const bundle = "internal/policybundle"
@@ -82,9 +84,12 @@ func TestPolicyBundleIsOffline(t *testing.T) {
 		t.Fatalf("package %s not found; the test is not looking at the module", bundle)
 	}
 	for _, d := range deps {
-		if d != cedarxDir {
-			t.Errorf("%s imports %s; its only module dependency is %s", bundle, d, cedarxDir)
+		if d != cedarxDir && d != agentscopeDir {
+			t.Errorf("%s imports %s; its only module dependencies are %s and %s", bundle, d, cedarxDir, agentscopeDir)
 		}
+	}
+	if len(graph[agentscopeDir]) != 0 {
+		t.Errorf("%s imports %v; it depends on no Tessera package", agentscopeDir, graph[agentscopeDir])
 	}
 	for _, banned := range []string{"internal/store", "internal/api", "internal/safehttp", "internal/sod"} {
 		if chain := reachable(graph, bundle, banned); chain != nil {
