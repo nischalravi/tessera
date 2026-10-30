@@ -193,6 +193,8 @@ var tables = []string{
 	"lp_false_positives",
 	// JIT eligibility as code: the enforcement switch, the rules, the groups they name and their versions (schema/0954_jit_eligibility.sql)
 	"jit_settings", "jit_eligibility", "jit_eligibility_groups", "jit_eligibility_versions",
+	// the repository change behind each SoD ruleset an apply wrote (schema/0955_sod_policy_refs.sql)
+	"sod_policy_refs",
 	// the automatic policy from the access-as-code repository (schema/0953_lp_auto_policy.sql)
 	"lp_auto_policy",
 	// AWS usage (schema/0915_aws_usage.sql)

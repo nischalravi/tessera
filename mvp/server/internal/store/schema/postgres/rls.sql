@@ -2530,6 +2530,13 @@ CREATE POLICY tenant_isolation ON jit_eligibility_versions
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE sod_policy_refs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sod_policy_refs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON sod_policy_refs;
+CREATE POLICY tenant_isolation ON sod_policy_refs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN
