@@ -202,6 +202,17 @@ func TestClassOf(t *testing.T) {
 		{"storage.objects.get", false, "read"},
 		{"storage.objects.create", false, "write"},
 		{"secretsmanager:PutSecretValue", false, "write"},
+		// issue #755: credential minting that does not read like a known token verb, and wildcards outside the verb
+		{"sso:GetRoleCredentials", false, "delegate"},
+		{"cognito-identity:GetOpenIdToken", false, "delegate"},
+		{"cognito-identity:GetOpenIdTokenForDeveloperIdentity", false, "delegate"},
+		{"iam.serviceAccountKeys.create", false, "admin"},
+		{"iam.serviceAccountKeys.get", false, "read"},
+		{"Microsoft.Authorization/*/write", false, "admin"},
+		{"*/write", false, "admin"},
+		{"Microsoft.Compute/*/delete", false, "admin"},
+		{"Microsoft.Authorization/*/read", false, "read"},
+		{"*/read", false, "read"},
 	}
 	for _, tc := range tests {
 		if got := agentscope.ClassOf(tc.action, tc.privileged); got != tc.want {
