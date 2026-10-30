@@ -1917,9 +1917,11 @@ owner_ceiling: true         # default; false lets the agent hold what its owner 
   resource's tags, where connectors put classification values). A class that sets no field is refused (it would match
   everything). The action class comes from the action name (`agentscope.ClassOf`): `delegate` for pass-role,
   assume-role, impersonate, act-as and credential-minting verbs (`sts:GetFederationToken`, `GetSessionToken`,
-  `GetClusterCredentials`, `getAccessToken`, `signJwt`, checked before the read prefixes); `admin` for privileged
-  actions, any wildcard (`s3:Get*` is admin, not read), and policy, ACL, attach, grant, login-profile, MFA-device,
-  group-membership, service-linked-role or role-assignment actions; `read` for get, list, describe, select and the
+  `GetClusterCredentials`, `getAccessToken`, `signJwt`, `sso:GetRoleCredentials`, `GetOpenIdToken`, checked before the
+  read prefixes); `admin` for privileged actions, a wildcard in the verb (`s3:Get*` is admin, not read) or anywhere in
+  an action that is not a read (`Microsoft.Authorization/*/write` is admin; `*/read` stays read), and policy, ACL,
+  attach, grant, login-profile, MFA-device, group-membership, service-linked-role, role-assignment or service-account-key
+  actions; `read` for get, list, describe, select and the
   like; everything else, including a verb nobody classified, is `write`. The verb is the last segment after `:`,
   `/` or `.`, and for Azure and GCP names the object before it counts too
   (`Microsoft.Authorization/roleAssignments/write` is admin).
