@@ -2537,6 +2537,20 @@ CREATE POLICY tenant_isolation ON sod_policy_refs
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE agent_scopes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_scopes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON agent_scopes;
+CREATE POLICY tenant_isolation ON agent_scopes
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE agent_scope_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_scope_versions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON agent_scope_versions;
+CREATE POLICY tenant_isolation ON agent_scope_versions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN

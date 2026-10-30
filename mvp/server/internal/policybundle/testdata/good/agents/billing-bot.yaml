@@ -1,0 +1,13 @@
+schema: tessera.agentscope/v1
+key: billing-bot
+name: Billing bot
+description: Reads billing data in prod; never writes, never administers.
+agent:
+  source: entra
+  external_id: 9a1b
+allow:
+  actions: [read]
+  resources:
+    - systems: [snowflake]
+      environments: [prod]
+      sensitivity: [internal]

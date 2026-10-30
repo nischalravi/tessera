@@ -1885,6 +1885,77 @@ Issue #652 (AC-6; `internal/sodascode`, schema `0955_sod_policy_refs.sql`, Postg
 - Not done yet: the ownership lock (`409 policy_managed` for UI edits of repository-managed rulesets) of design
   section 6.3, which no kind has yet.
 
+#### Agent scopes as code (AC-7)
+
+What an AI agent may hold, declared as `agents/<key>.yaml` (`tessera.agentscope/v1`, `internal/agentscope`) and
+applied through the same two-person path as roles, JIT and SoD (issue #653, design
+`docs/design/access-as-code-repo.md` section 3.5). A scope is a ceiling, not a grant: once an agent has one,
+anything it holds outside it is a violation.
+
+```yaml
+schema: tessera.agentscope/v1
+key: support-bot            # the file is agents/support-bot.yaml
+name: Support bot
+severity: high              # critical|high|medium|low, default high
+agent:                      # exactly one of: an agent of the tenant ...
+  source: entra
+  external_id: 7f3c
+  # blueprint: <app id>     # ... or every agent created from an Entra blueprint (agent_links)
+allow:
+  actions: [read, write]    # classes: read, write, admin, delegate (no hierarchy: write does not imply read)
+  resources:                # inside the scope when ANY class matches; inside a class every field set must match
+    - systems: [aws]
+      tags_any: [support]
+    - systems: [snowflake]
+      environments: [prod]
+      sensitivity: [internal, public]
+owner_ceiling: true         # default; false lets the agent hold what its owner does not (the plan warns)
+```
+
+- **Model.** Default deny: every effective permission of a scoped agent needs its **action class** listed and its
+  **resource** inside one resource class (`systems`, `environments`, `tags_any`, `sensitivity`; the last two read the
+  resource's tags, where connectors put classification values). A class that sets no field is refused (it would match
+  everything). The action class comes from the action name (`agentscope.ClassOf`): `delegate` for pass-role,
+  assume-role, impersonate, act-as and credential-minting verbs (`sts:GetFederationToken`, `GetSessionToken`,
+  `GetClusterCredentials`, `getAccessToken`, `signJwt`, checked before the read prefixes); `admin` for privileged
+  actions, any wildcard (`s3:Get*` is admin, not read), and policy, ACL, attach, grant, login-profile, MFA-device,
+  group-membership, service-linked-role or role-assignment actions; `read` for get, list, describe, select and the
+  like; everything else, including a verb nobody classified, is `write`. The verb is the last segment after `:`,
+  `/` or `.`, and for Azure and GCP names the object before it counts too
+  (`Microsoft.Authorization/roleAssignments/write` is admin).
+  **Retagging caveat:** `tags_any` and `sensitivity` select on the resource's tags, so an agent that may write a
+  resource's tags can move that resource into its own scope. Keep tag-write out of an agent's scope, or scope those
+  resources by `systems` and `environments`, which come from the connector rather than the resource. An agent without a scope is not checked (nhi-ownership and the agent views report it). An
+  agent's own scopes are its ceiling; its blueprint's scopes apply only when it has none of its own, so a broad
+  blueprint scope never widens a narrower agent scope.
+- **Delegation.** With `owner_ceiling` (the default) an agent may not hold a permission its owner does not hold; the
+  check walks the owner chain to a person, and every scoped agent on the way lends its scope as a further ceiling.
+  It fails closed: an agent with no owner, an owner the graph does not know, a terminated owner, an owner chain that
+  is a cycle or ends at an agent, reports every permission it holds.
+- **Compiled to invariants.** The tenant's active scopes add two policies (only while a scope is active),
+  `agent-out-of-scope` (key `<scope key>:<identity id>`) and `agent-exceeds-owner` (key `<scope key>:<identity id>:owner`),
+  evaluated over the graph's effective permissions in `internal/policy`, so `/api/violations`, what-if simulation and
+  reviews see them. The finding carries the first permissions, their paths and edges; a finding whose permissions are
+  all approximate, conditional or unsupported is low fidelity (reported, never blocking). Cedar invariants are
+  unchanged: their `action_class` fact is still `admin` or `unclassified`.
+- **Bundle and routes**, as for SoD: `tessera.yaml` with `manage: {agents: partial|full}`; `GET
+  /api/policy/agents/export` (`graph.read`), `POST /api/policy/agents/validate` and `/plan` (`agents.manage` +
+  step-up, change nothing; the plan lists each scope as `create`, `update`, `retire` or `unchanged` and gives
+  `plan_sha256`), `POST /api/policy/agents/apply` (`admin.change.request` + step-up, files an
+  `agent_scopes.bundle.apply` change request). **Every apply takes two people**; the apply plans again and refuses
+  `409 stale_plan` if the plan moved, `413 plan_too_large` over `TESSERA_POLICY_MAX_STEPS`, `409 deletion_guard`
+  when full-mode retirements pass the guard. Files are read strictly (unknown fields, duplicate keys, anchors,
+  aliases and a second document are refused; the path must be `agents/<key>.yaml`).
+- **Tenant isolation.** The agent or blueprint must be one the tenant discovered (`agent_profiles`, `agent_links`,
+  `agent_blueprints`), so a selector naming another tenant's agent is refused as `unknown_agent`, and a `tenant:`
+  that is not the session's is `tenant_mismatch`. A Cedar file in `agents/` is checked by the offline CLI only; the
+  server refuses it (`cedar_scope_unsupported`) rather than ignore it.
+- **Provenance.** `agent_scopes` (canonical document, version, status) and append-only `agent_scope_versions` with the
+  `{commit, path, bundle_sha256}` policy ref; audit `policy.agent_scope.create|update|retire` and
+  `policy.agent_scopes.applied`. Schema `0956_agent_scopes.sql` (Postgres 0963 and 0964).
+- Not done yet: scopes for MCP tokens and delegation depth limits (`max_delegation_depth`), and the Cedar `action_class`
+  fact using the same classes.
+
 #### Role mining
 
 **Directory → Roles → Mining** (issue #298, `internal/roles/mining`, schema `0420_role_mining.sql`,
