@@ -1915,9 +1915,16 @@ owner_ceiling: true         # default; false lets the agent hold what its owner 
   **resource** inside one resource class (`systems`, `environments`, `tags_any`, `sensitivity`; the last two read the
   resource's tags, where connectors put classification values). A class that sets no field is refused (it would match
   everything). The action class comes from the action name (`agentscope.ClassOf`): `delegate` for pass-role,
-  assume-role, impersonate and the like; `admin` for privileged, wildcard and policy, ACL, attach, grant or
-  key-deletion actions; `read` for get, list, describe, select and the like; everything else, including a verb nobody
-  classified, is `write`. An agent without a scope is not checked (nhi-ownership and the agent views report it). An
+  assume-role, impersonate, act-as and credential-minting verbs (`sts:GetFederationToken`, `GetSessionToken`,
+  `GetClusterCredentials`, `getAccessToken`, `signJwt`, checked before the read prefixes); `admin` for privileged
+  actions, any wildcard (`s3:Get*` is admin, not read), and policy, ACL, attach, grant, login-profile, MFA-device,
+  group-membership, service-linked-role or role-assignment actions; `read` for get, list, describe, select and the
+  like; everything else, including a verb nobody classified, is `write`. The verb is the last segment after `:`,
+  `/` or `.`, and for Azure and GCP names the object before it counts too
+  (`Microsoft.Authorization/roleAssignments/write` is admin).
+  **Retagging caveat:** `tags_any` and `sensitivity` select on the resource's tags, so an agent that may write a
+  resource's tags can move that resource into its own scope. Keep tag-write out of an agent's scope, or scope those
+  resources by `systems` and `environments`, which come from the connector rather than the resource. An agent without a scope is not checked (nhi-ownership and the agent views report it). An
   agent named by its own scope and by its blueprint's scope is in scope when either allows the permission.
 - **Delegation.** With `owner_ceiling` (the default) an agent may not hold a permission its owner does not hold; when
   the owner is itself an agent with a scope, that scope is the ceiling as well. An agent with no owner is skipped

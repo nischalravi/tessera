@@ -482,6 +482,8 @@ Synthesized from Gartner-cited statistics, practitioner guides and IDPro comment
 21. **COULD: behavioral ITDR for agents.** Baseline per-agent tool and data-access patterns and alert or auto-suspend on anomalies, such as a sudden bulk export or new egress destination.
 22. **COULD: agent-policy simulation.** Dry-run "what could this agent reach if hijacked?" and compute blast radius from the entitlement graph.
 
+**Agent scopes (AC-7).** Tessera declares an agent's allowed action and resource classes in YAML (`agents/<key>.yaml`) and compiles them to an offline graph invariant in Go, not a runtime decision point. That is fine while the scopes only report violations. If agent scopes ever gate live requests, they need Cedar permit/forbid semantics: keep the YAML as the source and generate Cedar from it.
+
 ### 8.2 Data-model entities and fields
 
 | Entity | Key fields |

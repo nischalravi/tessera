@@ -7,31 +7,42 @@ import "strings"
 // or write (everything else, so a verb nobody classified is never taken for a read). privileged is the
 // permission's own flag from the connector and makes it admin unless it delegates.
 //
-// The class is read from the action name as a connector reports it ("s3:GetObject", "iam:PassRole", "read"); the
-// service prefix is ignored except for delegation words and the bare wildcard.
+// The class is read from the action name as a connector reports it ("s3:GetObject", "iam:PassRole",
+// "Microsoft.Authorization/roleAssignments/write", "iam.serviceAccounts.actAs", "read"). The verb is the last
+// segment after ":", "/" or "."; for a name with three or more segments (Azure, GCP) the segment before the verb
+// names the object and counts too, so a write to role assignments is admin. A wildcard anywhere in the verb is
+// admin, never read: "s3:Get*" also matches credential-minting verbs.
 func ClassOf(action string, privileged bool) string {
 	a := strings.ToLower(strings.TrimSpace(action))
-	verb := a
-	if i := strings.LastIndex(a, ":"); i >= 0 {
-		verb = a[i+1:]
+	segs := strings.FieldsFunc(a, func(r rune) bool { return r == ':' || r == '/' || r == '.' })
+	verb, obj := "", ""
+	if n := len(segs); n > 0 {
+		verb = segs[n-1]
+		if n >= 3 {
+			obj = segs[n-2]
+		}
 	}
 	switch {
-	case hasAny(a, delegateWords):
+	case hasAny(a, delegateWords), verb == "actas":
 		return ClassDelegate
-	case privileged, verb == "*", verb == "":
+	case privileged, verb == "", strings.ContainsAny(verb, "*?"):
 		return ClassAdmin
 	case hasPrefixAny(verb, readVerbs):
 		return ClassRead
-	case hasAny(verb, adminWords), strings.HasSuffix(verb, "*"):
+	case hasAny(verb, adminWords), hasAny(obj, adminWords):
 		return ClassAdmin
 	}
 	return ClassWrite
 }
 
 var (
-	delegateWords = []string{"passrole", "assumerole", "impersonat", "delegat", "run_as", "act_as", "sudo", "tokenexchange", "token_exchange"}
-	adminWords    = []string{"admin", "owner", "manage", "policy", "policies", "acl", "attach", "detach", "createrole", "createuser",
-		"createaccesskey", "grant", "revoke", "keydeletion", "deletekey", "permission"}
+	delegateWords = []string{"passrole", "assumerole", "impersonat", "delegat", "run_as", "act_as", "sudo", "tokenexchange", "token_exchange",
+		// verbs that mint credentials for a principal, checked before the read prefixes since most begin with "get"
+		"getfederationtoken", "getsessiontoken", "getclustercredentials", "getauthorizationtoken", "getcredentials",
+		"getaccesstoken", "generateaccesstoken", "generateidtoken", "signjwt", "signblob"}
+	adminWords = []string{"admin", "owner", "manage", "policy", "policies", "acl", "attach", "detach", "createrole", "createuser",
+		"createaccesskey", "grant", "revoke", "keydeletion", "deletekey", "permission",
+		"loginprofile", "addusertogroup", "servicelinkedrole", "mfadevice", "roleassignment"}
 	readVerbs = []string{"get", "list", "describe", "head", "read", "select", "view", "query", "scan", "search", "fetch",
 		"download", "show", "lookup", "batchget", "browse"}
 )

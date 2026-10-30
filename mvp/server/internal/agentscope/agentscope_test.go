@@ -159,7 +159,8 @@ func TestClassOf(t *testing.T) {
 		{"s3:ListBucket", false, "read"},
 		{"snowflake:SELECT", false, "read"},
 		{"read", false, "read"},
-		{"s3:Get*", false, "read"},
+		{"s3:Get*", false, "admin"},
+		{"iam:List?", false, "admin"},
 		{"ec2:DescribeInstances", false, "read"},
 		{"s3:GetBucketAcl", false, "read"},
 		{"s3:PutObject", false, "write"},
@@ -180,6 +181,27 @@ func TestClassOf(t *testing.T) {
 		{"sts:AssumeRole", true, "delegate"},
 		{"run_as", false, "delegate"},
 		{"impersonate", false, "delegate"},
+		// credential minting reads like a get but hands out a principal's authority
+		{"sts:GetFederationToken", false, "delegate"},
+		{"sts:GetSessionToken", false, "delegate"},
+		{"redshift:GetClusterCredentials", false, "delegate"},
+		{"ecr:GetAuthorizationToken", false, "delegate"},
+		{"iam.serviceAccounts.actAs", false, "delegate"},
+		{"iam.serviceAccounts.getAccessToken", false, "delegate"},
+		{"iam.serviceAccounts.signJwt", false, "delegate"},
+		{"iam:CreateLoginProfile", false, "admin"},
+		{"iam:AddUserToGroup", false, "admin"},
+		{"iam:CreateServiceLinkedRole", false, "admin"},
+		{"iam:DeactivateMFADevice", false, "admin"},
+		// Azure and GCP names: the verb is the last segment, the object before it counts for admin
+		{"Microsoft.Authorization/roleAssignments/write", false, "admin"},
+		{"Microsoft.Authorization/roleAssignments/read", false, "read"},
+		{"Microsoft.Storage/storageAccounts/read", false, "read"},
+		{"Microsoft.Compute/virtualMachines/write", false, "write"},
+		{"resourcemanager.projects.setIamPolicy", false, "admin"},
+		{"storage.objects.get", false, "read"},
+		{"storage.objects.create", false, "write"},
+		{"secretsmanager:PutSecretValue", false, "write"},
 	}
 	for _, tc := range tests {
 		if got := agentscope.ClassOf(tc.action, tc.privileged); got != tc.want {
