@@ -75,7 +75,7 @@ func planErr(err error) error {
 // applyTerraformPlan reads the request's plan, maps it against the base snapshot and appends its operations to the
 // request's. It returns the answer's description of the plan, and the snapshot it loaded so the AWS half need not
 // load it again.
-func (s *Server) applyTerraformPlan(tx *store.TenantTx, in *policyDiffIn) (*policyDiffTerraform, *awsCtx, error) {
+func (s *Server) applyTerraformPlan(tx *store.TenantTx, in *policyDiffIn, maxOps int) (*policyDiffTerraform, *awsCtx, error) {
 	plan, err := tfplan.Parse(in.TerraformPlan)
 	if err != nil {
 		return nil, nil, planErr(err)
@@ -84,7 +84,11 @@ func (s *Server) applyTerraformPlan(tx *store.TenantTx, in *policyDiffIn) (*poli
 	if err != nil {
 		return nil, nil, err
 	}
-	res := tfplan.Map(plan, tfplan.NewEstate(ac.eng.snap))
+	res := tfplan.Map(plan, tfplan.NewEstate(ac.eng.snap), max(1, maxOps-len(in.Operations)))
+	if res.Exceeded {
+		return nil, nil, &readiness.Error{Status: http.StatusRequestEntityTooLarge, Code: "plan_too_large",
+			Msg: "the plan makes more operations than a preview takes (TESSERA_POLICY_MAX_STEPS). Split it into smaller changes"}
+	}
 	in.Operations = append(in.Operations[:len(in.Operations):len(in.Operations)], res.Operations...)
 	sum := sha256.Sum256(in.TerraformPlan)
 	v := &policyDiffTerraform{FormatVersion: plan.FormatVersion, PlanSHA256: hex.EncodeToString(sum[:]), Resources: res.Resources,

@@ -41,7 +41,7 @@ func mapFixture(t *testing.T, name string) *Result {
 		t.Fatalf("%s: %v", name, err)
 	}
 	_, e := estate(t)
-	return Map(p, e)
+	return Map(p, e, 0)
 }
 
 func opLine(o blast.Operation) string {
@@ -97,7 +97,8 @@ func TestMap_IAM(t *testing.T) {
 	if got := opLines(r.Operations); !reflect.DeepEqual(got, want) {
 		t.Errorf("operations:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if len(r.Findings) != 0 || r.Conditional() {
+	// the one attachment that finds its policy by reference is applied, and reported as resting on that assumption
+	if got := findings(r); !reflect.DeepEqual(got, []string{"aws_iam_role_policy_attachment.deploy conditional"}) || !r.Conditional() {
 		t.Errorf("findings = %v", findings(r))
 	}
 	if r.Resources != 9 || r.Mapped != 9 || r.Ignored != 0 {
@@ -133,7 +134,7 @@ func TestMap_S3AndOrganization(t *testing.T) {
 	if put != att {
 		t.Errorf("the attachment names %s, the policy is put as %s", att, put)
 	}
-	want := []string{"aws_organizations_policy.tags unsupported", "aws_s3_bucket_policy.ghost unresolved"}
+	want := []string{"aws_organizations_policy.tags unsupported", "aws_organizations_policy_attachment.deny_prod conditional", "aws_s3_bucket_policy.ghost unresolved"}
 	if got := findings(r); !reflect.DeepEqual(got, want) {
 		t.Errorf("findings = %v, want %v", got, want)
 	}
@@ -197,11 +198,11 @@ func TestMap_OrderIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, e := estate(t)
-	a, _ := json.Marshal(Map(p, e))
+	a, _ := json.Marshal(Map(p, e, 0))
 	for i, j := 0, len(p.Changes)-1; i < j; i, j = i+1, j-1 {
 		p.Changes[i], p.Changes[j] = p.Changes[j], p.Changes[i]
 	}
-	if b, _ := json.Marshal(Map(p, e)); string(a) != string(b) {
+	if b, _ := json.Marshal(Map(p, e, 0)); string(a) != string(b) {
 		t.Errorf("reversed plan gives a different answer:\n%s\n%s", a, b)
 	}
 }
@@ -211,7 +212,7 @@ func TestMap_NoEstate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := Map(p, NewEstate(nil))
+	r := Map(p, NewEstate(nil), 0)
 	if len(r.Operations) > 2 {
 		// only the policy documents can be put without an estate
 		t.Errorf("operations against nothing: %v", opLines(r.Operations))
@@ -356,7 +357,7 @@ func TestMap_Cases(t *testing.T) {
 				tc.ops = nil
 				tc.findings = []string{"aws_organizations_policy.s unresolved"}
 			}
-			r := Map(p, e)
+			r := Map(p, e, 0)
 			var got []string
 			for _, o := range r.Operations {
 				got = append(got, opLine(o))
@@ -450,7 +451,7 @@ func TestMap_ReferenceInModule(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, e := estate(t)
-	r := Map(p, e)
+	r := Map(p, e, 0)
 	got := opLines(r.Operations)
 	// the estate has two accounts and the plan names none, so the new policy has a placeholder ARN, and the attachment finds it by reference
 	if len(got) != 2 || !strings.HasPrefix(got[1], "attach "+awstest.EstateEngineer+" arn:aws:iam::000000000000:policy/tessera-plan/module_iam") || strings.Fields(got[0])[1] != strings.Fields(got[1])[2] {
@@ -477,7 +478,7 @@ func FuzzParseMap(f *testing.F) {
 			}
 			return
 		}
-		r := Map(p, e)
+		r := Map(p, e, 0)
 		if len(r.Operations) > MaxResourceChanges*8 {
 			t.Fatalf("%d operations from %d changes", len(r.Operations), len(p.Changes))
 		}
@@ -494,7 +495,7 @@ func FuzzParseMap(f *testing.F) {
 			t.Fatalf("operations do not apply: %v", err)
 		}
 		a, _ := json.Marshal(r)
-		if b, _ := json.Marshal(Map(p, e)); string(a) != string(b) {
+		if b, _ := json.Marshal(Map(p, e, 0)); string(a) != string(b) {
 			t.Fatal("two mappings of one plan differ")
 		}
 	})

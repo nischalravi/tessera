@@ -122,7 +122,7 @@ func (s *Server) policyDiff(_ http.ResponseWriter, r *http.Request, _ *params) (
 	var tf *policyDiffTerraform
 	var ac *awsCtx
 	if planGiven {
-		if tf, ac, err = s.applyTerraformPlan(tx, &in); err != nil {
+		if tf, ac, err = s.applyTerraformPlan(tx, &in, opt.Limit()); err != nil {
 			return nil, err
 		}
 	}

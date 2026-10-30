@@ -11,10 +11,12 @@ import (
 // Estate is what the mapping knows about the AWS estate a plan is applied to: the snapshot, indexed by the names a
 // Terraform resource uses (a role's name, a bucket's name, an organization policy's id). It only reads the snapshot.
 type Estate struct {
-	snap      *model.Snapshot
-	byName    map[string]map[string][]string // "user" | "role" | "group" -> name -> ARNs, sorted
-	managed   map[string]bool                // source ARNs of identity and boundary documents
-	inline    map[string]bool                // "<entity ARN>#inline/<name>" sources
+	snap    *model.Snapshot
+	byName  map[string]map[string][]string // "user" | "role" | "group" -> name -> ARNs, sorted
+	managed map[string]bool                // source ARNs of identity and boundary documents
+	inline  map[string]bool                // "<entity ARN>#inline/<name>" sources
+	// viaGroup holds "group/<name>|<policy ARN>" for each managed policy attached to a user through a group, indexed once.
+	viaGroup  map[string]bool
 	accounts  []string
 	partition string
 }
@@ -22,7 +24,7 @@ type Estate struct {
 // NewEstate indexes a snapshot. A nil snapshot is an estate with nothing in it.
 func NewEstate(snap *model.Snapshot) *Estate {
 	e := &Estate{snap: snap, byName: map[string]map[string][]string{"user": {}, "role": {}, "group": {}},
-		managed: map[string]bool{}, inline: map[string]bool{}, partition: "aws"}
+		managed: map[string]bool{}, inline: map[string]bool{}, viaGroup: map[string]bool{}, partition: "aws"}
 	if snap == nil {
 		return e
 	}
@@ -48,6 +50,17 @@ func NewEstate(snap *model.Snapshot) *Estate {
 			e.inline[d.SourceARN] = true
 		case d.Kind == model.PolicyIdentity || d.Kind == model.PolicyBoundary:
 			e.managed[d.SourceARN] = true
+		}
+	}
+	for _, a := range snap.Attachments {
+		if a.AttachmentType != model.AttachManaged {
+			continue
+		}
+		src := e.docSource(a.PolicyID)
+		for _, v := range a.Via {
+			if strings.HasPrefix(v, "group/") {
+				e.viaGroup[v+"|"+src] = true
+			}
 		}
 	}
 	for p := range parts {
@@ -175,13 +188,7 @@ func (e *Estate) attached(target, policyARN string) bool {
 	if !ok {
 		return false
 	}
-	via := "group/" + name
-	for _, a := range e.snap.Attachments {
-		if a.AttachmentType == model.AttachManaged && slices.Contains(a.Via, via) && e.docSource(a.PolicyID) == policyARN {
-			return true
-		}
-	}
-	return false
+	return e.viaGroup["group/"+name+"|"+policyARN]
 }
 
 func (e *Estate) hasResource(arn string) bool {

@@ -74,7 +74,7 @@ func TestPolicyDiffAPI_TerraformPlan(t *testing.T) {
 	body := `{"terraform_plan":` + planFixture(t, "iam.json") + `}`
 	ans, raw := tfDo(t, h, pa, body, 200)
 	tf := ans.Terraform
-	if tf == nil || tf.FormatVersion != "1.2" || tf.TerraformVersion != "1.9.5" || tf.Operations != 10 || tf.Resources != 9 || tf.Conditional || len(tf.Findings) != 0 || len(tf.PlanSHA256) != 64 {
+	if tf == nil || tf.FormatVersion != "1.2" || tf.TerraformVersion != "1.9.5" || tf.Operations != 10 || tf.Resources != 9 || !tf.Conditional || tf.ConditionalChanges != 1 || len(tf.Findings) != 1 || len(tf.PlanSHA256) != 64 {
 		t.Fatalf("terraform = %+v\n%.800s", tf, raw)
 	}
 	if ans.AWS == nil || len(ans.AWS.Operations) != 10 || ans.AWS.Operations[0].Source != "terraform:aws_iam_policy.deploy" {
@@ -198,5 +198,20 @@ func TestPolicyDiffAPI_TerraformPlanStepCeiling(t *testing.T) {
 	rec := reqDo(h, pa, "POST", "/api/policy/diff", `{"terraform_plan":`+planFixture(t, "iam.json")+`}`)
 	if rec.Code != 413 || !strings.Contains(rec.Body.String(), "plan_too_large") {
 		t.Errorf("ten operations over a ceiling of 3: %d %.300s", rec.Code, rec.Body)
+	}
+}
+
+// An unsupported change that can alter who has access makes the answer conditional (a new admin group with a member).
+func TestPolicyDiffAPI_TerraformPlanAccessRelevantUnsupported(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	persistEstate(t, f.DB, f.B.ID, nil)
+	h := newIsolationServerWith(f, withAWSCatalog).Handler()
+	pa := reqLogin(t, f, "pa@b.example", []auth.Role{auth.RolePolicyAdmin}, "")
+	plan := `{"format_version":"1.2","planned_values":{},"resource_changes":[
+	 {"address":"aws_iam_group.admins","mode":"managed","type":"aws_iam_group","name":"admins","change":{"actions":["create"],"before":null,"after":{"name":"admins"},"after_unknown":{}}},
+	 {"address":"aws_iam_user_group_membership.m","mode":"managed","type":"aws_iam_user_group_membership","name":"m","change":{"actions":["create"],"before":null,"after":{"user":"mallory","groups":["admins"]},"after_unknown":{}}}]}`
+	ans, raw := tfDo(t, h, pa, `{"terraform_plan":`+plan+`}`, 200)
+	if ans.Terraform == nil || !ans.Terraform.Conditional || ans.Terraform.Unsupported != 2 || !strings.Contains(raw, `"access_relevant":true`) {
+		t.Errorf("terraform = %+v\n%.600s", ans.Terraform, raw)
 	}
 }

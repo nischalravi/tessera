@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -39,6 +40,9 @@ type Finding struct {
 	Actions []string `json:"actions"`
 	Status  string   `json:"status"`
 	Reason  string   `json:"reason"`
+	// AccessRelevant marks an unsupported change that can alter who has access (an IAM or Organizations resource, a policy
+	// or permission of any service): it makes the answer conditional.
+	AccessRelevant bool `json:"access_relevant,omitempty"`
 }
 
 // Result is what a plan does to the estate.
@@ -53,12 +57,14 @@ type Result struct {
 	Resources int
 	Mapped    int
 	Ignored   int
+	// Exceeded: the plan made more operations than the limit given to Map; the result is partial.
+	Exceeded bool
 }
 
 // Conditional reports whether the answer rests on something the plan leaves unknown or the snapshot lacks.
 func (r *Result) Conditional() bool {
 	for _, f := range r.Findings {
-		if f.Status == StatusConditional || f.Status == StatusUnresolved {
+		if f.Status == StatusConditional || f.Status == StatusUnresolved || (f.Status == StatusUnsupported && f.AccessRelevant) {
 			return true
 		}
 	}
@@ -82,7 +88,7 @@ type mapper struct {
 	p   *Plan
 	e   *Estate
 	res *Result
-	ops []blast.Operation
+	ops []mop
 
 	byBase  map[string][]*Change // module path and type.name, no index
 	orgByID map[string]*Change   // organization policies the plan knows by id
@@ -92,15 +98,33 @@ type mapper struct {
 	pairs   map[string]bool // "<target>|<policy ARN>" the plan attaches
 	touched map[string]bool // addresses that have a finding
 	seen    map[string]bool
+
+	refCache     map[string]*Change // "<resource>|<attribute>" -> what its expression refers to (nil: nothing usable)
+	groupsMoving bool               // the plan creates a group or changes who belongs to one
 }
 
-// Map turns the changes of a plan into operations against the estate, and reports what it cannot turn into one.
-func Map(p *Plan, e *Estate) *Result {
+// mop is an operation with the resource that causes it and its phase.
+type mop struct {
+	op blast.Operation
+	ph int
+	c  *Change
+}
+
+// Map turns the changes of a plan into operations against the estate, and reports what it cannot turn into one. It
+// stops, with Result.Exceeded set, once the plan has made more than maxOps operations (0 is no limit), so a plan
+// cannot make it do unbounded work.
+func Map(p *Plan, e *Estate, maxOps int) *Result {
 	m := &mapper{p: p, e: e, res: &Result{}, byBase: map[string][]*Change{}, orgByID: map[string]*Change{}, polARN: map[string]string{},
-		created: map[string]bool{}, pairs: map[string]bool{}, touched: map[string]bool{}, seen: map[string]bool{}}
+		created: map[string]bool{}, pairs: map[string]bool{}, touched: map[string]bool{}, seen: map[string]bool{}, refCache: map[string]*Change{}}
 	for _, c := range p.Changes {
 		if c.Mode != "managed" {
 			continue
+		}
+		if !ignored(c) {
+			switch c.Type {
+			case "aws_iam_group", "aws_iam_group_membership", "aws_iam_user_group_membership":
+				m.groupsMoving = true
+			}
 		}
 		m.byBase[m.baseKey(c)] = append(m.byBase[m.baseKey(c)], c)
 		if c.Type == "aws_organizations_policy" {
@@ -135,9 +159,17 @@ func Map(p *Plan, e *Estate) *Result {
 		} else if !m.touched[c.Address] {
 			m.note(c, StatusNoEffect, "no attribute the preview evaluates changes")
 		}
+		if maxOps > 0 && len(m.ops) > maxOps {
+			m.res.Exceeded = true
+			break
+		}
 	}
 	sortOperations(m.ops)
-	m.res.Operations = m.ops
+	m.conflicts()
+	m.res.Operations = make([]blast.Operation, len(m.ops))
+	for i, o := range m.ops {
+		m.res.Operations[i] = o.op
+	}
 	sort.Slice(m.res.Findings, func(i, j int) bool {
 		a, b := m.res.Findings[i], m.res.Findings[j]
 		if a.Address != b.Address {
@@ -197,15 +229,32 @@ func (m *mapper) dispatch(c *Change) {
 	case "aws_organizations_policy_attachment":
 		m.orgAttachment(c)
 	default:
-		m.note(c, StatusUnsupported, "the resource type is not mapped to an AWS operation; its effect on access is not in this preview")
+		m.noteUnsupported(c, "the resource type is not mapped to an AWS operation; its effect on access is not in this preview", accessRelevant(c.Type))
 	}
 }
 
 // ---------------------------------------------------------------- reporting
 
-func (m *mapper) note(c *Change, status, reason string) {
+// accessRelevant reports whether a resource type that is not mapped can change who has access: an IAM or Organizations
+// resource, a policy of any service, a KMS, Lambda permission or S3 resource.
+func accessRelevant(t string) bool {
+	for _, p := range []string{"aws_iam_", "aws_organizations_", "aws_kms_", "aws_lambda_permission", "aws_s3_", "aws_ssoadmin_", "aws_sts_", "aws_ram_"} {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return strings.HasSuffix(t, "_policy") || strings.Contains(t, "_policy_") || strings.Contains(t, "_permission")
+}
+
+func (m *mapper) noteUnsupported(c *Change, reason string, relevant bool) {
+	m.noteF(c, StatusUnsupported, reason, relevant)
+}
+
+func (m *mapper) note(c *Change, status, reason string) { m.noteF(c, status, reason, false) }
+
+func (m *mapper) noteF(c *Change, status, reason string, relevant bool) {
 	m.touched[c.Address] = true
-	f := Finding{Address: c.Address, Type: c.Type, Actions: append([]string(nil), c.Actions...), Status: status, Reason: reason}
+	f := Finding{Address: c.Address, Type: c.Type, Actions: append([]string(nil), c.Actions...), Status: status, Reason: reason, AccessRelevant: relevant}
 	key := c.Address + "|" + status + "|" + reason
 	if m.seen[key] {
 		return
@@ -224,7 +273,11 @@ func unresolved(reason string) *issue { return &issue{StatusUnresolved, reason} 
 
 // op adds an operation, labelled with the resource that causes it.
 func (m *mapper) op(c *Change, ch snapshot.PolicyChange) {
-	m.ops = append(m.ops, blast.Operation{PolicyChange: ch, Source: "terraform:" + clipRunes(c.Address, 180)})
+	m.opPhase(c, ch, phase(ch.Op))
+}
+
+func (m *mapper) opPhase(c *Change, ch snapshot.PolicyChange, ph int) {
+	m.ops = append(m.ops, mop{op: blast.Operation{PolicyChange: ch, Source: "terraform:" + clipRunes(c.Address, 180)}, ph: ph, c: c})
 }
 
 func (m *mapper) put(c *Change, op snapshot.PolicyChangeOp, target, doc string) {
@@ -254,10 +307,61 @@ func phase(op snapshot.PolicyChangeOp) int {
 	return 2
 }
 
-func sortOperations(ops []blast.Operation) {
+// conflictKey names the thing an operation sets: two resources that set the same thing leave the result to the apply order.
+func conflictKey(o blast.Operation) string {
+	name := deref(o.PolicyARN)
+	switch o.Op {
+	case snapshot.OpPutPolicyVersion:
+		return "policy|" + o.TargetARN
+	case snapshot.OpPutSCP, snapshot.OpPutRCP:
+		return "orgpolicy|" + o.TargetARN
+	case snapshot.OpPutResourcePolicy:
+		return "resource|" + o.TargetARN
+	case snapshot.OpPutTrustPolicy:
+		return "trust|" + o.TargetARN
+	case snapshot.OpPutBoundary, snapshot.OpDeleteBoundary:
+		return "boundary|" + o.TargetARN
+	case snapshot.OpPutInline, snapshot.OpDeleteInline:
+		return "inline|" + o.TargetARN + "|" + name
+	case snapshot.OpAttach, snapshot.OpDetach:
+		return "attach|" + o.TargetARN + "|" + name
+	case snapshot.OpAttachSCP, snapshot.OpDetachSCP:
+		return "scp|" + o.TargetARN + "|" + name
+	case snapshot.OpAttachRCP, snapshot.OpDetachRCP:
+		return "rcp|" + o.TargetARN + "|" + name
+	}
+	return ""
+}
+
+// conflicts reports, as conditional, the resources whose operations set the same thing as another resource's: a
+// bucket policy that moves between modules is a delete in one and a create in the other, and which wins is not
+// something the plan says.
+func (m *mapper) conflicts() {
+	by := map[string]map[*Change]bool{}
+	for _, o := range m.ops {
+		k := conflictKey(o.op)
+		if k == "" {
+			continue
+		}
+		if by[k] == nil {
+			by[k] = map[*Change]bool{}
+		}
+		by[k][o.c] = true
+	}
+	for _, cs := range by {
+		if len(cs) < 2 {
+			continue
+		}
+		for c := range cs {
+			m.note(c, StatusConditional, "another resource of the plan changes the same policy, attachment or document, so the result depends on the order Terraform applies them")
+		}
+	}
+}
+
+func sortOperations(ops []mop) {
 	sort.SliceStable(ops, func(i, j int) bool {
-		a, b := ops[i], ops[j]
-		if pa, pb := phase(a.Op), phase(b.Op); pa != pb {
+		a, b := ops[i].op, ops[j].op
+		if pa, pb := ops[i].ph, ops[j].ph; pa != pb {
 			return pa < pb
 		}
 		if a.Source != b.Source {
@@ -272,6 +376,8 @@ func sortOperations(ops []blast.Operation) {
 		return deref(a.PolicyARN) < deref(b.PolicyARN)
 	})
 }
+
+func strPtr(s string) *string { return &s }
 
 func deref(s *string) string {
 	if s == nil {
@@ -432,19 +538,40 @@ func sameDoc(c *Change, key, after string) bool {
 }
 
 // strSet reads a set or list of strings. unknown is true when any of it is unknown after the change.
-func strSet(c *Change, after bool, key string) (vals []string, unknown bool) {
+// The set is deduplicated and sorted; dropped counts the entries that are not usable (not text, empty, over 2,048
+// bytes) and those past maxSetEntries, which the caller reports.
+func strSet(c *Change, after bool, key string) (vals []string, unknown bool, dropped int) {
 	v := c.get(after, key)
 	if v.st == stUnknown {
-		return nil, true
+		return nil, true, 0
 	}
 	list, _ := v.v.([]any)
+	seen := map[string]bool{}
 	for _, x := range list {
-		if s, ok := x.(string); ok && s != "" && len(s) <= 2048 {
+		s, ok := x.(string)
+		switch {
+		case !ok || s == "" || len(s) > 2048:
+			dropped++
+		case seen[s]:
+		case len(seen) >= maxSetEntries:
+			dropped++
+		default:
+			seen[s] = true
 			vals = append(vals, s)
 		}
 	}
 	sort.Strings(vals)
-	return vals, false
+	return vals, false, dropped
+}
+
+// maxSetEntries bounds one set of names or ARNs of a resource.
+const maxSetEntries = 1000
+
+// droppedFinding reports entries of a list that the preview could not use, so none is silently ignored.
+func (m *mapper) droppedFinding(c *Change, key string, n int) {
+	if n > 0 {
+		m.note(c, StatusUnresolved, key+" has entries that are not usable (not text, empty, too long, or past the limit of 1,000) and were not applied")
+	}
 }
 
 func minus(a, b []string) []string {
@@ -476,7 +603,25 @@ var notResource = map[string]bool{"var": true, "local": true, "data": true, "mod
 // refTarget finds the one resource of the plan that an unknown attribute is computed from, by the references of its
 // expression in the configuration (policy_arn = aws_iam_policy.deploy.arn). An expression that refers to anything
 // else (a variable, a condition between two resources) is not resolved.
-func (m *mapper) refTarget(c *Change, key string) *Change {
+//
+// Only a reference to one of the attributes the caller expects (or to the whole resource) counts, and each
+// (resource, attribute) is worked out once. Terraform lists the same references for aws_iam_policy.x.arn and for
+// replace(aws_iam_policy.x.arn, ...), so a resolution is never certain: it always adds a conditional finding that
+// says the expression is assumed to be the bare attribute.
+func (m *mapper) refTarget(c *Change, key string, attrs ...string) *Change {
+	ck := m.baseKey(c) + "|" + key
+	t, done := m.refCache[ck]
+	if !done {
+		t = m.resolveRef(c, key, attrs)
+		m.refCache[ck] = t
+	}
+	if t != nil {
+		m.note(c, StatusConditional, key+" is resolved by reference to "+t.Address+"; this assumes the expression is that attribute unchanged")
+	}
+	return t
+}
+
+func (m *mapper) resolveRef(c *Change, key string, attrs []string) *Change {
 	refs := m.p.refs[m.baseKey(c)][key]
 	prefix := ""
 	if mod := stripIndex(c.ModuleAddress); mod != "" {
@@ -486,6 +631,9 @@ func (m *mapper) refTarget(c *Change, key string) *Change {
 	for _, r := range refs {
 		segs := strings.SplitN(stripIndex(r), ".", 3)
 		if len(segs) < 2 || notResource[segs[0]] || !strings.HasPrefix(segs[0], "aws_") {
+			return nil
+		}
+		if len(segs) == 3 && !slices.Contains(attrs, strings.SplitN(segs[2], ".", 2)[0]) {
 			return nil
 		}
 		k := prefix + segs[0] + "." + segs[1]
@@ -590,17 +738,22 @@ func (m *mapper) policyARNOf(c *Change) string {
 
 // lookup finds a user, role or group of the snapshot by name.
 func (m *mapper) lookup(kind, name string) (string, *issue) {
-	arn, n := m.e.find(kind, name, m.account())
-	if n == 0 {
-		arn, n = m.e.find(kind, name, "")
+	// With the account known, only that account's entity counts. With it unknown and several accounts in the estate, a
+	// name is used only when one entity has it and the plan uses one provider configuration.
+	acct := m.account()
+	arn, n := m.e.find(kind, name, acct)
+	if acct == "" && n == 1 && len(m.e.accounts) > 1 && len(m.p.providers) > 1 {
+		return "", unresolved("the plan uses several provider configurations and does not say which account holds this " + kind)
 	}
 	switch {
 	case n == 1:
 		return arn, nil
 	case n > 1:
 		return "", unresolved("more than one " + kind + " of the snapshot has this name and the plan does not say which account")
-	case kind == "group":
+	case kind == "group" && !m.groupsMoving:
 		return "", &issue{StatusNoEffect, "no user of the snapshot is a member of this group, so the change reaches no principal"}
+	case kind == "group":
+		return "", unresolved("the plan creates a group or changes group membership, so who belongs to this group after it is not known")
 	}
 	return "", unresolved("the " + kind + " is not in the snapshot; the preview edits users and roles the snapshot holds, so one the plan creates is not evaluated")
 }
@@ -609,7 +762,7 @@ func (m *mapper) lookup(kind, name string) (string, *issue) {
 // the name is not known until apply.
 func (m *mapper) entity(c *Change, after bool, kind, key string) (string, *issue) {
 	if v := c.get(after, key); v.st == stUnknown {
-		t := m.refTarget(c, key)
+		t := m.refTarget(c, key, "name", "id")
 		if t == nil || t.Type != "aws_iam_"+kind {
 			return "", conditional(key)
 		}
@@ -629,7 +782,7 @@ func (m *mapper) entity(c *Change, after bool, kind, key string) (string, *issue
 // policyArg resolves a managed policy ARN attribute, following a reference to a policy of the plan.
 func (m *mapper) policyArg(c *Change, after bool, key string) (string, *issue) {
 	if v := c.get(after, key); v.st == stUnknown {
-		if t := m.refTarget(c, key); t != nil && t.Type == "aws_iam_policy" && t.After != nil {
+		if t := m.refTarget(c, key, "arn", "id"); t != nil && t.Type == "aws_iam_policy" && t.After != nil {
 			return m.policyARNOf(t), nil
 		}
 		return "", conditional(key)
@@ -761,7 +914,13 @@ func (m *mapper) attach(c *Change, target, arn string) {
 }
 
 func (m *mapper) detach(c *Change, target, arn string) {
-	if !m.e.attached(target, arn) && !m.pairs[target+"|"+arn] {
+	if !m.e.attached(target, arn) {
+		if m.pairs[target+"|"+arn] {
+			// attached by one resource of the plan and detached by another: not an operation that can apply (the pair is
+			// not in the snapshot), and which comes last is not in the plan
+			m.note(c, StatusConditional, "the plan attaches this policy to the same target with another resource, so whether it ends attached depends on the order Terraform applies them")
+			return
+		}
 		m.report(c, unresolved("the policy that the plan detaches is not attached in the snapshot"))
 		return
 	}
@@ -784,14 +943,18 @@ func (m *mapper) exclusiveAttachment(c *Change) {
 	for _, k := range []struct{ key, kind string }{{"users", "user"}, {"roles", "role"}, {"groups", "group"}} {
 		var bset, aset []string
 		if c.Before != nil {
-			bset, _ = strSet(c, false, k.key)
+			var dropped int
+			bset, _, dropped = strSet(c, false, k.key)
+			m.droppedFinding(c, k.key, dropped)
 		}
 		if c.After != nil {
 			var unk bool
-			if aset, unk = strSet(c, true, k.key); unk {
+			var dropped int
+			if aset, unk, dropped = strSet(c, true, k.key); unk {
 				m.report(c, conditional(k.key))
 				continue
 			}
+			m.droppedFinding(c, k.key, dropped)
 		}
 		toDetach, toAttach := minus(bset, aset), minus(aset, bset)
 		if bPol != aPol { // a different policy: every pair changes
@@ -816,7 +979,7 @@ func (m *mapper) exclusiveAttachment(c *Change) {
 
 func (m *mapper) iamRole(c *Change) {
 	if c.After == nil {
-		m.note(c, StatusUnsupported, "deleting a role is not an AWS operation this preview models")
+		m.noteUnsupported(c, "deleting a role is not an AWS operation this preview models", true)
 		return
 	}
 	var arn string
@@ -844,10 +1007,12 @@ func (m *mapper) iamRole(c *Change) {
 	}
 
 	// managed policies attached through the role's own attribute
-	bset, _ := strSet(c, false, "managed_policy_arns")
-	if aset, unk := strSet(c, true, "managed_policy_arns"); unk {
+	bset, _, bdrop := strSet(c, false, "managed_policy_arns")
+	m.droppedFinding(c, "managed_policy_arns", bdrop)
+	if aset, unk, adrop := strSet(c, true, "managed_policy_arns"); unk {
 		m.report(c, conditional("managed_policy_arns"))
 	} else {
+		m.droppedFinding(c, "managed_policy_arns", adrop)
 		for _, p := range minus(bset, aset) {
 			m.detach(c, arn, p)
 		}
@@ -861,31 +1026,36 @@ func (m *mapper) iamRole(c *Change) {
 }
 
 // inlineSet reads the inline_policy blocks of a role: name to document ("" when the document is not usable).
-func inlineSet(c *Change, after bool) (map[string]string, bool) {
+// dropped counts the blocks that are not usable (not an object, a bad name, past the limit).
+func inlineSet(c *Change, after bool) (out map[string]string, unknown bool, dropped int) {
 	v := c.get(after, "inline_policy")
 	if v.st == stUnknown {
-		return nil, true
+		return nil, true, 0
 	}
-	out := map[string]string{}
+	out = map[string]string{}
 	list, _ := v.v.([]any)
 	for _, x := range list {
-		o, _ := x.(map[string]any)
+		o, ok := x.(map[string]any)
 		name, _ := o["name"].(string)
-		doc, _ := docText(o["policy"])
-		if inlineNameRE.MatchString(name) {
+		switch {
+		case !ok || !inlineNameRE.MatchString(name) || len(out) >= maxSetEntries:
+			dropped++
+		default:
+			doc, _ := docText(o["policy"])
 			out[name] = doc
 		}
 	}
-	return out, false
+	return out, false, dropped
 }
 
 func (m *mapper) roleInline(c *Change, arn string) {
-	after, unk := inlineSet(c, true)
+	after, unk, adrop := inlineSet(c, true)
 	if unk {
 		m.report(c, conditional("inline_policy"))
 		return
 	}
-	before, _ := inlineSet(c, false)
+	before, _, bdrop := inlineSet(c, false)
+	m.droppedFinding(c, "inline_policy", adrop+bdrop)
 	for _, n := range sortedKeys(after) {
 		d := after[n]
 		switch {
@@ -948,7 +1118,7 @@ const emptyPolicy = `{"Version":"2012-10-17","Statement":[]}`
 func (m *mapper) bucketARN(c *Change, after bool) (string, *issue) {
 	var name string
 	if c.get(after, "bucket").st == stUnknown {
-		t := m.refTarget(c, "bucket")
+		t := m.refTarget(c, "bucket", "bucket", "id")
 		if t == nil || t.Type != "aws_s3_bucket" {
 			return "", conditional("bucket")
 		}
@@ -988,7 +1158,9 @@ func (m *mapper) bucketPolicy(c *Change) {
 		case !m.e.hasResource(oldARN):
 			m.report(c, unresolved("the bucket is not in the snapshot"))
 		case m.e.hasResourcePolicy(oldARN):
-			m.put(c, snapshot.OpPutResourcePolicy, oldARN, emptyPolicy)
+			// a removal is applied with the detaches, before any document: when the same plan puts a policy on this bucket
+			// from another resource (a move between modules), the new document must be the one that is left
+			m.opPhase(c, snapshot.PolicyChange{Op: snapshot.OpPutResourcePolicy, TargetARN: oldARN, Document: strPtr(emptyPolicy)}, 1)
 		default:
 			m.note(c, StatusNoEffect, "the bucket has no policy in the snapshot to remove")
 		}
@@ -1067,7 +1239,7 @@ func (m *mapper) orgPolicy(c *Change) {
 // orgPolicyArg resolves the policy of an attachment: the kind and ARN of the SCP or RCP its policy_id names.
 func (m *mapper) orgPolicyArg(c *Change, after bool) (model.PolicyKind, string, *issue) {
 	if c.get(after, "policy_id").st == stUnknown {
-		t := m.refTarget(c, "policy_id")
+		t := m.refTarget(c, "policy_id", "id")
 		if t == nil || t.Type != "aws_organizations_policy" || t.After == nil {
 			return 0, "", conditional("policy_id")
 		}
@@ -1081,8 +1253,9 @@ func (m *mapper) orgPolicyArg(c *Change, after bool) (model.PolicyKind, string, 
 	if iss != nil {
 		return 0, "", iss
 	}
-	if t := m.orgByID[id]; t != nil {
-		kind, iss := m.orgKind(t, t.After != nil)
+	// a policy the plan replaces has a new ARN: what is attached now (the before side) is the one the snapshot holds
+	if t := m.orgByID[id]; t != nil && after && t.After != nil {
+		kind, iss := m.orgKind(t, true)
 		if iss != nil {
 			return 0, "", iss
 		}
@@ -1142,8 +1315,12 @@ func (m *mapper) orgAttach(c *Change, attach bool) {
 	case attach && !m.created[kind.String()+"|"+arn] && !m.e.hasOrgPolicy(kind, arn):
 		m.report(c, unresolved("the organization policy is not in the snapshot"))
 		return
-	case !attach && !m.e.orgAttached(kind, node, arn) && !m.pairs[node+"|"+arn]:
-		m.report(c, unresolved("the policy that the plan detaches is not attached there in the snapshot"))
+	case !attach && !m.e.orgAttached(kind, node, arn):
+		if m.pairs[node+"|"+arn] {
+			m.note(c, StatusConditional, "the plan attaches this policy to the same target with another resource, so whether it ends attached depends on the order Terraform applies them")
+		} else {
+			m.report(c, unresolved("the policy that the plan detaches is not attached there in the snapshot"))
+		}
 		return
 	case attach:
 		m.pairs[node+"|"+arn] = true

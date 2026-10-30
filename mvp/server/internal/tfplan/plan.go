@@ -50,6 +50,8 @@ type Plan struct {
 	// refs holds, per resource (module path and type.name, no index), the references of each attribute's
 	// expression, from the plan's configuration.
 	refs map[string]map[string][]string
+	// providers are the provider configurations the configuration uses (provider_config_key).
+	providers map[string]bool
 }
 
 // Change is one entry of resource_changes.
@@ -108,6 +110,8 @@ type rawConfigResource struct {
 	Address     string                     `json:"address"`
 	Mode        string                     `json:"mode"`
 	Expressions map[string]json.RawMessage `json:"expressions"`
+	// ProviderConfigKey names the provider configuration of the resource (aws, aws.west).
+	ProviderConfigKey string `json:"provider_config_key"`
 }
 
 var (
@@ -134,7 +138,7 @@ func Parse(raw []byte) (*Plan, error) {
 	if rp.ResourceChanges == nil && rp.PlannedValues == nil {
 		return nil, fail("not_terraform_plan", "this is not a Terraform plan: it has no resource_changes or planned_values (a state file is not a plan)")
 	}
-	p := &Plan{FormatVersion: rp.FormatVersion, TerraformVersion: clip(rp.TerraformVersion, 40), refs: map[string]map[string][]string{}}
+	p := &Plan{FormatVersion: rp.FormatVersion, TerraformVersion: clip(rp.TerraformVersion, 40), refs: map[string]map[string][]string{}, providers: map[string]bool{}}
 	if rp.ResourceChanges != nil {
 		if len(*rp.ResourceChanges) > MaxResourceChanges {
 			return nil, fail("plan_too_large", "the plan lists %d resource changes; a preview takes at most %d. Plan a smaller part of the configuration with -target or split the change", len(*rp.ResourceChanges), MaxResourceChanges)
@@ -148,7 +152,8 @@ func Parse(raw []byte) (*Plan, error) {
 		}
 	}
 	if rp.Configuration != nil {
-		collectRefs(p.refs, rp.Configuration.RootModule, "", 0)
+		rc := &refCollector{refs: p.refs, providers: p.providers, budget: maxRefsPerPlan}
+		rc.collect(rp.Configuration.RootModule, "", 0)
 	}
 	return p, nil
 }
@@ -219,9 +224,23 @@ func checkDepth(raw []byte) error {
 	return nil
 }
 
-// collectRefs records, for every resource of the module tree, the references of each attribute's expression, under
-// the resource's address without indexes ("module.net.aws_iam_policy.deploy").
-func collectRefs(out map[string]map[string][]string, m *rawModule, prefix string, depth int) {
+// Bounds on what the configuration contributes: a longer expression, or references past the plan's total, are not
+// used (the attribute then stays unresolved), so a hostile configuration costs nothing per lookup.
+const (
+	maxRefsPerExpression = 16
+	maxRefsPerPlan       = 20000
+	maxProviders         = 64
+)
+
+type refCollector struct {
+	refs      map[string]map[string][]string
+	providers map[string]bool
+	budget    int
+}
+
+// collect records, for every resource of the module tree, the references of each attribute's expression, under the
+// resource's address without indexes ("module.net.aws_iam_policy.deploy"), and the provider configurations in use.
+func (rc *refCollector) collect(m *rawModule, prefix string, depth int) {
 	if m == nil || depth > MaxDepth {
 		return
 	}
@@ -229,19 +248,24 @@ func collectRefs(out map[string]map[string][]string, m *rawModule, prefix string
 		if r.Mode != "managed" || r.Address == "" || len(r.Address) > maxAddress {
 			continue
 		}
+		if r.ProviderConfigKey != "" && len(rc.providers) < maxProviders {
+			rc.providers[clip(r.ProviderConfigKey, 128)] = true
+		}
 		attrs := map[string][]string{}
 		for name, e := range r.Expressions {
 			var x struct {
 				References []string `json:"references"`
 			}
-			if json.Unmarshal(e, &x) == nil && len(x.References) > 0 {
-				attrs[name] = x.References
+			if json.Unmarshal(e, &x) != nil || len(x.References) == 0 || len(x.References) > maxRefsPerExpression || len(x.References) > rc.budget {
+				continue
 			}
+			rc.budget -= len(x.References)
+			attrs[name] = x.References
 		}
-		out[prefix+stripIndex(r.Address)] = attrs
+		rc.refs[prefix+stripIndex(r.Address)] = attrs
 	}
 	for name, call := range m.ModuleCalls {
-		collectRefs(out, call.Module, prefix+"module."+name+".", depth+1)
+		rc.collect(call.Module, prefix+"module."+name+".", depth+1)
 	}
 }
 
