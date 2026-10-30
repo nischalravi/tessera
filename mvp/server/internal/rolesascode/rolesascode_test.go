@@ -348,6 +348,10 @@ func TestUpdatePlanMatchesUI(t *testing.T) {
 	if !reflect.DeepEqual(p.Roles[0].Steps, ui.Plan.Steps) || p.Roles[0].Adds != ui.Plan.Adds {
 		t.Errorf("bundle steps %+v\nUI steps     %+v", p.Roles[0].Steps, ui.Plan.Steps)
 	}
+	// AllSteps is every step of the plan, in role order (what the blast-radius preview replays)
+	if !reflect.DeepEqual(p.AllSteps(), ui.Plan.Steps) || len(p.AllSteps()) != p.Steps {
+		t.Errorf("AllSteps = %+v, want the plan's %d steps", p.AllSteps(), p.Steps)
+	}
 	if _, err := w.apply(files, p.PlanSHA256); err != nil {
 		t.Fatal(err)
 	}

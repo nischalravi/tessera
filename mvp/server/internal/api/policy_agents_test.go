@@ -185,3 +185,32 @@ allow:
 		t.Errorf("tenant A sees B's scope: %.300s", rec.Body)
 	}
 }
+
+// A whitespace-only commit is refused when the apply is filed, not after a second admin approved it (issue #759):
+// the apply trims the commit and refuses an empty one, so filing it made a request that could never succeed.
+func TestPolicyBundleApply_BlankCommitRefusedAtFiling(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	pa := reqLogin(t, f, "pa@b.example", []auth.Role{auth.RolePolicyAdmin}, "")
+	ta1 := reqLogin(t, f, "ta1@b.example", []auth.Role{auth.RoleTenantAdmin}, "")
+	for _, kind := range []string{"agents", "roles", "jit", "sod"} {
+		t.Run(kind, func(t *testing.T) {
+			rec := reqDo(h, pa, "GET", "/api/policy/"+kind+"/export", "")
+			if rec.Code != 200 {
+				t.Fatalf("export: %d %s", rec.Code, rec.Body)
+			}
+			var exp struct {
+				Files map[string]string `json:"files"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &exp); err != nil {
+				t.Fatal(err)
+			}
+			for _, commit := range []string{" ", " \t\n "} {
+				raw, _ := json.Marshal(map[string]any{"commit": commit, "files": exp.Files})
+				if rec := reqDo(h, ta1, "POST", "/api/policy/"+kind+"/apply", string(raw)); rec.Code != 422 || !strings.Contains(rec.Body.String(), "commit") {
+					t.Errorf("commit %q: %d %s", commit, rec.Code, rec.Body)
+				}
+			}
+		})
+	}
+}

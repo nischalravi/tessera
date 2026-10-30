@@ -45,6 +45,11 @@ func TestParseRefusals(t *testing.T) {
 		{"anchor", swap("source: entra", "source: &a entra"), "invalid_document"},
 		{"alias", swap("name: Support bot", "name: &n Support bot\ndescription: *n"), "invalid_document"},
 		{"two documents", good + "---\n" + good, "invalid_document"},
+		// issue #756: a merge key is a hidden second value for a field
+		{"merge key beside the field", swap("allow:\n", "allow:\n  <<: {actions: [admin]}\n"), "invalid_document"},
+		{"merge key alone", swap("  actions: [write, read]\n", "  <<: {actions: [admin, delegate]}\n"), "invalid_document"},
+		{"merge key at the top", swap("name: Support bot", "name: Support bot\n<<: {severity: low}"), "invalid_document"},
+		{"quoted << is a field", swap("name: Support bot", "name: Support bot\n'<<': x"), "invalid_document"},
 		{"not yaml", "a: [", "invalid_document"},
 		{"wrong schema", swap("tessera.agentscope/v1", "tessera.agentscope/v2"), "invalid_schema"},
 		{"bad key", swap("key: support-bot", "key: ../x"), "invalid_key"},
@@ -202,6 +207,17 @@ func TestClassOf(t *testing.T) {
 		{"storage.objects.get", false, "read"},
 		{"storage.objects.create", false, "write"},
 		{"secretsmanager:PutSecretValue", false, "write"},
+		// issue #755: credential minting that does not read like a known token verb, and wildcards outside the verb
+		{"sso:GetRoleCredentials", false, "delegate"},
+		{"cognito-identity:GetOpenIdToken", false, "delegate"},
+		{"cognito-identity:GetOpenIdTokenForDeveloperIdentity", false, "delegate"},
+		{"iam.serviceAccountKeys.create", false, "admin"},
+		{"iam.serviceAccountKeys.get", false, "read"},
+		{"Microsoft.Authorization/*/write", false, "admin"},
+		{"*/write", false, "admin"},
+		{"Microsoft.Compute/*/delete", false, "admin"},
+		{"Microsoft.Authorization/*/read", false, "read"},
+		{"*/read", false, "read"},
 	}
 	for _, tc := range tests {
 		if got := agentscope.ClassOf(tc.action, tc.privileged); got != tc.want {

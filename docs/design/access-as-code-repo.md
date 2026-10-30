@@ -248,6 +248,8 @@ type BlastSummary struct {
 }
 ```
 
+**Implemented in AC-8 (#654)** as `POST /api/policy/diff` (`internal/blast`, `mvp/README.md` "Unified blast-radius preview"): a read-only preview that takes the bundle and AWS operations (`blast.Operation`, which a Terraform plan reader produces in AC-9) and answers with `summary`, `by_identity_type`, `by_resource` and `violations` before and after. It is not yet part of the canonical plan or `plan_sha256` (the plan routes do not call it); it has its own `diff_sha256`. Cedar invariants in a bundle are not previewed yet.
+
 v1 (with AC-4): role plan steps become `simulate.Request.AddEdges`/`RemoveEdgeIDs` and `simulate.Run` gives the identity diff and violations. AC-8 adds AWS operations (`snapshot.Apply` → `query.Diff`) and the principal-to-identity join. The summary is part of the canonical plan, so it is covered by `plan_sha256` and shown to the approver. Endpoints: `POST /api/policy/validate`, `POST /api/policy/diff` (the plan, AC-8's route; `policy.plan`, read-only, audited), `POST /api/policy/apply` (files the change request), `GET /api/policy/applies`.
 
 ## 9. Security

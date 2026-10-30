@@ -349,6 +349,7 @@ GET    /api/policy/agents/export                     graph.read      -  # issue 
 POST   /api/policy/agents/validate                   agents.manage   STEP_UP_POLICY  # issue #653 (AC-7: changes nothing)
 POST   /api/policy/agents/plan                       agents.manage   STEP_UP_POLICY  # issue #653 (AC-7: changes nothing)
 POST   /api/policy/agents/apply                      admin.change.request  STEP_UP_ADMIN  # issue #653 (AC-7: files an agent_scopes.bundle.apply change request; a different admin approves)
+POST   /api/policy/diff                              graph.read      STEP_UP_POLICY  # issue #654 (AC-8: changes nothing; the unified blast-radius preview)
 GET    /api/abac/policies                            graph.read      -  # issue #162
 POST   /api/abac/policies                            roles.manage    STEP_UP_POLICY  # issue #162
 GET    /api/abac/policies/{policy_id}                graph.read      -  # issue #162

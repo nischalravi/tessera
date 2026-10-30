@@ -11,7 +11,8 @@ import "strings"
 // "Microsoft.Authorization/roleAssignments/write", "iam.serviceAccounts.actAs", "read"). The verb is the last
 // segment after ":", "/" or "."; for a name with three or more segments (Azure, GCP) the segment before the verb
 // names the object and counts too, so a write to role assignments is admin. A wildcard anywhere in the verb is
-// admin, never read: "s3:Get*" also matches credential-minting verbs.
+// admin, never read: "s3:Get*" also matches credential-minting verbs. A wildcard in another segment makes a
+// non-read action admin too: "Microsoft.Authorization/*/write" covers role assignment writes.
 func ClassOf(action string, privileged bool) string {
 	a := strings.ToLower(strings.TrimSpace(action))
 	segs := strings.FieldsFunc(a, func(r rune) bool { return r == ':' || r == '/' || r == '.' })
@@ -29,7 +30,7 @@ func ClassOf(action string, privileged bool) string {
 		return ClassAdmin
 	case hasPrefixAny(verb, readVerbs):
 		return ClassRead
-	case hasAny(verb, adminWords), hasAny(obj, adminWords):
+	case hasAny(verb, adminWords), hasAny(obj, adminWords), strings.ContainsAny(a, "*?"):
 		return ClassAdmin
 	}
 	return ClassWrite
@@ -39,10 +40,12 @@ var (
 	delegateWords = []string{"passrole", "assumerole", "impersonat", "delegat", "run_as", "act_as", "sudo", "tokenexchange", "token_exchange",
 		// verbs that mint credentials for a principal, checked before the read prefixes since most begin with "get"
 		"getfederationtoken", "getsessiontoken", "getclustercredentials", "getauthorizationtoken", "getcredentials",
-		"getaccesstoken", "generateaccesstoken", "generateidtoken", "signjwt", "signblob"}
+		"getaccesstoken", "generateaccesstoken", "generateidtoken", "signjwt", "signblob",
+		"getrolecredentials", "getopenidtoken"}
 	adminWords = []string{"admin", "owner", "manage", "policy", "policies", "acl", "attach", "detach", "createrole", "createuser",
 		"createaccesskey", "grant", "revoke", "keydeletion", "deletekey", "permission",
-		"loginprofile", "addusertogroup", "servicelinkedrole", "mfadevice", "roleassignment"}
+		"loginprofile", "addusertogroup", "servicelinkedrole", "mfadevice", "roleassignment",
+		"serviceaccountkey"}
 	readVerbs = []string{"get", "list", "describe", "head", "read", "select", "view", "query", "scan", "search", "fetch",
 		"download", "show", "lookup", "batchget", "browse"}
 )
