@@ -393,5 +393,9 @@ func (s *Server) adminRevokeAPIClient(_ http.ResponseWriter, r *http.Request, p 
 	if err := tx.Audit(now, actor(r), "oauth.client.revoked", ojson.Object{{Key: "client_id", Value: c.ClientID}, {Key: "name", Value: c.Name}}); err != nil {
 		return nil, err
 	}
+	// what the client proposed and nobody approved yet is withdrawn with it (issue #743)
+	if _, err := s.admin.CancelProposalsOf(tx, c.ClientID, principal(r).UserID, actor(r)); err != nil {
+		return nil, err
+	}
 	return clientView(c), nil
 }
