@@ -128,10 +128,12 @@ func TestAgentScopeInsideScopeAndOwner(t *testing.T) {
 	profile(t, st, ids["svc-etl"], "test", "etl")
 	putScope(t, st, scopeDoc("etl", "test", "etl", []string{"read"}, []string{"aws"}, ""), "active")
 	pols := scopePolicies(t, st)
-	for _, id := range []string{policy.PolicyAgentOutOfScope, policy.PolicyAgentExceedsOwner} {
-		if vs := violations(t, st, id, pols); len(vs) != 0 {
-			t.Errorf("%s: %+v", id, vs)
-		}
+	if vs := violations(t, st, policy.PolicyAgentOutOfScope, pols); len(vs) != 0 {
+		t.Errorf("out of scope: %+v", vs)
+	}
+	// its owner Dave is terminated, so there is no ceiling to stay under: fail closed, never skipped
+	if vs := violations(t, st, policy.PolicyAgentExceedsOwner, pols); len(vs) != 1 || !strings.Contains(vs[0].Message, "terminated") {
+		t.Errorf("exceeds-owner with a terminated owner = %+v", vs)
 	}
 	// narrowing the scope to a tag svc-etl's resource lacks makes the same permission a finding
 	testkit.Write(t, st, func(c *store.TenantTx) error {
@@ -228,5 +230,58 @@ func TestAgentScopeNeedsTheDatabase(t *testing.T) {
 	vs, err := policy.Evaluate([]*policy.Policy{p}, policy.NewContext(g, nil, testkit.Now))
 	if err != nil || len(vs) != 0 {
 		t.Errorf("Evaluate = %v, %v", vs, err)
+	}
+}
+
+// An agent's own scope is its ceiling: a broader blueprint scope does not widen it.
+func TestAgentScopeOwnScopeBeatsBlueprint(t *testing.T) {
+	st, ids := testkit.Tiny(t)
+	profile(t, st, ids["helper-bot"], "entra", "hb")
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		return c.UpsertAgentLink(&store.AgentLink{Source: "entra", ExternalID: "hb", BlueprintAppID: "bp-1"})
+	})
+	putScope(t, st, "schema: tessera.agentscope/v1\nkey: bp\nname: bp\nagent:\n  blueprint: bp-1\nallow:\n  actions: [read]\n  resources:\n    - systems: [snowflake]\nowner_ceiling: false\n", "active")
+	if out := violations(t, st, policy.PolicyAgentOutOfScope, scopePolicies(t, st)); len(out) != 0 {
+		t.Fatalf("the blueprint scope allows the read: %+v", out)
+	}
+	putScope(t, st, scopeDoc("hb", "entra", "hb", []string{"read"}, []string{"aws"}, "owner_ceiling: false\n"), "active")
+	out := violations(t, st, policy.PolicyAgentOutOfScope, scopePolicies(t, st))
+	if len(out) != 1 || !strings.HasPrefix(out[0].Key, "hb:") {
+		t.Errorf("the agent's narrower scope did not apply: %+v", out)
+	}
+}
+
+// The owner ceiling fails closed: no owner, an owner chain that is a cycle, or one that ends at an agent reports
+// every permission the agent holds.
+func TestAgentScopeOwnerChainFailsClosed(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, st *testkit.DB, ids map[string]int64)
+		want  string
+	}{
+		{"no owner", func(t *testing.T, st *testkit.DB, ids map[string]int64) {
+			testkit.Write(t, st, func(c *store.TenantTx) error { return c.SetIdentityOwner(ids["helper-bot"], nil) })
+		}, "no owner"},
+		{"a cycle through an agent owner", func(t *testing.T, st *testkit.DB, ids map[string]int64) {
+			profile(t, st, ids["alice"], "entra", "alice")
+			hb := ids["helper-bot"]
+			testkit.Write(t, st, func(c *store.TenantTx) error { return c.SetIdentityOwner(ids["alice"], &hb) })
+		}, "cycle"},
+		{"a chain that ends at an agent", func(t *testing.T, st *testkit.DB, ids map[string]int64) {
+			profile(t, st, ids["alice"], "entra", "alice")
+			testkit.Write(t, st, func(c *store.TenantTx) error { return c.SetIdentityOwner(ids["alice"], nil) })
+		}, "ends at an agent"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st, ids := testkit.Tiny(t)
+			profile(t, st, ids["helper-bot"], "entra", "hb")
+			putScope(t, st, scopeDoc("hb", "entra", "hb", []string{"read"}, []string{"snowflake"}, ""), "active")
+			tc.setup(t, st, ids)
+			exc := violations(t, st, policy.PolicyAgentExceedsOwner, scopePolicies(t, st))
+			if len(exc) != 1 || *exc[0].IdentityID != ids["helper-bot"] || !strings.Contains(exc[0].Message, tc.want) {
+				t.Errorf("exceeds-owner = %+v; want one for helper-bot naming %q", exc, tc.want)
+			}
+		})
 	}
 }

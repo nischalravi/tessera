@@ -21,9 +21,15 @@ import (
 //	                      owner is itself an agent with a scope, one that scope does not allow); an agent may not
 //	                      have more than the person who answers for it. Key <scope key>:<identity id>:owner.
 //
-// The scopes of an agent are those that name it (agent profile source and external id) and those of its blueprint
-// (agent link blueprint app id); an agent is in scope when any of them allows the permission. An agent with no
-// scope is not checked here: nhi-ownership and the agent views report it. Both findings come from the effective
+// The scopes of an agent are those that name it (agent profile source and external id); only when none does, those of
+// its blueprint (agent link blueprint app id) apply, so a broad blueprint scope never widens an agent's own narrower
+// one. An agent is in scope when any of the scopes that apply allows the permission. An agent with no scope is not
+// checked here: nhi-ownership and the agent views report it.
+//
+// The owner ceiling walks the owner chain to a person: every scoped agent on the way lends its scope as a further
+// ceiling, and the person's effective permissions are the last one. When the chain does not end at an active person
+// (no owner, an owner the graph does not know, a terminated owner, a cycle, or only agents), there is no ceiling to
+// stay under, so every permission the agent holds is reported: a missing owner never turns the check off. Both findings come from the effective
 // permissions of the graph, so what-if simulation, reviews and /api/violations see them like any policy; a finding
 // whose every permission is approximate, conditional or unsupported is low fidelity (reported, never blocking).
 
@@ -74,24 +80,26 @@ func WithAgentScopes(tx *store.TenantTx, base []*Policy) ([]*Policy, error) {
 	), nil
 }
 
-// scoped maps an identity id to the scopes that apply to it, agent scopes before blueprint scopes, then by key.
-func scoped(c *Context, docs []*agentscope.Doc) (map[int64][]*agentscope.Doc, error) {
-	out := map[int64][]*agentscope.Doc{}
+// scoped maps an identity id to the scopes that apply to it, by key: the agent's own scopes, or its blueprint's when
+// it has none of its own. agents is every identity with an agent profile.
+func scoped(c *Context, docs []*agentscope.Doc) (out map[int64][]*agentscope.Doc, agents map[int64]bool, err error) {
+	out, agents = map[int64][]*agentscope.Doc{}, map[int64]bool{}
 	if c.Conn == nil {
-		return out, nil // the selectors need the database
+		return out, agents, nil // the selectors need the database
 	}
 	profiles, err := c.Conn.AgentProfiles()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	links, err := c.Conn.AgentLinks()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	type key struct{ source, ext string }
 	identity := map[key]int64{}
 	for _, p := range profiles {
 		identity[key{p.Source, p.ExternalID}] = p.IdentityID
+		agents[p.IdentityID] = true
 	}
 	byBlueprint := map[string][]int64{}
 	for _, l := range links {
@@ -108,15 +116,20 @@ func scoped(c *Context, docs []*agentscope.Doc) (map[int64][]*agentscope.Doc, er
 			out[id] = append(out[id], d)
 		}
 	}
-	for _, l := range out {
-		sort.SliceStable(l, func(i, j int) bool {
-			if l[i].ByBlueprint() != l[j].ByBlueprint() {
-				return !l[i].ByBlueprint()
+	for id, l := range out {
+		own := l[:0:0]
+		for _, d := range l {
+			if !d.ByBlueprint() {
+				own = append(own, d)
 			}
-			return l[i].Key < l[j].Key
-		})
+		}
+		if len(own) > 0 {
+			l = own // the agent's own scope is its ceiling; the blueprint's is only the default
+		}
+		sort.SliceStable(l, func(i, j int) bool { return l[i].Key < l[j].Key })
+		out[id] = l
 	}
-	return out, nil
+	return out, agents, nil
 }
 
 func permitted(scopes []*agentscope.Doc, ep *graph.EffectivePermission) bool {
@@ -172,7 +185,7 @@ func scopeKeys(scopes []*agentscope.Doc) string {
 }
 
 func evalAgentOutOfScope(p *Policy, c *Context) ([]Violation, error) {
-	by, err := scoped(c, p.AgentScopes)
+	by, _, err := scoped(c, p.AgentScopes)
 	if err != nil {
 		return nil, err
 	}
@@ -197,8 +210,44 @@ func evalAgentOutOfScope(p *Policy, c *Context) ([]Violation, error) {
 	return out, nil
 }
 
+// ceilingOf walks the owner chain of agent id to a person. It returns the person's node and the scopes of the agents
+// on the way (each a further ceiling), or a reason when the chain does not end at an active person.
+func ceilingOf(c *Context, id int64, people map[int64]*store.Identity, by map[int64][]*agentscope.Doc, agents map[int64]bool) (*graph.Node, [][]*agentscope.Doc, string) {
+	var lent [][]*agentscope.Doc
+	seen := map[int64]bool{id: true}
+	for cur := id; ; {
+		held := people[cur]
+		if held == nil || held.OwnerID == nil {
+			if cur == id {
+				return nil, nil, "it has no owner"
+			}
+			return nil, nil, "its owner chain ends at an agent, not a person"
+		}
+		o := *held.OwnerID
+		if seen[o] {
+			return nil, nil, "its owner chain is a cycle"
+		}
+		seen[o] = true
+		owner, ok := c.byID[o]
+		if !ok || people[o] == nil {
+			return nil, nil, "its owner is not in the graph"
+		}
+		if agents[o] {
+			if s := by[o]; len(s) > 0 {
+				lent = append(lent, s)
+			}
+			cur = o
+			continue
+		}
+		if owner.Status == "terminated" {
+			return nil, nil, "its owner " + owner.Label + " is terminated"
+		}
+		return owner, lent, ""
+	}
+}
+
 func evalAgentExceedsOwner(p *Policy, c *Context) ([]Violation, error) {
-	by, err := scoped(c, p.AgentScopes)
+	by, agents, err := scoped(c, p.AgentScopes)
 	if err != nil {
 		return nil, err
 	}
@@ -212,30 +261,33 @@ func evalAgentExceedsOwner(p *Policy, c *Context) ([]Violation, error) {
 	var out []Violation
 	for _, n := range c.idents {
 		scopes := by[n.ID]
-		held := people[n.ID]
-		if len(scopes) == 0 || held == nil || held.OwnerID == nil {
-			continue // no scope, or no owner: nhi-ownership reports the latter
-		}
 		bound := false
 		for _, d := range scopes {
 			bound = bound || d.Ceiling()
 		}
-		owner, ok := c.byID[*held.OwnerID]
-		if !bound || !ok {
+		if !bound {
 			continue
 		}
-		ownerEff := c.eff(owner.ID)
-		ownerScopes := by[owner.ID] // an owner that is an agent with a scope lends that scope as the ceiling
+		owner, lent, reason := ceilingOf(c, n.ID, people, by, agents)
 		var bad []*graph.EffectivePermission
 		for _, ep := range c.eff(n.ID).Values() {
-			if !ownerEff.Has(ep.PermKey) || len(ownerScopes) > 0 && !permitted(ownerScopes, ep) {
+			ok := owner != nil && c.eff(owner.ID).Has(ep.PermKey)
+			for _, s := range lent {
+				ok = ok && permitted(s, ep)
+			}
+			if !ok {
 				bad = append(bad, ep)
 			}
 		}
 		if len(bad) == 0 {
 			continue
 		}
-		msg := fmt.Sprintf("%s holds %d permission(s) its owner %s does not", n.Label, len(bad), owner.Label)
+		msg := ""
+		if owner != nil {
+			msg = fmt.Sprintf("%s holds %d permission(s) its owner %s does not", n.Label, len(bad), owner.Label)
+		} else {
+			msg = fmt.Sprintf("%s holds %d permission(s) with no owner ceiling: %s", n.Label, len(bad), reason)
+		}
 		out = append(out, agentFinding(p, c, n, fmt.Sprintf("%s:%d:owner", scopes[0].Key, n.ID), msg, scopes, bad))
 	}
 	return out, nil

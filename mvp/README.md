@@ -1925,10 +1925,12 @@ owner_ceiling: true         # default; false lets the agent hold what its owner 
   **Retagging caveat:** `tags_any` and `sensitivity` select on the resource's tags, so an agent that may write a
   resource's tags can move that resource into its own scope. Keep tag-write out of an agent's scope, or scope those
   resources by `systems` and `environments`, which come from the connector rather than the resource. An agent without a scope is not checked (nhi-ownership and the agent views report it). An
-  agent named by its own scope and by its blueprint's scope is in scope when either allows the permission.
-- **Delegation.** With `owner_ceiling` (the default) an agent may not hold a permission its owner does not hold; when
-  the owner is itself an agent with a scope, that scope is the ceiling as well. An agent with no owner is skipped
-  (nhi-ownership reports it).
+  agent's own scopes are its ceiling; its blueprint's scopes apply only when it has none of its own, so a broad
+  blueprint scope never widens a narrower agent scope.
+- **Delegation.** With `owner_ceiling` (the default) an agent may not hold a permission its owner does not hold; the
+  check walks the owner chain to a person, and every scoped agent on the way lends its scope as a further ceiling.
+  It fails closed: an agent with no owner, an owner the graph does not know, a terminated owner, an owner chain that
+  is a cycle or ends at an agent, reports every permission it holds.
 - **Compiled to invariants.** The tenant's active scopes add two policies (only while a scope is active),
   `agent-out-of-scope` (key `<scope key>:<identity id>`) and `agent-exceeds-owner` (key `<scope key>:<identity id>:owner`),
   evaluated over the graph's effective permissions in `internal/policy`, so `/api/violations`, what-if simulation and
