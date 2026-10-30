@@ -589,6 +589,7 @@ func New(cfg Config) *Server {
 	s.registerRoleMiningRoutes()
 	s.registerPolicyRoleRoutes()
 	s.registerPolicyJitRoutes()
+	s.registerPolicySodRoutes()
 	s.registerLPAutoRoutes()
 	s.registerAbacRoutes()
 	s.registerSodRoutes()

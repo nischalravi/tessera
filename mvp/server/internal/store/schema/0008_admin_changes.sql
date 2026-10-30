@@ -77,6 +77,8 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     'config.proposal','api_client.propose.grant',
     -- applying JIT eligibility rules from a policy repository takes two admins, always (internal/admin/change_jit_bundle.go, issue #651)
     'jit.bundle.apply',
+    -- applying SoD rulesets, functions and risks from a policy repository takes two admins, always (internal/admin/change_sod_bundle.go, issue #652)
+    'sod.bundle.apply',
     -- the automatic least-privilege policy from the access-as-code repository (internal/admin/change_lp_auto.go, issue #664)
     'lp.auto_policy.apply')),
 
