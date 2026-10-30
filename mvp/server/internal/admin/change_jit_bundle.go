@@ -3,6 +3,7 @@ package admin
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/jitascode"
 	"github.com/nischalravi/tessera/mvp/server/internal/roles"
@@ -52,7 +53,7 @@ func (e *env) jitOptions() (jitascode.Options, error) {
 // planJitBundle files a request only for a bundle that is valid and whose plan is the one named now: what the
 // requester reviewed. Two people always.
 func planJitBundle(e *env, v *rolesBundlePayload) (plan, error) {
-	if v.Commit == "" || len(v.Commit) > jitascode.MaxCommit {
+	if strings.TrimSpace(v.Commit) == "" || len(v.Commit) > jitascode.MaxCommit {
 		return plan{}, invalid("commit is 1 to %d characters", jitascode.MaxCommit)
 	}
 	if len(v.Files) == 0 {
