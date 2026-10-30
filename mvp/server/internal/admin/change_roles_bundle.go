@@ -3,6 +3,7 @@ package admin
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/policybundle"
 	"github.com/nischalravi/tessera/mvp/server/internal/roles"
@@ -66,7 +67,7 @@ func (e *env) rolesOptions() (rolesascode.Options, error) {
 // planRolesBundle files a request only for a bundle that is valid and whose plan is the one named now: what the
 // requester reviewed. Two people always.
 func planRolesBundle(e *env, v *rolesBundlePayload) (plan, error) {
-	if v.Commit == "" || len(v.Commit) > rolesascode.MaxCommit {
+	if strings.TrimSpace(v.Commit) == "" || len(v.Commit) > rolesascode.MaxCommit {
 		return plan{}, invalid("commit is 1 to %d characters", rolesascode.MaxCommit)
 	}
 	if len(v.Files) == 0 {
