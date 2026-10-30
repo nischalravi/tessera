@@ -537,6 +537,10 @@ func guard(tx *store.TenantTx, removes int) error {
 	return nil
 }
 
+// Guard is the deletion guard check of a plan: it refuses (409 deletion_guard) a plan whose removals pass what the
+// group_members category allows in its window. The JIT eligibility apply (internal/jitascode) uses it too.
+func Guard(tx *store.TenantTx, removes int) error { return guard(tx, removes) }
+
 // Validate loads and resolves the bundle without planning it.
 func Validate(tx *store.TenantTx, files policybundle.Files, opt Options) error {
 	_, err := prepare(tx, files, opt)

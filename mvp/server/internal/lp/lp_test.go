@@ -195,7 +195,7 @@ func TestPlan(t *testing.T) {
 		{"off to suggest is one admin", def, lp.SettingsUpdate{Mode: sp("suggest")}, false, ""},
 		{"off to staged takes two", def, lp.SettingsUpdate{Mode: sp("staged")}, true, ""},
 		{"staged to off is one", paused, lp.SettingsUpdate{Mode: sp("off")}, false, ""},
-		{"auto is not available", def, lp.SettingsUpdate{Mode: sp("auto")}, false, "auto_not_available"},
+		{"auto is planned (the caller checks the policy)", def, lp.SettingsUpdate{Mode: sp("auto")}, true, ""},
 		{"unknown mode", def, lp.SettingsUpdate{Mode: sp("yolo")}, false, "invalid_settings"},
 		{"resume takes two", paused, lp.SettingsUpdate{Paused: bp(false)}, true, ""},
 		{"pause is one", def, lp.SettingsUpdate{Paused: bp(true)}, false, ""},

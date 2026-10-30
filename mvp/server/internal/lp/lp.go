@@ -10,7 +10,7 @@
 //	    +------------+-----------+-> exempted, superseded, failed
 //
 // Modes: off (the default), suggest (recommendations only, no rows here), staged (a person approves each batch,
-// medium items one by one) and auto (LP-8: not available yet). Pausing is one person; resuming, a stronger mode,
+// medium items one by one) and auto (LP-8: its policy from the access-as-code repository, internal/lpauto). Pausing is one person; resuming, a stronger mode,
 // larger caps and a shorter announce or finalize period are an admin change request of type lp.settings.update
 // (two people). A pause, the operator switch TESSERA_LP_DISABLE and an exhausted cap stop new executions at once;
 // none of them ever blocks a restore.
@@ -208,7 +208,8 @@ func modeRank(m string) int {
 
 // Plan applies an update to the current settings and says whether it loosens them (so it takes two people):
 // a stronger mode (off to suggest is not one), resuming, a larger cap, a shorter announce or finalize period or a
-// lower auto threshold. Tightening and pausing take one. The mode auto is refused until its policy exists (LP-8).
+// lower auto threshold. Tightening and pausing take one. The mode auto is a stronger mode; that a policy is applied is
+// checked by the caller (internal/admin), which can read it.
 func Plan(cur *store.LPSettings, u *SettingsUpdate) (next *store.LPSettings, loosens bool, err error) {
 	n := *cur
 	if u.Mode == nil && u.Paused == nil && u.CapPerRun == nil && u.CapPerDay == nil && u.CapPerAccount == nil &&
@@ -218,8 +219,7 @@ func Plan(cur *store.LPSettings, u *SettingsUpdate) (next *store.LPSettings, loo
 	if u.Mode != nil {
 		switch *u.Mode {
 		case store.LPModeOff, store.LPModeSuggest, store.LPModeStaged:
-		case store.LPModeAuto:
-			return nil, false, refuse(422, "auto_not_available", "auto mode needs the auto policy in the access-as-code repository (LP-8), which is not built yet")
+		case store.LPModeAuto: // needs the applied policy: the caller checks it (admin.planLP)
 		default:
 			return nil, false, refuse(422, "invalid_settings", "mode is off, suggest or staged")
 		}
@@ -526,6 +526,8 @@ type Recheck struct {
 // Tick is the result of one pass.
 type Tick struct {
 	Revoking, Revoked, Finalized, Restored, Failed, Superseded, Expired, Held int
+	// Announced counts the candidates the automatic policy announced (auto mode, LP-8).
+	Announced int
 	// Holds counts, by reason, the announced revocations that were due and not executed.
 	Holds map[string]int
 	// Paused is the reason the pass paused the loop, if it did.
@@ -661,6 +663,23 @@ func Run(tx *store.TenantTx, now time.Time, ex Executor, disabled bool, rechecks
 			if err := pause(reason); err != nil {
 				return nil, err
 			}
+		}
+	}
+	// auto mode pauses itself when the calibration asks for a review (design section 10), and announces what its policy covers
+	if s.Mode == store.LPModeAuto && !s.Paused && !disabled {
+		if reason, err := CalibrationReview(tx, now); err != nil {
+			return nil, err
+		} else if reason != "" {
+			ns, err := autoPause(tx, now, ex, reason)
+			if err != nil {
+				return nil, err
+			}
+			s, t.Paused = ns, "calibration: "+reason
+		}
+	}
+	if s.Mode == store.LPModeAuto && Active(s) && !disabled {
+		if err := autoAnnounce(tx, now, s, ex, t); err != nil {
+			return nil, err
 		}
 	}
 	// new executions
