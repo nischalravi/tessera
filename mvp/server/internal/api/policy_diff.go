@@ -36,6 +36,9 @@ import (
 // summarizes who gains and loses access by identity type and by resource ("N identities gain a path to bucket X; k are
 // agents"), sorted, with diff_sha256 over the whole so a pull request comment can be compared byte for byte.
 //
+// terraform_plan is a Terraform plan (AC-9, #655; policy_diff_tf.go): its IAM, S3 bucket policy, SCP and RCP changes are
+// added to the operations, and what it cannot map or leaves unknown is listed under "terraform".
+//
 // It changes nothing: it needs graph.read with STEP_UP_POLICY like the plan routes, runs in one read transaction,
 // reads only the session's tenant, and is refused 413 plan_too_large when the bundle's writes and the operations pass
 // TESSERA_POLICY_MAX_STEPS. The request's audit event carries the totals.
@@ -51,6 +54,8 @@ type policyDiffIn struct {
 	Operations   []blast.Operation `json:"operations"`
 	BaseSnapshot string            `json:"base_snapshot"`
 	Profile      string            `json:"profile"`
+	// TerraformPlan is the JSON of a Terraform plan (policy_diff_tf.go).
+	TerraformPlan json.RawMessage `json:"terraform_plan"`
 }
 
 type policyDiffOp struct {
@@ -84,6 +89,8 @@ type policyDiffView struct {
 	OperationsSHA256 string              `json:"operations_sha256"`
 	Kinds            []blast.KindSummary `json:"kinds"`
 	AWS              *policyDiffAWS      `json:"aws"`
+	// Terraform is what the request's Terraform plan did (AC-9); absent when it had none.
+	Terraform *policyDiffTerraform `json:"terraform,omitempty"`
 	*blast.Report
 	// DiffSHA256 is the digest of this answer with this field empty.
 	DiffSHA256 string `json:"diff_sha256"`
@@ -94,8 +101,9 @@ func (s *Server) policyDiff(_ http.ResponseWriter, r *http.Request, _ *params) (
 	if err := decodeBody(r, &in, false); err != nil {
 		return nil, err
 	}
-	if len(in.Files) == 0 && len(in.Operations) == 0 {
-		return nil, badRequest("empty_change", "a change needs files, operations or both")
+	planGiven := hasPlan(in.TerraformPlan)
+	if len(in.Files) == 0 && len(in.Operations) == 0 && !planGiven {
+		return nil, badRequest("empty_change", "a change needs files, operations, a terraform_plan or a combination")
 	}
 	for i, o := range in.Operations {
 		if len(o.Source) > maxOperationSource || !utf8.ValidString(o.Source) {
@@ -110,6 +118,14 @@ func (s *Server) policyDiff(_ http.ResponseWriter, r *http.Request, _ *params) (
 		return nil, err
 	}
 	opt := blast.Options{Tenant: t.Slug, MaxSteps: s.admin.PolicyMaxSteps, Now: now}
+	// a Terraform plan adds its operations to the request's (AC-9)
+	var tf *policyDiffTerraform
+	var ac *awsCtx
+	if planGiven {
+		if tf, ac, err = s.applyTerraformPlan(tx, &in); err != nil {
+			return nil, err
+		}
+	}
 	if err := blast.CheckCeiling(opt, 0, len(in.Operations)); err != nil {
 		return nil, bundleErr(err)
 	}
@@ -158,7 +174,7 @@ func (s *Server) policyDiff(_ http.ResponseWriter, r *http.Request, _ *params) (
 	var aws *blast.AWSDiff
 	var awsView *policyDiffAWS
 	if len(in.Operations) > 0 {
-		if aws, awsView, err = s.policyDiffAWS(ctx, tx, &in, now); err != nil {
+		if aws, awsView, err = s.policyDiffAWS(ctx, tx, &in, ac, now); err != nil {
 			return nil, err
 		}
 	}
@@ -178,7 +194,7 @@ func (s *Server) policyDiff(_ http.ResponseWriter, r *http.Request, _ *params) (
 	}
 	opsSum := sha256.Sum256(ops)
 	view := &policyDiffView{Tenant: t.Slug, BundleSHA256: c.BundleSHA256, OperationsSHA256: hex.EncodeToString(opsSum[:]), Kinds: c.Kinds,
-		AWS: awsView, Report: blast.Summarize(blast.Inputs{People: people, Graph: graphRes, AWS: aws})}
+		AWS: awsView, Terraform: tf, Report: blast.Summarize(blast.Inputs{People: people, Graph: graphRes, AWS: aws})}
 	raw, err := json.Marshal(view)
 	if err != nil {
 		return nil, err
@@ -194,6 +210,9 @@ func (s *Server) policyDiff(_ http.ResponseWriter, r *http.Request, _ *params) (
 	audit.Mark(ctx, "policy_diff_operations", len(in.Operations))
 	audit.Mark(ctx, "policy_diff_bundle_sha256", c.BundleSHA256)
 	audit.Mark(ctx, "policy_diff_diff_sha256", view.DiffSHA256)
+	if tf != nil {
+		markTerraform(r, tf)
+	}
 	return view, nil
 }
 
@@ -212,10 +231,12 @@ func (s *Server) currentRisks(tx *store.TenantTx) ([]*sod.Risk, error) {
 
 // policyDiffAWS applies the operations to the base snapshot and diffs the two, as /api/aws/simulate-policy-change
 // does, without rendering a comment.
-func (s *Server) policyDiffAWS(ctx context.Context, tx *store.TenantTx, in *policyDiffIn, now time.Time) (*blast.AWSDiff, *policyDiffAWS, error) {
-	ac, err := s.awsContext(tx, in.BaseSnapshot)
-	if err != nil {
-		return nil, nil, err
+func (s *Server) policyDiffAWS(ctx context.Context, tx *store.TenantTx, in *policyDiffIn, ac *awsCtx, now time.Time) (*blast.AWSDiff, *policyDiffAWS, error) {
+	if ac == nil {
+		var err error
+		if ac, err = s.awsContext(tx, in.BaseSnapshot); err != nil {
+			return nil, nil, err
+		}
 	}
 	opts, label, err := awsOptions(in.Profile, now)
 	if err != nil {
@@ -226,8 +247,11 @@ func (s *Server) policyDiffAWS(ctx context.Context, tx *store.TenantTx, in *poli
 	if err != nil {
 		var ce *snapshot.ChangeError
 		if errors.As(err, &ce) {
-			return nil, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "invalid_change", Msg: ce.Error(),
-				Extra: map[string]any{"change_index": ce.Index}}
+			extra := map[string]any{"change_index": ce.Index}
+			if ce.Index >= 0 && ce.Index < len(in.Operations) && in.Operations[ce.Index].Source != "" {
+				extra["source"] = in.Operations[ce.Index].Source
+			}
+			return nil, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "invalid_change", Msg: ce.Error(), Extra: extra}
 		}
 		return nil, nil, awsEvalErr(err)
 	}

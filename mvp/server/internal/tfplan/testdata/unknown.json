@@ -1,0 +1,92 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "aws_iam_policy.dyn", "mode": "managed", "type": "aws_iam_policy", "name": "dyn",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"name": "dyn", "path": "/"},
+        "after_unknown": {"arn": true, "id": true, "policy": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_iam_role_policy_attachment.dyn", "mode": "managed", "type": "aws_iam_role_policy_attachment", "name": "dyn",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"role": "DataEngineer"},
+        "after_unknown": {"id": true, "policy_arn": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_iam_role_policy_attachment.admin", "mode": "managed", "type": "aws_iam_role_policy_attachment", "name": "admin",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"role": "DataEngineer", "policy_arn": "arn:aws:iam::aws:policy/AdministratorAccess"},
+        "after_unknown": {"id": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_iam_role.newrole", "mode": "managed", "type": "aws_iam_role", "name": "newrole",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"name": "brand-new", "path": "/", "assume_role_policy": "{\"Version\":\"2012-10-17\",\"Statement\":[]}"},
+        "after_unknown": {"arn": true, "id": true, "managed_policy_arns": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_instance.web", "mode": "managed", "type": "aws_instance", "name": "web",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"ami": "ami-123", "instance_type": "t3.micro"},
+        "after_unknown": {"id": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_db_instance.db", "mode": "managed", "type": "aws_db_instance", "name": "db",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"identifier": "db", "password": "SECRET-VALUE-123"},
+        "after_unknown": {"id": true}, "before_sensitive": false, "after_sensitive": {"password": true}
+      }
+    },
+    {
+      "address": "aws_iam_user_policy_attachment.sens", "mode": "managed", "type": "aws_iam_user_policy_attachment", "name": "sens",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"user": "SENSITIVE-USER-NAME", "policy_arn": "arn:aws:iam::111111111111:policy/S3Read"},
+        "after_unknown": {"id": true}, "before_sensitive": false, "after_sensitive": {"user": true}
+      }
+    },
+    {
+      "address": "aws_iam_role_policy.sensdoc", "mode": "managed", "type": "aws_iam_role_policy", "name": "sensdoc",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"role": "DataEngineer", "name": "sens-doc", "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"SECRET-RESOURCE-NAME\"}]}"},
+        "after_unknown": {"id": true}, "before_sensitive": false, "after_sensitive": {"policy": true}
+      }
+    },
+    {
+      "address": "data.aws_caller_identity.current", "mode": "data", "type": "aws_caller_identity", "name": "current",
+      "change": {"actions": ["read"], "before": null, "after": {"account_id": "111111111111"}, "after_unknown": {}, "before_sensitive": false, "after_sensitive": {}}
+    },
+    {
+      "address": "aws_iam_role_policy_attachment.same", "mode": "managed", "type": "aws_iam_role_policy_attachment", "name": "same",
+      "change": {
+        "actions": ["no-op"],
+        "before": {"role": "DataEngineer", "policy_arn": "arn:aws:iam::111111111111:policy/S3Read"},
+        "after": {"role": "DataEngineer", "policy_arn": "arn:aws:iam::111111111111:policy/S3Read"},
+        "after_unknown": {}, "before_sensitive": {}, "after_sensitive": {}
+      }
+    }
+  ],
+  "configuration": {
+    "root_module": {
+      "resources": [
+        {"address": "aws_iam_role_policy_attachment.dyn", "mode": "managed", "type": "aws_iam_role_policy_attachment", "name": "dyn",
+         "expressions": {"policy_arn": {"references": ["var.policy_arn"]}}}
+      ]
+    }
+  }
+}
