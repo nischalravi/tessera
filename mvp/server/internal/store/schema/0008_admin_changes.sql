@@ -74,7 +74,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     'roles.bundle.apply',
     -- a config write proposed by a machine client holding config.propose, and the two-admin grant of that scope
     -- (internal/admin/change_proposal.go, issue #721)
-    'config.proposal','api_client.propose.grant')),
+    'config.proposal','api_client.propose.grant',
+    -- the automatic least-privilege policy from the access-as-code repository (internal/admin/change_lp_auto.go, issue #664)
+    'lp.auto_policy.apply')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

@@ -191,6 +191,8 @@ var tables = []string{
 	"lp_denial_hooks", "lp_denials",
 	// false positives of the loop, which feed the calibration (schema/0923_lp_false_positives.sql)
 	"lp_false_positives",
+	// the automatic policy from the access-as-code repository (schema/0953_lp_auto_policy.sql)
+	"lp_auto_policy",
 	// AWS usage (schema/0915_aws_usage.sql)
 	"aws_usage_daily", "aws_usage_state", "aws_usage_gaps",
 	// flat-file import for disconnected apps (schema/0352_flatfile.sql)

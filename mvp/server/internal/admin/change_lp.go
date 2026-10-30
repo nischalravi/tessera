@@ -56,9 +56,12 @@ func planLP(e *env, v *lp.SettingsUpdate) (plan, error) {
 	if err != nil {
 		return plan{}, err
 	}
-	_, loosens, err := lp.Plan(cur, v)
+	next, loosens, err := lp.Plan(cur, v)
 	if err != nil {
 		return plan{}, lpErr(err)
+	}
+	if err := e.autoAllowed(next); err != nil {
+		return plan{}, err
 	}
 	return plan{twoPerson: loosens, target: "lp"}, nil
 }
@@ -77,6 +80,9 @@ func applyLP(e *env, ch *store.AdminChange, v *lp.SettingsUpdate) error {
 	if ch.ApprovedBy != nil {
 		by = ch.ApprovedBy.String()
 	}
+	if err := e.autoAllowed(next); err != nil {
+		return err
+	}
 	if next.Paused && !cur.Paused {
 		next.PausedBy, next.PausedAt = ch.RequestedBy.String(), &e.now
 	}
@@ -94,4 +100,27 @@ func applyLP(e *env, ch *store.AdminChange, v *lp.SettingsUpdate) error {
 	}
 	_, err = audit.Record(e.tx.Context(), e.tx, "lp.settings_updated", detail, audit.At(e.now), audit.Target("admin_change", ch.ID.String()))
 	return err
+}
+
+// autoAllowed refuses a change to auto mode (LP-8) while no automatic policy has been applied, or while the
+// calibration asks for a review of the rule (the false-positive rate of high confidence is over 1 percent).
+func (e *env) autoAllowed(next *store.LPSettings) error {
+	if next.Mode != store.LPModeAuto {
+		return nil
+	}
+	p, _, err := lp.AutoPolicy(e.tx)
+	if err != nil {
+		return lpErr(err)
+	}
+	if p == nil {
+		return newErr(422, "auto_policy_missing", "auto mode needs the automatic policy (lp/auto.yaml) applied from the access-as-code repository first")
+	}
+	reason, err := lp.CalibrationReview(e.tx, e.now)
+	if err != nil {
+		return err
+	}
+	if reason != "" {
+		return conflict("calibration_review", "%s", reason)
+	}
+	return nil
 }
