@@ -2013,6 +2013,71 @@ the plan routes. Body (`files` and `operations` may each be empty, not both):
   index build, as every AWS route does.
 - No UI yet: the admin center has no policy plan view to hang a "Blast radius" panel on, so this is API only.
 
+##### Terraform plan input (AC-9)
+
+The same route takes `"terraform_plan": <the JSON of terraform show -json plan.tfplan>` (issue #655, `internal/tfplan`)
+beside or instead of `files` and `operations`. Its changes become `blast.Operation`s labelled `terraform:<address>`,
+replayed after the explicit operations, with the route's permission, step-up, audit event, tenant scoping and ceilings
+(`413 plan_too_large` over `TESSERA_POLICY_MAX_STEPS`). The plan is untrusted and only read: it is never run, nothing is
+fetched, and the preview needs a collected snapshot (`404 no_snapshot` otherwise).
+
+- **Refused.** Anything that is not a plan is `422 invalid_terraform_plan` with `reason`: `not_json`, `not_terraform_plan`
+  (`format_version` must be `1.x`, and `resource_changes` or `planned_values` must be present, so a state file or a
+  CloudTrail log is refused), `plan_too_deep` (more than 128 levels), `invalid_plan` (a malformed change). More than 5,000
+  resource changes is `413 plan_too_large`. The body cap (1 MiB) applies to the whole request: for a large plan, send
+  only what matters (`terraform plan -target=...`, or `jq '{format_version, terraform_version, planned_values, resource_changes, configuration}'`).
+- **Mapped.** `aws_iam_policy` (put policy version); `aws_iam_{user,role,group}_policy` (inline put and delete, a renamed
+  or moved one is a delete plus a put); `aws_iam_{user,role,group}_policy_attachment` and `aws_iam_policy_attachment`
+  (attach and detach); `aws_iam_role` (trust policy, `managed_policy_arns`, `inline_policy`, `permissions_boundary`);
+  `aws_s3_bucket_policy` (put resource policy; a deleted policy becomes an empty one); `aws_organizations_policy` of type
+  SERVICE_CONTROL_POLICY or RESOURCE_CONTROL_POLICY and `aws_organizations_policy_attachment` (put and attach or detach
+  SCP and RCP). Operations are ordered policy documents, detaches and removals (a deleted bucket policy, an inline
+  delete), entity policies, attaches, each sorted by source, so a policy the plan creates exists before what attaches it
+  and a new document is applied after a removal. When two resources of the plan set the same policy, document,
+  attachment or inline policy (a bucket policy moved between modules), or one attaches what another detaches, both are
+  `conditional` findings: which comes last is not in the plan.
+- **Resolved against the snapshot.** Names become ARNs from the snapshot's users, roles and groups. The account is the
+  one the plan's own IAM ARNs name (a resource's `arn`, or the customer-managed `policy_arn` of an attachment), else the
+  estate's only account; with the account known, only that account's entity is used (no cross-account fallback); with
+  it unknown and several accounts in the estate, no name resolves (`unresolved`). A user, role or group the plan
+  creates (actions exactly `create`) is a new entity: it is never mapped onto the one of the snapshot with its name,
+  and neither are the inline policies and attachments the plan puts on it (all `unresolved`). A value computed from another resource of the plan (`policy_arn = aws_iam_policy.x.arn`) follows the
+  configuration's references when they name exactly one resource and only the attribute expected there (`arn` or `id`
+  for a policy, `name` or `id` for a role, user or group, `bucket` or `id` for a bucket, `id` for an organization policy).
+  Terraform lists the same references for `replace(aws_iam_policy.x.arn, ...)`, so every resolution by reference adds a
+  `conditional` finding saying the expression is assumed to be the bare attribute. At most 16 references per expression
+  and 20,000 per plan are kept (an expression over the cap is not resolved), and each (resource, attribute) is
+  resolved once. A new policy whose ARN is not known until apply gets a placeholder ARN (`.../tessera-plan/...`, or
+  `o-tessera-plan` for an SCP or RCP) so its attachments still take effect; it is never a real policy. A replaced
+  organization policy is detached by the ARN the snapshot holds, and attached again by the new one.
+- **Bounds.** Sets of names (users, roles, groups, managed policy ARNs, inline policy blocks) are deduplicated and cut
+  at 1,000; entries that are not usable (not text, empty, over 2,048 bytes, a bad inline name, past the cut) are an
+  `unresolved` finding, not silently dropped. Mapping stops with `413 plan_too_large` once the plan has made more
+  operations than `TESSERA_POLICY_MAX_STEPS` allows.
+- **Reported, never dropped.** `terraform.findings` lists, sorted by address, each resource change that is not turned
+  into operations (an address, a type, the actions and a fixed reason; never a plan value), with a status. `unsupported`:
+  any other resource type, a role deletion, an organization policy of another type. An unsupported change that can
+  alter who has access (`access_relevant: true`: any `aws_iam_*`, `aws_organizations_*`, `aws_kms_*`, `aws_s3_*`,
+  `aws_lambda_permission`, `aws_lambda_function_url`, `aws_identitystore_*`, `aws_eks_*`, `aws_cognito_*`, `*_policy` or
+  `*_permission` resource, or any resource with a `policy`, `access_policies` or `*_policy` attribute such as an SNS
+  topic, SQS queue, OpenSearch domain, VPC endpoint, API Gateway REST API or secret; so also group membership, access
+  keys, login profiles and role deletion) makes `terraform.conditional` true; an `aws_instance` does not. `conditional`: a value the plan
+  leaves unknown until apply (a computed policy document, a name from `name_prefix`, an attachment of a new policy by a
+  `var`), a resolution by reference, or an order-dependent change; an unknown value is not applied and
+  `terraform.conditional` is true, so the answer is neither allow nor deny for it.
+  `unresolved`: the plan names something the snapshot does not hold (a role the plan creates, a policy no principal uses
+  such as an AWS managed policy nothing attaches, a bucket the collector did not see), marks the name sensitive, or
+  changes a group the snapshot does not know while the same plan creates a group or changes membership.
+  `no_effect`: nothing the preview evaluates changes. Counts in `terraform` are exact; at most 500 findings are listed
+  (`findings_omitted`). `terraform` also has `resources`, `operations`, `ignored` (data sources, reads, no-ops) and
+  `plan_sha256`.
+- **Secrets.** The response and the audit event carry no value of the plan: documents go into the replay only, names
+  that the plan marks sensitive are never used as targets, and `terraform_version` is echoed only if it looks like a
+  version. The audit event has the totals and the plan digest (`policy_diff_tf_*`).
+- **Limits of the first cut.** A role, user or group the plan creates, and a bucket or policy outside the snapshot, are
+  reported not evaluated; group membership, S3 public access blocks and ownership controls, KMS and other resource types
+  are `unsupported`.
+
 #### Role mining
 
 **Directory → Roles → Mining** (issue #298, `internal/roles/mining`, schema `0420_role_mining.sql`,
