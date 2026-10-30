@@ -5,6 +5,7 @@ import { Recommendation, ago, useApi } from "../../api";
 import { Badge, Button, Callout, Chip, EmptyState, FilterChips, Loading, Page, Segmented, TypeBadge, InsightsTabs } from "../../components";
 import { RevokeDrawer } from "../directory/IdentityPage";
 import { AwsRevocationsCard } from "./AwsRevocationsCard";
+import { LpMetricsCard } from "./LpMetricsCard";
 
 const KIND: Record<string, [string, "critical" | "info" | "warning"]> = { remove: ["Remove", "critical"], role_trim: ["Role trim", "info"], right_size: ["Right-size", "warning"] };
 
@@ -69,6 +70,7 @@ export function LeastPrivilege() {
         </div>
       )}
       <AwsRevocationsCard />
+      <LpMetricsCard />
       {revoke !== null && <RevokeDrawer edgeId={revoke} onClose={() => setRevoke(null)} onDone={reload} />}
     </Page>
   );

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/lp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
@@ -131,6 +132,15 @@ func Generate(c *store.TenantTx, in Input) (*Result, error) {
 		return nil, err
 	}
 	tables = append(tables, table{FileQuestionnaires, questionnaireHeader, qa})
+
+	lpRows, lpTruncated, err := leastPrivilegeTable(c, in)
+	if err != nil {
+		return nil, err
+	}
+	tables = append(tables, table{FileLeastPrivilege, leastPrivilegeHeader, lpRows})
+	if lpTruncated {
+		notes = append(notes, fmt.Sprintf("%s is capped at %d rows; narrow the period for the rest.", FileLeastPrivilege, store.LPEvidenceMaxRows))
+	}
 
 	readme := readmeText(in, notes)
 	files := []struct {
@@ -567,4 +577,51 @@ func questionnaireTable(c *store.TenantTx, in Input) ([][]string, error) {
 			a.AnsweredBy, timeutil.ISO(a.AnsweredAt), a.Answers})
 	}
 	return rows, nil
+}
+
+// ---------------------------------------------------------------- least privilege
+
+var leastPrivilegeHeader = []string{"revocation_id", "principal", "policy_arn", "state", "confidence", "unused_days", "approval_path", "approved_by",
+	"executed_at", "revoked_at", "reread_verified", "restore_trigger", "restored_at", "restore_latency_seconds", "false_positive_source",
+	"evidence_sha256", "evidence"}
+
+// leastPrivilegeTable lists, per revocation the least-privilege loop carried out in the period (issue #666), the
+// summary columns and the whole evidence record as JSON: the usage window, confidence, simulation diff, verified
+// re-read and any restore or false-positive label. evidence_sha256 is the digest the audit event of the transition
+// to revoked, finalized or restored carries. truncated: the row cap was reached.
+func leastPrivilegeTable(c *store.TenantTx, in Input) (rows [][]string, truncated bool, err error) {
+	evs, err := lp.EvidenceBetween(c, in.From, in.To, store.LPEvidenceMaxRows)
+	if err != nil {
+		return nil, false, err
+	}
+	rows = [][]string{}
+	for _, e := range evs {
+		body, err := json.Marshal(e)
+		if err != nil {
+			return nil, false, err
+		}
+		var trigger, restoredAt, latency, fp string
+		if e.Restore != nil {
+			trigger, restoredAt = e.Restore.Trigger, e.Restore.RestoredAt
+			if e.Restore.LatencySeconds != nil {
+				latency = strconv.FormatInt(*e.Restore.LatencySeconds, 10)
+			}
+		}
+		if e.FalsePositive != nil {
+			fp = e.FalsePositive.Source
+		}
+		rows = append(rows, []string{e.RevocationID, e.Principal, e.PolicyARN, e.State, confidenceLevel(e), strconv.Itoa(e.UsageWindow.UnusedDays),
+			e.Approval.Path, e.Approval.ApprovedBy, e.Revoke.ExecutedAt, e.Revoke.RevokedAt, strconv.FormatBool(e.Reread.Verified), trigger, restoredAt,
+			latency, fp, e.SHA256, string(body)})
+	}
+	return rows, len(evs) >= store.LPEvidenceMaxRows, nil
+}
+
+// confidenceLevel reads the level out of the record's confidence section.
+func confidenceLevel(e *lp.Evidence) string {
+	var c struct {
+		Level string `json:"level"`
+	}
+	_ = json.Unmarshal(e.Confidence, &c)
+	return c.Level
 }

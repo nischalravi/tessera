@@ -1,0 +1,251 @@
+{
+  "description": "Tessera least-privilege evidence export v1 (LP-10, #666): the records of two revocations of unused AWS access, one finalized and one restored after a denial. sha256 is the digest of the record with sha256 empty, marshalled as the server does; audit_evidence_sha256 is what the hash-chained audit events of each transition carry.",
+  "schema": "tessera.lp-evidence/1",
+  "audit_evidence_sha256": {
+    "rev-1": {
+      "lp.revocation.finalized": "5cbba2b54e504c3de2f1b2152d802cd47f261f6c7b03c54f6b3c0f6c5d4ddc47",
+      "lp.revocation.revoked": "cc478df671d6f2a408e25255043a0e972ae0dca84b39326afb37e419dad4a3e6"
+    },
+    "rev-2": {
+      "lp.revocation.restored": "305d195e8b9c3042cc23e927d712bccc796f7265bb21f3ddca659c1cad1c6543",
+      "lp.revocation.revoked": "4713baae57410a69f6e668e782734db828007fa29944f4f3a0bca67aacec7e0d"
+    }
+  },
+  "records": [
+    {
+      "schema": "tessera.lp-evidence/1",
+      "revocation_id": "rev-1",
+      "state": "finalized",
+      "principal": "arn:aws:iam::111122223333:role/r1",
+      "policy_arn": "arn:aws:iam::111122223333:policy/P1",
+      "kind": "aws_set_policy_version",
+      "account_id": "111122223333",
+      "connector_id": "conn",
+      "usage_window": {
+        "unused_days": 120,
+        "snapshot_id": "snap",
+        "assessed_at": "2026-10-08T09:30:00.000000Z"
+      },
+      "confidence": {
+        "level": "high",
+        "reasons": [
+          "no call in 120 days",
+          "CloudTrail management events cover the window"
+        ]
+      },
+      "verification": {
+        "kept": [
+          {
+            "action": "s3:GetObject",
+            "resource": "arn:aws:s3:::reports/*"
+          }
+        ],
+        "broken": [],
+        "inexact": [],
+        "added": 0,
+        "removed": 3,
+        "ok": true,
+        "auto_applicable": true,
+        "reasons": []
+      },
+      "simulation": {
+        "gained": 0,
+        "lost": 3,
+        "conditional_changed": 0,
+        "fidelity_changed": 0,
+        "principals_affected": 1,
+        "groups": 1,
+        "recomputed": 1,
+        "global": false
+      },
+      "approval": {
+        "path": "staged",
+        "eligibility": "auto",
+        "approved_by": "alice",
+        "approved_at": "2026-10-08T09:31:00.000000Z",
+        "announce_until": "2026-10-15T09:31:00.000000Z",
+        "detail": "approved"
+      },
+      "revoke": {
+        "op_id": "op-rev-1",
+        "executed_at": "2026-10-16T10:30:00.000000Z",
+        "revoked_at": "2026-10-16T10:31:00.000000Z",
+        "candidate_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "restore_sha256": "65878be2918dbafedcbafa5b368ebc79a4189190b4de080042867c88ce8e6079"
+      },
+      "reread": {
+        "verified": true,
+        "at": "2026-10-16T10:31:00.000000Z",
+        "expected_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "finalized_at": "2026-11-15T10:31:01.000000Z",
+      "timeline": [
+        {
+          "to": "candidate",
+          "actor": "alice",
+          "at": "2026-10-08T09:30:00.000000Z"
+        },
+        {
+          "from": "candidate",
+          "to": "announced",
+          "actor": "alice",
+          "detail": "approved",
+          "at": "2026-10-08T09:31:00.000000Z"
+        },
+        {
+          "from": "announced",
+          "to": "revoking",
+          "actor": "lp.worker",
+          "detail": "queued through the AWS write target",
+          "at": "2026-10-16T10:30:00.000000Z"
+        },
+        {
+          "from": "revoking",
+          "to": "revoked",
+          "actor": "lp.worker",
+          "detail": "verified by re-reading the target",
+          "at": "2026-10-16T10:31:00.000000Z"
+        },
+        {
+          "from": "revoked",
+          "to": "finalized",
+          "actor": "lp.worker",
+          "detail": "no denial or re-request in the finalize period",
+          "at": "2026-11-15T10:31:01.000000Z"
+        }
+      ],
+      "sha256": "5cbba2b54e504c3de2f1b2152d802cd47f261f6c7b03c54f6b3c0f6c5d4ddc47"
+    },
+    {
+      "schema": "tessera.lp-evidence/1",
+      "revocation_id": "rev-2",
+      "state": "restored",
+      "principal": "arn:aws:iam::111122223333:role/r2",
+      "policy_arn": "arn:aws:iam::111122223333:policy/P2",
+      "kind": "aws_set_policy_version",
+      "account_id": "111122223333",
+      "connector_id": "conn",
+      "usage_window": {
+        "unused_days": 120,
+        "snapshot_id": "snap",
+        "assessed_at": "2026-10-08T09:30:00.000000Z"
+      },
+      "confidence": {
+        "level": "high",
+        "reasons": [
+          "no call in 120 days",
+          "CloudTrail management events cover the window"
+        ]
+      },
+      "verification": {
+        "kept": [
+          {
+            "action": "s3:GetObject",
+            "resource": "arn:aws:s3:::reports/*"
+          }
+        ],
+        "broken": [],
+        "inexact": [],
+        "added": 0,
+        "removed": 3,
+        "ok": true,
+        "auto_applicable": true,
+        "reasons": []
+      },
+      "simulation": {
+        "gained": 0,
+        "lost": 3,
+        "conditional_changed": 0,
+        "fidelity_changed": 0,
+        "principals_affected": 1,
+        "groups": 1,
+        "recomputed": 1,
+        "global": false
+      },
+      "approval": {
+        "path": "staged",
+        "eligibility": "auto",
+        "approved_by": "alice",
+        "approved_at": "2026-10-08T09:31:00.000000Z",
+        "announce_until": "2026-10-15T09:31:00.000000Z",
+        "detail": "approved"
+      },
+      "revoke": {
+        "op_id": "op-rev-2",
+        "executed_at": "2026-10-16T11:30:00.000000Z",
+        "revoked_at": "2026-10-16T11:31:00.000000Z",
+        "candidate_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "restore_sha256": "65878be2918dbafedcbafa5b368ebc79a4189190b4de080042867c88ce8e6079"
+      },
+      "reread": {
+        "verified": true,
+        "at": "2026-10-16T11:31:00.000000Z",
+        "expected_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "restore": {
+        "trigger": "denial",
+        "requested_at": "2026-10-16T12:31:00.000000Z",
+        "restored_at": "2026-10-16T12:35:00.000000Z",
+        "op_id": "rop-rev-2",
+        "latency_seconds": 240,
+        "denials": [
+          {
+            "source": "cloudtrail",
+            "event_id": "evt-rev-2",
+            "action": "s3:GetObject",
+            "resource": "arn:aws:s3:::reports/q3.csv",
+            "arrived_at": "2026-10-16T12:31:00.000000Z"
+          }
+        ]
+      },
+      "false_positive": {
+        "source": "denial",
+        "ref": "rop-rev-2",
+        "labelled_at": "2026-10-16T12:35:00.000000Z"
+      },
+      "timeline": [
+        {
+          "to": "candidate",
+          "actor": "alice",
+          "at": "2026-10-08T09:30:00.000000Z"
+        },
+        {
+          "from": "candidate",
+          "to": "announced",
+          "actor": "alice",
+          "detail": "approved",
+          "at": "2026-10-08T09:31:00.000000Z"
+        },
+        {
+          "from": "announced",
+          "to": "revoking",
+          "actor": "lp.worker",
+          "detail": "queued through the AWS write target",
+          "at": "2026-10-16T11:30:00.000000Z"
+        },
+        {
+          "from": "revoking",
+          "to": "revoked",
+          "actor": "lp.worker",
+          "detail": "verified by re-reading the target",
+          "at": "2026-10-16T11:31:00.000000Z"
+        },
+        {
+          "from": "revoked",
+          "to": "restoring",
+          "actor": "lp.denial",
+          "detail": "restore requested (denial)",
+          "at": "2026-10-16T12:31:00.000000Z"
+        },
+        {
+          "from": "restoring",
+          "to": "restored",
+          "actor": "lp.worker",
+          "detail": "verified by re-reading the target",
+          "at": "2026-10-16T12:35:00.000000Z"
+        }
+      ],
+      "sha256": "305d195e8b9c3042cc23e927d712bccc796f7265bb21f3ddca659c1cad1c6543"
+    }
+  ]
+}
