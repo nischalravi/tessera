@@ -237,9 +237,36 @@ func TestProposalsAPI_ScopeIsNotRegistrable(t *testing.T) {
 	if rec.Code != 422 || !strings.Contains(rec.Body.String(), "invalid_scopes") {
 		t.Errorf("registering a client with config.propose: %d %s", rec.Code, rec.Body)
 	}
+	// a person cannot file a config.proposal: only a machine client does, through /api/proposals (issue #740)
+	direct := `{"type":"config.proposal","payload":{"kind":"alert_rule","id":"mfa_bypass","body":{"enabled":false,"severity":"low","threshold":1,"window_minutes":60}}}`
+	if rec := serve(e.h, authed(admin, "POST", "/api/admin/change-requests", direct)); rec.Code != 422 {
+		t.Errorf("a person filing a config.proposal: %d %s", rec.Code, rec.Body)
+	}
 	// and the grant refuses a first-party client
 	grant := `{"type":"api_client.propose.grant","payload":{"client_id":"tessera-cli"}}`
 	if rec := serve(e.h, authed(admin, "POST", "/api/admin/change-requests", grant)); rec.Code != 404 && rec.Code != 409 && rec.Code != 422 {
 		t.Errorf("granting config.propose to the CLI client: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestProposalsAPI_ProposerKeysRotate: an admin rotates the keys of a client that holds config.propose (issue #739). No
+// person holds that permission, so the creator check must leave it out, as the #522 approver check does.
+func TestProposalsAPI_ProposerKeysRotate(t *testing.T) {
+	e := newOAuthEnv(t)
+	admin := signIn(t, e.f.DB, e.f.A.ID, authtest.User{Email: "ada@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	id := "tsc_rotator"
+	seedClient(t, e.f.DB, e.f.A.ID, id, "terraform", func(c *store.APIClient) {
+		c.AllowedScopes, c.ApprovedBy = []string{"tessera:read", "config.propose"}, admin.UserID.String()
+	})
+	for i, mode := range []string{"add", "replace"} {
+		payload := fmt.Sprintf(`{"mode":%q,"jwks":%s}`, mode, pubJWKS(t, fmt.Sprintf("rot%d", i)))
+		if rec := serve(e.h, authed(admin, "POST", "/api/admin/api-clients/"+id+"/keys", payload)); rec.Code != 200 {
+			t.Errorf("rotating (%s) the keys of a proposer client: %d %s", mode, rec.Code, rec.Body)
+		}
+	}
+	// the scope is still not registrable, and a client whose roles exceed the admin is still refused
+	viewer := signIn(t, e.f.DB, e.f.A.ID, authtest.User{Email: "vic@a.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, storetest.Now)
+	if rec := serve(e.h, authed(viewer, "POST", "/api/admin/api-clients/"+id+"/keys", fmt.Sprintf(`{"mode":"add","jwks":%s}`, pubJWKS(t, "rot9")))); rec.Code != 403 {
+		t.Errorf("a viewer rotating the keys: %d %s", rec.Code, rec.Body)
 	}
 }

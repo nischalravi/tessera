@@ -333,6 +333,11 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 	if err != nil {
 		return nil, err
 	}
+	if typ.name == TypeConfigProposal && clientID == "" {
+		// a config.proposal is filed only by a machine client through SubmitProposal, which names it; a person's
+		// request of this type would carry the "Proposed by a machine client" label with no client behind it (issue #740)
+		return nil, invalid("type %s is filed by a machine client through POST /api/proposals/...", TypeConfigProposal)
+	}
 	if len(in.Payload) == 0 {
 		return nil, invalid("payload is required")
 	}
@@ -438,6 +443,7 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, id uuid.UUID, 
 		return nil, denied(d)
 	}
 	var ch *store.AdminChange
+	var failure error
 	err := s.DB.InTenant(ctx, p.TenantID, func(tx *store.TenantTx) error {
 		var err error
 		if ch, err = tx.AdminChange(id); err != nil {
@@ -459,9 +465,17 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, id uuid.UUID, 
 		case !seal.Equal([]byte(payloadHash), []byte(ch.PayloadHash)):
 			return conflict("payload_hash_mismatch", "the payload changed since you reviewed it; reload the request")
 		}
+		if !seal.Equal([]byte(HashPayload(ch.Payload)), []byte(ch.PayloadHash)) {
+			failure = tampered()
+			return errApplierFailed
+		}
 		typ, v, err := decodeStored(ch)
 		if err != nil {
 			return err
+		}
+		if err := s.env(tx, now, ch.RequestedBy).proposerStillValid(ch); err != nil {
+			failure = err
+			return errApplierFailed
 		}
 		if _, err := typ.plan(s.env(tx, now, ch.RequestedBy), v); err != nil {
 			return err // the tenant changed since the request: approve nothing stale
@@ -475,6 +489,9 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, id uuid.UUID, 
 		}
 		return s.env(tx, now, ch.RequestedBy).transition(ch, TransApproved, p.Display)
 	})
+	if errors.Is(err, errApplierFailed) {
+		return s.fail(ctx, p.TenantID, id, failure, p.Display)
+	}
 	if err != nil {
 		return nil, mapStore(err)
 	}
@@ -553,6 +570,11 @@ func (s *Service) Apply(ctx context.Context, p *auth.Principal, id uuid.UUID) (*
 
 var errApplierFailed = errors.New("admin: the applier failed")
 
+// tampered is the failure of a request whose stored payload no longer matches the hash it was filed under.
+func tampered() error {
+	return conflict(ReasonPayloadTampered, "the stored payload no longer matches its hash")
+}
+
 // apply runs the applier in the transaction that marks the request applied,
 // so a failure rolls the change back; the failure is then recorded in a
 // transaction of its own (status failed, audited, notified).
@@ -574,10 +596,15 @@ func (s *Service) apply(ctx context.Context, tenant tenancy.ID, id uuid.UUID, by
 			return conflict("cooling_off_active", "the cooling-off period ends at %s; the change cannot be applied before",
 				ch.EffectiveAt.UTC().Format(time.RFC3339))
 		case !seal.Equal([]byte(HashPayload(ch.Payload)), []byte(ch.PayloadHash)):
-			return conflict("payload_hash_mismatch", "the stored payload no longer matches its approved hash")
+			failure = tampered()
+			return errApplierFailed
 		}
 		typ, v, err := decodeStored(ch)
 		if err != nil {
+			failure = err
+			return errApplierFailed
+		}
+		if err := s.env(tx, now, ch.RequestedBy).proposerStillValid(ch); err != nil {
 			failure = err
 			return errApplierFailed
 		}
@@ -604,10 +631,14 @@ func (s *Service) apply(ctx context.Context, tenant tenancy.ID, id uuid.UUID, by
 
 // fail records that the applier of request id raised err.
 func (s *Service) fail(ctx context.Context, tenant tenancy.ID, id uuid.UUID, cause error, by string) (*store.AdminChange, error) {
-	msg := "the change could not be applied"
+	msg, code := "the change could not be applied", "apply_failed"
 	var ae *Error
 	if errors.As(cause, &ae) {
 		msg = ae.Msg
+		if ae.Code == ReasonProposerRevoked || ae.Code == ReasonPayloadTampered {
+			// the reason is the failure text; the caller gets the 409 with that code
+			msg, code = ae.Code, ae.Code
+		}
 	} else {
 		s.log().Error("admin change applier failed", "change", id.String(), "err", cause)
 	}
@@ -626,7 +657,7 @@ func (s *Service) fail(ctx context.Context, tenant tenancy.ID, id uuid.UUID, cau
 	if err != nil {
 		return nil, mapStore(err)
 	}
-	return ch, newErr(http.StatusConflict, "apply_failed", "%s", msg)
+	return ch, newErr(http.StatusConflict, code, "%s", msg)
 }
 
 // decodeStored decodes a stored request's payload (it was validated and
