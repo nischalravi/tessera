@@ -133,6 +133,9 @@ func decode(data []byte, v any) error {
 	if err := yaml.Unmarshal(data, &root); err != nil {
 		return err
 	}
+	if hasMerge(&root, 0) {
+		return errors.New("YAML merge keys (<<) are not accepted")
+	}
 	if hasAlias(&root, 0) {
 		return errors.New("YAML anchors and aliases are not accepted")
 	}
@@ -146,6 +149,28 @@ func decode(data []byte, v any) error {
 		return errors.New("the file holds more than one document")
 	}
 	return nil
+}
+
+// hasMerge reports a YAML merge key (<<) anywhere in the document. A merge gives a field a second value that the
+// duplicate-key check does not see (the explicit key silently wins), so a reader could review one value while
+// another is in the file (issue #756).
+func hasMerge(n *yaml.Node, depth int) bool {
+	if depth > 64 {
+		return false // hasAlias refuses it
+	}
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i < len(n.Content); i += 2 {
+			if k := n.Content[i]; k.Kind == yaml.ScalarNode && k.ShortTag() == "!!merge" {
+				return true
+			}
+		}
+	}
+	for _, c := range n.Content {
+		if hasMerge(c, depth+1) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasAlias(n *yaml.Node, depth int) bool {

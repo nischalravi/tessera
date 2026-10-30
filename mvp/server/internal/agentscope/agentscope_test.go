@@ -45,6 +45,11 @@ func TestParseRefusals(t *testing.T) {
 		{"anchor", swap("source: entra", "source: &a entra"), "invalid_document"},
 		{"alias", swap("name: Support bot", "name: &n Support bot\ndescription: *n"), "invalid_document"},
 		{"two documents", good + "---\n" + good, "invalid_document"},
+		// issue #756: a merge key is a hidden second value for a field
+		{"merge key beside the field", swap("allow:\n", "allow:\n  <<: {actions: [admin]}\n"), "invalid_document"},
+		{"merge key alone", swap("  actions: [write, read]\n", "  <<: {actions: [admin, delegate]}\n"), "invalid_document"},
+		{"merge key at the top", swap("name: Support bot", "name: Support bot\n<<: {severity: low}"), "invalid_document"},
+		{"quoted << is a field", swap("name: Support bot", "name: Support bot\n'<<': x"), "invalid_document"},
 		{"not yaml", "a: [", "invalid_document"},
 		{"wrong schema", swap("tessera.agentscope/v1", "tessera.agentscope/v2"), "invalid_schema"},
 		{"bad key", swap("key: support-bot", "key: ../x"), "invalid_key"},

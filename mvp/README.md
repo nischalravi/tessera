@@ -1944,7 +1944,7 @@ owner_ceiling: true         # default; false lets the agent hold what its owner 
   `plan_sha256`), `POST /api/policy/agents/apply` (`admin.change.request` + step-up, files an
   `agent_scopes.bundle.apply` change request). **Every apply takes two people**; the apply plans again and refuses
   `409 stale_plan` if the plan moved, `413 plan_too_large` over `TESSERA_POLICY_MAX_STEPS`, `409 deletion_guard`
-  when full-mode retirements pass the guard. Files are read strictly (unknown fields, duplicate keys, anchors,
+  when full-mode retirements pass the guard. Files are read strictly (unknown fields, duplicate keys, anchors, merge keys,
   aliases and a second document are refused; the path must be `agents/<key>.yaml`).
 - **Tenant isolation.** The agent or blueprint must be one the tenant discovered (`agent_profiles`, `agent_links`,
   `agent_blueprints`), so a selector naming another tenant's agent is refused as `unknown_agent`, and a `tenant:`
