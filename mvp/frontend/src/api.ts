@@ -3779,6 +3779,16 @@ export interface LpRevocation {
   unused_days: number; confidence: string; candidate_sha256: string; restore_sha256: string; created_by: string; created_at: string;
   approved_by?: string; announce_until?: string; revoked_at?: string; restore_until?: string; finalized_at?: string; reason?: string;
 }
+/** GET /api/lp/metrics (LP-10, #666): what the loop has done and how often it was wrong, over the window. */
+export interface LpMetricsLevel {
+  confidence: "high" | "medium"; revoked: number; restored: number; restore_percent: number;
+  false_positives: number; false_positive_percent: number; review: boolean;
+}
+export interface LpMetrics {
+  window_days: number; from: string; to: string; truncated: boolean; executed: number; unused_permissions_removed: number;
+  auto: number; staged: number; false_positive_percent: number; levels: LpMetricsLevel[]; by_state: Record<string, number>;
+  median_restore_seconds: number | null; restores: number; restores_within_slo: number; restore_slo_seconds: number;
+}
 export const lpLoop = {
   /** The kill switch: one person; resuming takes a second admin through a change request (lp.settings.update). */
   pause: (reason: string) => api<LpSettings>("/lp/pause", { reason }),

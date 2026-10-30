@@ -116,7 +116,7 @@ func TestManifestCoversEveryFile(t *testing.T) {
 				t.Errorf("manifest = %+v", m)
 			}
 			want := []string{evidence.FileUsers, evidence.FileJML, evidence.FileCampaigns, evidence.FileItems,
-				evidence.FilePrivileged, evidence.FileRevoked, evidence.FileQuestionnaires, "README.txt"}
+				evidence.FilePrivileged, evidence.FileRevoked, evidence.FileQuestionnaires, evidence.FileLeastPrivilege, "README.txt"}
 			if len(m.Files) != len(want) {
 				t.Fatalf("manifest lists %d files, want %d", len(m.Files), len(want))
 			}

@@ -1083,7 +1083,8 @@ Issue #111; packages `server/internal/evidence`, `graph.BuildAsOf`, schema `0260
   from the HR termination to the last grant removal, or `access_remains`; ids only), `review_campaigns.csv`
   and `review_items.csv` (campaigns created in the period with decisions), `privileged_access.csv` (who
   held privileged access at the end of the period, with the path), `revocations.csv` (grants revoked in
-  Tessera in the period, verified against Tessera's own graph, not the target system), `README.txt`,
+  Tessera in the period, verified against Tessera's own graph, not the target system),
+  `least_privilege_revocations.csv` (the least-privilege loop's revocations with their evidence, #666), `README.txt`,
   `manifest.json` (SHA-256 and row count of every file, control mapping from the knowledge base) and
   `manifest.sha256`. The same input gives the same bytes. CSV cells starting with `= + - @` get a leading
   apostrophe. The PCI pack notes that exception-only campaigns may not satisfy requirement 7.2.4.
@@ -7085,6 +7086,33 @@ two-person steps, in this order.
 - **Self-pause.** When the calibration reports `review: true` (false positives of `high` over 1% in 60 days), the tick pauses auto
   mode and audits `lp.auto_paused` (and `lp.paused`) with the reason. Pausing takes one person; resuming takes two.
 - **Schema.** `0953_lp_auto_policy.sql` (Postgres `0957`, change type `0958`): `lp_auto_policy`, with RLS.
+
+### Least-privilege evidence and metrics (issue #666, LP-10)
+
+Design `docs/design/least-privilege-loop.md` section 7. Every revocation the loop carries out has an **evidence record**, computed
+from the rows the loop keeps anyway (`lp_revocations`, its events, `lp_false_positives`, `lp_denials`): there is no table of its
+own, so no second copy that could drift. The record (`tessera.lp-evidence/1`, `internal/lp/evidence.go`) holds the usage window
+(unused days, snapshot, when it was assessed), the confidence level and reasons, the evaluator's verification (the used calls the
+right-size keeps, none broken), the simulated diff summary, the approval (`auto` policy or `staged` person, who and when), the
+operation id, the verified re-read (the loop enters `revoked` only after the target was read again and held the candidate digest),
+any restore (trigger, request and completion times, latency, the denial events behind it), the false-positive label and the
+timeline. Its `sha256` is the digest of the record with that field empty.
+- **Chain.** The audit events `lp.revocation.revoked`, `.finalized` and `.restored` carry `evidence_sha256`, the digest of the record
+  as of that transition, so for a finalized or restored (terminal) revocation the exported record's digest is the one in the hash
+  chain. A restore labels the false positive before it moves to `restored`, so the digest covers the label. Golden export:
+  `testdata/golden/lp_evidence_v1.json` (regenerate with `go test ./internal/lp -run TestEvidenceGolden -update` and explain the
+  change); the test also verifies the audit chain with the evidence in it.
+- **Export.** `GET /api/lp/evidence?from=&to=&limit=` (`audit.read`) lists the records of the revocations carried out in `[from, to)`
+  (dates or datetimes, a date-only `to` inclusive; default the last 60 days, at most 731 days, at most 5000 records);
+  `GET /api/lp/revocations/{id}/evidence` (`audit.read`) gives one. Evidence packs (`POST /api/evidence/packs`) get
+  `least_privilege_revocations.csv`: summary columns plus the whole record as JSON and its `evidence_sha256`; the SOC 2 (CC6.3), ISO
+  27001 (A.5.18) and PCI (7.2.2) controls list it.
+- **Metrics.** `GET /api/lp/metrics?days=` (`graph.read`, 1 to 365, default 60): revocations carried out, unused permissions removed
+  (those whose removal stands), auto against staged counts, outcomes by state, per confidence level the restore rate and the
+  false-positive rate (restores and JIT re-requests over revocations; `review` when `high` is over 1%), and the median restore time
+  (request to verified completion) with how many were inside the 15-minute SLO. Insights, Least privilege shows them under the loop.
+- **Not stored.** Per-source usage coverage and gaps are not copied into the record (the right-size does not keep them with the
+  candidate); the used-call list, confidence reasons and snapshot id are. No schema change.
 
 ### LDAP and Active Directory provisioning (issue #586)
 
