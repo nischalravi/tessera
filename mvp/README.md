@@ -968,6 +968,7 @@ when a second reviewer is needed) ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
 `POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
 (changes take `?dry_run=1`) · `GET /api/policy/roles/export` · `POST /api/policy/roles/validate|plan|apply` (roles and birthright rules as code, below) · `GET /api/policy/jit/export` · `POST /api/policy/jit/validate|plan|apply` (JIT eligibility as code, below) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
+(changes take `?dry_run=1`) · `GET /api/policy/roles/export` · `POST /api/policy/roles/validate|plan|apply` (roles and birthright rules as code, below) · `GET /api/lp/auto-policy` · `POST /api/lp/auto-policy/validate|apply` (auto least-privilege mode as code) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
 `GET|POST /api/role-mining/runs` · `GET /api/role-mining/runs/{id}` · `GET /api/role-mining/candidates/{id}` ·
 `POST /api/role-mining/candidates/{id}/accept|dismiss` (role mining, below) ·
 `GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
@@ -6835,7 +6836,7 @@ See [the contract, examples and phase limits](../docs/migration-assessment.md).
 ### AWS write target (issue #660, LP-4)
 
 The loop of `docs/design/least-privilege-loop.md` (§4.1, §6.3) needs a way to take access away in AWS and to put it back.
-This is that target; there is no auto mode yet (LP-5, LP-8). `internal/connectors/awsorg` `WriteTarget` is a provisioning
+This is that target; auto mode is LP-8 ("Automatic least-privilege mode as code"). `internal/connectors/awsorg` `WriteTarget` is a provisioning
 target of kind `aws` (`PUT /api/provisioning/targets/{connection}` with `{"kind":"aws","aws":{"connector_id":"<AWS connector id>","writer_role":"TesseraWriter"}}`;
 no token: the connector must be federated, a stored-key connector is refused). Every call is signed with SigV4 and sent
 through the safehttp AWS client.
@@ -6953,8 +6954,37 @@ revocation is final. This differs from the issue's "restores it" wording; the de
   trigger), once, so the counters never double count.
 - **Calibration.** `GET /api/lp/calibration` (`graph.read`) gives, per confidence level (`high`, `medium`), the revocations
   carried out and the false positives labelled in the last 60 days, the percentage, and `review: true` when `high` is over 1%
-  (the rule goes to a person; no self-tuning). The flag is reported, not yet wired to an automatic pause.
+  (the rule goes to a person; no self-tuning). In auto mode (LP-8, below) the flag pauses the loop by itself.
 - **Schema.** `0923_lp_false_positives.sql` (Postgres `0952`): `lp_false_positives`, with RLS and a cross-tenant trigger.
+
+### Automatic least-privilege mode as code (issue #664, LP-8)
+
+Design `docs/design/least-privilege-loop.md` sections 3, 4, 10 and 11. Auto mode is **off by default** and needs two
+two-person steps, in this order.
+
+- **The policy is a file in the access-as-code repository**: `lp/auto.yaml` (package `internal/lpauto`). It can only narrow what
+  the design allows: `confidence` is `high`; `min_unused_days` 90 to 365 (default 90); `max_per_day` 1 to 100 (default 100);
+  `kinds` (required) from the auto-eligible kinds (`aws_detach_policy`, `aws_delete_inline_policy`, `aws_set_policy_version`,
+  `aws_remove_from_group`, `aws_delete_assignment`); optional `accounts`; `exclude_break_glass` must be `true` and `privileged_prod`
+  must be `suggest` (privileged prod permissions and protected or break-glass principals are never auto-revoked). Unknown fields
+  and every other value are refused (`422 invalid_auto_policy`).
+- **Apply** follows the AC-4 pattern. `POST /api/lp/auto-policy/apply {commit, files}` (`admin.change.request`, step-up) parses
+  the file and files a `lp.auto_policy.apply` change request carrying `bundle_sha256` and `policy_sha256`; a different admin
+  approves (two people always), and the apply parses again and refuses `409 stale_plan` if the policy moved. It writes
+  `lp_auto_policy` (one row per tenant) and audits `lp.auto_policy_applied` with the policy. `POST /api/lp/auto-policy/validate`
+  (`lp.manage`) changes nothing; `GET /api/lp/auto-policy` (`graph.read`) shows the applied policy, the mode, whether auto is
+  running and the calibration review.
+- **Switching on** is `lp.settings.update` to `mode: auto` (two people, a loosening). It is refused `422 auto_policy_missing`
+  until a policy is applied and `409 calibration_review` while the calibration asks for a review.
+- **What auto does.** Silence is consent: each `lp_tick` pass announces the candidates the policy covers (high confidence, EXACT
+  and verified when proposed, unused for at least the larger of the policy's and the tenant's `auto_min_days`, not protected,
+  exempted or open, no open evaluator disagreement) with actor `lp.auto`, at most `max_per_day` in 24 hours. Owners have the
+  announce period (7 days) to object; after it the recheck, caps (25 per run, 100 per day, 10 per account per day), the kill
+  switch, verification, the 30-day finalize and restores work as in staged mode. A candidate the policy does not cover stays a
+  candidate for a person.
+- **Self-pause.** When the calibration reports `review: true` (false positives of `high` over 1% in 60 days), the tick pauses auto
+  mode and audits `lp.auto_paused` (and `lp.paused`) with the reason. Pausing takes one person; resuming takes two.
+- **Schema.** `0953_lp_auto_policy.sql` (Postgres `0957`, change type `0958`): `lp_auto_policy`, with RLS.
 
 ### LDAP and Active Directory provisioning (issue #586)
 

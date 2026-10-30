@@ -2495,6 +2495,13 @@ CREATE POLICY tenant_isolation ON admin_change_proposals
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE lp_auto_policy ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lp_auto_policy FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON lp_auto_policy;
+CREATE POLICY tenant_isolation ON lp_auto_policy
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE jit_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE jit_settings FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON jit_settings;

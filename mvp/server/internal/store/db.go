@@ -193,6 +193,8 @@ var tables = []string{
 	"lp_false_positives",
 	// JIT eligibility as code: the enforcement switch, the rules, the groups they name and their versions (schema/0954_jit_eligibility.sql)
 	"jit_settings", "jit_eligibility", "jit_eligibility_groups", "jit_eligibility_versions",
+	// the automatic policy from the access-as-code repository (schema/0953_lp_auto_policy.sql)
+	"lp_auto_policy",
 	// AWS usage (schema/0915_aws_usage.sql)
 	"aws_usage_daily", "aws_usage_state", "aws_usage_gaps",
 	// flat-file import for disconnected apps (schema/0352_flatfile.sql)

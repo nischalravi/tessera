@@ -1,7 +1,7 @@
 -- Widens the admin_change_requests type CHECK to admit jit.bundle.apply (applying JIT eligibility rules from a
 -- policy repository: always two admins, issue #651, internal/admin/change_jit_bundle.go). SQLite changes the CHECK in
 -- 0008_admin_changes.sql and DB.upgradeAdminChangeTypes. The list is every type of
--- 0956_config_proposal_change_types.sql and this one: a migration after this one that adds a type must add it here
+-- 0958_lp_auto_policy_change_type.sql and this one: a migration after this one that adds a type must add it here
 -- too. No table is added, so rls.sql is unchanged by this file.
 
 -- +goose Up
@@ -13,4 +13,4 @@ ALTER TABLE admin_change_requests ADD CONSTRAINT admin_change_requests_type_chec
     'breakglass.register','breakglass.revoke','groups.loader.save','retention.update','groups.folder.delete_recursive',
     'deletion_guard.update','siem.sink.filter','siem.sink.target','alerts.rule.loosen','breach.item.attest',
     'provisioning.write_back.enable','lp.settings.update','roles.bundle.apply','config.proposal','api_client.propose.grant',
-    'jit.bundle.apply'));
+    'lp.auto_policy.apply','jit.bundle.apply'));
