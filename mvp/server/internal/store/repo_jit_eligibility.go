@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// JIT eligibility as code (schema/0953_jit_eligibility.sql, issue #651, AC-5). Every statement binds the tenant.
+// JIT eligibility as code (schema/0954_jit_eligibility.sql, issue #651, AC-5). Every statement binds the tenant.
 
 // JIT eligibility statuses.
 const (

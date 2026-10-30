@@ -191,7 +191,7 @@ var tables = []string{
 	"lp_denial_hooks", "lp_denials",
 	// false positives of the loop, which feed the calibration (schema/0923_lp_false_positives.sql)
 	"lp_false_positives",
-	// JIT eligibility as code: the enforcement switch, the rules, the groups they name and their versions (schema/0953_jit_eligibility.sql)
+	// JIT eligibility as code: the enforcement switch, the rules, the groups they name and their versions (schema/0954_jit_eligibility.sql)
 	"jit_settings", "jit_eligibility", "jit_eligibility_groups", "jit_eligibility_versions",
 	// AWS usage (schema/0915_aws_usage.sql)
 	"aws_usage_daily", "aws_usage_state", "aws_usage_gaps",
