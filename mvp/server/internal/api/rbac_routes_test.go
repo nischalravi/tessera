@@ -331,6 +331,10 @@ GET    /api/policy/roles/export                      graph.read      -  # issue 
 POST   /api/policy/roles/validate                    roles.manage    -  # issue #650 (AC-4: changes nothing)
 POST   /api/policy/roles/plan                        roles.manage    -  # issue #650 (AC-4: changes nothing)
 POST   /api/policy/roles/apply                       admin.change.request  STEP_UP_ADMIN  # issue #650 (AC-4: files a roles.bundle.apply change request; a different admin approves)
+GET    /api/policy/jit/export                        graph.read      -  # issue #651 (AC-5)
+POST   /api/policy/jit/validate                      roles.manage    -  # issue #651 (AC-5: changes nothing)
+POST   /api/policy/jit/plan                          roles.manage    -  # issue #651 (AC-5: changes nothing)
+POST   /api/policy/jit/apply                         admin.change.request  STEP_UP_ADMIN  # issue #651 (AC-5: files a jit.bundle.apply change request; a different admin approves)
 GET    /api/abac/policies                            graph.read      -  # issue #162
 POST   /api/abac/policies                            roles.manage    STEP_UP_POLICY  # issue #162
 GET    /api/abac/policies/{policy_id}                graph.read      -  # issue #162

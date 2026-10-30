@@ -967,7 +967,7 @@ when a second reviewer is needed) ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
 `POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
-(changes take `?dry_run=1`) · `GET /api/policy/roles/export` · `POST /api/policy/roles/validate|plan|apply` (roles and birthright rules as code, below) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
+(changes take `?dry_run=1`) · `GET /api/policy/roles/export` · `POST /api/policy/roles/validate|plan|apply` (roles and birthright rules as code, below) · `GET /api/policy/jit/export` · `POST /api/policy/jit/validate|plan|apply` (JIT eligibility as code, below) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
 `GET|POST /api/role-mining/runs` · `GET /api/role-mining/runs/{id}` · `GET /api/role-mining/candidates/{id}` ·
 `POST /api/role-mining/candidates/{id}/accept|dismiss` (role mining, below) ·
 `GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
@@ -1820,8 +1820,39 @@ is refused with a diagnostic.
   (default 20000) is `413 plan_too_large`, and one whose grant removals pass the deletion guard's `group_members`
   limit is `409 deletion_guard`. Split the change.
 - v1 is partial mode: roles absent from the bundle are left alone (nothing is retired by a bundle), and
-  `manage.roles: full` is refused. The other kinds in a bundle (JIT, SoD, agents, invariants) are not applied yet.
+  `manage.roles: full` is refused. JIT eligibility has its own routes (below); SoD, agents and invariants are not applied yet.
   Not yet: the `managed_by` lock on UI edits, one pending apply per tenant, the blast-radius summary (AC-8).
+
+#### JIT eligibility as code
+
+Issue #651 (AC-5; `internal/jitascode`, `internal/jit/eligibility.go`, schema `0953_jit_eligibility.sql`,
+Postgres `0957` and `0958`; tables `jit_settings`, `jit_eligibility`, `jit_eligibility_groups`,
+`jit_eligibility_versions`). Today anyone may request any `requestable` group for up to 72 hours; a tenant can now
+state who may ask for what, for how long and who approves, as `jit/<key>.yaml` in its policy repository.
+
+- **Bundle.** `tessera.yaml` (`manage: {jit: partial}` or `full`, and optionally `jit_enforce: true|false`; absent
+  leaves the tenant's setting alone) and `jit/<key>.yaml` (`schema: tessera.jit/v1`): `principals` (group
+  membership lets a person ask), `entitlements` (what may be asked for), `max_hours` (1 to 72), `approvers`,
+  `min_approvals` (0 or 1; more is refused for now) and `step_up`. References are `system:name` and may contain
+  spaces. Rules are YAML data; there is no Cedar to author here (anything but `.yaml` under `jit/` is refused).
+- **Enforcement.** Until `jit_enforce: true` is applied, `groups.requestable` decides, as before. Once it is on,
+  deny by default: `jit.CreateRequest` needs an active rule whose principals include a group the person holds
+  (standing access only, not a JIT grant), whose entitlements include the group and whose `max_hours` covers the
+  duration (`422 not_eligible`). `jit.Approve` checks again: the rule must still allow the request, and when it names
+  approvers the approver must be in one of those groups (`403 not_approver`; no approvers: any `jit.decide` holder).
+  Approval already needs step-up, so `step_up` is recorded in the plan and versions; it cannot lower that. A
+  lookup error denies.
+- **Routes**, as for roles: `GET /api/policy/jit/export`, `POST /api/policy/jit/validate` and `/plan`
+  (`roles.manage`, change nothing; the plan lists each rule as `create`, `update`, `retire` or `unchanged`, the
+  enforcement switch before and after, warnings such as "no rule is active" and `plan_sha256`) and
+  `POST /api/policy/jit/apply` (`admin.change.request` + step-up, files a `jit.bundle.apply` change request).
+  **Every apply takes two people** (including turning enforcement on or off); the apply plans again and refuses
+  `409 stale_plan` if the plan moved. Each rule version carries `policy_ref` `{commit, path, bundle_sha256}`.
+  Audit: `policy.jit.applied`, `policy.jit.create|update|retire` and `policy.jit.enforcement`.
+- **Full mode** retires (keeps, never deletes) active rules absent from the bundle. Rules, group references
+  and retirements that an apply removes count against the deletion guard's `group_members` limit (`409
+  deletion_guard`), and an apply of more than `TESSERA_POLICY_MAX_STEPS` writes is `413 plan_too_large`; both are
+  refused outright with no override.
 
 #### Role mining
 

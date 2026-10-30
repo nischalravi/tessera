@@ -74,7 +74,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     'roles.bundle.apply',
     -- a config write proposed by a machine client holding config.propose, and the two-admin grant of that scope
     -- (internal/admin/change_proposal.go, issue #721)
-    'config.proposal','api_client.propose.grant')),
+    'config.proposal','api_client.propose.grant',
+    -- applying JIT eligibility rules from a policy repository takes two admins, always (internal/admin/change_jit_bundle.go, issue #651)
+    'jit.bundle.apply')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

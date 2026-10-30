@@ -81,6 +81,9 @@ type Config struct {
 	Schema string            `yaml:"schema"`
 	Tenant string            `yaml:"tenant"`
 	Manage map[string]string `yaml:"manage"`
+	// JitEnforce turns JIT eligibility enforcement on (deny by default) or off when the bundle is applied (AC-5);
+	// absent leaves the tenant's setting alone.
+	JitEnforce *bool `yaml:"jit_enforce,omitempty"`
 }
 
 var manageKinds = []string{"roles", "sod", "jit", "invariants", "agents", "birthright"}
