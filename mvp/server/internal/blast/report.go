@@ -40,7 +40,7 @@ type AWSDiff struct {
 // Inputs are what Summarize joins.
 type Inputs struct {
 	People map[int64]Person
-	Graph  *simulate.Result // nil: the bundle changed no graph edit and no policy
+	Graph  *simulate.Result // nil: no simulation ran, so the violations are reported as zero (the API always runs one)
 	AWS    *AWSDiff         // nil: no AWS operations
 }
 

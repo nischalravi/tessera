@@ -425,3 +425,29 @@ func TestPolicyDiffAPI_BadOperations(t *testing.T) {
 		t.Errorf("bad profile: %d %.200s", rec.Code, rec.Body)
 	}
 }
+
+// A change that moves nothing in the graph or the policies still reports the violations the tenant has, the same
+// baseline GET /api/violations gives; before this the preview skipped the simulation and answered 0 and 0 (issue #765).
+func TestPolicyDiffAPI_NoOpReportsBaselineViolations(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	pa := reqLogin(t, f, "pa@b.example", []auth.Role{auth.RolePolicyAdmin}, "")
+
+	rec := reqDo(h, pa, "GET", "/api/violations", "")
+	var viol []json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &viol); err != nil || rec.Code != 200 {
+		t.Fatalf("violations: %d %.200s %v", rec.Code, rec.Body, err)
+	}
+	if len(viol) == 0 {
+		t.Fatal("the fixture tenant has no violations, so the baseline cannot be told from zero")
+	}
+	// an empty roles bundle changes nothing
+	files := map[string]string{"tessera.yaml": fmt.Sprintf("schema: tessera.repo/v1\ntenant: %s\nmanage:\n    roles: partial\n", f.B.Slug)}
+	ans, raw := diffDo(t, h, pa, diffBody(files, ""), 200)
+	if ans.Summary.IdentitiesGaining != 0 || ans.Summary.IdentitiesLosing != 0 || ans.Violations.IntroducedTotal != 0 {
+		t.Errorf("a no-op bundle is a change: %.600s", raw)
+	}
+	if ans.Violations.Before != len(viol) || ans.Violations.After != len(viol) {
+		t.Errorf("no-op violations before/after = %d/%d, GET /api/violations has %d", ans.Violations.Before, ans.Violations.After, len(viol))
+	}
+}

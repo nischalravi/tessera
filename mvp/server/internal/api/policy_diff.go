@@ -149,25 +149,25 @@ func (s *Server) policyDiff(_ http.ResponseWriter, r *http.Request, _ *params) (
 	if err := blast.CheckCeiling(opt, c.Steps, len(in.Operations)); err != nil {
 		return nil, bundleErr(err)
 	}
+	// the simulation runs for an empty change too: it is how the answer reports the violations the tenant has, so a
+	// no-op preview says "73 to 73", not "0 to 0" (issue #765)
 	var graphRes *simulate.Result
-	if !c.Empty() {
-		var risks []*sod.Risk
-		if c.RisksChanged {
-			risks = c.Risks
+	var risks []*sod.Risk
+	if c.RisksChanged {
+		risks = c.Risks
+	}
+	afterPolicies := before
+	if c.RisksChanged || c.ScopesChanged {
+		scopes := &c.Scopes
+		if !c.ScopesChanged {
+			scopes = nil
 		}
-		afterPolicies := before
-		if c.RisksChanged || c.ScopesChanged {
-			scopes := &c.Scopes
-			if !c.ScopesChanged {
-				scopes = nil
-			}
-			if afterPolicies, err = s.effectivePoliciesWith(tx, risks, scopes); err != nil {
-				return nil, err
-			}
-		}
-		if graphRes, err = simulate.Run(tx, c.Request, simulate.Inputs{Now: now, Policies: before, AfterPolicies: afterPolicies}); err != nil {
+		if afterPolicies, err = s.effectivePoliciesWith(tx, risks, scopes); err != nil {
 			return nil, err
 		}
+	}
+	if graphRes, err = simulate.Run(tx, c.Request, simulate.Inputs{Now: now, Policies: before, AfterPolicies: afterPolicies}); err != nil {
+		return nil, err
 	}
 
 	// the AWS operations
