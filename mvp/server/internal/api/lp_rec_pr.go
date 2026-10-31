@@ -298,7 +298,7 @@ func githubFailure(err error, msg string, extra map[string]any) error {
 		status, code = http.StatusUnprocessableEntity, "role_file_not_in_repo"
 	case errors.Is(err, policybundle.ErrEntitlementAbsent):
 		status, code = http.StatusConflict, "entitlement_not_in_repo"
-	case errors.Is(err, ghapp.ErrNotAFile):
+	case errors.Is(err, ghapp.ErrNotAFile), errors.Is(err, policybundle.ErrRoleUnreadable):
 		status, code = http.StatusUnprocessableEntity, "role_file_unreadable"
 	case errors.Is(err, ghapp.ErrPullNotFound):
 		status, code = http.StatusUnprocessableEntity, "pull_request_not_found"
