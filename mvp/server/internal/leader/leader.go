@@ -36,13 +36,19 @@ type Locker interface {
 // DefaultRetry is how often a standby replica tries to take a lease.
 const DefaultRetry = 5 * time.Second
 
+// DefaultStopGrace is how long a cancelled loop may take to return.
+const DefaultStopGrace = 10 * time.Second
+
 // Elector runs loops under leases. The zero Locker means a single process:
 // every loop runs, every loop is its own leader.
 type Elector struct {
 	Locker Locker
 	Log    *slog.Logger
 	Retry  time.Duration // default DefaultRetry
-	Loops  *obs.Loops    // default obs.DefaultLoops; tracked loops are dropped when leadership is lost
+	// StopGrace bounds how long Run waits for a cancelled loop to return before
+	// it gives up on releasing the lease and lets it expire. Default DefaultStopGrace.
+	StopGrace time.Duration
+	Loops     *obs.Loops // default obs.DefaultLoops; tracked loops are dropped when leadership is lost
 
 	mu     sync.Mutex
 	status map[string]bool // loop -> this replica leads it
@@ -95,8 +101,19 @@ func (e *Elector) Run(ctx context.Context, name string, tracked []string, fn fun
 			case <-lctx.Done():
 			}
 		}()
-		fn(lctx)
-		lost := false
+		// Run the body on its own goroutine so a stuck body cannot pin Run.
+		// The lease is released only after the body has returned: releasing
+		// first would let another replica start the loop while this one still
+		// runs it. If the body ignores cancellation for StopGrace, the lease is
+		// not released at all: it expires on its own (the session ends), and
+		// Run keeps waiting for the body before it ever competes again.
+		done := make(chan struct{})
+		go func() { defer close(done); fn(lctx) }()
+		var lost, stuck bool
+		select {
+		case <-done:
+		case <-lctx.Done():
+		}
 		select {
 		case <-lease.Lost():
 			lost = true
@@ -104,9 +121,23 @@ func (e *Elector) Run(ctx context.Context, name string, tracked []string, fn fun
 		}
 		stop()
 		cancel()
-		lease.Release()
+		grace := time.NewTimer(e.stopGrace())
+		select {
+		case <-done:
+			grace.Stop()
+			lease.Release()
+		case <-grace.C:
+			stuck = true
+			e.log().Error("leader loop ignored cancellation; leaving the lease to expire", "loop", name, "grace", e.stopGrace())
+		}
 		e.set(name, false)
 		loops.Unregister(tracked...)
+		if stuck {
+			if ctx.Err() != nil {
+				return
+			}
+			<-done // never run a second copy of this loop here
+		}
 		if !lost && ctx.Err() == nil {
 			return // the loop ended by itself (nothing to run); do not spin
 		}
@@ -115,6 +146,13 @@ func (e *Elector) Run(ctx context.Context, name string, tracked []string, fn fun
 		}
 	}
 	e.set(name, false)
+}
+
+func (e *Elector) stopGrace() time.Duration {
+	if e.StopGrace > 0 {
+		return e.StopGrace
+	}
+	return DefaultStopGrace
 }
 
 func (e *Elector) log() *slog.Logger {
