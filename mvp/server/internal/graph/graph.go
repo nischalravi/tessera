@@ -17,6 +17,7 @@
 package graph
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sort"
@@ -583,11 +584,20 @@ func settle(pes []pathEval, total int) (conditional bool, fidelity string, ids [
 
 // AllEffective computes effective permissions for every identity.
 func (g *Snapshot) AllEffective() map[int64]*Eff {
+	out, _ := g.AllEffectiveContext(context.Background())
+	return out
+}
+
+// AllEffectiveContext is AllEffective, stopping with ctx's error between identities when ctx is done.
+func (g *Snapshot) AllEffectiveContext(ctx context.Context) (map[int64]*Eff, error) {
 	out := map[int64]*Eff{}
 	for _, iid := range g.Identities(true) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		out[iid] = g.EffectivePermissions(iid)
 	}
-	return out
+	return out, nil
 }
 
 // PathHasJIT reports whether any hop of the path is a JIT grant.
