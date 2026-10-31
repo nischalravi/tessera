@@ -201,9 +201,10 @@ func (s *Server) lpRecPullRequest(_ http.ResponseWriter, r *http.Request, p *par
 
 	// reserve one of the hourly attempts before GitHub is called, so a request that fails, repeats or races still counts
 	var reserved bool
+	var attemptID string
 	if err := p.scope.Write(ctx, func(c *store.TenantTx) error {
 		var err error
-		if reserved, err = c.ReserveLPRecPRAttempt(recID, st.Repo, pr.Display, now, now.Add(-time.Hour), lpRecPRHourlyCap); err != nil || !reserved {
+		if attemptID, reserved, err = c.ReserveLPRecPRAttemptID(recID, st.Repo, pr.Display, now, now.Add(-time.Hour), lpRecPRHourlyCap); err != nil || !reserved {
 			return err
 		}
 		return c.Audit(now, pr.Display, "lp.recommendation.pull_request.attempt", ojson.Object{{Key: "recommendation_id", Value: recID},
@@ -248,7 +249,18 @@ func (s *Server) lpRecPullRequest(_ http.ResponseWriter, r *http.Request, p *par
 		detail = append(detail, ojson.KV{Key: "pull_number", Value: out.PullNumber}, ojson.KV{Key: "head_sha", Value: out.HeadSHA},
 			ojson.KV{Key: "committed", Value: out.Committed}, ojson.KV{Key: "status", Value: out.Status})
 	}
+	// a refusal because of the repository's role file wrote nothing to GitHub, so it does not spend one of the hourly
+	// attempts (the release only lowers the count: the cap still holds under concurrency)
+	release := gerr != nil && lpFileRefusal(gerr) && (out == nil || out.HeadSHA == "")
+	if release {
+		detail = append(detail, ojson.KV{Key: "attempt_released", Value: true})
+	}
 	werr := p.scope.Write(ctx, func(c *store.TenantTx) error {
+		if release {
+			if err := c.ReleaseLPRecPRAttempt(attemptID); err != nil {
+				return err
+			}
+		}
 		if out != nil && out.HeadSHA != "" {
 			// the branch head is recorded even when no pull request exists yet: it is what the next request verifies the branch against
 			if err := c.PutLPRecPR(&store.LPRecPR{RecID: recID, Repo: st.Repo, Branch: branch, PullNumber: out.PullNumber, HeadSHA: out.HeadSHA,
@@ -281,6 +293,13 @@ func (s *Server) lpRecPullRequest(_ http.ResponseWriter, r *http.Request, p *par
 		return nil, githubFailure(gerr, "the pull request could not be opened on GitHub", map[string]any{"reason": code})
 	}
 	return out, nil
+}
+
+// lpFileRefusal reports whether err is a refusal because of the role file in the repository (missing, not a file, not
+// readable as a Tessera role, or without the entitlement): the request read from GitHub and wrote nothing.
+func lpFileRefusal(err error) bool {
+	return errors.Is(err, ghapp.ErrFileNotFound) || errors.Is(err, ghapp.ErrNotAFile) ||
+		errors.Is(err, policybundle.ErrRoleUnreadable) || errors.Is(err, policybundle.ErrEntitlementAbsent)
 }
 
 // githubFailure maps a GitHub client error to the API's answer.
@@ -402,6 +421,7 @@ func (s *Server) lpRecPlanOf(ctx context.Context, tx *store.TenantTx, recID stri
 		return nil, lpRefuse(http.StatusUnprocessableEntity, "not_policy_managed", "no business role the identity holds grants that group, so the policy repository has no file that defines the grant")
 	}
 	members := roleMembers
+	impact := lpRoleImpact(a, members, gid, days)
 	if ents, err := tx.RoleEntitlements(role.ID); err != nil {
 		return nil, err
 	} else if len(ents) < 2 {
@@ -451,7 +471,7 @@ func (s *Server) lpRecPlanOf(ctx context.Context, tx *store.TenantTx, recID stri
 	perms := append([]string(nil), rec.UnusedExamples...)
 	sort.Strings(perms)
 	pl.rs = ghapp.RightSize{RecID: recID, Kind: rec.Kind, IdentityName: rec.IdentityName, IdentityType: rec.IdentityType, Grant: rec.Grant,
-		Group: pl.group, RoleKey: role.Key, RoleFile: pl.file, RoleMembers: len(members), Permissions: perms,
+		Group: pl.group, RoleKey: role.Key, RoleFile: pl.file, RoleMembers: impact.losing, MembersUsing: impact.using, Permissions: perms,
 		PermissionsLost: rec.PermissionsLost, UnusedLost: rec.UnusedLost, UsedLost: rec.UsedLost, UnusedDays: days,
 		Fidelity: graph.FidelityExact, ExplanationID: rec.ExplanationID, Preview: pl.preview}
 	if rec.LastUsed != nil {
@@ -488,6 +508,10 @@ func (s *Server) lpPublish(ctx context.Context, c *ghapp.Client, cr *ghapp.Crede
 	if err != nil {
 		return nil, nil, err
 	}
+	// the file is written back by Tessera's own renderer: comments and formatting that it would not reproduce are lost
+	if norm, err := policybundle.NormalizeRole(repoFile.Content); err == nil && !bytes.Equal(norm, repoFile.Content) {
+		pl.rs.FileRewritten = true
+	}
 	if !bytes.Equal(want, pl.edited) {
 		pl.rs.RepoDiffers = true
 		pl.verdict = ghapp.Verdict{Conclusion: ghapp.Neutral, Reasons: append([]string{"The role file in the repository differs from the one Tessera exports, so the simulation is of Tessera's export with the same edit."}, pl.verdict.Reasons...)}
@@ -502,6 +526,16 @@ func (s *Server) lpPublish(ctx context.Context, c *ghapp.Client, cr *ghapp.Crede
 	}
 	bot := slug + "[bot]"
 
+	// supersede closes Tessera's own recorded pull request when it is found on a head that is not the one Tessera recorded
+	// (best effort: the request still ends in the conflict and records nothing). Someone else's pull request is never touched.
+	supersede := func(pull *ghapp.Pull) {
+		if pull == nil || pull.State != "open" || pull.Author != bot || pl.prev == nil || pl.prev.State != store.LPRecPROpen ||
+			pl.prev.PullNumber != pull.Number || pull.HeadSHA == pl.prev.HeadSHA {
+			return
+		}
+		_ = c.ClosePull(ctx, cr, pull.Number, lpSupersededNotice)
+	}
+
 	// the branch: accept an existing one only after verifying it (a new one is created at the commit, below)
 	tip, err := c.BranchHead(ctx, cr, branch)
 	isNew := errors.Is(err, ghapp.ErrBranchNotFound)
@@ -515,12 +549,18 @@ func (s *Server) lpPublish(ctx context.Context, c *ghapp.Client, cr *ghapp.Crede
 		if err != nil {
 			return nil, nil, err
 		}
+		foreign := (pl.prev == nil || pl.prev.HeadSHA != tip) && cmp.AheadBy != 0
 		for _, f := range cmp.Files {
 			if f != pl.file {
-				return nil, nil, ghapp.ErrBranchConflict
+				foreign = true
 			}
 		}
-		if (pl.prev == nil || pl.prev.HeadSHA != tip) && cmp.AheadBy != 0 {
+		if foreign {
+			if pl.prev != nil && pl.prev.State == store.LPRecPROpen && pl.prev.PullNumber > 0 {
+				if rp, err := c.GetPull(ctx, cr, pl.prev.PullNumber); err == nil {
+					supersede(rp)
+				}
+			}
 			return nil, nil, ghapp.ErrBranchConflict
 		}
 	}
@@ -552,6 +592,7 @@ func (s *Server) lpPublish(ctx context.Context, c *ghapp.Client, cr *ghapp.Crede
 			}
 		}
 		if pull != nil && (pull.Author != bot || pull.HeadSHA != tip) {
+			supersede(pull)
 			return nil, nil, ghapp.ErrPullConflict
 		}
 	}
@@ -639,4 +680,41 @@ func (s *Server) lpPublish(ctx context.Context, c *ghapp.Client, cr *ghapp.Crede
 	}
 	out.CheckRunID = pub.CheckRunID
 	return out, pub, nil
+}
+
+// lpImpact is what removing the group from the role does to the members who hold it through it.
+type lpImpact struct{ losing, using int }
+
+// lpRoleImpact counts, over every member of the role (not only the identity the recommendation is about), those who lose
+// a permission when the role's grant of the group goes, and those among them who used one of the permissions in the window.
+func lpRoleImpact(a *analysis, members []*store.RoleMember, gid int64, days int) lpImpact {
+	var im lpImpact
+	dst := graph.Key("group", gid)
+	seen := map[int64]bool{}
+	for _, m := range members {
+		if seen[m.IdentityID] {
+			continue
+		}
+		seen[m.IdentityID] = true
+		eff := a.g.EffectivePermissions(m.IdentityID)
+		lost, used := 0, false
+		for _, ag := range a.g.GrantEdgesFromAccounts(m.IdentityID) {
+			if ag.Dst != dst {
+				continue
+			}
+			for _, ep := range graph.PermsLostIfRemoved(eff, [2]string{ag.Acct, ag.Dst}) {
+				lost++
+				if !a.u.Unused(m.IdentityID, ep.PermID, days) {
+					used = true
+				}
+			}
+		}
+		if lost > 0 {
+			im.losing++
+		}
+		if used {
+			im.using++
+		}
+	}
+	return im
 }

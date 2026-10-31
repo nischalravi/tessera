@@ -47,6 +47,8 @@ var (
 	lpRecPRAttemptIns = tq("lp_rec_pr_attempts.insert", `
 		INSERT INTO lp_rec_pr_attempts (tenant_id, id, rec_id, repo, created_by, created_at)
 		VALUES (@tenant, @id, @rec_id, @repo, @created_by, @created_at)`)
+	lpRecPRAttemptDel = tq("lp_rec_pr_attempts.delete", `
+		DELETE FROM lp_rec_pr_attempts WHERE tenant_id = @tenant AND id = @id`)
 )
 
 // LPRecPR returns the pull request recorded for the recommendation on the repository, or nil when there is none.
@@ -87,14 +89,31 @@ func (tx *TenantTx) LPRecPRAttemptsSince(since time.Time) (int, error) {
 // used. It locks the tenant's GitHub App settings row first (a no-op update), so two concurrent reservations of one tenant
 // run one after the other even on Postgres, and the count sees the earlier insert.
 func (tx *TenantTx) ReserveLPRecPRAttempt(recID, repo, by string, now, windowStart time.Time, limit int) (bool, error) {
+	_, ok, err := tx.ReserveLPRecPRAttemptID(recID, repo, by, now, windowStart, limit)
+	return ok, err
+}
+
+// ReserveLPRecPRAttemptID is ReserveLPRecPRAttempt that also returns the reserved attempt's id, for ReleaseLPRecPRAttempt.
+func (tx *TenantTx) ReserveLPRecPRAttemptID(recID, repo, by string, now, windowStart time.Time, limit int) (string, bool, error) {
 	if _, err := tx.exec(lpRecPRLock); err != nil {
-		return false, err
+		return "", false, err
 	}
 	n, err := tx.LPRecPRAttemptsSince(windowStart)
 	if err != nil || n >= limit {
-		return false, err
+		return "", false, err
 	}
-	_, err = tx.exec(lpRecPRAttemptIns, sql.Named("id", NewID()), sql.Named("rec_id", recID), sql.Named("repo", repo),
+	id := NewID()
+	_, err = tx.exec(lpRecPRAttemptIns, sql.Named("id", id), sql.Named("rec_id", recID), sql.Named("repo", repo),
 		sql.Named("created_by", by), sql.Named("created_at", RT(now)))
-	return err == nil, err
+	if err != nil {
+		return "", false, err
+	}
+	return id, true, nil
+}
+
+// ReleaseLPRecPRAttempt gives back an attempt that was reserved but refused before anything was written to the repository.
+// Releasing only lowers the count, so it cannot let the cap be exceeded.
+func (tx *TenantTx) ReleaseLPRecPRAttempt(id string) error {
+	_, err := tx.exec(lpRecPRAttemptDel, sql.Named("id", id))
+	return err
 }

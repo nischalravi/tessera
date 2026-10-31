@@ -1,7 +1,7 @@
 <!-- tessera:lp-rightsize:v1 grant-17 -->
 ## Tessera right-sizing recommendation
 
-Removes an entitlement nobody is using from a business role. Tessera opened this pull request and never merges it: a person reviews it, and the policy check run on this pull request shows what the change does.
+Removes an entitlement from a business role, which takes it from every member of the role. Tessera opened this pull request and never merges it: a person reviews it, and the policy check run on this pull request shows what the change does.
 
 | | |
 |---|---|
@@ -9,8 +9,8 @@ Removes an entitlement nobody is using from a business role. Tessera opened this
 | Identity | `Esme Thornbury` (`human`) |
 | Grant | `workday:emp-1057 → workday:Payroll Administrator` |
 | Entitlement removed | `workday:Payroll Administrator` from role `payroll-ops` in `roles/payroll-ops.yaml` |
-| Role members who lose it | 1 |
-| Permissions lost | 2 (2 unused, 0 used) |
+| Role members who lose it | 1 (0 used it in the window) |
+| Permissions lost by this identity | 2 (2 unused, 0 used) |
 | Usage window | 60 days; never seen in the usage data |
 | Confidence | grant evaluated `exact` (never approximate or conditional) |
 | Evidence | `GET /api/aws/explanations/ex-9` |
