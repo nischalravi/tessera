@@ -10,6 +10,7 @@ const ROUTES = [
   "/", "/inbox", "/access/request", "/directory/people", "/insights/risk", "/governance/reviews", "/admin/connections",
   // issue #420: the pages added since
   "/governance/workflows", "/security/oauth-apps", "/admin/request-settings", "/admin/step-up", "/admin/sod-page",
+  "/admin/github-app",
   "/governance/review-types", "/account/preferences", "/access/request/service-account",
 ];
 

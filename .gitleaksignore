@@ -11,3 +11,9 @@
 213c433ab2340479ffab148a804f94db24716724:mvp/server/internal/rotation/service_test.go:aws-access-token:31
 213c433ab2340479ffab148a804f94db24716724:mvp/server/internal/rotation/service_test.go:aws-access-token:562
 c73adc25304be8eff315fb27c64292a817bdcc9f:mvp/server/internal/oauth/dpop/dpop_test.go:jwt:527
+# Fake PEM blocks in the GitHub App settings unit test (commit cdf2338); the test now builds them from parts.
+cdf23386dabcee7f6f6a34a27230cda7196707e5:mvp/frontend/tests/github-app.test.ts:private-key:64
+cdf23386dabcee7f6f6a34a27230cda7196707e5:mvp/frontend/tests/github-app.test.ts:private-key:65
+cdf23386dabcee7f6f6a34a27230cda7196707e5:mvp/frontend/tests/github-app.test.ts:private-key:48
+cdf23386dabcee7f6f6a34a27230cda7196707e5:mvp/frontend/tests/github-app.test.ts:private-key:49
+cdf23386dabcee7f6f6a34a27230cda7196707e5:mvp/frontend/tests/github-app.test.ts:private-key:94

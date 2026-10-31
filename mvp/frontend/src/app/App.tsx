@@ -101,6 +101,7 @@ const BreachResponse = named(rotationPages, "BreachResponse");
 const SharedSignals = named(() => import("../features/admin/SharedSignals"), "SharedSignals");
 const EventSinks = named(() => import("../features/admin/EventSinks"), "EventSinks");
 const RequestSettings = named(() => import("../features/admin/RequestSettings"), "RequestSettings");
+const GitHubApp = named(() => import("../features/admin/GitHubApp"), "GitHubApp");
 const StepUpPolicy = named(() => import("../features/admin/StepUpPolicy"), "StepUpPolicy");
 const SodViewSettings = named(() => import("../features/admin/SodViewSettings"), "SodViewSettings");
 const ReviewTypes = named(() => import("../features/governance/ReviewTypes"), "ReviewTypes");
@@ -287,6 +288,7 @@ export default function App() {
                     <Route path="/admin/platform-health" element={<PlatformHealth />} />
                     <Route path="/admin/event-sinks" element={<EventSinks />} />
                     <Route path="/admin/request-settings" element={<RequestSettings />} />
+                    <Route path="/admin/github-app" element={<GitHubApp />} />
                     <Route path="/admin/step-up" element={<StepUpPolicy />} />
                     <Route path="/admin/sod-page" element={<SodViewSettings />} />
                     <Route path="/governance/review-types" element={<ReviewTypes />} />
