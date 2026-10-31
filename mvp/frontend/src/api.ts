@@ -5443,3 +5443,48 @@ export const deletionGuard = {
   /** One source's settings per category: the category's, its override, what applies, its last good record count. */
   sourcePath: (kind: DeletionSourceKind, id: string) => `/admin/deletion-guard/sources/${kind}/${encodeURIComponent(id)}`,
 };
+
+/**
+ * GET /api/policy/github/app (AC-10, #656; the webhook #771): the tenant's GitHub App. Neither secret is ever returned: the private
+ * key shows as `key_set` and its `key_fingerprint`, the webhook secret as `webhook_secret_set`. `webhook_secret` is present once,
+ * in the answer to the PUT that rotated it.
+ */
+export interface GitHubAppSettings {
+  enabled: boolean;
+  app_id: string;
+  installation_id: number;
+  repo: string;
+  key_set: boolean;
+  key_fingerprint: string;
+  key_set_at: string | null;
+  updated_by: string;
+  updated_at: string | null;
+  api_base: string;
+  permissions: Record<string, string>;
+  contents_permissions: Record<string, string>;
+  /** Where GitHub delivers pull_request events, relative to the Tessera URL. */
+  webhook_path: string;
+  webhook_secret_set: boolean;
+  webhook_secret_set_at: string | null;
+  webhook_secret?: string;
+}
+
+/** PUT /api/policy/github/app: a field left out keeps its stored value. Needs connections.manage and a fresh step-up. */
+export interface GitHubAppInput {
+  enabled: boolean;
+  app_id?: string;
+  installation_id?: number;
+  repo?: string;
+  /** The App's private key (PEM). Sending one rotates it. */
+  private_key?: string;
+  remove_key?: boolean;
+  /** Make a new webhook secret; it is returned once. */
+  rotate_webhook_secret?: boolean;
+  remove_webhook_secret?: boolean;
+}
+
+export const githubApp = {
+  get: () => api<GitHubAppSettings>("/policy/github/app"),
+  /** Never kept for resuming after a step-up: the body can carry the private key. */
+  save: (input: GitHubAppInput) => apiNoResume<GitHubAppSettings>("/policy/github/app", input, "PUT"),
+};

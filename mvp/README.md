@@ -2092,8 +2092,8 @@ token of `PUT /api/aws/pr-comment`.
 
 | Route | Needs | What |
 |---|---|---|
-| `GET /api/policy/github/app` | `connections.read` | the settings: `enabled`, `app_id`, `installation_id`, `repo`, `key_set`, `key_fingerprint`, `key_set_at`, the API base and the permissions the token asks for. The private key is never returned. |
-| `PUT /api/policy/github/app` `{enabled, app_id, installation_id, repo, private_key, remove_key}` | `connections.manage` + step-up | store the settings. `private_key` (PEM, RSA, 2048 bits or more) is sealed with `internal/seal` (AAD bound to tenant, table and column); omit it to keep the stored key, send a new one to rotate it; any of `app_id`, `installation_id` and `repo` that the body omits keeps its stored value (so `{"enabled":false}` only turns the check off and `{"enabled":true}` turns it back on), one sent replaces it (compare `key_fingerprint` with the App's page), `remove_key` deletes it. Audited (`policy.github_app.settings`, with the fingerprint, never the key). |
+| `GET /api/policy/github/app` | `connections.read` | the settings: `enabled`, `app_id`, `installation_id`, `repo`, `key_set`, `key_fingerprint`, `key_set_at`, the API base, the permissions the token asks for, `webhook_path`, `webhook_secret_set`. Neither the private key nor the webhook secret is ever returned. |
+| `PUT /api/policy/github/app` `{enabled, app_id, installation_id, repo, private_key, remove_key, rotate_webhook_secret, remove_webhook_secret}` | `connections.manage` + step-up | store the settings. `private_key` (PEM, RSA, 2048 bits or more) is sealed with `internal/seal` (AAD bound to tenant, table and column); omit it to keep the stored key, send a new one to rotate it; any of `app_id`, `installation_id` and `repo` that the body omits keeps its stored value (so `{"enabled":false}` only turns the check off and `{"enabled":true}` turns it back on), one sent replaces it (compare `key_fingerprint` with the App's page), `remove_key` deletes it. Audited (`policy.github_app.settings`, with the fingerprint, never the key). |
 | `POST /api/policy/github/check` `{repo, pull_number, head_sha, files, operations, terraform_plan, base_snapshot, profile}` | `policy.github.check` (no step-up) | run the preview (same body as `POST /api/policy/diff`), then post. `repo` must be the configured repository, and `head_sha` the pull request's current head (read with `GET /pulls/{n}`, which also proves `pull_number` is a pull request): otherwise `409 stale_head_sha` or `422 pull_request_not_found`. Answers `200` with the conclusion, reasons, the check run and comment ids and the markdown posted; `409 github_app_disabled` until the tenant enables the App; `502 github_failed` (`reason`: `app_auth_failed`, `installation_not_found`, `installation_scope_mismatch`, `github_301`, `github_403`, ...) or `503 github_rate_limited` when GitHub refuses. Audited (`policy.github_check.posted` / `.failed`). |
 
 - **CI credential.** A machine client cannot meet a step-up (`interactive_authentication_required`), so the trigger has its own
@@ -2141,13 +2141,43 @@ token of `PUT /api/aws/pr-comment`.
   recommendations as pull requests" below). The check run itself still asks for `checks` and `pull_requests` only; the
   installation token of a right-sizing request is asked for `contents: write` as well, for the one repository, and tokens of the two
   kinds are cached apart. An installation that has not accepted the permission answers `422 installation_scope_mismatch`.
-- **Not built:** fetching the bundle from the commit (needs `contents: read`), a `pull_request` webhook (signature check, replay protection by delivery id; tracked as a follow-up), so
-  CI calls the route, and an Admin UI card (use the API).
+- **Webhook (issue #771).** `PUT /api/policy/github/app` also takes `rotate_webhook_secret: true` (Tessera makes a 256-bit secret, seals it
+  with AAD bound to tenant, table and column, and returns it **once** as `webhook_secret`) and `remove_webhook_secret: true`; `GET` returns only `webhook_secret_set`,
+  `webhook_secret_set_at` and `webhook_path`. `POST /public/t/{slug}/github/webhook` (no session) is the receiver, below. The settings are also
+  in the UI under Settings, GitHub App (`/admin/github-app`): the key fingerprint, replace or remove the key, and rotate or remove the webhook secret.
+- **Not built:** the plan inputs (a Terraform plan) are not read from the commit, so the webhook checks the policy bundle only (the API route takes a plan from CI).
+
+##### GitHub pull_request webhook (issue #771)
+
+`POST /public/t/{slug}/github/webhook` takes GitHub's `pull_request` event for the tenant of the URL slug. The actions `opened`, `synchronize` and `reopened`
+run the same check as `POST /api/policy/github/check`, on the pull request's own files: Tessera reads the policy bundle at the head commit through a
+`contents: read` installation token (a separate token from the one that posts), previews it, and posts the check run and the comment. Every other action or event
+(including `ping`) answers `202 {"outcome":"ignored"}`, as does a head that is no longer the pull request's head (`stale_head`: a re-run for an older commit never
+overwrites a newer commit's result) and a commit with no policy bundle. A checked delivery answers `202 {"outcome":"checked","conclusion",...}`.
+
+| Refusal | Status | Notes |
+|---|---|---|
+| missing or wrong `X-Hub-Signature-256`, unknown or inactive slug, tenant with no secret | `401 unauthorized` | one answer for all four, after the same work (`hmac.Equal` on the HMAC-SHA256 of the raw body) |
+| body over 1 MiB | `413 payload_too_large` | |
+| payload installation id or repository is not the tenant's | `403 installation_mismatch` | the tenant comes from the slug, never the body |
+| `X-GitHub-Delivery` seen before (72 hours, per tenant, table `github_webhook_deliveries`) | `409 replayed_delivery` | a delivery that fails for a reason that may pass is forgotten, so GitHub's redelivery is handled |
+| App not configured and enabled | `409 github_app_disabled` | |
+| more than 30 authentic deliveries in a burst per tenant (then one per 2 s) | `429 rate_limited` | bad signatures never use the tenant's allowance; they fall under the per-IP anonymous limit |
+
+Deliveries for one pull request run one at a time (the claim of the check route); a delivery waits up to 20 seconds for it. Audit: a delivery that fails the
+signature is in the request's `http.request` event on the platform chain (`github_webhook_outcome: rejected`), since no tenant is trusted yet; every other
+delivery is a tenant event (`policy.github_webhook.ignored` / `.rejected`, or `policy.github_check.posted` / `.failed` with `trigger: webhook` and the delivery id).
+The secret appears in no response after the one that made it, no log and no audit event. There is no new configuration; the receiver needs the KEK like the App key does.
+
+**Registering the App's webhook (a human step; `needs-human`).** In the App's settings on GitHub: **Webhook active**; Webhook URL
+`<your Tessera URL>/public/t/<tenant slug>/github/webhook` (shown on the settings page); content type `application/json`; paste the secret the settings page
+or `PUT` showed once; repository permission **Contents: Read-only** (add it to the Checks and Pull requests permissions, and accept the change on the installation);
+subscribe to the **Pull request** event. Use **Recent deliveries** on GitHub to redeliver one.
 
 **Registering the App (a human does this once per tenant; `needs-human`).** In GitHub, Settings, Developer settings, GitHub
-Apps, New GitHub App: homepage = your Tessera URL; **uncheck Webhook active** (no webhook is used yet); Repository
-permissions: **Checks: Read and write**, **Pull requests: Read and write**, and **Contents: Read and write** only if you use right-sizing pull requests (LP-9), everything else No access; no account
-permissions, no events; "Only on this account". Create the App and note the **App ID**; Generate a private key (a `.pem`
+Apps, New GitHub App: homepage = your Tessera URL; leave **Webhook active** unchecked unless you use the pull_request webhook (see below); Repository
+permissions: **Checks: Read and write**, **Pull requests: Read and write**, **Contents: Read-only** (merge sync and the webhook), and **Contents: Read and write** only if you use right-sizing pull requests (LP-9), everything else No access; no account
+permissions; "Only on this account". Create the App and note the **App ID**; Generate a private key (a `.pem`
 download). Install the App on the organization, choose **Only select repositories** and pick the policy repository; the
 installation id is the number at the end of the installation's URL (`.../settings/installations/<id>`). Then
 `PUT /api/policy/github/app` with `app_id`, `installation_id`, `repo` and the PEM as `private_key`, and delete the `.pem`

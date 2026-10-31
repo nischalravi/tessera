@@ -181,6 +181,7 @@ test("a two-admin request dialog keeps focus after it is submitted (issue #533)"
 // indicator, focus stays on the page, and the content is reachable.
 for (const route of [
   "/governance/workflows", "/security/oauth-apps", "/admin/request-settings", "/admin/step-up", "/admin/sod-page",
+  "/admin/github-app",
   "/governance/review-types", "/account/preferences", "/access/request/service-account",
 ]) {
   test(`${route} is keyboard operable with a visible focus indicator`, async ({ page }) => {

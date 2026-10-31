@@ -84,6 +84,8 @@ var publicRoutes = []string{
 	"POST /public/t/{slug}/ssf/{transmitter_id}/events",
 	// least-privilege loop denial events (LP-6): authenticated by the tenant's bearer secret (lp_denial.go).
 	"POST /public/t/{slug}/lp/denials",
+	// GitHub pull_request webhook (issue #771): authenticated by the HMAC of the body under the tenant's webhook secret (policy_github_webhook.go).
+	"POST /public/t/{slug}/github/webhook",
 	"GET /t/{slug}/.well-known/oauth-authorization-server",
 	"GET /t/{slug}/.well-known/jwks.json",
 	"GET /.well-known/oauth-protected-resource",

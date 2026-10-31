@@ -199,6 +199,8 @@ var tables = []string{
 	"agent_scopes", "agent_scope_versions",
 	// the GitHub App of the policy pull request check and what it last posted (schema/0957_github_app.sql)
 	"github_app_settings", "github_pr_checks", "github_pr_check_claims",
+	// the GitHub pull_request webhook secret and the deliveries handled (schema/0963_github_webhook.sql)
+	"github_webhook_secrets", "github_webhook_deliveries",
 	// the pull request opened for each right-sizing recommendation (schema/0958_lp_rec_prs.sql)
 	"lp_rec_prs", "lp_rec_pr_attempts",
 	// merge sync of the policy repository and its prediction-check findings (schema/0961_policy_syncs.sql)
