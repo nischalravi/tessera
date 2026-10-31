@@ -149,6 +149,7 @@ func scopeDescriptions() oamap {
 		string(auth.ScopeAdmin):             "Administration: change requests, sessions, config transport, break-glass.",
 		string(auth.ScopeEmailDSN):          "Deliver mail delivery status reports; nothing else.",
 		string(auth.ScopePolicyGitHubCheck): "Run the policy pull request check on the configured repository; nothing else.",
+		string(auth.ScopePolicySync):        "File the sync of the policy repository at a commit of its default branch (a human admin approves it); nothing else.",
 		string(auth.ScopeConfigPropose):     "Propose configuration changes for a human admin to approve; nothing else. Held only after a two-admin approved grant.",
 		oauth.ScopeIntrospect:               "Call the token introspection endpoint.",
 	}

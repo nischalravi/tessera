@@ -10,16 +10,20 @@ import (
 // ErrEntitlementAbsent: the role file does not list the entitlement.
 var ErrEntitlementAbsent = errors.New("policybundle: the role does not list the entitlement")
 
+// ErrRoleUnreadable: the text is not a role file the strict reader accepts (not YAML, an unknown field, an anchor, a
+// second document, or another schema). The wrapped error says why.
+var ErrRoleUnreadable = errors.New("policybundle: the role file cannot be read")
+
 // RemoveRoleEntitlement returns the roles/<key>.yaml text without entitlement (a system:name reference). The file is read
 // with the loader's strict reader (unknown fields, anchors and a second document are refused) and written as the roles
 // export writes it, so an edited file loads and plans like any other. Comments in the file are not kept.
 func RemoveRoleEntitlement(text []byte, entitlement string) ([]byte, error) {
 	var r Role
 	if err := decode(text, &r); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrRoleUnreadable, err)
 	}
 	if r.Schema != TagRole {
-		return nil, fmt.Errorf("schema is %q; expected %q", r.Schema, TagRole)
+		return nil, fmt.Errorf("%w: schema is %q; expected %q", ErrRoleUnreadable, r.Schema, TagRole)
 	}
 	kept := make([]string, 0, len(r.Entitlements))
 	found := false

@@ -39,7 +39,7 @@ var Scopes = []string{"tessera:read", "tessera:write", "tessera:audit", "tessera
 // MachineScopes are the scopes a machine client can be registered with: the
 // token scopes, and ScopeIntrospect (the right to call the introspection
 // endpoint).
-var MachineScopes = append(slices.Clone(Scopes), ScopeIntrospect, ScopeEmailDSN, ScopePolicyGitHubCheck)
+var MachineScopes = append(slices.Clone(Scopes), ScopeIntrospect, ScopeEmailDSN, ScopePolicyGitHubCheck, ScopePolicySync)
 
 // DPoPAlgs are the DPoP proof algorithms the server accepts.
 var DPoPAlgs = []string{"ES256", "EdDSA"}

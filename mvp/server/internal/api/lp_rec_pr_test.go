@@ -37,6 +37,8 @@ type gitRepo struct {
 	race func(g *gitRepo)
 	// pullHead, when set, is the head sha every pull request answer reports
 	pullHead string
+	// extra, when set, answers a route first (the merge sync test of AC-11 adds trees, blobs and ancestry); it runs with mu held
+	extra    func(g *gitRepo, r *http.Request, body map[string]any, send func(int, any)) bool
 	mu       sync.Mutex
 	branches map[string]string            // branch -> commit
 	commits  map[string]map[string]string // commit -> path -> content
@@ -128,6 +130,9 @@ const repoBase = "/repos/o/policy"
 func (g *gitRepo) serve(r *http.Request, body map[string]any, send func(int, any)) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.extra != nil && g.extra(g, r, body, send) {
+		return true
+	}
 	path := r.URL.Path
 	str := func(k string) string { s, _ := body[k].(string); return s }
 	switch {
@@ -622,6 +627,27 @@ func TestLPRecPR_RoleFileNotInRepo(t *testing.T) {
 	w.repo.mu.Unlock()
 	if rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", ""); rec.Code != 409 || !strings.Contains(rec.Body.String(), "entitlement_not_in_repo") {
 		t.Fatalf("entitlement already gone: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A role file in the repository that Tessera cannot read is the file's fault, not GitHub's: 422 role_file_unreadable
+// (issue #786), never 502 github_failed.
+func TestLPRecPR_RepositoryRoleFileUnreadable(t *testing.T) {
+	for name, edit := range map[string]func(string) string{
+		"unknown field": func(s string) string { return s + "extra_field: 1\n" },
+		"anchor": func(s string) string {
+			return strings.Replace(s, "name: Payroll ops", "name: &n Payroll ops", 1) + "alias: *n\n"
+		},
+		"second document": func(s string) string { return s + "---\nschema: x\n" },
+	} {
+		w := lpPRSetup(t)
+		w.repo.mu.Lock()
+		main := w.repo.commits[w.repo.branches["main"]]
+		main[w.role] = edit(main[w.role])
+		w.repo.mu.Unlock()
+		if rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", ""); rec.Code != 422 || !strings.Contains(rec.Body.String(), "role_file_unreadable") {
+			t.Errorf("%s: %d %s, want 422 role_file_unreadable", name, rec.Code, rec.Body)
+		}
 	}
 }
 

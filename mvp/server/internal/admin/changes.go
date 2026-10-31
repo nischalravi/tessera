@@ -39,8 +39,10 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/syncverify"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
@@ -100,6 +102,12 @@ type Service struct {
 	// PolicyMaxSteps is the most grant steps one roles.bundle.apply may make (TESSERA_POLICY_MAX_STEPS); 0 is
 	// rolesascode.DefaultMaxSteps.
 	PolicyMaxSteps int
+	// EffectivePolicies gives the policies the tenant is checked against now; the prediction check of policy.sync.apply
+	// reads the violations through it. Nil: violations are not compared (permissions still are).
+	EffectivePolicies func(tx *store.TenantTx) ([]*policy.Policy, error)
+	// SyncObserve, when set, may change the state the prediction check of policy.sync.apply reads after the apply: the seam
+	// where a connector re-collect (or a test's fake target that drops a change) shows what the target holds.
+	SyncObserve func(after *syncverify.State)
 }
 
 func (s *Service) now() time.Time {
@@ -333,6 +341,11 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 	if err != nil {
 		return nil, err
 	}
+	if typ.name == TypePolicySyncApply && ctx.Value(syncFiling{}) == nil {
+		// the sync is filed only by SubmitPolicySync (POST /api/policy/github/sync), which reads the commit from GitHub and
+		// checks it is on the default branch; a caller's own payload would skip all of that
+		return nil, newErr(http.StatusBadRequest, "use_sync_route", "type %s is filed through POST /api/policy/github/sync or /rollback", TypePolicySyncApply)
+	}
 	if typ.name == TypeConfigProposal && clientID == "" {
 		// a config.proposal is filed only by a machine client through SubmitProposal, which names it; a person's
 		// request of this type would carry the "Proposed by a machine client" label with no client behind it (issue #740)
@@ -350,7 +363,7 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 		requester := uuid.Nil
 		if clientID != "" {
 			var err error
-			if requester, err = s.env(tx, now, uuid.Nil).proposerUser(clientID); err != nil {
+			if requester, err = s.env(tx, now, uuid.Nil).proposerUserFor(clientID, proposerScope(typ.name)); err != nil {
 				return err
 			}
 		} else {

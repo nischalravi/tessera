@@ -56,3 +56,24 @@ func TestRemoveRoleEntitlementRefusals(t *testing.T) {
 		}
 	}
 }
+
+// A role file the strict reader refuses is ErrRoleUnreadable, so a caller can tell it from a failure of the service that
+// served it (issue #786).
+func TestRemoveRoleEntitlement_UnreadableFile(t *testing.T) {
+	for name, text := range map[string]string{
+		"unknown field":   editRole + "extra_field: 1\n",
+		"anchor":          strings.Replace(editRole, "name: Payroll ops", "name: &n Payroll ops", 1) + "alias: *n\n",
+		"second document": editRole + "---\nschema: x\n",
+		"empty":           "",
+		"not yaml":        "key: [unclosed\n",
+		"other schema":    strings.Replace(editRole, "tessera.role/v1", "tessera.other/v1", 1),
+	} {
+		if _, err := RemoveRoleEntitlement([]byte(text), "workday:Payroll Administrator"); !errors.Is(err, ErrRoleUnreadable) {
+			t.Errorf("%s: err = %v, want ErrRoleUnreadable", name, err)
+		}
+	}
+	// an entitlement that is not listed is still its own error
+	if _, err := RemoveRoleEntitlement([]byte(editRole), "workday:Nope"); !errors.Is(err, ErrEntitlementAbsent) || errors.Is(err, ErrRoleUnreadable) {
+		t.Errorf("absent entitlement: err = %v", err)
+	}
+}

@@ -2093,7 +2093,7 @@ token of `PUT /api/aws/pr-comment`.
 | Route | Needs | What |
 |---|---|---|
 | `GET /api/policy/github/app` | `connections.read` | the settings: `enabled`, `app_id`, `installation_id`, `repo`, `key_set`, `key_fingerprint`, `key_set_at`, the API base and the permissions the token asks for. The private key is never returned. |
-| `PUT /api/policy/github/app` `{enabled, app_id, installation_id, repo, private_key, remove_key}` | `connections.manage` + step-up | store the settings. `private_key` (PEM, RSA, 2048 bits or more) is sealed with `internal/seal` (AAD bound to tenant, table and column); omit it to keep the stored key, send a new one to rotate it (compare `key_fingerprint` with the App's page), `remove_key` deletes it. Audited (`policy.github_app.settings`, with the fingerprint, never the key). |
+| `PUT /api/policy/github/app` `{enabled, app_id, installation_id, repo, private_key, remove_key}` | `connections.manage` + step-up | store the settings. `private_key` (PEM, RSA, 2048 bits or more) is sealed with `internal/seal` (AAD bound to tenant, table and column); omit it to keep the stored key, send a new one to rotate it; any of `app_id`, `installation_id` and `repo` that the body omits keeps its stored value (so `{"enabled":false}` only turns the check off and `{"enabled":true}` turns it back on), one sent replaces it (compare `key_fingerprint` with the App's page), `remove_key` deletes it. Audited (`policy.github_app.settings`, with the fingerprint, never the key). |
 | `POST /api/policy/github/check` `{repo, pull_number, head_sha, files, operations, terraform_plan, base_snapshot, profile}` | `policy.github.check` (no step-up) | run the preview (same body as `POST /api/policy/diff`), then post. `repo` must be the configured repository, and `head_sha` the pull request's current head (read with `GET /pulls/{n}`, which also proves `pull_number` is a pull request): otherwise `409 stale_head_sha` or `422 pull_request_not_found`. Answers `200` with the conclusion, reasons, the check run and comment ids and the markdown posted; `409 github_app_disabled` until the tenant enables the App; `502 github_failed` (`reason`: `app_auth_failed`, `installation_not_found`, `installation_scope_mismatch`, `github_301`, `github_403`, ...) or `503 github_rate_limited` when GitHub refuses. Audited (`policy.github_check.posted` / `.failed`). |
 
 - **CI credential.** A machine client cannot meet a step-up (`interactive_authentication_required`), so the trigger has its own
@@ -2106,17 +2106,19 @@ token of `PUT /api/aws/pr-comment`.
   check summary say so. Treat it as an enforcement gate only if CI provably sends the pull request's own files (for example
   by building the bundle from the checked-out head in the same job that calls the route). A follow-up (#771) adds
   `contents: read` and fetches the bundle from the commit through the installation token, which makes it verifiable.
-- **Conclusion** (`ghapp.Evaluate`, deterministic): `failure` when the change introduces policy violations (any rule has
-  more findings after than before, or any new agent-out-of-scope, agent-exceeds-owner or separation-of-duties finding;
-  when the report's lists are cut, any new finding); `neutral` when the preview is conditional (a Terraform change
+- **Conclusion** (`ghapp.Evaluate`, deterministic): `failure` when the change introduces any policy violation, whatever it
+  resolves (a violation moved from one identity to another fails), or any new agent-out-of-scope, agent-exceeds-owner or
+  separation-of-duties finding; the title and summary give the new and the resolved counts; failure wins over neutral; `neutral` when the preview is conditional (a Terraform change
   unknown until apply or unsupported but access relevant, results resting on approximate evaluation, or low-fidelity
   findings, which never block); otherwise `success`. The comment and the check summary are the same markdown, starting
   with `<!-- tessera:policy-check:v1 -->`; tenant-supplied names and messages are rendered inside code spans so a mention
   or tag in them does nothing.
 - **In place.** `github_pr_checks` (schema `0957_github_app.sql`, Postgres 0965) remembers, per repository and pull request,
   the commit, check run id and comment id. A re-run on the same commit updates the check run, a new commit gets a new check
-  run, and the comment is always updated in place (created again if it was deleted). Two runs at the same moment for one
-  pull request can still add two comments; CI should not overlap them.
+  run, and the comment is always updated in place (created again if it was deleted). A request first claims the pull
+  request (`github_pr_checks` claim row in `github_pr_check_claims`, schema `0960`, Postgres 0968; a claim expires after the route timeout (`TESSERA_POLICY_DIFF_TIMEOUT` + 60 s) plus
+  1 minute), and reads the record under the claim, so overlapping runs never create a second check run or comment: a run that
+  cannot get the claim answers `409 check_in_progress` (retry).
 - **App auth** (`ghapp.AppJWT`, `ghapp.Client`): an RS256 JWT with `iss` = App id, `iat` 60 s in the past and `exp` 9 minutes
   after `iat` (8 minutes after now, so it stays under GitHub's 10 minutes even if this clock runs 60 s fast), signed in memory; exchanged at `POST /app/installations/{id}/access_tokens` for a token limited to the one
   configured repository and `checks: write`, `pull_requests: write` (no contents access: CI sends the bundle). The token is
@@ -2152,6 +2154,58 @@ installation id is the number at the end of the installation's URL (`.../setting
 from disk. Rotate by generating a second key in GitHub, sending it, checking `key_fingerprint`, then deleting the old key
 in GitHub. CI (a machine client with scope `tessera:policy-github-check`) then calls `POST /api/policy/github/check` with the commit's `head_sha` (the PR head, not the merge commit),
 the bundle files and the plan JSON.
+
+##### Merge sync, prediction check and rollback (AC-11)
+
+Issue #657 (`internal/admin/change_policy_sync.go`, `internal/syncverify`, `internal/ghapp/bundle.go`, `internal/api/policy_sync.go`;
+schema `0961_policy_syncs.sql` and `0962_policy_sync_findings.sql`, Postgres `0969` and `0970`). There is no webhook: an
+authenticated caller triggers the sync after a merge.
+
+| Route | Needs | What |
+|---|---|---|
+| `POST /api/policy/github/sync` `{sha}` | `policy.sync` (a tenant admin with a fresh step-up, or CI with scope `tessera:policy-sync`) | read the policy bundle at that commit through the GitHub App and file ONE change request (`policy.sync.apply`) with the plan digest of every kind, the commit and the prediction. `201` `{status: "filed", sync, change_request, plan, no_changes, blast}`; a repeat answers `200` `{status: "existing", sync}` |
+| `POST /api/policy/github/rollback` `{to_sha}` | `policy.sync` | the same for the bundle of an earlier commit Tessera applied (`kind: rollback`), so the plan returns to that state. `422 rollback_target_unknown` for a commit never synced, `409 already_at_commit` |
+| `GET /api/policy/github/sync` | `connections.read` | `{enabled, repo, last_synced, syncs}`: the last synced commit (the newest applied sync), the latest 20 syncs with their change status, `check_status` (`pending`, `verified`, `mismatch`), the check's detail, the prediction's counts and, for a mismatch, the findings (`kind`, `subject`, `predicted`, `observed`) |
+
+- **Reading the commit.** Tessera asks GitHub for a token limited to the one configured repository with `contents: read` only
+  (the checks and pull request permissions of the check run, and the `contents: write` of the right-sizing pull request, are not
+  asked for; the installation must have accepted `contents: read`, else `installation_scope_mismatch`). It first checks that
+  the commit is the head of the default branch or one of its ancestors (`409 sha_not_on_default_branch`; `422 commit_not_found`)
+  and, for a sync, a descendant of the last synced commit (`409 not_a_descendant`: use rollback to go back). The bundle is read
+  as trees and blobs, only `tessera.yaml`, `schema/tessera.cedarschema` and the `roles`, `birthright`, `jit`, `sod`, `agents`,
+  `invariants` and `tests` folders; symlinks and submodules are refused (`422 bundle_unreadable`) and the limits of a bundle apply
+  (2,000 files, 4 MiB, 256 KiB a file: `413 bundle_too_large`). A bundle that does not load, or names another tenant, is
+  `422 invalid_bundle` with the diagnostics. A commit with no policy files is `422 empty_bundle`.
+- **One request, two people.** The request carries the bundle files, a plan digest per kind (roles, agents, sod, jit) and one
+  digest of them all, and the AC-8 blast-radius prediction (the permissions each identity gains and loses, and the violations
+  introduced and resolved). A different human admin approves it with a step-up (`403 self_approval_refused` for the requester; CI
+  is filed in the name of its owner, who cannot approve either, and the client itself never can). Approval plans again and refuses a stale plan
+  (`409 stale_plan`); the apply runs every kind's writer with its digest in ONE transaction with each kind's audit event and
+  `policy.sync.applied`, and records the commit in `policy_syncs`. A commit is filed once: a repeat while the request is open, or
+  when it was applied and is still the last sync, answers the same sync; a rejected, cancelled, expired or failed request frees
+  the commit. A sync that changes nothing is still filed and approved (it is how the first commit is recorded).
+- **Prediction check.** In the apply's transaction the store's state is read before the writes and after
+  (`internal/syncverify`: every identity's effective permissions, and the policy violations) and compared with the prediction:
+  predicted gains must be held, predicted losses gone, introduced violations present, resolved ones gone, and nothing unpredicted
+  may have changed (unless the prediction was cut at 2,000 permission changes or 500 violations, when only the named ones are
+  checked). Agreement marks the sync `verified` (`policy.sync.verified`); a difference marks it `mismatch`, writes one
+  `policy_sync_findings` row per difference (at most 100) and audits `policy.sync.mismatch`. The apply stands: a human decides what
+  to do. `admin.Service.SyncObserve` is the seam for a connector re-collect (or a test's fake target that drops a change).
+- **Hardening.** Only these routes file a `policy.sync.apply` request (the generic change request route answers `400 use_sync_route`),
+  and the request must name the configured repository and a consistent prediction. A request records the last applied sync
+  when it is filed and is refused (`409 stale_base`) at approval and apply when another sync applied since, so an older commit
+  never replaces a newer one. A check that could not compare everything (a prediction cut at 2,000 permission changes or 500
+  violations, or no policies to read violations with) is `partial` (`policy.sync.partial`), never `verified`. A rollback is refused
+  (`409 rollback_bundle_changed`) when the bundle now at that commit is not the one that was applied. The approval text names the
+  default branch and warns when the sync creates the tenant's first SoD ruleset, which replaces its legacy YAML SoD policies.
+- **After a force-push.** Commits that are no longer on the default branch cannot be synced or rolled back to (`409
+  sha_not_on_default_branch`, `422 commit_not_found`) and a sync must descend from the last synced commit (`409 not_a_descendant`).
+  To recover: push the corrected state as a new commit on the default branch that is a descendant of the last synced commit
+  (a revert, or a commit restoring the files you want), then sync it; or roll back to an earlier synced commit that is still on
+  the branch. `GET /api/policy/github/sync` shows the last synced commit. Reject or cancel any open request first.
+- **Audit.** `admin.change.submitted/approved/applied`, `policy.<kind>.applied`, `policy.sync.applied`, then
+  `policy.sync.verified` or `policy.sync.mismatch`, all in the apply's transaction. Not built: the admin UI panel (the data is in
+  `GET /api/policy/github/sync`), a webhook trigger, and re-collecting from a live write-back target.
 
 #### Role mining
 

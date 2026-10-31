@@ -149,6 +149,11 @@ const (
 	// through the tessera:policy-github-check scope alone (a machine client cannot meet the step-up of connections.manage).
 	// It reads no graph data itself and cannot change the App's settings.
 	PermPolicyGitHubCheck Permission = "policy.github.check"
+	// PermPolicySync lets a caller file the sync of the policy repository at a commit of its default branch, or a rollback
+	// to an earlier synced commit (POST /api/policy/github/sync and /rollback, issue #657, AC-11). It only files a change
+	// request: a different human admin approves it with a step-up, and the approval applies it. Tenant admins hold it
+	// through their role; CI holds it through the tessera:policy-sync scope alone and can never approve.
+	PermPolicySync Permission = "policy.sync"
 	// PermConfigPropose lets a machine client file a configuration change for a human admin to approve (issue #721).
 	// No role holds it: it comes only from the config.propose scope, which a client gets only through an approved
 	// api_client.propose.grant change (two admins). It never applies a change and never approves one.
@@ -237,7 +242,7 @@ var rolePermissions = map[Role][]Permission{
 		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove, PermHelpdeskRisk, PermSSFConfigure, PermAgentsManage, PermGroupsLoaderAdmin, PermOAuthAppsManage, PermOAuthAppsRevoke},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermEmailDSN, PermPolicyGitHubCheck, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin,
+		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermEmailDSN, PermPolicyGitHubCheck, PermPolicySync, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin,
 		PermJobsRead, PermJobsManage, PermProvisioningRead, PermProvisioningManage, PermLPManage, PermConfigTransport,
 		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermFlatfileManage, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermConditionalAccessRead, PermConditionalAccessManage, PermGroupsLoaderAdmin, PermOAuthAppsManage, PermHelpdeskRisk},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
@@ -258,7 +263,7 @@ func AllPermissions() []Permission {
 			}
 		}
 	}
-	for _, sc := range []Scope{ScopeEmailDSN, ScopePolicyGitHubCheck, ScopeConfigPropose} {
+	for _, sc := range []Scope{ScopeEmailDSN, ScopePolicyGitHubCheck, ScopePolicySync, ScopeConfigPropose} {
 		for _, p := range scopeOnlyPermissions[sc] {
 			if !seen[p] {
 				seen[p] = true
@@ -329,13 +334,15 @@ const (
 	ScopeEmailDSN Scope = "tessera:email-dsn"
 	// ScopePolicyGitHubCheck is a narrow machine scope: it grants PermPolicyGitHubCheck and nothing else (issue #656).
 	ScopePolicyGitHubCheck Scope = "tessera:policy-github-check"
+	// ScopePolicySync is a narrow machine scope: it grants PermPolicySync and nothing else (issue #657).
+	ScopePolicySync Scope = "tessera:policy-sync"
 	// ScopeConfigPropose is a narrow machine scope: it grants PermConfigPropose and nothing else (issue #721). It is
 	// never registered directly (no UI, CLI or API accepts it for a new client); an approved two-admin change adds it.
 	ScopeConfigPropose Scope = "config.propose"
 )
 
 // scopeOnlyPermissions are granted by a token's scope alone, without a role: effective = (roles ∩ scopes) ∪ these.
-var scopeOnlyPermissions = map[Scope][]Permission{ScopeEmailDSN: {PermEmailDSN}, ScopePolicyGitHubCheck: {PermPolicyGitHubCheck}, ScopeConfigPropose: {PermConfigPropose}}
+var scopeOnlyPermissions = map[Scope][]Permission{ScopeEmailDSN: {PermEmailDSN}, ScopePolicyGitHubCheck: {PermPolicyGitHubCheck}, ScopePolicySync: {PermPolicySync}, ScopeConfigPropose: {PermConfigPropose}}
 
 var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead},
@@ -353,7 +360,7 @@ var scopePermissions = map[Scope][]Permission{
 // has none.
 func ScopesFor(p Permission) []Scope {
 	var out []Scope
-	for _, sc := range []Scope{ScopeRead, ScopeWrite, ScopeAudit, ScopeAdmin, ScopeEmailDSN, ScopePolicyGitHubCheck, ScopeConfigPropose} {
+	for _, sc := range []Scope{ScopeRead, ScopeWrite, ScopeAudit, ScopeAdmin, ScopeEmailDSN, ScopePolicyGitHubCheck, ScopePolicySync, ScopeConfigPropose} {
 		if p == PermAuthenticated || slices.Contains(scopePermissions[sc], p) || slices.Contains(scopeOnlyPermissions[sc], p) {
 			out = append(out, sc)
 		}

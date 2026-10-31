@@ -66,6 +66,7 @@ type diffAnswer struct {
 		Before               int `json:"before"`
 		After                int `json:"after"`
 		IntroducedTotal      int `json:"introduced_total"`
+		ResolvedTotal        int `json:"resolved_total"`
 		AgentScopeIntroduced int `json:"agent_scope_introduced"`
 		Introduced           []struct {
 			PolicyID string `json:"policy_id"`
@@ -376,8 +377,11 @@ risks:
 			t.Errorf("an unrelated finding was introduced: %+v", v)
 		}
 	}
-	if ans.Violations.IntroducedTotal != ans.Violations.After-ans.Violations.Before {
-		t.Errorf("introduced %d, but %d before and %d after", ans.Violations.IntroducedTotal, ans.Violations.Before, ans.Violations.After)
+	// the first ruleset a tenant gets replaces the legacy YAML SoD policies it was checked against (sod.Load), so findings of
+	// those can resolve as the rule's own are introduced (issue #657: the merge sync's prediction check found the preview
+	// keeping them)
+	if ans.Violations.IntroducedTotal-ans.Violations.ResolvedTotal != ans.Violations.After-ans.Violations.Before {
+		t.Errorf("introduced %d and resolved %d, but %d before and %d after", ans.Violations.IntroducedTotal, ans.Violations.ResolvedTotal, ans.Violations.Before, ans.Violations.After)
 	}
 	if ans.Violations.IntroducedTotal < 1 || len(ans.Violations.Introduced) != ans.Violations.IntroducedTotal {
 		t.Errorf("the rule raises no finding on the tiny world, where someone holds both: %+v", ans.Violations)

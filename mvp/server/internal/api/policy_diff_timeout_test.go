@@ -117,7 +117,10 @@ func TestRouteTimeout_OtherRoutesKeepTheDefault(t *testing.T) {
 		if rt.pattern == "/api/lp/recommendations/{id}/pull-request" && rt.timeout != time.Minute+90*time.Second {
 			t.Errorf("the right-sizing pull request route's timeout is %s, want the preview's plus 90 seconds", rt.timeout)
 		}
-		if rt.timeout != 0 && rt.pattern != "/api/policy/diff" && rt.pattern != "/api/policy/github/check" && rt.pattern != "/api/lp/recommendations/{id}/pull-request" && rt.pattern != "/api/nap-long" && rt.pattern != "/api/nap-short" {
+		if (rt.pattern == "/api/policy/github/sync" && rt.method == "POST" || rt.pattern == "/api/policy/github/rollback") && rt.timeout != time.Minute+90*time.Second {
+			t.Errorf("the merge sync route %s's timeout is %s, want the preview's plus 90 seconds", rt.pattern, rt.timeout)
+		}
+		if rt.timeout != 0 && rt.pattern != "/api/policy/diff" && rt.pattern != "/api/policy/github/check" && rt.pattern != "/api/policy/github/sync" && rt.pattern != "/api/policy/github/rollback" && rt.pattern != "/api/lp/recommendations/{id}/pull-request" && rt.pattern != "/api/nap-long" && rt.pattern != "/api/nap-short" {
 			t.Errorf("route %s %s has timeout %s", rt.method, rt.pattern, rt.timeout)
 		}
 		if rt.pattern == "/api/policy/diff" && rt.timeout != time.Minute {

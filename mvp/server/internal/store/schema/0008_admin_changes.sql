@@ -82,7 +82,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     -- applying agent scopes (what an AI agent may hold) from a policy repository takes two admins, always (internal/admin/change_agent_scopes_bundle.go, issue #653)
     'agent_scopes.bundle.apply',
     -- the automatic least-privilege policy from the access-as-code repository (internal/admin/change_lp_auto.go, issue #664)
-    'lp.auto_policy.apply')),
+    'lp.auto_policy.apply',
+    -- applying the policy bundle at a commit of the default branch, with its prediction (internal/admin/change_policy_sync.go, issue #657)
+    'policy.sync.apply')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),
