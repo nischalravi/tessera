@@ -625,6 +625,27 @@ func TestLPRecPR_RoleFileNotInRepo(t *testing.T) {
 	}
 }
 
+// A role file in the repository that Tessera cannot read is the file's fault, not GitHub's: 422 role_file_unreadable
+// (issue #786), never 502 github_failed.
+func TestLPRecPR_RepositoryRoleFileUnreadable(t *testing.T) {
+	for name, edit := range map[string]func(string) string{
+		"unknown field": func(s string) string { return s + "extra_field: 1\n" },
+		"anchor": func(s string) string {
+			return strings.Replace(s, "name: Payroll ops", "name: &n Payroll ops", 1) + "alias: *n\n"
+		},
+		"second document": func(s string) string { return s + "---\nschema: x\n" },
+	} {
+		w := lpPRSetup(t)
+		w.repo.mu.Lock()
+		main := w.repo.commits[w.repo.branches["main"]]
+		main[w.role] = edit(main[w.role])
+		w.repo.mu.Unlock()
+		if rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", ""); rec.Code != 422 || !strings.Contains(rec.Body.String(), "role_file_unreadable") {
+			t.Errorf("%s: %d %s, want 422 role_file_unreadable", name, rec.Code, rec.Body)
+		}
+	}
+}
+
 func TestLPRecPR_AppDisabledAndPermissions(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
