@@ -872,6 +872,33 @@ func TestPolicySync_StaleBase(t *testing.T) {
 	}
 }
 
+// After stale_base the refused request ends failed and syncing the same commit again files a new request that applies: the
+// route must not return the dead request as "existing" (issue #793).
+func TestPolicySync_StaleBaseCommitCanBeSyncedAgain(t *testing.T) {
+	w := syncSetup(t)
+	w.syncAndApply(w.shaA)
+	shaB := w.repo.push(w.merged())
+	shaC := w.repo.push(w.files) // a descendant of B
+	stale := w.sync(w.ta1, shaC, 201)
+	w.syncAndApply(shaB) // another sync is applied while C waits
+	w.approve(w.ta2, stale, 409)
+	sid, _ := w.change(stale)
+	if _, m := w.do(w.ta1, "GET", "/api/admin/change-requests/"+sid, ""); fmt.Sprint(m["status"]) != "failed" {
+		t.Errorf("the stale request is %v, want failed", m["status"])
+	}
+	fresh := w.sync(w.ta1, shaC, 201)
+	if fresh["status"] != "filed" {
+		t.Fatalf("sync of the commit after stale_base = %v, want a fresh filed request", fresh)
+	}
+	if nid, _ := w.change(fresh); nid == sid {
+		t.Fatal("the stale request was returned again")
+	}
+	w.approve(w.ta2, fresh, 200)
+	if l := w.last(); l["sha"] != shaC {
+		t.Errorf("last synced = %v, want the commit synced again", l)
+	}
+}
+
 // A comparison that could not be complete is partial, never verified.
 func TestPolicySync_PartialIsNotVerified(t *testing.T) {
 	w := syncSetup(t)
