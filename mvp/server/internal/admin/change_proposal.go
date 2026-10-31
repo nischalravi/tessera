@@ -620,6 +620,7 @@ func ProposalResult(tx *store.TenantTx, ch *store.AdminChange) string {
 // name of its owner, so the owner can never approve it either. The request waits for a different human admin.
 func (s *Service) SubmitPolicySync(ctx context.Context, p *auth.Principal, payload json.RawMessage) (*store.AdminChange, error) {
 	in := SubmitInput{Type: TypePolicySyncApply, Payload: payload}
+	ctx = context.WithValue(ctx, syncFiling{}, true)
 	if p != nil && p.Kind == auth.KindAPIClient && p.ClientID != "" {
 		if d := auth.Check(p, auth.PermPolicySync, nil, s.now()); d != nil {
 			return nil, denied(d)
@@ -628,3 +629,6 @@ func (s *Service) SubmitPolicySync(ctx context.Context, p *auth.Principal, paylo
 	}
 	return s.Submit(ctx, p, in)
 }
+
+// syncFiling marks the context of SubmitPolicySync, the only way a policy.sync.apply request is filed.
+type syncFiling struct{}

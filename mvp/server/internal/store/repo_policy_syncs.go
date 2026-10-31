@@ -16,6 +16,9 @@ const (
 
 	PolicySyncPending  = "pending"
 	PolicySyncVerified = "verified"
+	// PolicySyncPartial: nothing differed in what could be compared, but the comparison was not complete (a cut prediction,
+	// or no policies to evaluate violations with); never reported as verified.
+	PolicySyncPartial  = "partial"
 	PolicySyncMismatch = "mismatch"
 )
 

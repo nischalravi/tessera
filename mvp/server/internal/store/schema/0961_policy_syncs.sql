@@ -5,7 +5,7 @@
 -- policy.sync.apply, always two admins). kind is sync (the bundle at sha) or rollback (the bundle at an earlier commit
 -- Tessera applied before; sha is that commit and rollback_from the commit it was last synced to). prediction is the JSON
 -- of the blast-radius prediction the approver reviewed (internal/syncverify). applied_at is set by the apply, in the
--- same transaction as the writes, together with check_status (verified, or mismatch with findings in
+-- same transaction as the writes, together with check_status (verified; partial when the comparison could not be complete; or mismatch with findings in
 -- policy_sync_findings) and its JSON detail. active_key is "<repo>|<sha>|<kind>" while the request is open or applied
 -- and NULL once it ended without applying, so one commit is filed once (idempotent per tenant, repo and sha) and a
 -- rejected request can be filed again. The last synced commit of a repository is its newest applied row.
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS policy_syncs (
   created_at TEXT NOT NULL,
   applied_at TEXT,
   active_key TEXT CHECK (active_key IS NULL OR length(active_key) <= 300),
-  check_status TEXT NOT NULL DEFAULT 'pending' CHECK (check_status IN ('pending', 'verified', 'mismatch')),
+  check_status TEXT NOT NULL DEFAULT 'pending' CHECK (check_status IN ('pending', 'verified', 'partial', 'mismatch')),
   checked_at TEXT,
   check_detail TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (tenant_id, id),

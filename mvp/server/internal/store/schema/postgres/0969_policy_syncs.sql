@@ -29,7 +29,7 @@ CREATE TABLE policy_syncs (
   created_at TEXT NOT NULL,
   applied_at TEXT,
   active_key TEXT CHECK (active_key IS NULL OR length(active_key) <= 300),
-  check_status TEXT NOT NULL DEFAULT 'pending' CHECK (check_status IN ('pending', 'verified', 'mismatch')),
+  check_status TEXT NOT NULL DEFAULT 'pending' CHECK (check_status IN ('pending', 'verified', 'partial', 'mismatch')),
   checked_at TEXT,
   check_detail TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (tenant_id, id),

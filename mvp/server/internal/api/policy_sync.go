@@ -14,6 +14,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ghapp"
 	"github.com/nischalravi/tessera/mvp/server/internal/policybundle"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/rolesascode"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/syncverify"
 )
@@ -226,7 +227,7 @@ func (s *Server) policySync(r *http.Request, p *params, sha string, rollback boo
 
 	// the settings, what was synced before, and whether this commit is filed already
 	var st *store.GitHubAppSettings
-	var last, existing *store.PolicySync
+	var last, existing, target *store.PolicySync
 	var tenantSlug string
 	err = p.scope.Read(ctx, func(tx *store.TenantTx) error {
 		var err error
@@ -240,7 +241,8 @@ func (s *Server) policySync(r *http.Request, p *params, sha string, rollback boo
 			return err
 		}
 		if rollback {
-			target, err := tx.AppliedPolicySync(st.Repo, sha)
+			var err error
+			target, err = tx.AppliedPolicySync(st.Repo, sha)
 			if err != nil {
 				return err
 			}
@@ -256,8 +258,11 @@ func (s *Server) policySync(r *http.Request, p *params, sha string, rollback boo
 			return err
 		}
 		t, err := tx.TenantRecord()
+		if err != nil {
+			return err
+		}
 		tenantSlug = t.Slug
-		return err
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -328,6 +333,10 @@ func (s *Server) policySync(r *http.Request, p *params, sha string, rollback boo
 	if len(files) == 0 {
 		return nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "empty_bundle", Msg: "the commit holds no policy bundle (tessera.yaml and the roles, jit, sod or agents folders)"}
 	}
+	if rollback && rolesascode.Digest(files) != target.BundleSHA256 {
+		return nil, &readiness.Error{Status: http.StatusConflict, Code: "rollback_bundle_changed",
+			Msg: "the bundle at that commit is not the one Tessera applied (the commit or the repository changed); roll back to a commit whose bundle is unchanged"}
+	}
 	text := make(map[string]string, len(files))
 	for path, b := range files {
 		text[path] = string(b)
@@ -349,11 +358,14 @@ func (s *Server) policySync(r *http.Request, p *params, sha string, rollback boo
 		return nil, err
 	}
 	prediction := syncverify.Predict(extras.graph, view.DiffSHA256)
-	rollbackFrom := ""
+	rollbackFrom, lastID := "", ""
+	if last != nil {
+		lastID = last.ID
+	}
 	if rollback {
 		rollbackFrom = last.SHA
 	}
-	payload, err := json.Marshal(map[string]any{"repo": st.Repo, "sha": sha, "kind": kind, "rollback_from": rollbackFrom, "default_branch": branch,
+	payload, err := json.Marshal(map[string]any{"repo": st.Repo, "sha": sha, "kind": kind, "rollback_from": rollbackFrom, "last_sync_id": lastID, "default_branch": branch,
 		"files": text, "bundle_sha256": plan.BundleSHA256, "plan_sha256": plan.PlanSHA256, "kinds": plan.Kinds, "prediction": prediction})
 	if err != nil {
 		return nil, err

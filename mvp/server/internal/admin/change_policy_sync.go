@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/agentscopeascode"
@@ -70,7 +71,10 @@ type policySyncPayload struct {
 	SHA  string `json:"sha"`
 	Kind string `json:"kind"`
 	// RollbackFrom is the commit last synced when a rollback was filed.
-	RollbackFrom  string                 `json:"rollback_from,omitempty"`
+	RollbackFrom string `json:"rollback_from,omitempty"`
+	// LastSyncID is the id of the last applied sync when this request was filed ("" for none): the request is refused (409
+	// stale_base) at approval and apply when another sync was applied since, so an older commit never replaces a newer one.
+	LastSyncID    string                 `json:"last_sync_id"`
 	DefaultBranch string                 `json:"default_branch"`
 	Files         map[string]string      `json:"files"`
 	BundleSHA256  string                 `json:"bundle_sha256"`
@@ -94,12 +98,21 @@ var (
 
 func init() {
 	t := typed(TypePolicySyncApply, nil, planPolicySync, applyPolicySync,
-		func(_ *env, v *policySyncPayload) string {
+		func(e *env, v *policySyncPayload) string {
 			verb := "Apply"
 			if v.Kind == SyncKindRollback {
 				verb = "Roll back to"
 			}
-			return fmt.Sprintf("%s the policy bundle of %s commit %.12s (%d files, plan %.12s)", verb, v.Repo, v.SHA, len(v.Files), v.PlanSHA256)
+			out := fmt.Sprintf("%s the policy bundle of %s commit %.12s from default branch %q (%d files, plan %.12s)", verb, v.Repo, v.SHA, v.DefaultBranch, len(v.Files), v.PlanSHA256)
+			if n, err := e.tx.CountSodRulesets(); err == nil && n == 0 {
+				for _, k := range v.Kinds {
+					if k.Kind == "sod" && k.Created > 0 {
+						out += ". WARNING: this creates the tenant's first SoD ruleset, which replaces (retires) its legacy YAML SoD policies"
+						break
+					}
+				}
+			}
+			return out
 		})
 	t.afterSubmit = func(e *env, ch *store.AdminChange, v any) error {
 		p := v.(*policySyncPayload)
@@ -220,6 +233,21 @@ func planPolicySync(e *env, v *policySyncPayload) (plan, error) {
 		return plan{}, invalid("files is required")
 	case v.Prediction == nil:
 		return plan{}, invalid("prediction is required")
+	case v.DefaultBranch == "" || len(v.DefaultBranch) > 200:
+		return plan{}, invalid("default_branch is required")
+	}
+	if err := v.Prediction.Valid(); err != nil {
+		return plan{}, invalid("%v", err)
+	}
+	st, err := e.tx.GitHubAppSettings()
+	if err != nil {
+		return plan{}, err
+	}
+	if !st.Enabled || !strings.EqualFold(st.Repo, v.Repo) {
+		return plan{}, conflict("repo_not_configured", "repo is not the repository the GitHub App is configured for")
+	}
+	if err := e.syncBase(v); err != nil {
+		return plan{}, err
 	}
 	files := v.bundle()
 	if d := rolesascode.Digest(files); d != v.BundleSHA256 {
@@ -233,6 +261,22 @@ func planPolicySync(e *env, v *policySyncPayload) (plan, error) {
 		return plan{}, conflict("stale_plan", "the plan is %s, not %s; sync the commit again", p.PlanSHA256, v.PlanSHA256)
 	}
 	return plan{twoPerson: true, target: "policy"}, nil
+}
+
+// syncBase refuses a request filed against a last synced commit that is not the last one now.
+func (e *env) syncBase(v *policySyncPayload) error {
+	last, err := e.tx.LastPolicySync(v.Repo)
+	if err != nil {
+		return err
+	}
+	now := ""
+	if last != nil {
+		now = last.ID
+	}
+	if now != v.LastSyncID {
+		return conflict("stale_base", "another sync was applied since this one was filed; sync the commit again")
+	}
+	return nil
 }
 
 func syncDigestOf(v *policySyncPayload, kind string) string {
@@ -251,6 +295,9 @@ func applyPolicySync(e *env, ch *store.AdminChange, v *policySyncPayload) error 
 	}
 	files := v.bundle()
 	// the plan of every kind is checked as a whole before anything is written
+	if err := e.syncBase(v); err != nil {
+		return err
+	}
 	cur, err := e.syncPlan(v)
 	if err != nil {
 		return err
@@ -308,13 +355,24 @@ func applyPolicySync(e *env, ch *store.AdminChange, v *policySyncPayload) error 
 		e.svc.SyncObserve(after)
 	}
 	ms, total := syncverify.Compare(v.Prediction, before, after)
+	// verified only when the whole comparison ran: a cut prediction or no policies to read violations with is partial
+	var partial []string
+	if v.Prediction.Truncated() {
+		partial = append(partial, "prediction_truncated")
+	}
+	if !before.Checked || !after.Checked {
+		partial = append(partial, "violations_not_checked")
+	}
 	status := store.PolicySyncVerified
-	if total > 0 {
+	switch {
+	case total > 0:
 		status = store.PolicySyncMismatch
+	case len(partial) > 0:
+		status = store.PolicySyncPartial
 	}
 	detail, err := json.Marshal(map[string]any{"predicted_permission_changes": v.Prediction.PermsTotal,
 		"identities_affected": v.Prediction.IdentitiesAffected, "violations_checked": before.Checked && after.Checked,
-		"mismatches": total, "diff_sha256": v.Prediction.DiffSHA256})
+		"mismatches": total, "partial_reasons": partial, "diff_sha256": v.Prediction.DiffSHA256})
 	if err != nil {
 		return err
 	}
@@ -344,8 +402,11 @@ func applyPolicySync(e *env, ch *store.AdminChange, v *policySyncPayload) error 
 	}
 	action := "policy.sync.verified"
 	outcome := store.OutcomeSuccess
-	if total > 0 {
+	switch status {
+	case store.PolicySyncMismatch:
 		action, outcome = "policy.sync.mismatch", store.OutcomeFailure
+	case store.PolicySyncPartial:
+		action = "policy.sync.partial"
 	}
 	d = append(d, ojson.KV{Key: "mismatches", Value: total}, ojson.KV{Key: "predicted_permission_changes", Value: v.Prediction.PermsTotal})
 	_, err = audit.Record(e.tx.Context(), e.tx, action, d, audit.At(e.now), audit.Target("policy_sync", sync.ID), audit.Outcome(outcome))

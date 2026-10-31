@@ -122,3 +122,24 @@ func TestCompareCapsFindings(t *testing.T) {
 		t.Errorf("a long subject was not cut: %d", len(ms[0].Subject))
 	}
 }
+
+func TestPredictionValid(t *testing.T) {
+	for name, tc := range map[string]struct {
+		p  Prediction
+		ok bool
+	}{
+		"empty":                     {Prediction{}, true},
+		"listed in full":            {Prediction{Perms: make([]PermChange, 3), PermsTotal: 3}, true},
+		"cut at the cap":            {Prediction{Perms: make([]PermChange, MaxPerms), PermsTotal: MaxPerms + 9}, true},
+		"a forged total":            {Prediction{PermsTotal: 1}, false},
+		"a total below the list":    {Prediction{Perms: make([]PermChange, 2), PermsTotal: 1}, false},
+		"a list over its cap":       {Prediction{Perms: make([]PermChange, MaxPerms+1), PermsTotal: MaxPerms + 1}, false},
+		"forged introduced":         {Prediction{IntroducedTotal: 4}, false},
+		"forged resolved":           {Prediction{Resolved: []string{"a"}, ResolvedTotal: 2}, false},
+		"violations cut at the cap": {Prediction{Introduced: make([]string, MaxViolations), IntroducedTotal: MaxViolations + 1}, true},
+	} {
+		if err := tc.p.Valid(); (err == nil) != tc.ok {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

@@ -820,3 +820,91 @@ func TestPolicySync_StalePlanAtApproval(t *testing.T) {
 		t.Error("a stale request changed the state")
 	}
 }
+
+// A policy.sync.apply payload of the caller's own, through the generic change request route, is refused: only the sync routes
+// file it, because they read the commit from GitHub and check it is on the default branch.
+func TestPolicySync_GenericRouteIsRefused(t *testing.T) {
+	w := syncSetup(t)
+	forged := map[string]any{"repo": "o/policy", "sha": strings.Repeat("f", 40), "kind": "sync", "default_branch": "main", "files": w.files,
+		"bundle_sha256": strings.Repeat("0", 64), "plan_sha256": strings.Repeat("1", 64), "kinds": []any{},
+		"prediction": map[string]any{"perms": []any{}, "perms_total": 1}}
+	raw, _ := json.Marshal(map[string]any{"type": "policy.sync.apply", "payload": forged})
+	if code, m := w.do(w.ta1, "POST", "/api/admin/change-requests", string(raw)); code != 400 || m["error"] != "use_sync_route" {
+		t.Errorf("a forged payload through the generic route = %d %v", code, m)
+	}
+	if n := len(w.status()["syncs"].([]any)); n != 0 || w.last() != nil {
+		t.Errorf("a forged request left a sync: %d", n)
+	}
+}
+
+// A sync filed against an older last synced commit is refused when another sync applied since: an older commit never
+// replaces a newer one.
+func TestPolicySync_StaleBase(t *testing.T) {
+	w := syncSetup(t)
+	w.syncAndApply(w.shaA)
+	shaB := w.repo.push(w.merged())
+	older := w.sync(w.ta1, shaB, 201)
+	shaC := w.repo.push(w.files)
+	newer := w.sync(w.ta1, shaC, 201)
+	w.approve(w.ta2, newer, 200)
+	w.approve(w.ta2, older, 409)
+	if l := w.last(); l["sha"] != shaC {
+		t.Errorf("last synced = %v, want the newer commit", l)
+	}
+	// and the newer one still holds its commit
+	if again := w.sync(w.ta1, shaC, 200); again["status"] != "existing" {
+		t.Errorf("repeat of the newer = %v", again)
+	}
+}
+
+// A comparison that could not be complete is partial, never verified.
+func TestPolicySync_PartialIsNotVerified(t *testing.T) {
+	w := syncSetup(t)
+	w.syncAndApply(w.shaA)
+	shaB := w.repo.push(w.merged())
+	resp := w.sync(w.ta1, shaB, 201)
+	saved := w.e.srv.admin.EffectivePolicies
+	w.e.srv.admin.EffectivePolicies = nil // violations cannot be read
+	defer func() { w.e.srv.admin.EffectivePolicies = saved }()
+	w.approve(w.ta2, resp, 200)
+	if l := w.last(); l["sha"] != shaB || l["check_status"] != "partial" || !strings.Contains(fmt.Sprint(l["check"]), "violations_not_checked") {
+		t.Fatalf("last synced = %v", l)
+	}
+	if !w.audited("policy.sync.partial") {
+		t.Error("no policy.sync.partial event")
+	}
+}
+
+// A rollback is refused when the bundle at the commit is no longer the one Tessera applied.
+func TestPolicySync_RollbackBundleChanged(t *testing.T) {
+	w := syncSetup(t)
+	w.syncAndApply(w.shaA)
+	shaB := w.repo.push(w.merged())
+	w.syncAndApply(shaB)
+	w.repo.mu.Lock()
+	w.repo.commits[w.shaA]["roles/engineer.yaml"] += "# changed after the sync\n"
+	w.repo.mu.Unlock()
+	if code, m := w.do(w.ta1, "POST", "/api/policy/github/rollback", fmt.Sprintf(`{"to_sha":%q}`, w.shaA)); code != 409 || m["error"] != "rollback_bundle_changed" {
+		t.Errorf("rollback to a changed commit = %d %v", code, m)
+	}
+}
+
+// A bundle whose other kinds name something only the same bundle's new role would create fails closed when filed, with
+// the diagnostic, and nothing is applied.
+func TestPolicySync_ReferenceToANewRoleFailsClosed(t *testing.T) {
+	w := syncSetup(t)
+	w.syncAndApply(w.shaA)
+	digest := w.exportDigest()
+	files := w.merged()
+	files["tessera.yaml"] = fmt.Sprintf("schema: tessera.repo/v1\ntenant: %s\nmanage:\n    roles: partial\n    jit: partial\n", w.e.f.B.Slug)
+	files["roles/support.yaml"] = "schema: tessera.role/v1\nkey: support\nname: Support\nrisk: low\nentitlements: [okta:eng]\n"
+	files["jit/support.yaml"] = "schema: tessera.jit/v1\nkey: support-jit\nprincipals: [okta:support]\nentitlements: [okta:eng]\nmax_hours: 4\n"
+	sha := w.repo.push(files)
+	code, m := w.do(w.ta1, "POST", "/api/policy/github/sync", fmt.Sprintf(`{"sha":%q}`, sha))
+	if code != 422 || m["error"] != "invalid_bundle" {
+		t.Fatalf("a reference to a role of the same bundle = %d %v", code, m)
+	}
+	if w.exportDigest() != digest || w.last()["sha"] != w.shaA || len(w.status()["syncs"].([]any)) != 1 {
+		t.Error("a refused bundle left state behind")
+	}
+}

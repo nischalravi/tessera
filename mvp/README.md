@@ -2189,6 +2189,18 @@ authenticated caller triggers the sync after a merge.
   checked). Agreement marks the sync `verified` (`policy.sync.verified`); a difference marks it `mismatch`, writes one
   `policy_sync_findings` row per difference (at most 100) and audits `policy.sync.mismatch`. The apply stands: a human decides what
   to do. `admin.Service.SyncObserve` is the seam for a connector re-collect (or a test's fake target that drops a change).
+- **Hardening.** Only these routes file a `policy.sync.apply` request (the generic change request route answers `400 use_sync_route`),
+  and the request must name the configured repository and a consistent prediction. A request records the last applied sync
+  when it is filed and is refused (`409 stale_base`) at approval and apply when another sync applied since, so an older commit
+  never replaces a newer one. A check that could not compare everything (a prediction cut at 2,000 permission changes or 500
+  violations, or no policies to read violations with) is `partial` (`policy.sync.partial`), never `verified`. A rollback is refused
+  (`409 rollback_bundle_changed`) when the bundle now at that commit is not the one that was applied. The approval text names the
+  default branch and warns when the sync creates the tenant's first SoD ruleset, which replaces its legacy YAML SoD policies.
+- **After a force-push.** Commits that are no longer on the default branch cannot be synced or rolled back to (`409
+  sha_not_on_default_branch`, `422 commit_not_found`) and a sync must descend from the last synced commit (`409 not_a_descendant`).
+  To recover: push the corrected state as a new commit on the default branch that is a descendant of the last synced commit
+  (a revert, or a commit restoring the files you want), then sync it; or roll back to an earlier synced commit that is still on
+  the branch. `GET /api/policy/github/sync` shows the last synced commit. Reject or cancel any open request first.
 - **Audit.** `admin.change.submitted/approved/applied`, `policy.<kind>.applied`, `policy.sync.applied`, then
   `policy.sync.verified` or `policy.sync.mismatch`, all in the apply's transaction. Not built: the admin UI panel (the data is in
   `GET /api/policy/github/sync`), a webhook trigger, and re-collecting from a live write-back target.

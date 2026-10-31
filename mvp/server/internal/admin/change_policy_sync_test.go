@@ -55,6 +55,12 @@ func TestPolicySyncPayloadIsValidated(t *testing.T) {
 			t.Errorf("%s: %v, want a 4xx admin error", name, err)
 		}
 	}
+	// a prediction whose total does not match its list (it would switch off the unexpected-change checks) is refused by the
+	// sync filing path too
+	forged := with("prediction", map[string]any{"perms": []any{}, "perms_total": 1})
+	if _, err := h.svc.SubmitPolicySync(h.ctx, p, mustJSON(t, forged)); err == nil || !strings.Contains(err.Error(), "perms") {
+		t.Errorf("a forged prediction: %v", err)
+	}
 	// nothing was filed
 	h.tx(func(tx *store.TenantTx) error {
 		if s, err := tx.RecentPolicySyncs("o/policy", 10); err != nil || len(s) != 0 {

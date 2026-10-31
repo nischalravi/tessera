@@ -53,6 +53,28 @@ type Prediction struct {
 	ResolvedTotal      int      `json:"resolved_total"`
 }
 
+// Valid refuses a prediction whose lists and totals do not fit the way Predict makes them: a list is cut only at its cap, so a
+// total larger than its list with the list under the cap is a forged or damaged prediction (it would turn off the checks of
+// what was not predicted).
+func (p *Prediction) Valid() error {
+	chk := func(name string, n, total, cap int) error {
+		switch {
+		case total < n || n > cap:
+			return fmt.Errorf("syncverify: %s: %d listed of %d", name, n, total)
+		case total > n && n != cap:
+			return fmt.Errorf("syncverify: %s: %d listed of %d, but a list is cut only at %d", name, n, total, cap)
+		}
+		return nil
+	}
+	for _, e := range []error{chk("perms", len(p.Perms), p.PermsTotal, MaxPerms), chk("introduced", len(p.Introduced), p.IntroducedTotal, MaxViolations),
+		chk("resolved", len(p.Resolved), p.ResolvedTotal, MaxViolations)} {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
 // Truncated reports that a list of the prediction was cut, so unpredicted changes cannot be told from cut ones.
 func (p *Prediction) Truncated() bool {
 	return p.PermsTotal > len(p.Perms) || p.IntroducedTotal > len(p.Introduced) || p.ResolvedTotal > len(p.Resolved)

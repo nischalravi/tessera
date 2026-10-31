@@ -341,6 +341,11 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 	if err != nil {
 		return nil, err
 	}
+	if typ.name == TypePolicySyncApply && ctx.Value(syncFiling{}) == nil {
+		// the sync is filed only by SubmitPolicySync (POST /api/policy/github/sync), which reads the commit from GitHub and
+		// checks it is on the default branch; a caller's own payload would skip all of that
+		return nil, newErr(http.StatusBadRequest, "use_sync_route", "type %s is filed through POST /api/policy/github/sync or /rollback", TypePolicySyncApply)
+	}
 	if typ.name == TypeConfigProposal && clientID == "" {
 		// a config.proposal is filed only by a machine client through SubmitProposal, which names it; a person's
 		// request of this type would carry the "Proposed by a machine client" label with no client behind it (issue #740)
