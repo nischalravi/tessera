@@ -578,9 +578,24 @@ func TestPolicySync_PermissionsStepUpAndApp(t *testing.T) {
 	// a sign-in older than the step-up window can file nothing
 	stale := signIn(t, w.e.f.DB, w.e.f.B.ID, authtest.User{Email: "stale@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}},
 		authtest.Ctx{AAL: 2, Phr: true, AuthTime: w.e.clock.Now().Add(-20 * time.Minute)}, w.e.clock.Now())
-	if code, m := w.do(stale, "POST", "/api/policy/github/sync", body); code != 401 || m["error"] != "step_up_required" {
-		t.Errorf("a stale sign-in = %d %v", code, m)
+	w.gh.mu.Lock()
+	calls := len(w.gh.got)
+	w.gh.mu.Unlock()
+	for _, path := range []string{"/api/policy/github/sync", "/api/policy/github/rollback"} {
+		in := body
+		if strings.HasSuffix(path, "rollback") {
+			in = fmt.Sprintf(`{"to_sha":%q}`, shaB)
+		}
+		if code, m := w.do(stale, "POST", path, in); code != 401 || m["error"] != "step_up_required" {
+			t.Errorf("%s with a stale sign-in = %d %v", path, code, m)
+		}
 	}
+	// refused before GitHub is read (issue #792)
+	w.gh.mu.Lock()
+	if n := len(w.gh.got) - calls; n != 0 {
+		t.Errorf("a stale sign-in made %d GitHub calls before it was refused: %v", n, w.gh.got[calls:])
+	}
+	w.gh.mu.Unlock()
 	if n := len(w.status()["syncs"].([]any)); n != 0 {
 		t.Errorf("%d syncs after refused requests", n)
 	}
