@@ -1305,6 +1305,11 @@ func checkGitHubAPIBase(base string, prod bool) error {
 		return errors.New("must be https with TESSERA_ENV=prod")
 	}
 	host := strings.ToLower(u.Hostname())
+	// GitHub's API is at the root of api.github.com; a GitHub Enterprise Server's is under /api/v3. Any other path
+	// would send every call to a 404, which the check reports as a missing installation.
+	if p := strings.TrimRight(u.Path, "/"); host == "api.github.com" && p != "" || host != "api.github.com" && p != "/api/v3" {
+		return errors.New("must be https://api.github.com or a GitHub Enterprise Server's https://HOST/api/v3 with TESSERA_ENV=prod")
+	}
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return errors.New("must not be localhost with TESSERA_ENV=prod")
 	}

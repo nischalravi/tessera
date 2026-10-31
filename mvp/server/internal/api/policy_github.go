@@ -34,16 +34,18 @@ import (
 // read transaction, with no transaction open posts one check run on head_sha and one comment on the pull request (the
 // comment is updated in place on a re-run, the check run on the same commit), and records the outcome. The conclusion is
 // failure when the change introduces policy violations, neutral when the preview is conditional, success otherwise
-// (ghapp.Evaluate). Posting reaches outside Tessera with stored credentials, so it needs connections.manage with a fresh
-// phishing-resistant sign-in (as the AWS comment does), and graph.read as well, since the comment shows what the preview
-// reads. It acts only on the one repository the tenant configured and is refused until the tenant has enabled the App. A
+// (ghapp.Evaluate). Posting reaches outside Tessera with stored credentials, but CI is a machine client and cannot meet a
+// step-up, so the route has its own narrow permission, policy.github.check (scope tessera:policy-github-check); the App's
+// settings stay connections.manage with step-up. head_sha must be the pull request's head now. The check is advisory: the
+// caller supplies the bundle, plan and operations, and the comment says so. It acts only on the one repository the tenant
+// configured and is refused until the tenant has enabled the App. A
 // GitHub webhook trigger is not built: CI calls this route.
 
 func (s *Server) registerPolicyGitHubRoutes() {
 	s.handle(http.MethodGet, "/api/policy/github/app", read, need(auth.PermConnectionsRead), s.rd(s.getGitHubApp))
 	s.handle(http.MethodPut, "/api/policy/github/app", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.putGitHubApp))
 	// phased: the preview is computed in a read transaction, the post is made with none open, and its outcome is then recorded
-	rt := s.handle(http.MethodPost, "/api/policy/github/check", phased, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.githubCheck)
+	rt := s.handle(http.MethodPost, "/api/policy/github/check", phased, need(auth.PermPolicyGitHubCheck), s.githubCheck)
 	rt.answersRead = true
 	// the preview's deadline, and the time the post may take after it
 	rt.timeout = s.cfg.PolicyDiffTimeout + 60*time.Second
@@ -220,9 +222,6 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 	pr := principal(r)
 	ctx := r.Context()
 	now := s.clock()
-	if d := auth.Check(pr, auth.PermGraphRead, nil, now); d != nil {
-		return nil, denial{d}
-	}
 	client, err := s.githubClient(s.clock)
 	if err != nil {
 		return nil, err
@@ -276,7 +275,12 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 	cr := &ghapp.Credentials{AppID: st.AppID, InstallationID: st.InstallationID, Repo: st.Repo, Key: key, Scope: p.scope.Tenant.String(), KeyID: st.KeyFingerprint}
 	pctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	pub, perr := client.Publish(pctx, cr, in.PullNumber, chk, comment, prev0)
+	// head_sha must be the pull request's head now (this also proves pull_number is a pull request)
+	var pub *ghapp.Published
+	perr := client.VerifyHead(pctx, cr, in.PullNumber, in.HeadSHA)
+	if perr == nil {
+		pub, perr = client.Publish(pctx, cr, in.PullNumber, chk, comment, prev0)
+	}
 
 	// record what was posted (even half of it, so a re-run updates it), and the event
 	detail := ojson.Object{{Key: "repo", Value: st.Repo}, {Key: "pull_number", Value: in.PullNumber}, {Key: "head_sha", Value: in.HeadSHA},
@@ -312,8 +316,13 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 	if perr != nil {
 		var rl *ghapp.RateLimitError
 		status, errCode := http.StatusBadGateway, "github_failed"
-		if errors.As(perr, &rl) {
+		switch {
+		case errors.As(perr, &rl):
 			status, errCode = http.StatusServiceUnavailable, "github_rate_limited"
+		case errors.Is(perr, ghapp.ErrHeadMismatch):
+			status, errCode = http.StatusConflict, "stale_head_sha"
+		case errors.Is(perr, ghapp.ErrPullNotFound):
+			status, errCode = http.StatusUnprocessableEntity, "pull_request_not_found"
 		}
 		return nil, &readiness.Error{Status: status, Code: errCode, Msg: "the check could not be posted to GitHub",
 			Extra: map[string]any{"reason": code, "conclusion": verdict.Conclusion, "diff_sha256": view.DiffSHA256}}

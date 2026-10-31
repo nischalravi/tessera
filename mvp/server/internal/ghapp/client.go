@@ -71,8 +71,14 @@ var (
 	ErrAppAuth = errors.New("ghapp: GitHub refused the App credentials")
 	// ErrInstallationNotFound: the installation does not exist (wrong id, or the App was uninstalled).
 	ErrInstallationNotFound = errors.New("ghapp: installation not found")
-	// ErrRepoAccess: the installation cannot reach the repository, or the request was not valid.
-	ErrRepoAccess = errors.New("ghapp: the installation cannot access the repository")
+	// ErrInstallationScope: GitHub answered 422 to the token request, which it does when the repository is not one the
+	// installation covers, or when the requested permissions exceed what the installation was granted (the App's
+	// permissions changed and the installation has not accepted them yet).
+	ErrInstallationScope = errors.New("ghapp: the installation does not cover the repository or the requested permissions")
+	// ErrHeadMismatch: head_sha is not the head of the pull request now.
+	ErrHeadMismatch = errors.New("ghapp: the commit is not the pull request's head")
+	// ErrPullNotFound: the number is not a pull request of the repository (an issue, or none).
+	ErrPullNotFound = errors.New("ghapp: pull request not found")
 	// ErrBadInput: a value failed validation before any request was made.
 	ErrBadInput = errors.New("ghapp: invalid repository, pull request, commit or text")
 )
@@ -103,8 +109,12 @@ func ErrCode(err error) string {
 		return "app_auth_failed"
 	case errors.Is(err, ErrInstallationNotFound):
 		return "installation_not_found"
-	case errors.Is(err, ErrRepoAccess):
-		return "repository_not_accessible"
+	case errors.Is(err, ErrInstallationScope):
+		return "installation_scope_mismatch"
+	case errors.Is(err, ErrHeadMismatch):
+		return "head_sha_mismatch"
+	case errors.Is(err, ErrPullNotFound):
+		return "pull_request_not_found"
 	case errors.Is(err, ErrBadInput), errors.Is(err, ErrAppID), errors.Is(err, ErrKey):
 		return "invalid_settings"
 	case errors.As(err, &rl):
@@ -281,7 +291,12 @@ func (c *Client) roundTrip(ctx context.Context, method, path, bearer string, pay
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.HTTP.Do(req) // #nosec G704 -- HTTP is an internal/safehttp client
+	// A redirect (a renamed or transferred repository answers 301) would turn a POST or PATCH into a GET that succeeds
+	// without doing anything: never follow one, so it surfaces as a status error. The copy shares the safehttp client's
+	// transport, so the address and port rules still apply.
+	hc := *c.HTTP
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := hc.Do(req) // #nosec G704 -- HTTP is an internal/safehttp client
 	if err != nil {
 		var ue *url.Error
 		if errors.As(err, &ue) {
@@ -374,7 +389,7 @@ func (c *Client) installationToken(ctx context.Context, cr *Credentials) (string
 	case http.StatusNotFound:
 		return "", ErrInstallationNotFound
 	case http.StatusUnprocessableEntity:
-		return "", ErrRepoAccess
+		return "", ErrInstallationScope
 	default:
 		return "", &StatusError{Status: r.status, Op: "the installation token request"}
 	}
@@ -397,7 +412,7 @@ func (c *Client) installationToken(ctx context.Context, cr *Credentials) (string
 
 // api sends an authenticated request as the installation. A 401 (the token expired or was revoked early) drops the
 // cached token and retries once with a new one.
-func (c *Client) api(ctx context.Context, cr *Credentials, method, path string, payload any, op string) (*reply, error) {
+func (c *Client) api(ctx context.Context, cr *Credentials, method, path string, payload any, want int, op string) (*reply, error) {
 	var raw []byte
 	if payload != nil {
 		var err error
@@ -422,7 +437,7 @@ func (c *Client) api(ctx context.Context, cr *Credentials, method, path string, 
 			refreshed = true
 			continue
 		}
-		if r.status < 200 || r.status > 299 {
+		if r.status != want {
 			return nil, &StatusError{Status: r.status, Op: op}
 		}
 		return r, nil
@@ -487,11 +502,13 @@ func (c *Client) CreateCheckRun(ctx context.Context, cr *Credentials, k Check) (
 	if !ValidRepo(cr.Repo) || !k.valid() {
 		return 0, "", ErrBadInput
 	}
-	r, err := c.api(ctx, cr, http.MethodPost, "/repos/"+cr.Repo+"/check-runs", k.payload(c.now(), true), "the check run create")
+	r, err := c.api(ctx, cr, http.MethodPost, "/repos/"+cr.Repo+"/check-runs", k.payload(c.now(), true), http.StatusCreated, "the check run create")
 	if err != nil {
 		return 0, "", err
 	}
-	id, htmlURL = parseCreated(r)
+	if id, htmlURL = parseCreated(r); id < 1 {
+		return 0, "", errors.New("ghapp: GitHub created the check run but returned no id")
+	}
 	return id, htmlURL, nil
 }
 
@@ -500,7 +517,7 @@ func (c *Client) UpdateCheckRun(ctx context.Context, cr *Credentials, id int64, 
 	if !ValidRepo(cr.Repo) || !k.valid() || id < 1 {
 		return ErrBadInput
 	}
-	_, err := c.api(ctx, cr, http.MethodPatch, "/repos/"+cr.Repo+"/check-runs/"+strconv.FormatInt(id, 10), k.payload(c.now(), false), "the check run update")
+	_, err := c.api(ctx, cr, http.MethodPatch, "/repos/"+cr.Repo+"/check-runs/"+strconv.FormatInt(id, 10), k.payload(c.now(), false), http.StatusOK, "the check run update")
 	return err
 }
 
@@ -509,11 +526,13 @@ func (c *Client) CreateComment(ctx context.Context, cr *Credentials, number int,
 	if !ValidRepo(cr.Repo) || number < 1 || number > 1<<31-1 || body == "" {
 		return 0, "", ErrBadInput
 	}
-	r, err := c.api(ctx, cr, http.MethodPost, "/repos/"+cr.Repo+"/issues/"+strconv.Itoa(number)+"/comments", map[string]string{"body": clip(body)}, "the comment create")
+	r, err := c.api(ctx, cr, http.MethodPost, "/repos/"+cr.Repo+"/issues/"+strconv.Itoa(number)+"/comments", map[string]string{"body": clip(body)}, http.StatusCreated, "the comment create")
 	if err != nil {
 		return 0, "", err
 	}
-	id, htmlURL = parseCreated(r)
+	if id, htmlURL = parseCreated(r); id < 1 {
+		return 0, "", errors.New("ghapp: GitHub created the comment but returned no id")
+	}
 	return id, htmlURL, nil
 }
 
@@ -522,12 +541,37 @@ func (c *Client) UpdateComment(ctx context.Context, cr *Credentials, id int64, b
 	if !ValidRepo(cr.Repo) || id < 1 || body == "" {
 		return "", ErrBadInput
 	}
-	r, err := c.api(ctx, cr, http.MethodPatch, "/repos/"+cr.Repo+"/issues/comments/"+strconv.FormatInt(id, 10), map[string]string{"body": clip(body)}, "the comment update")
+	r, err := c.api(ctx, cr, http.MethodPatch, "/repos/"+cr.Repo+"/issues/comments/"+strconv.FormatInt(id, 10), map[string]string{"body": clip(body)}, http.StatusOK, "the comment update")
 	if err != nil {
 		return "", err
 	}
 	_, htmlURL = parseCreated(r)
 	return htmlURL, nil
+}
+
+// VerifyHead checks that sha is the head of pull request number now (GET /repos/{repo}/pulls/{number}, which the
+// pull_requests permission covers). It also proves the number is a pull request and not an issue. A check posted for an
+// old commit, or for a commit that is not the pull request's, is refused (ErrHeadMismatch).
+func (c *Client) VerifyHead(ctx context.Context, cr *Credentials, number int, sha string) error {
+	if !ValidRepo(cr.Repo) || number < 1 || number > 1<<31-1 || !ValidSHA(sha) {
+		return ErrBadInput
+	}
+	r, err := c.api(ctx, cr, http.MethodGet, "/repos/"+cr.Repo+"/pulls/"+strconv.Itoa(number), nil, http.StatusOK, "the pull request read")
+	if err != nil {
+		if IsStatus(err, http.StatusNotFound) {
+			return ErrPullNotFound
+		}
+		return err
+	}
+	var out struct {
+		Head struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	if json.Unmarshal(r.body, &out) != nil || !strings.EqualFold(out.Head.SHA, sha) {
+		return ErrHeadMismatch
+	}
+	return nil
 }
 
 // IsStatus reports whether err is a StatusError with the status.

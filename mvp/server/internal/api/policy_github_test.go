@@ -83,6 +83,7 @@ type appGitHub struct {
 	comments map[int64]string
 	nextID   int64
 	got      []string
+	head     string // the pull request's head; ghHead when empty
 	// fail answers the next request of a route ("METHOD path") with the status and headers
 	fail map[string]ghFail
 }
@@ -170,6 +171,12 @@ func (g *appGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/repos/o/policy/pulls/"):
+		h := g.head
+		if h == "" {
+			h = ghHead
+		}
+		send(http.StatusOK, map[string]any{"head": map[string]string{"sha": h}})
 	case route == "POST /repos/o/policy/check-runs":
 		g.nextID++
 		g.checks[g.nextID] = body
@@ -457,7 +464,13 @@ func TestGitHubCheck_ConclusionsAndInPlaceUpdates(t *testing.T) {
 	// 3. neutral: a Terraform change that is unsupported but access relevant makes the answer conditional; a new commit gets a
 	// new check run and the same comment
 	newHead := strings.Repeat("ab", 20)
+	gh.mu.Lock()
+	gh.head = newHead
+	gh.mu.Unlock()
 	v = post(newHead, 7, conditional, 200)
+	gh.mu.Lock()
+	gh.head = ""
+	gh.mu.Unlock()
 	if v["conclusion"] != "neutral" || v["check_created"] != true || v["comment_created"] != false || int64(v["comment_id"].(float64)) != commentID {
 		t.Fatalf("conditional = %v", v)
 	}
@@ -525,6 +538,7 @@ func TestGitHubCheck_ConclusionsAndInPlaceUpdates(t *testing.T) {
 		"branch as sha":    {checkBody(t, "main", 7, noop), 422, "invalid_head_sha"},
 		"upper-case sha":   {checkBody(t, strings.ToUpper(ghHead), 7, noop), 422, "invalid_head_sha"},
 		"no change":        {checkBody(t, ghHead, 7, nil), 422, "empty_change"},
+		"stale head":       {checkBody(t, strings.Repeat("cd", 20), 7, noop), 409, "stale_head_sha"},
 		"unknown field":    {checkBody(t, ghHead, 7, map[string]any{"token": "x"}), 422, "invalid_body"},
 	} {
 		if rec := reqDo(h, admin, "POST", "/api/policy/github/check", tc.body); rec.Code != tc.want || !strings.Contains(rec.Body.String(), tc.code) {
@@ -586,7 +600,7 @@ func TestGitHubCheck_GitHubFailuresAreReportedAndAudited(t *testing.T) {
 	}{
 		"installation gone":  {tokenRoute, ghFail{status: 404}, 502, "github_failed", "installation_not_found"},
 		"App key refused":    {tokenRoute, ghFail{status: 401}, 502, "github_failed", "app_auth_failed"},
-		"repo not installed": {tokenRoute, ghFail{status: 422}, 502, "github_failed", "repository_not_accessible"},
+		"repo not installed": {tokenRoute, ghFail{status: 422}, 502, "github_failed", "installation_scope_mismatch"},
 		"rate limited":       {"POST /repos/o/policy/check-runs", ghFail{status: 403, header: map[string]string{"Retry-After": "3600"}}, 503, "github_rate_limited", "rate_limited"},
 		"no permission":      {"POST /repos/o/policy/check-runs", ghFail{status: 403}, 502, "github_failed", "github_403"},
 	} {
@@ -640,4 +654,55 @@ func TestPersonalTokenDisabled(t *testing.T) {
 	if rec := c.do("PUT", "/api/aws/pr-comment", `{"enabled":false,"repo":"o/r"}`); rec.Code != 200 {
 		t.Errorf("PUT without a token = %d %s", rec.Code, rec.Body.String())
 	}
+}
+
+// CI is a machine client: it cannot meet a step-up, so the trigger is a scope-only permission it can hold
+// (tessera:policy-github-check), and that scope gives it nothing else, least of all the App's settings.
+func TestGitHubCheck_MachineClient(t *testing.T) {
+	gh, withGH := newAppGitHub(t, nil)
+	e := newOAuthEnv(t, withGH)
+	_, pemKey := ghTestKey(t)
+	adminA := signIn(t, e.f.DB, e.f.A.ID, authtest.User{Email: "admin@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	putApp(t, e.h, adminA, pemKey, true)
+	body := checkBody(t, ghHead, 7, map[string]any{"files": map[string]string{"tessera.yaml": fmt.Sprintf("schema: tessera.repo/v1\ntenant: %s\nmanage:\n    roles: partial\n", e.f.A.Slug)}})
+
+	ci := e.addMachine("tenant-a", []string{"viewer"}, []string{"tessera:policy-github-check"}, true)
+	tok := e.machineToken(ci, "tenant-a", "tessera:policy-github-check")
+	rec := e.call(tok, "POST", "/api/policy/github/check", body)
+	if rec.Code != 200 || body_(rec)["conclusion"] != "success" || body_(rec)["status"] != "posted" {
+		t.Fatalf("CI check = %d %s", rec.Code, rec.Body)
+	}
+	if len(gh.comments) != 1 || len(gh.checks) != 1 {
+		t.Errorf("GitHub holds %d comments and %d check runs", len(gh.comments), len(gh.checks))
+	}
+	// the scope gives it nothing else: not the settings, not the graph
+	if rec := e.call(tok, "PUT", "/api/policy/github/app", `{"enabled":false}`); rec.Code != 403 {
+		t.Errorf("CI PUT settings = %d %s", rec.Code, rec.Body)
+	}
+	if rec := e.call(tok, "GET", "/api/policy/github/app", ""); rec.Code != 403 {
+		t.Errorf("CI GET settings = %d", rec.Code)
+	}
+	if rec := e.call(tok, "GET", "/api/summary", ""); rec.Code != 403 {
+		t.Errorf("CI GET /api/summary = %d", rec.Code)
+	}
+	// a client without the scope is refused, even with a role that reads
+	reader := e.addMachine("tenant-a", []string{"viewer"}, []string{"tessera:read"}, true)
+	rtok := e.machineToken(reader, "tenant-a", "tessera:read")
+	if rec := e.call(rtok, "POST", "/api/policy/github/check", body); rec.Code != 403 {
+		t.Errorf("read-scope client = %d %s", rec.Code, rec.Body)
+	}
+	// the head must be the pull request's now
+	gh.mu.Lock()
+	gh.head = strings.Repeat("ef", 20)
+	gh.mu.Unlock()
+	before := len(gh.comments)
+	if rec := e.call(tok, "POST", "/api/policy/github/check", body); rec.Code != 409 || !strings.Contains(rec.Body.String(), "stale_head_sha") || len(gh.comments) != before {
+		t.Errorf("stale head = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func body_(rec *httptest.ResponseRecorder) map[string]any {
+	var m map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &m)
+	return m
 }

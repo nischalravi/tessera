@@ -64,7 +64,8 @@ func TestGitHubAPIBase(t *testing.T) {
 		t.Errorf("dev loopback base: %v", err)
 	}
 	for _, bad := range []string{"http://ghe.example.com/api/v3", "https://127.0.0.1", "https://10.1.2.3/api", "https://[::1]/", "https://169.254.169.254/",
-		"https://localhost/api", "https://user:pw@ghe.example.com", "https://ghe.example.com/?x=1", "ftp://ghe.example.com", "ghe.example.com"} {
+		"https://localhost/api", "https://user:pw@ghe.example.com", "https://ghe.example.com/?x=1", "ftp://ghe.example.com", "ghe.example.com",
+		"https://ghe.example.com", "https://ghe.example.com/api/v4", "https://ghe.example.com/api/v3/extra", "https://api.github.com/api/v3"} {
 		if _, err := config.Load(env(with(safeProd(), "TESSERA_GITHUB_API_BASE", bad))); err == nil || !strings.Contains(err.Error(), "TESSERA_GITHUB_API_BASE") {
 			t.Errorf("prod base %q: err = %v, want refused", bad, err)
 		}

@@ -2094,8 +2094,18 @@ token of `PUT /api/aws/pr-comment`.
 |---|---|---|
 | `GET /api/policy/github/app` | `connections.read` | the settings: `enabled`, `app_id`, `installation_id`, `repo`, `key_set`, `key_fingerprint`, `key_set_at`, the API base and the permissions the token asks for. The private key is never returned. |
 | `PUT /api/policy/github/app` `{enabled, app_id, installation_id, repo, private_key, remove_key}` | `connections.manage` + step-up | store the settings. `private_key` (PEM, RSA, 2048 bits or more) is sealed with `internal/seal` (AAD bound to tenant, table and column); omit it to keep the stored key, send a new one to rotate it (compare `key_fingerprint` with the App's page), `remove_key` deletes it. Audited (`policy.github_app.settings`, with the fingerprint, never the key). |
-| `POST /api/policy/github/check` `{repo, pull_number, head_sha, files, operations, terraform_plan, base_snapshot, profile}` | `connections.manage` + step-up, and `graph.read` | run the preview (same body as `POST /api/policy/diff`), then post. `repo` must be the configured repository. Answers `200` with the conclusion, reasons, the check run and comment ids and the markdown posted; `409 github_app_disabled` until the tenant enables the App; `502 github_failed` (`reason`: `app_auth_failed`, `installation_not_found`, `repository_not_accessible`, `github_403`, ...) or `503 github_rate_limited` when GitHub refuses. Audited (`policy.github_check.posted` / `.failed`). |
+| `POST /api/policy/github/check` `{repo, pull_number, head_sha, files, operations, terraform_plan, base_snapshot, profile}` | `policy.github.check` (no step-up) | run the preview (same body as `POST /api/policy/diff`), then post. `repo` must be the configured repository, and `head_sha` the pull request's current head (read with `GET /pulls/{n}`, which also proves `pull_number` is a pull request): otherwise `409 stale_head_sha` or `422 pull_request_not_found`. Answers `200` with the conclusion, reasons, the check run and comment ids and the markdown posted; `409 github_app_disabled` until the tenant enables the App; `502 github_failed` (`reason`: `app_auth_failed`, `installation_not_found`, `installation_scope_mismatch`, `github_301`, `github_403`, ...) or `503 github_rate_limited` when GitHub refuses. Audited (`policy.github_check.posted` / `.failed`). |
 
+- **CI credential.** A machine client cannot meet a step-up (`interactive_authentication_required`), so the trigger has its own
+  narrow, scope-only permission `policy.github.check` (scope `tessera:policy-github-check`, like `tessera:email-dsn`): create a
+  machine client with that scope and any machine role (`viewer`), and nothing else. It cannot read the graph or the App's
+  settings and cannot change them; the settings `PUT` stays `connections.manage` + step-up for humans. A tenant admin (human)
+  also holds the permission. The client's approver must hold it (the tenant admin does).
+- **Advisory, not a gate.** The check says "Tessera evaluated *this bundle and plan*", not "this commit is safe": the caller
+  supplies `files`, `operations` and `terraform_plan`, and Tessera does not fetch them from the commit, so the comment and the
+  check summary say so. Treat it as an enforcement gate only if CI provably sends the pull request's own files (for example
+  by building the bundle from the checked-out head in the same job that calls the route). A follow-up (#771) adds
+  `contents: read` and fetches the bundle from the commit through the installation token, which makes it verifiable.
 - **Conclusion** (`ghapp.Evaluate`, deterministic): `failure` when the change introduces policy violations (any rule has
   more findings after than before, or any new agent-out-of-scope, agent-exceeds-owner or separation-of-duties finding;
   when the report's lists are cut, any new finding); `neutral` when the preview is conditional (a Terraform change
@@ -2108,21 +2118,24 @@ token of `PUT /api/aws/pr-comment`.
   run, and the comment is always updated in place (created again if it was deleted). Two runs at the same moment for one
   pull request can still add two comments; CI should not overlap them.
 - **App auth** (`ghapp.AppJWT`, `ghapp.Client`): an RS256 JWT with `iss` = App id, `iat` 60 s in the past and `exp` 9 minutes
-  ahead, signed in memory; exchanged at `POST /app/installations/{id}/access_tokens` for a token limited to the one
+  after `iat` (8 minutes after now, so it stays under GitHub's 10 minutes even if this clock runs 60 s fast), signed in memory; exchanged at `POST /app/installations/{id}/access_tokens` for a token limited to the one
   configured repository and `checks: write`, `pull_requests: write` (no contents access: CI sends the bundle). The token is
   cached in memory only, until 5 minutes before `expires_at`, per tenant, installation, repository and key. A `401` drops it
   and retries once; `403`/`429` with `Retry-After` or `X-RateLimit-Reset` are waited out (at most twice, at most 30 s each,
-  else `rate_limited`); `404` on the exchange is `installation_not_found`. Errors carry a status or code, never a response
+  else `rate_limited`); `404` on the exchange is `installation_not_found`; `422` is `installation_scope_mismatch` (the repository
+  is not covered, or the App's permissions changed and the installation has not accepted them). Redirects are never followed
+  (a renamed repository's `301` would turn a `POST` into a `GET` that succeeds and does nothing): it surfaces as `github_301`,
+  only `201` (creates) and `200` (updates) count as success, and a created object must carry an id. Errors carry a status or code, never a response
   body, a key or a token.
 - **Outbound.** Every call goes through `internal/safehttp`. `TESSERA_GITHUB_API_BASE` (default `https://api.github.com`)
-  may name a GitHub Enterprise Server (`https://ghe.example.com/api/v3`); prod needs https and refuses `localhost` and
-  loopback, private and link-local addresses (safehttp also checks what the name resolves to).
+  may name a GitHub Enterprise Server (`https://ghe.example.com/api/v3`); prod needs https, a base of exactly
+  `https://api.github.com` or `https://HOST/api/v3`, and refuses `localhost` and loopback, private and link-local addresses (safehttp also checks what the name resolves to).
 - **Personal token (deprecated).** `PUT /api/aws/pr-comment` with a `token` still works in dev and test
   (`TESSERA_GITHUB_ALLOW_PERSONAL_TOKEN`, default on there). It is off in prod, and prod refuses to start with it on; the
   route then answers `409 personal_token_disabled` and a stored token is never used. **Migration:** configure the App with
   `PUT /api/policy/github/app`, call `POST /api/policy/github/check` from CI instead of `comment.pull_number`, and clear any
   stored token with `PUT /api/aws/pr-comment {"enabled":false, "repo":"..."}`.
-- **Not built:** a `pull_request` webhook (signature check, replay protection by delivery id; tracked as a follow-up), so
+- **Not built:** fetching the bundle from the commit (needs `contents: read`), a `pull_request` webhook (signature check, replay protection by delivery id; tracked as a follow-up), so
   CI calls the route, and an Admin UI card (use the API).
 
 **Registering the App (a human does this once per tenant; `needs-human`).** In GitHub, Settings, Developer settings, GitHub
@@ -2133,7 +2146,7 @@ download). Install the App on the organization, choose **Only select repositorie
 installation id is the number at the end of the installation's URL (`.../settings/installations/<id>`). Then
 `PUT /api/policy/github/app` with `app_id`, `installation_id`, `repo` and the PEM as `private_key`, and delete the `.pem`
 from disk. Rotate by generating a second key in GitHub, sending it, checking `key_fingerprint`, then deleting the old key
-in GitHub. CI then calls `POST /api/policy/github/check` with the commit's `head_sha` (the PR head, not the merge commit),
+in GitHub. CI (a machine client with scope `tessera:policy-github-check`) then calls `POST /api/policy/github/check` with the commit's `head_sha` (the PR head, not the merge commit),
 the bundle files and the plan JSON.
 
 #### Role mining

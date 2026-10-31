@@ -352,7 +352,7 @@ POST   /api/policy/agents/apply                      admin.change.request  STEP_
 POST   /api/policy/diff                              graph.read      STEP_UP_POLICY  # issue #654 (AC-8: changes nothing; the unified blast-radius preview)
 GET    /api/policy/github/app                        connections.read -  # issue #656 (AC-10: the GitHub App settings; the private key is never returned)
 PUT    /api/policy/github/app                        connections.manage STEP_UP_POLICY  # issue #656
-POST   /api/policy/github/check                      connections.manage STEP_UP_POLICY  # issue #656 (graph.read too, in the handler; the preview, then a check run and one comment on the configured repository)
+POST   /api/policy/github/check                      policy.github.check -  # issue #656 (a machine client's scope-only permission: it cannot meet step-up; the preview, then a check run and one comment on the configured repository)
 GET    /api/abac/policies                            graph.read      -  # issue #162
 POST   /api/abac/policies                            roles.manage    STEP_UP_POLICY  # issue #162
 GET    /api/abac/policies/{policy_id}                graph.read      -  # issue #162

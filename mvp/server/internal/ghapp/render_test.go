@@ -84,6 +84,9 @@ func TestSummaryIsDeterministicAndSafe(t *testing.T) {
 			t.Errorf("comment lacks %q:\n%s", want, a)
 		}
 	}
+	if !strings.Contains(a, "supplied by the caller, not files fetched from this commit") || !strings.Contains(a, "advisory") {
+		t.Errorf("the comment does not say the files were caller-supplied and the check advisory:\n%s", a)
+	}
 	// tenant-supplied text sits inside code spans on one line: a mention, tag or heading in it does nothing
 	for _, line := range strings.Split(a, "\n") {
 		if strings.Contains(line, "octocat") || strings.Contains(line, "everyone") || strings.Contains(line, "@team") {

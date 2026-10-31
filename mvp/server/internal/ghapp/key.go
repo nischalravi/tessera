@@ -34,7 +34,9 @@ const (
 
 	// JWTBackdate is how far iat is set in the past, to absorb clock drift (GitHub: "60 seconds in the past").
 	JWTBackdate = 60 * time.Second
-	// JWTLifetime is exp - now. GitHub allows at most 10 minutes; 9 leaves room for drift.
+	// JWTLifetime is exp - iat, so exp is JWTLifetime - JWTBackdate (8 minutes) after the signer's clock. GitHub allows
+	// exp at most 10 minutes after its own clock: this stays inside that even when the local clock runs up to 60 s
+	// fast (iat is backdated by that much, and exp is measured from iat, not from now).
 	JWTLifetime = 9 * time.Minute
 )
 
@@ -99,7 +101,7 @@ func Fingerprint(key *rsa.PrivateKey) string {
 }
 
 // AppJWT signs the JWT that authenticates as the App (RS256): iss is the App id, iat is JWTBackdate in the past and
-// exp JWTLifetime ahead, so it is valid for under 10 minutes. It is signed in memory and meant to be used at once.
+// exp is JWTLifetime after iat (8 minutes after now), so it is valid for under 10 minutes. It is signed in memory and meant to be used at once.
 func AppJWT(appID string, key *rsa.PrivateKey, now time.Time) (string, error) {
 	if !ValidAppID(appID) {
 		return "", ErrAppID
@@ -108,7 +110,8 @@ func AppJWT(appID string, key *rsa.PrivateKey, now time.Time) (string, error) {
 		return "", ErrKey
 	}
 	header, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT"})
-	claims, err := json.Marshal(map[string]any{"iat": now.Add(-JWTBackdate).Unix(), "exp": now.Add(JWTLifetime).Unix(), "iss": appID})
+	iat := now.Add(-JWTBackdate)
+	claims, err := json.Marshal(map[string]any{"iat": iat.Unix(), "exp": iat.Add(JWTLifetime).Unix(), "iss": appID})
 	if err != nil {
 		return "", err
 	}

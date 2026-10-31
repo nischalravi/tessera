@@ -96,8 +96,8 @@ func TestAppJWTClaims(t *testing.T) {
 	if iat != t0.Unix()-60 {
 		t.Errorf("iat = %d, want now-60s (%d)", iat, t0.Unix()-60)
 	}
-	if exp <= t0.Unix() || exp-t0.Unix() > 600 {
-		t.Errorf("exp = now+%ds, want within (0, 600]", exp-t0.Unix())
+	if exp-iat != 540 || exp-t0.Unix() != 480 {
+		t.Errorf("exp = iat+%ds = now+%ds, want iat+540s (now+480s): it must stay under 10 minutes even if this clock runs 60 s fast", exp-iat, exp-t0.Unix())
 	}
 	if c["iss"] != "123456" {
 		t.Errorf("iss = %v, want the App id as a string", c["iss"])
@@ -169,6 +169,7 @@ type fakeGitHub struct {
 	lifetime   time.Duration
 	current    string // the token the API accepts
 	mintStatus int    // non-zero: the mint answers this
+	head       string // the pull request's head (default sha1c)
 	mintBodies []map[string]any
 	checks     map[int64]map[string]any
 	comments   map[int64]string
@@ -293,9 +294,18 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		f.comments[id], _ = body["body"].(string)
 		send(http.StatusOK, map[string]any{"id": id, "html_url": "https://github.com/o/policy/pull/5#issuecomment-" + strconv.FormatInt(id, 10)})
+	case route == "GET /repos/o/policy/pulls/5":
+		send(http.StatusOK, map[string]any{"number": 5, "head": map[string]string{"sha": f.headSHA()}})
 	default:
 		send(http.StatusNotFound, map[string]string{"message": "Not Found"})
 	}
+}
+
+func (f *fakeGitHub) headSHA() string {
+	if f.head != "" {
+		return f.head
+	}
+	return sha1c
 }
 
 func (f *fakeGitHub) client(t *testing.T) (*ghapp.Client, *[]time.Duration) {
@@ -410,7 +420,7 @@ func TestMintFailures(t *testing.T) {
 	}{
 		{http.StatusNotFound, ghapp.ErrInstallationNotFound, "installation_not_found"},
 		{http.StatusUnauthorized, ghapp.ErrAppAuth, "app_auth_failed"},
-		{http.StatusUnprocessableEntity, ghapp.ErrRepoAccess, "repository_not_accessible"},
+		{http.StatusUnprocessableEntity, ghapp.ErrInstallationScope, "installation_scope_mismatch"},
 	} {
 		f := newFake(t)
 		f.mintStatus = tc.status
@@ -601,6 +611,78 @@ func TestPublishPartialFailureKeepsTheCheck(t *testing.T) {
 	pub, err := c.Publish(context.Background(), creds(t), 5, okCheck(), "c", ghapp.Previous{})
 	if !ghapp.IsStatus(err, 422) || pub == nil || pub.CheckRunID == 0 || pub.CommentID != 0 {
 		t.Errorf("pub = %+v, err = %v; want the check run reported and the comment error returned", pub, err)
+	}
+}
+
+// A redirect (a renamed or transferred repository answers 301) is never followed: it would turn a POST or PATCH into a GET
+// that succeeds without doing anything. Only the exact success status counts, and a created object needs an id.
+func TestRedirectsAndStatusesAreNotSuccess(t *testing.T) {
+	f := newFake(t)
+	c, _ := f.client(t)
+	cr := creds(t)
+	ctx := context.Background()
+	moved := reply{status: 301, header: map[string]string{"Location": f.srv.URL + "/repos/o/renamed/issues/5/comments"}, body: `{"id":5}`}
+	f.failNext("POST /repos/o/policy/issues/5/comments", moved)
+	_, _, err := c.CreateComment(ctx, cr, 5, "x")
+	if !ghapp.IsStatus(err, 301) || ghapp.ErrCode(err) != "github_301" {
+		t.Errorf("301 on a comment create: err = %v, want github_301", err)
+	}
+	f.failNext("POST /repos/o/policy/check-runs", reply{status: 308, header: map[string]string{"Location": f.srv.URL + "/repos/o/renamed/check-runs"}})
+	if _, _, err := c.CreateCheckRun(ctx, cr, okCheck()); !ghapp.IsStatus(err, 308) {
+		t.Errorf("308 on a check run create: %v", err)
+	}
+	f.failNext("PATCH /repos/o/policy/issues/comments/7", reply{status: 302, header: map[string]string{"Location": f.srv.URL + "/x"}})
+	if _, err := c.UpdateComment(ctx, cr, 7, "x"); !ghapp.IsStatus(err, 302) {
+		t.Errorf("302 on a comment update: %v", err)
+	}
+	if n := f.count("GET "); n != 0 {
+		t.Errorf("%d GET requests: a redirect was followed", n)
+	}
+	// 200 where 201 is the answer, and 201 without an id, are errors, so nothing is recorded as posted
+	f.failNext("POST /repos/o/policy/issues/5/comments", reply{status: 200, body: `{"id":9}`})
+	if _, _, err := c.CreateComment(ctx, cr, 5, "x"); !ghapp.IsStatus(err, 200) {
+		t.Errorf("200 on a create: %v", err)
+	}
+	f.failNext("POST /repos/o/policy/issues/5/comments", reply{status: 201, body: `{"html_url":"https://github.com/x"}`})
+	if _, _, err := c.CreateComment(ctx, cr, 5, "x"); err == nil {
+		t.Error("a created comment with no id was accepted")
+	}
+	f.failNext("POST /repos/o/policy/check-runs", reply{status: 201, body: `not json`})
+	if _, _, err := c.CreateCheckRun(ctx, cr, okCheck()); err == nil {
+		t.Error("a created check run with no id was accepted")
+	}
+	f.failNext("PATCH /repos/o/policy/check-runs/1", reply{status: 201, body: `{}`})
+	if err := c.UpdateCheckRun(ctx, cr, 1, okCheck()); !ghapp.IsStatus(err, 201) {
+		t.Errorf("201 on an update: %v", err)
+	}
+	// Publish reports it too, rather than returning ids of zero
+	f.failNext("POST /repos/o/policy/check-runs", moved)
+	if pub, err := c.Publish(ctx, cr, 5, okCheck(), "c", ghapp.Previous{}); err == nil || (pub != nil && pub.CheckRunID != 0) {
+		t.Errorf("Publish through a 301 = %+v, %v", pub, err)
+	}
+}
+
+func TestVerifyHead(t *testing.T) {
+	f := newFake(t)
+	c, _ := f.client(t)
+	cr := creds(t)
+	ctx := context.Background()
+	if err := c.VerifyHead(ctx, cr, 5, sha1c); err != nil {
+		t.Errorf("the head: %v", err)
+	}
+	f.head = strings.ToUpper(sha1c)
+	if err := c.VerifyHead(ctx, cr, 5, sha1c); err != nil {
+		t.Errorf("the head in upper case: %v", err)
+	}
+	f.head = "fedcba9876543210fedcba9876543210fedcba98"
+	if err := c.VerifyHead(ctx, cr, 5, sha1c); !errors.Is(err, ghapp.ErrHeadMismatch) || ghapp.ErrCode(err) != "head_sha_mismatch" {
+		t.Errorf("an older commit: %v", err)
+	}
+	if err := c.VerifyHead(ctx, cr, 6, sha1c); !errors.Is(err, ghapp.ErrPullNotFound) || ghapp.ErrCode(err) != "pull_request_not_found" {
+		t.Errorf("not a pull request: %v", err)
+	}
+	if err := c.VerifyHead(ctx, cr, 5, "main"); !errors.Is(err, ghapp.ErrBadInput) {
+		t.Errorf("a branch name: %v", err)
 	}
 }
 

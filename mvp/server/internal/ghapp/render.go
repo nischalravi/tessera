@@ -225,6 +225,7 @@ func Summary(p Preview, v Verdict, headSHA string) string {
 			fmt.Fprintf(&b, "- %s (%s, %s): %s\n", code(f.Address, maxTextLen), code(f.Type, 60), code(f.Status, 20), code(f.Reason, maxTextLen))
 		}
 	}
+	b.WriteString("\n_Tessera evaluated the bundle and plan supplied by the caller, not files fetched from this commit. This is an advisory preview, not proof the commit is safe._\n")
 	short := func(s string) string {
 		if len(s) > 12 {
 			return s[:12]
