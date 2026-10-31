@@ -298,7 +298,13 @@ func (g *gitRepo) serve(r *http.Request, body map[string]any, send func(int, any
 			return false // the check route's own pull request (7)
 		}
 		if r.Method == http.MethodPatch {
-			p.Title, p.Body = str("title"), str("body")
+			if t := str("title"); t != "" {
+				p.Title = t
+			}
+			p.Body = str("body")
+			if str("state") == "closed" {
+				p.State = "closed"
+			}
 		}
 		send(200, g.pullJSON(p))
 	default:
@@ -999,6 +1005,17 @@ func TestLPRecPR_PullHeadMustBeOurs(t *testing.T) {
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "pull_request_conflict") || len(w.gh.checks) != 0 {
 		t.Fatalf("%d %.300s", rec.Code, rec.Body)
 	}
+	// the pull request GitHub published is closed with a notice, not left showing Tessera's body
+	var closed *fakePull
+	for _, p := range w.repo.pulls {
+		closed = p
+	}
+	if closed == nil || closed.State != "closed" || !strings.Contains(closed.Body, "do not merge") || strings.Contains(closed.Body, "right-sizing recommendation") {
+		t.Errorf("pull request = %+v, want closed with the notice", closed)
+	}
+	if !w.c.audited("lp.recommendation.pull_request.failed") {
+		t.Error("the refusal was not audited")
+	}
 	w.c.read(func(tx *store.TenantTx) error {
 		if p, err := tx.LPRecPR("grant-"+w.rec, "o/policy"); err != nil || p != nil {
 			t.Errorf("a mapping was recorded: %+v, %v", p, err)
@@ -1019,5 +1036,23 @@ func TestLPRecPR_PicksTheAppsOwnAmongSeveral(t *testing.T) {
 	v := w.open(200)
 	if v["pull_number"] != float64(91) || v["status"] != "updated" || w.repo.pulls[90].Title != "theirs" || w.repo.pulls[91].Body == "old" {
 		t.Errorf("answer %v; theirs %+v", v, w.repo.pulls[90])
+	}
+}
+
+// An open pull request whose head is not the commit Tessera made is not updated at all.
+func TestLPRecPR_ExistingPullHeadChangesBeforeUpdate(t *testing.T) {
+	w := lpPRSetup(t)
+	v := w.open(200)
+	n := int(v["pull_number"].(float64))
+	w.repo.mu.Lock()
+	w.repo.pulls[n].Body = "untouched"
+	w.repo.pullHead = strings.Repeat("c", 40)
+	w.repo.mu.Unlock()
+	rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", "")
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "pull_request_conflict") {
+		t.Fatalf("%d %.300s", rec.Code, rec.Body)
+	}
+	if w.repo.pulls[n].Body != "untouched" || w.repo.pulls[n].State != "open" {
+		t.Errorf("the pull request was updated or closed: %+v", w.repo.pulls[n])
 	}
 }

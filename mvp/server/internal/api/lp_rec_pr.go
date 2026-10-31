@@ -51,6 +51,9 @@ import (
 // The answer is a narrowed aws_iam_policy resource for the user to paste into their own Terraform; nothing is written.
 // A low-confidence candidate is refused, and so is one that is no longer open.
 
+// lpSupersededNotice replaces the body of a pull request found on a commit Tessera did not make.
+const lpSupersededNotice = "Superseded, do not merge: this branch was pushed by someone other than Tessera, so Tessera closed this pull request and did not check it."
+
 const (
 	lpRecPRHourlyCap = 20
 	lpRecPRBranch    = "tessera/rightsize-"
@@ -583,6 +586,14 @@ func (s *Server) lpPublish(ctx context.Context, c *ghapp.Client, cr *ghapp.Crede
 
 	// the pull request must be at the head Tessera made or verified before anything is posted or recorded
 	if pull != nil {
+		// read its head again right before the body is replaced: not at the commit Tessera made or verified, no update
+		cur, err := c.GetPull(ctx, cr, pull.Number)
+		if err != nil {
+			return out, nil, err
+		}
+		if cur.State != "open" || cur.HeadSHA != head {
+			return nil, nil, ghapp.ErrPullConflict
+		}
 		if pull, err = c.UpdatePull(ctx, cr, pull.Number, title, body); err != nil {
 			return out, nil, err
 		}
@@ -598,6 +609,9 @@ func (s *Server) lpPublish(ctx context.Context, c *ghapp.Client, cr *ghapp.Crede
 		out.Status = "opened"
 	}
 	if pull.HeadSHA != head {
+		// GitHub has published Tessera's title and body on a commit that is not Tessera's: replace them and close the pull
+		// request (a failure to do so is not hidden; the request still ends in the conflict, which is audited)
+		_ = c.ClosePull(ctx, cr, pull.Number, lpSupersededNotice)
 		return nil, nil, ghapp.ErrPullConflict
 	}
 	out.PullNumber, out.PullURL = pull.Number, pull.HTMLURL

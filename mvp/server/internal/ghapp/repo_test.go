@@ -239,8 +239,8 @@ func TestAppSlugAndCompare(t *testing.T) {
 		"no status":            `{"ahead_by":0,"files":[]}`,
 	} {
 		f.failNext("GET /repos/o/policy/compare/main...tessera/x", reply{status: 200, body: body})
-		if _, err := c.CompareBranch(ctx, cr, "main", "tessera/x"); err == nil {
-			t.Errorf("a comparison with %s was accepted", name)
+		if _, err := c.CompareBranch(ctx, cr, "main", "tessera/x"); !errors.Is(err, ghapp.ErrBranchConflict) {
+			t.Errorf("a comparison with %s = %v, want ErrBranchConflict", name, err)
 		}
 	}
 	f.failNext("GET /repos/o/policy/compare/main...tessera/x", reply{status: 200, body: `{"ahead_by":0,"status":"identical","files":[]}`})
@@ -257,7 +257,23 @@ func TestAppSlugAndCompare(t *testing.T) {
 	}
 	many.WriteString(`]}`)
 	f.failNext("GET /repos/o/policy/compare/main...tessera/x", reply{status: 200, body: many.String()})
-	if _, err := c.CompareBranch(ctx, cr, "main", "tessera/x"); !errors.Is(err, ghapp.ErrNotAFile) {
+	if _, err := c.CompareBranch(ctx, cr, "main", "tessera/x"); !errors.Is(err, ghapp.ErrBranchConflict) {
 		t.Errorf("a comparison that may hold more files than listed = %v, want refusal", err)
+	}
+}
+
+func TestClosePull(t *testing.T) {
+	f := newFake(t)
+	c, _ := f.client(t)
+	cr := creds(t)
+	f.failNext("PATCH /repos/o/policy/pulls/41", reply{status: 200, body: `{}`}, reply{status: 404, body: `{}`})
+	if err := c.ClosePull(context.Background(), cr, 41, "notice"); err != nil {
+		t.Errorf("ClosePull = %v", err)
+	}
+	if err := c.ClosePull(context.Background(), cr, 41, "notice"); !ghapp.IsStatus(err, 404) {
+		t.Errorf("ClosePull refused = %v", err)
+	}
+	if err := c.ClosePull(context.Background(), cr, 0, "notice"); !errors.Is(err, ghapp.ErrBadInput) {
+		t.Errorf("ClosePull of no pull request = %v", err)
 	}
 }

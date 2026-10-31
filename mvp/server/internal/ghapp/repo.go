@@ -426,13 +426,14 @@ func (c *Client) CompareBranch(ctx context.Context, cr *Credentials, base, head 
 		} `json:"files"`
 		TotalCommits int `json:"total_commits"`
 	}
+	// an answer that cannot be read, or that may list fewer files than changed, cannot show the branch holds only Tessera's edit
 	if json.Unmarshal(r.body, &out) != nil || len(out.Files) >= 100 || out.AheadBy < 0 {
-		return nil, ErrNotAFile
+		return nil, ErrBranchConflict
 	}
 	switch out.Status {
 	case "identical", "ahead", "behind", "diverged":
 	default:
-		return nil, ErrNotAFile
+		return nil, ErrBranchConflict
 	}
 	// commits the branch has with no file changed (an empty commit) or files without commits are not a state Tessera made
 	if (out.AheadBy > 0 && len(out.Files) == 0) || (out.AheadBy == 0 && len(out.Files) > 0) {
@@ -446,4 +447,14 @@ func (c *Client) CompareBranch(ctx context.Context, cr *Credentials, base, head 
 		}
 	}
 	return cmp, nil
+}
+
+// ClosePull replaces the body of a pull request with notice and closes it (PATCH state=closed), for a pull request Tessera
+// opened or updated that turned out to sit on a commit that is not Tessera's.
+func (c *Client) ClosePull(ctx context.Context, cr *Credentials, number int, notice string) error {
+	if !ValidRepo(cr.Repo) || number < 1 || number > 1<<31-1 || notice == "" {
+		return ErrBadInput
+	}
+	_, err := c.api(ctx, cr, http.MethodPatch, "/repos/"+cr.Repo+"/pulls/"+strconv.Itoa(number), map[string]string{"state": "closed", "body": notice}, http.StatusOK, "the pull request close")
+	return err
 }
