@@ -69,7 +69,7 @@ type oauthEnv struct {
 	tenants map[string]tenancy.ID
 }
 
-func newOAuthEnv(t *testing.T) *oauthEnv {
+func newOAuthEnv(t *testing.T, mutate ...func(*Config)) *oauthEnv {
 	t.Helper()
 	f := storetest.TwoTenants(t)
 	kek := make([]byte, 32)
@@ -86,12 +86,17 @@ func newOAuthEnv(t *testing.T) *oauthEnv {
 		t.Fatal(err)
 	}
 	clock := &testClock{t: storetest.Now}
-	srv := New(Config{Store: f.DB, Clock: timeutil.Clock(clock.Now), Policies: policy.NewLoader(policies.FS),
+	cfg := Config{Store: f.DB, Clock: timeutil.Clock(clock.Now), Policies: policy.NewLoader(policies.FS),
 		Connectors: func(now time.Time) ([]connectors.Connector, error) {
 			return []connectors.Connector{connectors.Tiny{Now: now}}, nil
 		},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowedOrigins: []string{authtest.Origin}, Env: "test",
-		RateLimits: noRateLimits, PublicURL: publicBase, Sealer: sealer})
+		RateLimits: noRateLimits, PublicURL: publicBase, Sealer: sealer}
+	for _, m := range mutate {
+		m(&cfg)
+	}
+	cfg.Sealer = sealer
+	srv := New(cfg)
 	return &oauthEnv{t: t, clock: clock, f: f, srv: srv, h: srv.Handler(), sealer: sealer,
 		tenants: map[string]tenancy.ID{"tenant-a": f.A.ID, "tenant-b": f.B.ID}}
 }

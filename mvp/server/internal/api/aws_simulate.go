@@ -362,6 +362,8 @@ func (s *Server) postPRComment(ctx context.Context, p *params, pr *auth.Principa
 		return awsPRCommentResult{Status: "disabled"}
 	case s.cfg.OutboundHTTP == nil || s.cfg.Sealer == nil:
 		return awsPRCommentResult{Status: "unavailable"}
+	case s.cfg.DisablePersonalToken:
+		return awsPRCommentResult{Status: "unavailable", Error: "personal_token_disabled"}
 	}
 	token, err := s.cfg.Sealer.Open(st.TokenEnc, prCommentAAD(p.scope.Tenant))
 	if err != nil {
@@ -448,6 +450,10 @@ func (s *Server) putAWSPRComment(r *http.Request, _ *params) (int, any, error) {
 	}
 	if in.Token != nil && !prcomment.ValidToken(*in.Token) {
 		return 0, nil, badRequest("invalid_token", "token is not a usable GitHub token")
+	}
+	if in.Token != nil && s.cfg.DisablePersonalToken {
+		return 0, nil, &readiness.Error{Status: http.StatusConflict, Code: "personal_token_disabled",
+			Msg: "stored personal tokens are deprecated and disabled (TESSERA_GITHUB_ALLOW_PERSONAL_TOKEN); use the GitHub App (PUT /api/policy/github/app)"}
 	}
 	var out awsPRCommentView
 	err := s.write(r, func(c *store.TenantTx, now time.Time) error {

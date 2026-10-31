@@ -133,6 +133,14 @@ type Config struct {
 	// token; no secret is stored). Default on in dev and test, off in prod, and
 	// prod refuses it on.
 	AWSAllowStaticKeys bool
+	// GitHubAPIBase (TESSERA_GITHUB_API_BASE) is the GitHub API the policy pull request check talks to: GitHub's by
+	// default, or a GitHub Enterprise Server's ("https://ghe.example.com/api/v3"). Prod needs https and refuses a
+	// loopback, private or link-local address and "localhost" (internal/safehttp also checks the resolved address).
+	GitHubAPIBase string
+	// GitHubAllowPersonalToken (TESSERA_GITHUB_ALLOW_PERSONAL_TOKEN) keeps the deprecated stored personal access
+	// token of PUT /api/aws/pr-comment working. The GitHub App (PUT /api/policy/github/app) replaces it. Default on in
+	// dev and test, off in prod, and prod refuses it on.
+	GitHubAllowPersonalToken bool
 	// LPDisable (TESSERA_LP_DISABLE=1) is the operator-level kill switch of the least-privilege loop (issue #661,
 	// LP-5): no tenant gets a new announcement or revocation while it is set. Restores and the verification of what
 	// is already in flight still run. Allowed in prod: it only stops writes.
@@ -201,6 +209,9 @@ type Config struct {
 	// PolicyMaxSteps is the most grant steps one roles-as-code apply may make (TESSERA_POLICY_MAX_STEPS,
 	// default 20000); a larger plan is refused with 413 plan_too_large and the author splits it.
 	PolicyMaxSteps int
+	// PolicyDiffTimeout is the deadline of POST /api/policy/diff (TESSERA_POLICY_DIFF_TIMEOUT, default 90s, 5s to
+	// 5m); every other route keeps the 30s handler timeout. A preview past it stops and answers 503.
+	PolicyDiffTimeout time.Duration
 	// MetricsAddr is TESSERA_METRICS_ADDR: where the internal /metrics
 	// listener binds (host:port). Empty means no metrics listener. Dev and
 	// test default to MetricsDefaultAddr (loopback); production defaults to
@@ -488,6 +499,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.ClientRateBurst = integer("TESSERA_API_CLIENT_RATE_BURST", 120, 1, 100000)
 	c.ClientRatePerMinute = integer("TESSERA_API_CLIENT_RATE_PER_MINUTE", 600, 0, 600000)
 	c.PolicyMaxSteps = integer("TESSERA_POLICY_MAX_STEPS", 20000, 1, 1000000)
+	c.PolicyDiffTimeout = loadDuration(getenv, "TESSERA_POLICY_DIFF_TIMEOUT", 90*time.Second, 5*time.Second, 5*time.Minute, bad)
 	// no limit at all on machine clients is a dev and load-test setting; production needs an explicit override
 	if prod && c.ClientRatePerMinute == 0 && !boolean("TESSERA_API_CLIENT_RATE_ALLOW_OFF", false, false) {
 		bad("TESSERA_API_CLIENT_RATE_PER_MINUTE=0 turns machine-client rate limits off, which needs TESSERA_API_CLIENT_RATE_ALLOW_OFF=true with TESSERA_ENV=prod")
@@ -532,6 +544,14 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.AWSAllowStaticKeys = boolean("TESSERA_AWS_ALLOW_STATIC_KEYS", true, false)
 	if prod && c.AWSAllowStaticKeys {
 		bad("TESSERA_AWS_ALLOW_STATIC_KEYS must not be set with TESSERA_ENV=prod (the AWS connector reads with federated credentials, not stored access keys)")
+	}
+	c.GitHubAPIBase = strings.TrimRight(str("TESSERA_GITHUB_API_BASE", "https://api.github.com", "https://api.github.com"), "/")
+	if err := checkGitHubAPIBase(c.GitHubAPIBase, prod); err != nil {
+		bad("TESSERA_GITHUB_API_BASE: %v", err)
+	}
+	c.GitHubAllowPersonalToken = boolean("TESSERA_GITHUB_ALLOW_PERSONAL_TOKEN", true, false)
+	if prod && c.GitHubAllowPersonalToken {
+		bad("TESSERA_GITHUB_ALLOW_PERSONAL_TOKEN must not be set with TESSERA_ENV=prod (the policy pull request check uses a GitHub App installation token, not a stored personal token)")
 	}
 	c.LPDisable = boolean("TESSERA_LP_DISABLE", false, false)
 	c.FakeTarget = boolean("TESSERA_DEV_FAKE_TARGET", false, false)
@@ -1268,4 +1288,36 @@ func loadDuration(getenv func(string) string, key string, def, min, max time.Dur
 		return def
 	}
 	return d
+}
+
+// checkGitHubAPIBase validates the GitHub API base: an http(s) URL with a host and no user info, query or fragment; in
+// prod https only and no loopback, private or link-local address literal, and not "localhost".
+func checkGitHubAPIBase(base string, prod bool) error {
+	u, err := url.Parse(base)
+	switch {
+	case err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery:
+		return errors.New("must be an http(s) URL with a host and no user info, query or fragment")
+	case u.Scheme != "https" && u.Scheme != "http":
+		return errors.New("must be an https URL")
+	case !prod:
+		return nil
+	case u.Scheme != "https":
+		return errors.New("must be https with TESSERA_ENV=prod")
+	}
+	host := strings.ToLower(u.Hostname())
+	// GitHub's API is at the root of api.github.com; a GitHub Enterprise Server's is under /api/v3. Any other path
+	// would send every call to a 404, which the check reports as a missing installation.
+	if p := strings.TrimRight(u.Path, "/"); host == "api.github.com" && p != "" || host != "api.github.com" && p != "/api/v3" {
+		return errors.New("must be https://api.github.com or a GitHub Enterprise Server's https://HOST/api/v3 with TESSERA_ENV=prod")
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return errors.New("must not be localhost with TESSERA_ENV=prod")
+	}
+	if a, err := netip.ParseAddr(host); err == nil {
+		a = a.Unmap()
+		if a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsUnspecified() || a.IsMulticast() {
+			return errors.New("must not be a loopback, private or link-local address with TESSERA_ENV=prod")
+		}
+	}
+	return nil
 }

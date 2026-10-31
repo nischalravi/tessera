@@ -104,6 +104,8 @@ type ViolationRef struct {
 	IdentityID   *int64 `json:"identity_id"`
 	IdentityName string `json:"identity_name"`
 	Message      string `json:"message"`
+	// LowFidelity marks a finding whose only basis is approximate evidence: reported, never blocking.
+	LowFidelity bool `json:"low_fidelity,omitempty"`
 }
 
 // Violations are the policy findings before and after, as policy.DiffViolations gives them. The agent-scope
@@ -396,7 +398,7 @@ func violationsOf(g *simulate.Result) Violations {
 			}
 			if len(out) < MaxViolations {
 				out = append(out, ViolationRef{Key: x.Key, PolicyID: x.PolicyID, Severity: x.Severity, IdentityID: x.IdentityID,
-					IdentityName: x.IdentityName, Message: x.Message})
+					IdentityName: x.IdentityName, Message: x.Message, LowFidelity: x.LowFidelity})
 			}
 		}
 		return out, len(in) - len(out)

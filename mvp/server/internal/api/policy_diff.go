@@ -44,7 +44,10 @@ import (
 // TESSERA_POLICY_MAX_STEPS. The request's audit event carries the totals.
 
 func (s *Server) registerPolicyDiffRoutes() {
-	s.handle(http.MethodPost, "/api/policy/diff", read, needStepUp(auth.PermGraphRead, auth.StepUpPolicy), s.policyDiff).answersRead = true
+	rt := s.handle(http.MethodPost, "/api/policy/diff", read, needStepUp(auth.PermGraphRead, auth.StepUpPolicy), s.policyDiff)
+	rt.answersRead = true
+	// a large preview takes longer than the 30 s every other route gets (the AC-8 gate is 60 s at 10,000 identities)
+	rt.timeout = s.cfg.PolicyDiffTimeout
 }
 
 const maxOperationSource = 200
@@ -96,38 +99,72 @@ type policyDiffView struct {
 	DiffSHA256 string `json:"diff_sha256"`
 }
 
-func (s *Server) policyDiff(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+func (s *Server) policyDiff(w http.ResponseWriter, r *http.Request, p *params) (out any, err error) {
+	if end := s.policyDiffHooks.end; end != nil {
+		defer func() { end(err) }()
+	}
+	return s.policyDiffRun(w, r, p)
+}
+
+func (s *Server) policyDiffRun(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
 	var in policyDiffIn
 	if err := decodeBody(r, &in, false); err != nil {
 		return nil, err
 	}
+	ctx := r.Context()
+	view, _, err := s.computePolicyDiff(ctx, store.TxFrom(ctx), &in)
+	if err != nil {
+		return nil, err
+	}
+	sm := &view.Summary
+	audit.Mark(ctx, "policy_diff_identities_gaining", sm.IdentitiesGaining)
+	audit.Mark(ctx, "policy_diff_agents_gaining", sm.AgentsGaining)
+	audit.Mark(ctx, "policy_diff_identities_losing", sm.IdentitiesLosing)
+	audit.Mark(ctx, "policy_diff_violations_introduced", view.Violations.IntroducedTotal)
+	audit.Mark(ctx, "policy_diff_operations", len(in.Operations))
+	audit.Mark(ctx, "policy_diff_bundle_sha256", view.BundleSHA256)
+	audit.Mark(ctx, "policy_diff_diff_sha256", view.DiffSHA256)
+	if view.Terraform != nil {
+		markTerraform(r, view.Terraform)
+	}
+	return view, nil
+}
+
+// diffExtras is what the pull request check needs of a preview beyond its answer.
+type diffExtras struct {
+	// sodPolicies are the ids of the effective policies after the change that are separation-of-duties rules.
+	sodPolicies map[string]bool
+}
+
+// computePolicyDiff is the preview itself, inside the read transaction tx: POST /api/policy/diff and the GitHub check
+// (policy_github.go) both run it. in.Operations grows by the Terraform plan's operations.
+func (s *Server) computePolicyDiff(ctx context.Context, tx *store.TenantTx, in *policyDiffIn) (*policyDiffView, *diffExtras, error) {
 	planGiven := hasPlan(in.TerraformPlan)
 	if len(in.Files) == 0 && len(in.Operations) == 0 && !planGiven {
-		return nil, badRequest("empty_change", "a change needs files, operations, a terraform_plan or a combination")
+		return nil, nil, badRequest("empty_change", "a change needs files, operations, a terraform_plan or a combination")
 	}
 	for i, o := range in.Operations {
 		if len(o.Source) > maxOperationSource || !utf8.ValidString(o.Source) {
-			return nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "invalid_change", Msg: "an operation's source must be text of at most 200 bytes",
+			return nil, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "invalid_change", Msg: "an operation's source must be text of at most 200 bytes",
 				Extra: map[string]any{"change_index": i}}
 		}
 	}
-	ctx, tx := r.Context(), store.TxFrom(r.Context())
 	now := s.clock()
 	t, err := tx.TenantRecord()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	opt := blast.Options{Tenant: t.Slug, MaxSteps: s.admin.PolicyMaxSteps, Now: now}
 	// a Terraform plan adds its operations to the request's (AC-9)
 	var tf *policyDiffTerraform
 	var ac *awsCtx
 	if planGiven {
-		if tf, ac, err = s.applyTerraformPlan(tx, &in, opt.Limit()); err != nil {
-			return nil, err
+		if tf, ac, err = s.applyTerraformPlan(tx, in, opt.Limit()); err != nil {
+			return nil, nil, err
 		}
 	}
 	if err := blast.CheckCeiling(opt, 0, len(in.Operations)); err != nil {
-		return nil, bundleErr(err)
+		return nil, nil, bundleErr(err)
 	}
 
 	// the bundle
@@ -137,17 +174,17 @@ func (s *Server) policyDiff(_ http.ResponseWriter, r *http.Request, _ *params) (
 	}
 	before, err := s.effectivePolicies(tx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if opt.Risks, err = s.currentRisks(tx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	c, err := blast.Compile(tx, files, opt)
 	if err != nil {
-		return nil, bundleErr(err)
+		return nil, nil, bundleErr(err)
 	}
 	if err := blast.CheckCeiling(opt, c.Steps, len(in.Operations)); err != nil {
-		return nil, bundleErr(err)
+		return nil, nil, bundleErr(err)
 	}
 	// the simulation runs for an empty change too: it is how the answer reports the violations the tenant has, so a
 	// no-op preview says "73 to 73", not "0 to 0" (issue #765)
@@ -163,57 +200,65 @@ func (s *Server) policyDiff(_ http.ResponseWriter, r *http.Request, _ *params) (
 			scopes = nil
 		}
 		if afterPolicies, err = s.effectivePoliciesWith(tx, risks, scopes); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	if graphRes, err = simulate.Run(tx, c.Request, simulate.Inputs{Now: now, Policies: before, AfterPolicies: afterPolicies}); err != nil {
-		return nil, err
+	if before := s.policyDiffHooks.before; before != nil {
+		before(ctx)
+	}
+	// the request's context carries the route deadline and the client's disconnect: a preview that outlives either
+	// stops here, at its next step, and releases the read transaction, instead of running on after the 503
+	if graphRes, err = simulate.RunContext(ctx, tx, c.Request, simulate.Inputs{Now: now, Policies: before, AfterPolicies: afterPolicies}); err != nil {
+		return nil, nil, err
 	}
 
 	// the AWS operations
 	var aws *blast.AWSDiff
 	var awsView *policyDiffAWS
 	if len(in.Operations) > 0 {
-		if aws, awsView, err = s.policyDiffAWS(ctx, tx, &in, ac, now); err != nil {
-			return nil, err
+		if aws, awsView, err = s.policyDiffAWS(ctx, tx, in, ac, now); err != nil {
+			return nil, nil, err
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	people, err := tenantPeople(tx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if aws != nil {
 		if aws.Principals, err = awsPrincipalOwners(tx); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	ops, err := json.Marshal(in.Operations)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	opsSum := sha256.Sum256(ops)
 	view := &policyDiffView{Tenant: t.Slug, BundleSHA256: c.BundleSHA256, OperationsSHA256: hex.EncodeToString(opsSum[:]), Kinds: c.Kinds,
 		AWS: awsView, Terraform: tf, Report: blast.Summarize(blast.Inputs{People: people, Graph: graphRes, AWS: aws})}
 	raw, err := json.Marshal(view)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sum := sha256.Sum256(raw)
 	view.DiffSHA256 = hex.EncodeToString(sum[:])
 
-	sm := &view.Summary
-	audit.Mark(ctx, "policy_diff_identities_gaining", sm.IdentitiesGaining)
-	audit.Mark(ctx, "policy_diff_agents_gaining", sm.AgentsGaining)
-	audit.Mark(ctx, "policy_diff_identities_losing", sm.IdentitiesLosing)
-	audit.Mark(ctx, "policy_diff_violations_introduced", view.Violations.IntroducedTotal)
-	audit.Mark(ctx, "policy_diff_operations", len(in.Operations))
-	audit.Mark(ctx, "policy_diff_bundle_sha256", c.BundleSHA256)
-	audit.Mark(ctx, "policy_diff_diff_sha256", view.DiffSHA256)
-	if tf != nil {
-		markTerraform(r, tf)
+	return view, &diffExtras{sodPolicies: sodPolicyIDs(afterPolicies)}, nil
+}
+
+// sodPolicyIDs are the ids of the separation-of-duties policies among ps.
+func sodPolicyIDs(ps []*policy.Policy) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range ps {
+		if p.Type == policy.TypeSoDRisk || p.Type == "separation_of_duties" {
+			out[p.ID] = true
+		}
 	}
-	return view, nil
+	return out
 }
 
 // currentRisks are the SoD risks the tenant is checked against now: the base a bundle's SoD rules are applied to.

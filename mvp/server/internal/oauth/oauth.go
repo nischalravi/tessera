@@ -64,6 +64,8 @@ const (
 	ScopeIntrospect = "tessera:introspect"
 	// ScopeEmailDSN is held by a machine client that posts delivery status reports (POST /api/email/dsn).
 	ScopeEmailDSN = "tessera:email-dsn"
+	// ScopePolicyGitHubCheck is held by a machine client (CI) that runs the policy pull request check (issue #656).
+	ScopePolicyGitHubCheck = "tessera:policy-github-check"
 	// ScopeConfigPropose is held by a machine client that may propose configuration changes for a human admin to
 	// approve (issue #721). It is never in MachineScopes: it is added only by an approved two-admin
 	// api_client.propose.grant change, so no registration path can hand it out.
