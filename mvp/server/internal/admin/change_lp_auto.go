@@ -68,7 +68,7 @@ func init() {
 
 // planLPAuto files a request only for a policy that is valid and is the one named now: what the requester reviewed.
 func planLPAuto(_ *env, v *lpAutoPayload) (plan, error) {
-	if v.Commit == "" || len(v.Commit) > lpauto.MaxCommit {
+	if blankCommit(v.Commit) || len(v.Commit) > lpauto.MaxCommit {
 		return plan{}, invalid("commit is 1 to %d characters", lpauto.MaxCommit)
 	}
 	files := v.bundle()
