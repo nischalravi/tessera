@@ -287,6 +287,10 @@ func TestLPAPI_CrossTenant(t *testing.T) {
 	if rec := b("GET", "/api/lp/revocations/"+id+"/evidence", ""); rec.Code != http.StatusNotFound {
 		t.Errorf("B evidence of A's = %d %s", rec.Code, rec.Body.String())
 	}
+	// the Terraform suggestion of LP-9: B gets a 404 for A's candidate
+	if rec := b("GET", "/api/lp/revocations/"+id+"/terraform", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("B terraform of A's = %d %s", rec.Code, rec.Body.String())
+	}
 	if rec := b("GET", "/api/lp/evidence?from=2026-01-01&to=2027-01-01", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"items":[]`) {
 		t.Errorf("B evidence export = %d %s", rec.Code, rec.Body.String())
 	}

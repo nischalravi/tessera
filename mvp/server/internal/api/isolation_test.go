@@ -430,6 +430,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/lp/revocations/{id}") {
 			continue // TestLPAPI_CrossTenant (UUIDs, not fixture ids)
 		}
+		if rt.Pattern == "/api/lp/recommendations/{id}/pull-request" {
+			continue // TestLPRecPR_CrossTenant (edge ids of one tenant's graph, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/evidence/packs/{pack_id}") {
 			continue // TestEvidenceAPI_CrossTenant (a UUID, not a fixture id)
 		}
@@ -631,8 +634,8 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if path == "/api/orgs/{org_id}/settings" {
 			continue // TestSettingsAPI_CrossTenant (derived ids, not fixture ids)
 		}
-		if strings.HasPrefix(path, "/api/lp/revocations/{id}") {
-			continue // TestLPAPI_CrossTenant (UUIDs, not fixture ids)
+		if strings.HasPrefix(path, "/api/lp/revocations/{id}") || path == "/api/lp/recommendations/{id}/pull-request" {
+			continue // TestLPAPI_CrossTenant, TestLPRecPR_CrossTenant (UUIDs and edge ids, not fixture ids)
 		}
 		if strings.HasPrefix(path, "/api/sod/") && strings.Contains(path, "{") {
 			continue // TestSodAPI_CrossTenant (UUIDs, not fixture ids)

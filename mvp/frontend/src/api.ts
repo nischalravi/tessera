@@ -3789,6 +3789,19 @@ export interface LpMetrics {
   auto: number; staged: number; false_positive_percent: number; levels: LpMetricsLevel[]; by_state: Record<string, number>;
   median_restore_seconds: number | null; restores: number; restores_within_slo: number; restore_slo_seconds: number;
 }
+/** POST /api/lp/recommendations/{id}/pull-request (LP-9, #665): the pull request opened or updated on the policy repository. */
+export interface LpRecPullRequest {
+  status: "opened" | "updated"; recommendation_id: string; repo: string; branch: string; base_branch: string; pull_number: number;
+  pull_url?: string; head_sha: string; committed: boolean; file: string; entitlement: string; conclusion: "success" | "failure" | "neutral";
+  title: string; reasons: string[];
+}
+/** GET /api/lp/revocations/{id}/terraform (LP-9, #665): a narrowed aws_iam_policy resource to paste into your own Terraform. */
+export interface LpTerraform { id: string; policy_arn: string; format: "hcl"; snippet: string; snippet_sha256: string; confidence: string; unused_days: number }
+export const lpRecommendations = {
+  /** Needs lp.manage and a fresh step-up; only a "remove" recommendation of a role-made grant qualifies. Never merged by Tessera. */
+  openPullRequest: (edgeId: number, unusedDays: number) => api<LpRecPullRequest>(`/lp/recommendations/${edgeId}/pull-request`, { unused_days: unusedDays }),
+  terraform: (id: string) => api<LpTerraform>(`/lp/revocations/${encodeURIComponent(id)}/terraform`),
+};
 export const lpLoop = {
   /** The kill switch: one person; resuming takes a second admin through a change request (lp.settings.update). */
   pause: (reason: string) => api<LpSettings>("/lp/pause", { reason }),

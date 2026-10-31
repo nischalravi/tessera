@@ -42,6 +42,20 @@ func TestLPAPI_AutoPolicyFlow(t *testing.T) {
 	if r := w.c.do("POST", "/api/lp/auto-policy/validate", `{"files":{"README.md":"x"}}`); r.Code != 422 {
 		t.Errorf("a bundle without lp/auto.yaml: %d %s", r.Code, r.Body)
 	}
+	// a commit label that shows nothing is refused like "" (issues #772 and #776); one with text is not
+	withCommit := func(commit string) string {
+		raw, _ := json.Marshal(map[string]any{"commit": commit, "files": map[string]string{"lp/auto.yaml": good}})
+		return string(raw)
+	}
+	for name, blank := range map[string]string{"empty": "", "spaces": "  ", "zero width space": "\u200b", "hangul filler": "\u3164",
+		"braille blank": "\u2800", "halfwidth filler and space": "\uffa0 ", "grapheme joiner": "\u034f", "mixed": " \u3164\u2800\u200b\t"} {
+		if r := w.c.do("POST", "/api/lp/auto-policy/apply", withCommit(blank)); r.Code != 422 {
+			t.Errorf("apply with a blank commit (%s): %d %s", name, r.Code, r.Body)
+		}
+	}
+	if r := w.c.do("POST", "/api/lp/auto-policy/apply", withCommit("fix\u3164x")); r.Code != http.StatusCreated {
+		t.Errorf("apply with text around a filler: %d %s", r.Code, r.Body)
+	}
 	v := w.c.json("POST", "/api/lp/auto-policy/validate", files(good), 200).(map[string]any)
 	digest := asString(v["policy_sha256"])
 	if v["valid"] != true || len(digest) != 64 {

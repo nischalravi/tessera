@@ -144,7 +144,7 @@ func code(s string, n int) string {
 		switch {
 		case r == '`':
 			return '\''
-		case r < 0x20 || r == 0x7f || r == ' ' || r == ' ':
+		case unsafeRune(r):
 			return ' '
 		}
 		return r
@@ -153,6 +153,20 @@ func code(s string, n int) string {
 		s = string([]rune(s)[:n]) + "..."
 	}
 	return "`" + strings.TrimSpace(s) + "`"
+}
+
+// isBidi reports a Unicode bidirectional control: the marks, embeddings, overrides and isolates.
+func isBidi(r rune) bool {
+	return r == 0x061c || r == 0x200e || r == 0x200f || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
+}
+
+// unsafeRune reports a rune that is replaced by a space in any text from the estate, whether it ends up in a code span, a
+// title or a commit message: control characters, line and paragraph separators, next line, the bidirectional controls (an
+// unterminated override would reorder the rest of the line) and the zero-width and format characters that hide text. The
+// zero-width joiner (U+200D) is kept in a code span, where it joins emoji; a title or commit message drops it too (plain).
+func unsafeRune(r rune) bool {
+	return r < 0x20 || r == 0x7f || r == 0x85 || r == 0x2028 || r == 0x2029 || isBidi(r) ||
+		(r >= 0x200b && r <= 0x200f && r != 0x200d) || (r >= 0x2060 && r <= 0x2069) || r == 0xfeff
 }
 
 // Title is the check run's title.
@@ -180,15 +194,7 @@ func Summary(p Preview, v Verdict, headSHA string) string {
 		fmt.Fprintf(&b, "- %s\n", r)
 	}
 	if r := p.Report; r != nil {
-		s := &r.Summary
-		b.WriteString("\n| Blast radius | Count |\n|---|---:|\n")
-		fmt.Fprintf(&b, "| Identities gaining access | %d |\n| Identities losing access | %d |\n| Agents gaining access | %d |\n| Agents losing access | %d |\n",
-			s.IdentitiesGaining, s.IdentitiesLosing, s.AgentsGaining, s.AgentsLosing)
-		fmt.Fprintf(&b, "| Permissions gained / lost (graph) | %d / %d |\n| AWS paths gained / lost | %d / %d |\n", s.GraphPermissionsGained, s.GraphPermissionsLost, s.AWSPathsGained, s.AWSPathsLost)
-		fmt.Fprintf(&b, "| Policy violations before / after | %d / %d |\n| Violations introduced / resolved | %d / %d |\n", r.Violations.Before, r.Violations.After, r.Violations.IntroducedTotal, r.Violations.ResolvedTotal)
-		if s.UnlinkedPrincipals > 0 {
-			fmt.Fprintf(&b, "| AWS principals not linked to an identity | %d |\n", s.UnlinkedPrincipals)
-		}
+		writeBlastTable(&b, r)
 		if len(r.Violations.Introduced) > 0 {
 			b.WriteString("\n**New violations**\n\n")
 			for i, x := range r.Violations.Introduced {
@@ -239,4 +245,17 @@ func Summary(p Preview, v Verdict, headSHA string) string {
 // Comment is the pull request comment: the marker, then the summary.
 func Comment(p Preview, v Verdict, headSHA string) string {
 	return CommentMarker + "\n" + Summary(p, v, headSHA)
+}
+
+// writeBlastTable writes the blast-radius table of a report (shared by the check summary and the right-sizing pull request).
+func writeBlastTable(b *strings.Builder, r *blast.Report) {
+	s := &r.Summary
+	b.WriteString("\n| Blast radius | Count |\n|---|---:|\n")
+	fmt.Fprintf(b, "| Identities gaining access | %d |\n| Identities losing access | %d |\n| Agents gaining access | %d |\n| Agents losing access | %d |\n",
+		s.IdentitiesGaining, s.IdentitiesLosing, s.AgentsGaining, s.AgentsLosing)
+	fmt.Fprintf(b, "| Permissions gained / lost (graph) | %d / %d |\n| AWS paths gained / lost | %d / %d |\n", s.GraphPermissionsGained, s.GraphPermissionsLost, s.AWSPathsGained, s.AWSPathsLost)
+	fmt.Fprintf(b, "| Policy violations before / after | %d / %d |\n| Violations introduced / resolved | %d / %d |\n", r.Violations.Before, r.Violations.After, r.Violations.IntroducedTotal, r.Violations.ResolvedTotal)
+	if s.UnlinkedPrincipals > 0 {
+		fmt.Fprintf(b, "| AWS principals not linked to an identity | %d |\n", s.UnlinkedPrincipals)
+	}
 }

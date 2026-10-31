@@ -66,6 +66,9 @@ type githubAppView struct {
 	UpdatedAt      *string           `json:"updated_at"`
 	APIBase        string            `json:"api_base"`
 	Permissions    map[string]string `json:"permissions"`
+	// ContentsPermissions are what the right-sizing pull requests of LP-9 ask the installation for (contents:write added);
+	// the installation must have accepted them, or those routes answer installation_scope_mismatch.
+	ContentsPermissions map[string]string `json:"contents_permissions"`
 }
 
 func (s *Server) githubAppViewOf(st *store.GitHubAppSettings) githubAppView {
@@ -74,7 +77,8 @@ func (s *Server) githubAppViewOf(st *store.GitHubAppSettings) githubAppView {
 		base = ghapp.DefaultAPIBase
 	}
 	v := githubAppView{Enabled: st.Enabled, AppID: st.AppID, InstallationID: st.InstallationID, Repo: st.Repo, KeySet: len(st.KeyEnc) > 0,
-		KeyFingerprint: st.KeyFingerprint, UpdatedBy: st.UpdatedBy, APIBase: base, Permissions: ghapp.Permissions}
+		KeyFingerprint: st.KeyFingerprint, UpdatedBy: st.UpdatedBy, APIBase: base, Permissions: ghapp.Permissions,
+		ContentsPermissions: ghapp.ContentsPermissions}
 	if st.KeySetAt != "" {
 		v.KeySetAt = &st.KeySetAt
 	}
