@@ -4,9 +4,9 @@
  * announce, object and restore. Every number comes from GET /api/lp/settings and GET /api/lp/revocations.
  */
 import { useState } from "react";
-import { LpRevocation, LpSettings, LpState, fmtDate, lpLoop, refetchAll, useApi } from "../../api";
+import { LpRevocation, LpSettings, LpState, LpTerraform, fmtDate, lpLoop, lpRecommendations, refetchAll, useApi } from "../../api";
 import { useSession } from "../../app/auth";
-import { Badge, Button, EmptyState, Loading, useToast } from "../../components";
+import { Badge, Button, Drawer, EmptyState, Loading, useToast } from "../../components";
 
 const TONE: Record<LpState, "info" | "warning" | "critical" | "ok" | "neutral"> = {
   candidate: "neutral", announced: "warning", revoking: "warning", revoked: "info", finalized: "ok", restoring: "warning",
@@ -29,6 +29,7 @@ function Row({ r, onDone }: { r: LpRevocation; onDone: () => void }) {
     }
   };
   const auto = r.eligibility === "auto";
+  const [tf, setTf] = useState<LpTerraform | null>(null);
   return (
     <tr>
       <td className="small"><code className="xs" style={{ wordBreak: "break-all" }}>{r.principal}</code><div className="xs faint sys">{r.policy_arn}</div></td>
@@ -41,6 +42,13 @@ function Row({ r, onDone }: { r: LpRevocation; onDone: () => void }) {
         {r.state === "candidate" && <Button size="sm" disabled={busy} onClick={() => run("Announced", () => lpLoop.approve(auto ? [r.id] : [], auto ? [] : [r.id]))}>Announce</Button>}
         {r.state === "announced" && <Button size="sm" disabled={busy} onClick={() => run("Objection recorded", () => lpLoop.object(r.id, "Objected in the console"))}>Object</Button>}
         {(r.state === "revoked" || r.state === "failed") && <Button size="sm" disabled={busy} onClick={() => run("Restore queued", () => lpLoop.restore(r.id))}>Restore</Button>}
+        {(r.state === "candidate" || r.state === "announced") && <Button size="sm" disabled={busy} onClick={() => run("Terraform suggestion ready", async () => setTf(await lpRecommendations.terraform(r.id)))}>Terraform</Button>}
+        {tf && (
+          <Drawer title="Terraform suggestion" sub="Paste over your own resource for this policy, review the plan and apply it yourself. Tessera writes nothing." onClose={() => setTf(null)} wide
+            footer={<Button onClick={() => { void navigator.clipboard?.writeText(tf.snippet); }}>Copy</Button>}>
+            <pre className="xs" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{tf.snippet}</pre>
+          </Drawer>
+        )}
       </td>
     </tr>
   );

@@ -194,6 +194,8 @@ POST   /api/lp/candidates                            lp.manage          -  # iss
 POST   /api/lp/revocations/approve                   lp.manage          STEP_UP_POLICY  # issue #661 (LP-5)
 POST   /api/lp/revocations/{id}/object               lp.manage          -  # issue #661 (LP-5)
 POST   /api/lp/revocations/{id}/restore              lp.manage          STEP_UP_POLICY  # issue #661 (LP-5: re-grants access, so step-up like LP-4's restore)
+POST   /api/lp/recommendations/{id}/pull-request     lp.manage          STEP_UP_POLICY  # issue #665 (LP-9: commits to and opens a pull request on the policy repository with the App's credentials)
+GET    /api/lp/revocations/{id}/terraform            graph.read         -  # issue #665 (LP-9: text only, nothing written)
 GET    /api/lp/protected                             graph.read         -  # issue #661 (LP-5)
 POST   /api/lp/protected                             lp.manage          -  # issue #661 (LP-5)
 GET    /api/lp/denial-hook                           graph.read         -  # issue #662 (LP-6)

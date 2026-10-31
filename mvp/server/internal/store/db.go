@@ -199,6 +199,8 @@ var tables = []string{
 	"agent_scopes", "agent_scope_versions",
 	// the GitHub App of the policy pull request check and what it last posted (schema/0957_github_app.sql)
 	"github_app_settings", "github_pr_checks",
+	// the pull request opened for each right-sizing recommendation (schema/0958_lp_rec_prs.sql)
+	"lp_rec_prs", "lp_rec_pr_attempts",
 	// the automatic policy from the access-as-code repository (schema/0953_lp_auto_policy.sql)
 	"lp_auto_policy",
 	// AWS usage (schema/0915_aws_usage.sql)

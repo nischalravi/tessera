@@ -2135,12 +2135,16 @@ token of `PUT /api/aws/pr-comment`.
   route then answers `409 personal_token_disabled` and a stored token is never used. **Migration:** configure the App with
   `PUT /api/policy/github/app`, call `POST /api/policy/github/check` from CI instead of `comment.pull_number`, and clear any
   stored token with `PUT /api/aws/pr-comment {"enabled":false, "repo":"..."}`.
+- **Right-sizing pull requests (LP-9, issue #665)** add one permission to the App: **Contents: Read and write** (see "Right-sizing
+  recommendations as pull requests" below). The check run itself still asks for `checks` and `pull_requests` only; the
+  installation token of a right-sizing request is asked for `contents: write` as well, for the one repository, and tokens of the two
+  kinds are cached apart. An installation that has not accepted the permission answers `422 installation_scope_mismatch`.
 - **Not built:** fetching the bundle from the commit (needs `contents: read`), a `pull_request` webhook (signature check, replay protection by delivery id; tracked as a follow-up), so
   CI calls the route, and an Admin UI card (use the API).
 
 **Registering the App (a human does this once per tenant; `needs-human`).** In GitHub, Settings, Developer settings, GitHub
 Apps, New GitHub App: homepage = your Tessera URL; **uncheck Webhook active** (no webhook is used yet); Repository
-permissions: **Checks: Read and write**, **Pull requests: Read and write**, everything else No access; no account
+permissions: **Checks: Read and write**, **Pull requests: Read and write**, and **Contents: Read and write** only if you use right-sizing pull requests (LP-9), everything else No access; no account
 permissions, no events; "Only on this account". Create the App and note the **App ID**; Generate a private key (a `.pem`
 download). Install the App on the organization, choose **Only select repositories** and pick the policy repository; the
 installation id is the number at the end of the installation's URL (`.../settings/installations/<id>`). Then
@@ -7297,6 +7301,26 @@ timeline. Its `sha256` is the digest of the record with that field empty.
   chain. A restore labels the false positive before it moves to `restored`, so the digest covers the label. Golden export:
   `testdata/golden/lp_evidence_v1.json` (regenerate with `go test ./internal/lp -run TestEvidenceGolden -update` and explain the
   change); the test also verifies the audit chain with the evidence in it.
+- **Right-sizing recommendations as pull requests and Terraform (LP-9, #665).**
+  `POST /api/lp/recommendations/{id}/pull-request {unused_days?}` (`lp.manage`, step-up) opens, or updates in place, a pull request on the
+  policy repository for a grant recommendation (`{id}` is the number `GET /api/least-privilege/recommendations` shows; default window 60
+  days, at most 90). Only a `remove` or `redundant` recommendation of a grant the evaluator found unconditional (never approximate or
+  conditional) qualifies, and the grant must be a group a business role grants the identity (a role-made edge; exactly one such role,
+  and not its only entitlement: a role file grants at least one). Tessera reads `roles/<key>.yaml` at the default branch head, removes the
+  entitlement, commits it to `tessera/rightsize-grant-<id>` (cut from the head, or reused: a `422 reference already exists` is reuse) and
+  opens the pull request, then posts the AC-10 check run on its head. The same recommendation never has two open pull requests: the mapping
+  is kept in `lp_rec_prs` (migration `0958`, Postgres `0966`) and a repeat updates the pull request in place (a closed one gets a new
+  pull request on the same branch). The body is deterministic (golden `internal/ghapp/testdata/rightsize_pr_body.golden.md`): the
+  recommendation id, identity, entitlement, role and file, the unused permissions, the usage window and confidence, the evidence link
+  and the blast-radius table of the edit, with every name from the estate escaped as in the policy check. Never merged. Nothing already on the repository is trusted: an existing branch of that name is used only when its tip is the commit Tessera recorded (or it holds no commit of its own) and its comparison with the base changes no file but the role file, else `409 branch_conflict` (delete the branch on GitHub to start again; Tessera never force-resets a ref); an open pull request is adopted only when the App opened it and its head is that tip, else `409 pull_request_conflict`; the check run is posted only on a commit Tessera made or verified, and when the repository's role file is not Tessera's export the body says so and the check is neutral. The commit is made atomically through the Git Data API (blob, tree on the verified tip's tree, commit with parents exactly `[tip]`, checked), then `PATCH /git/refs` with `force:false` (a new branch is created directly at the commit); a push that landed after the verification makes the move fail with `branch_conflict`. The pull request's head must equal that commit before the check run is posted or anything is recorded (else `409 pull_request_conflict`, nothing recorded). Only `contents: write` is needed; no permission change. The comparison must be `identical`, `ahead`, `behind` or `diverged` with commits and files agreeing, and the search for an open pull request filters by base and picks the App's own among several. Capped at 20 attempts
+  an hour per tenant (every request counts, failed ones too: reserved in `lp_rec_pr_attempts`, migration `0959`, Postgres `0967`, before GitHub is called) and 256 KiB per file; audited as `lp.recommendation.pull_request` (`.failed` when GitHub refused) in
+  the transaction that records the mapping. Errors: `404 recommendation_not_found`, `422 not_removable | not_policy_managed |
+  ambiguous_role | role_would_be_empty | confidence_too_low | role_file_not_in_repo`, `409 github_app_disabled | entitlement_not_in_repo |
+  stale_base`, `429 pull_request_rate_limited`, `502 github_failed` (`reason`), `503 github_rate_limited`. Not built: a batch of
+  recommendations in one pull request, other as-code kinds, closing the pull request when the recommendation goes away.
+  `GET /api/lp/revocations/{id}/terraform` (`graph.read`) answers `{snippet, snippet_sha256, ...}` for an open candidate (a verified AWS
+  right-size of one managed policy): a narrowed `aws_iam_policy` resource to paste into your own Terraform (policy variables are written
+  `$${...}`; golden `testdata/lp9/terraform_policy.tf.golden`). Text only; nothing is written anywhere.
 - **Export.** `GET /api/lp/evidence?from=&to=&limit=` (`audit.read`) lists the records of the revocations carried out in `[from, to)`
   (dates or datetimes, a date-only `to` inclusive; default the last 60 days, at most 731 days, at most 5000 records);
   `GET /api/lp/revocations/{id}/evidence` (`audit.read`) gives one. Evidence packs (`POST /api/evidence/packs`) get
