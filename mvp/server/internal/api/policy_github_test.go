@@ -83,7 +83,9 @@ type appGitHub struct {
 	comments map[int64]string
 	nextID   int64
 	got      []string
-	head     string // the pull request's head; ghHead when empty
+	mintBody []map[string]any // the body of each token request
+	repo     *gitRepo         // the repository routes of the right-sizing pull request (lp_rec_pr_test.go); nil: none
+	head     string           // the pull request's head; ghHead when empty
 	// fail answers the next request of a route ("METHOD path") with the status and headers
 	fail map[string]ghFail
 }
@@ -160,6 +162,7 @@ func (g *appGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		g.jwts = append(g.jwts, bearer)
+		g.mintBody = append(g.mintBody, body)
 		g.mints++
 		g.current = "ghs_apptoken" + strconv.Itoa(g.mints)
 		g.tokens = append(g.tokens, g.current)
@@ -168,6 +171,9 @@ func (g *appGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if bearer != g.current || g.current == "" {
 		send(http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
+		return
+	}
+	if g.repo != nil && g.repo.serve(r, body, send) {
 		return
 	}
 	switch {
@@ -256,6 +262,9 @@ func TestGitHubApp_SettingsSealTheKeyAndNeverReturnIt(t *testing.T) {
 	}
 	if p := v["permissions"].(map[string]any); len(p) != 2 || p["checks"] != "write" || p["pull_requests"] != "write" {
 		t.Errorf("permissions = %v, want checks and pull_requests write only", p)
+	}
+	if p := v["contents_permissions"].(map[string]any); len(p) != 3 || p["contents"] != "write" || p["checks"] != "write" || p["pull_requests"] != "write" {
+		t.Errorf("contents_permissions = %v, want checks, pull_requests and contents write", p)
 	}
 
 	for name, body := range map[string]string{

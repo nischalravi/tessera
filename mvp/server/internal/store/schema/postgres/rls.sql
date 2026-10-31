@@ -2565,6 +2565,13 @@ CREATE POLICY tenant_isolation ON github_pr_checks
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE lp_rec_prs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lp_rec_prs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON lp_rec_prs;
+CREATE POLICY tenant_isolation ON lp_rec_prs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN

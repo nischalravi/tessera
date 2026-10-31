@@ -45,6 +45,7 @@ func (s *Server) registerAWSRoutes() {
 	s.registerAWSRightSizeRoutes()
 	s.registerAWSWriteRoutes()
 	s.registerLPRoutes()
+	s.registerLPRecRoutes()
 	s.registerLPDenialRoutes()
 	s.registerLPJITRoutes()
 	s.registerLPEvidenceRoutes()

@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Scissors } from "lucide-react";
-import { Recommendation, ago, useApi } from "../../api";
-import { Badge, Button, Callout, Chip, EmptyState, FilterChips, Loading, Page, Segmented, TypeBadge, InsightsTabs } from "../../components";
+import { Recommendation, ago, lpRecommendations, useApi } from "../../api";
+import { useSession } from "../../app/auth";
+import { Badge, Button, Callout, Chip, EmptyState, FilterChips, Loading, Page, Segmented, TypeBadge, InsightsTabs, useToast } from "../../components";
 import { RevokeDrawer } from "../directory/IdentityPage";
 import { AwsRevocationsCard } from "./AwsRevocationsCard";
 import { LpMetricsCard } from "./LpMetricsCard";
@@ -15,6 +16,21 @@ export function LeastPrivilege() {
   const [itype, setItype] = useState<"" | "human" | "service" | "ai_agent">("");
   const { data, error, reload } = useApi<Recommendation[]>(`/least-privilege/recommendations?unused_days=${days}${kind ? `&kind=${kind}` : ""}${itype ? `&identity_type=${itype}` : ""}`);
   const [revoke, setRevoke] = useState<number | null>(null);
+  const { can } = useSession();
+  const toast = useToast();
+  const [busyPr, setBusyPr] = useState<number | null>(null);
+  // LP-9: a pull request on the policy repository that removes the unused entitlement from its business role (never merged by Tessera)
+  const openPr = async (edgeId: number) => {
+    setBusyPr(edgeId);
+    try {
+      const pr = await lpRecommendations.openPullRequest(edgeId, Number(days));
+      toast(`Pull request #${pr.pull_number} ${pr.status} on ${pr.repo}`);
+    } catch (e) {
+      toast((e as Error).message, { kind: "error" });
+    } finally {
+      setBusyPr(null);
+    }
+  };
   const totalUnused = (data ?? []).reduce((a, r) => a + r.unused_lost, 0);
   return (
     <Page tabs={<InsightsTabs />}
@@ -59,7 +75,10 @@ export function LeastPrivilege() {
                         </td>
                         <td className="num">{r.unused_lost} / {r.permissions_lost}{(r.privileged_unused ?? 0) > 0 && <div className="xs faint">{r.privileged_unused} privileged</div>}</td>
                         <td className="small nowrap">{ago(r.days_since_used)}</td>
-                        <td className="actions-cell"><Button size="sm" onClick={() => setRevoke(r.edge_id)}>Dry-run revoke</Button></td>
+                        <td className="actions-cell">
+                          <Button size="sm" onClick={() => setRevoke(r.edge_id)}>Dry-run revoke</Button>
+                          {r.kind === "remove" && can("lp.manage") && <Button size="sm" disabled={busyPr === r.edge_id} onClick={() => openPr(r.edge_id)}>Open PR</Button>}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

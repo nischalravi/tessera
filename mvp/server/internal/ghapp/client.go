@@ -26,6 +26,11 @@ const DefaultAPIBase = "https://api.github.com"
 // is also limited to the one configured repository. (The check reads no repository files, so no contents permission.)
 var Permissions = map[string]string{"checks": "write", "pull_requests": "write"}
 
+// ContentsPermissions are what a token is asked for when the request writes to the repository (the right-sizing pull
+// request of LP-9, repo.go): Permissions and contents:write, to read the policy file, push a branch and commit to it.
+// Only requests that set Credentials.Contents get them; the check run never does.
+var ContentsPermissions = map[string]string{"checks": "write", "pull_requests": "write", "contents": "write"}
+
 // Limits.
 const (
 	// RefreshMargin: a cached token is replaced this long before its expires_at.
@@ -138,10 +143,19 @@ type Credentials struct {
 	// tenant with the same installation) never shares a token.
 	Scope string
 	KeyID string
+	// Contents asks for ContentsPermissions instead of Permissions; its tokens are cached apart.
+	Contents bool
 }
 
 func (cr *Credentials) cacheKey() string {
-	return strings.Join([]string{cr.Scope, cr.AppID, strconv.FormatInt(cr.InstallationID, 10), cr.Repo, cr.KeyID}, "|")
+	return strings.Join([]string{cr.Scope, cr.AppID, strconv.FormatInt(cr.InstallationID, 10), cr.Repo, cr.KeyID, strconv.FormatBool(cr.Contents)}, "|")
+}
+
+func (cr *Credentials) permissions() map[string]string {
+	if cr.Contents {
+		return ContentsPermissions
+	}
+	return Permissions
 }
 
 // TokenCache holds installation tokens in memory until RefreshMargin before they expire. Tokens are never written
@@ -374,7 +388,7 @@ func (c *Client) installationToken(ctx context.Context, cr *Credentials) (string
 		return "", err
 	}
 	_, name, _ := strings.Cut(cr.Repo, "/")
-	payload, err := json.Marshal(map[string]any{"repositories": []string{name}, "permissions": Permissions})
+	payload, err := json.Marshal(map[string]any{"repositories": []string{name}, "permissions": cr.permissions()})
 	if err != nil {
 		return "", err
 	}
