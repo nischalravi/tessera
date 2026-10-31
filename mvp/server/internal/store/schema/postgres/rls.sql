@@ -2551,6 +2551,20 @@ CREATE POLICY tenant_isolation ON agent_scope_versions
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE github_app_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE github_app_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON github_app_settings;
+CREATE POLICY tenant_isolation ON github_app_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE github_pr_checks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE github_pr_checks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON github_pr_checks;
+CREATE POLICY tenant_isolation ON github_pr_checks
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN

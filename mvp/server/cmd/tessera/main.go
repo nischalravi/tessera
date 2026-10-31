@@ -664,7 +664,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 			Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, Agents: agents, AuditAnchor: anchorURL,
-		Siem: siemSvc, Alerts: alertSvc, AWSCatalog: awsCatalogLoader(cfg), AWSHTTP: awsHTTP, AWSAllowStaticKeys: cfg.AWSAllowStaticKeys, LPDisabled: cfg.LPDisable,
+		Siem: siemSvc, Alerts: alertSvc, AWSCatalog: awsCatalogLoader(cfg), AWSHTTP: awsHTTP, AWSAllowStaticKeys: cfg.AWSAllowStaticKeys, GitHubAPIBase: cfg.GitHubAPIBase, DisablePersonalToken: !cfg.GitHubAllowPersonalToken, LPDisabled: cfg.LPDisable,
 		SoD:            sod.Settings{MaxDays: cfg.SoDMaxMitigationDays, WarnDays: cfg.SoDWarnDays},
 		ClientRate:     api.ClientRate{Burst: cfg.ClientRateBurst, PerMinute: cfg.ClientRatePerMinute},
 		PolicyMaxSteps: cfg.PolicyMaxSteps, PolicyDiffTimeout: cfg.PolicyDiffTimeout,

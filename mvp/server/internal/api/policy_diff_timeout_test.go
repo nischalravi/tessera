@@ -109,9 +109,12 @@ func TestRouteTimeout_OtherRoutesKeepTheDefault(t *testing.T) {
 			t.Errorf("%s: %d, want %d (%s)", path, rec.Code, want, rec.Body)
 		}
 	}
-	// only the preview route carries the longer deadline
+	// only the preview route and the GitHub check that runs it (plus the time to post, AC-10) carry the longer deadline
 	for _, rt := range srv.routes {
-		if rt.timeout != 0 && rt.pattern != "/api/policy/diff" && rt.pattern != "/api/nap-long" && rt.pattern != "/api/nap-short" {
+		if rt.pattern == "/api/policy/github/check" && rt.timeout != time.Minute+60*time.Second {
+			t.Errorf("the GitHub check route's timeout is %s, want the preview's plus a minute", rt.timeout)
+		}
+		if rt.timeout != 0 && rt.pattern != "/api/policy/diff" && rt.pattern != "/api/policy/github/check" && rt.pattern != "/api/nap-long" && rt.pattern != "/api/nap-short" {
 			t.Errorf("route %s %s has timeout %s", rt.method, rt.pattern, rt.timeout)
 		}
 		if rt.pattern == "/api/policy/diff" && rt.timeout != time.Minute {

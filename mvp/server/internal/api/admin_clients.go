@@ -46,7 +46,7 @@ func (s *Server) registerAdminClientRoutes() {
 // machineClientScopes and machineClientRoles are what a UI-created machine client may hold: no admin scope and no
 // admin role (§9.5); approvals and policy changes stay human-only.
 var (
-	machineClientScopes = []string{"tessera:read", "tessera:write", "tessera:audit", oauth.ScopeIntrospect, oauth.ScopeEmailDSN}
+	machineClientScopes = []string{"tessera:read", "tessera:write", "tessera:audit", oauth.ScopeIntrospect, oauth.ScopeEmailDSN, oauth.ScopePolicyGitHubCheck}
 	machineClientRoles  = []string{string(auth.RoleViewer), string(auth.RoleOperator), string(auth.RoleAuditor)}
 )
 

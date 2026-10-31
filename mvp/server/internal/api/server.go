@@ -38,6 +38,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed/wire"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/ghapp"
 	"github.com/nischalravi/tessera/mvp/server/internal/ghtokens"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
@@ -306,6 +307,9 @@ type Config struct {
 	// GitHubAPIBase is where the access-diff comment is posted (default
 	// https://api.github.com). Tests point it at a local server.
 	GitHubAPIBase string
+	// DisablePersonalToken refuses the stored personal access token of PUT /api/aws/pr-comment (deprecated; the GitHub App
+	// replaces it). main sets it unless config.Config.GitHubAllowPersonalToken, which prod refuses.
+	DisablePersonalToken bool
 }
 
 // Server serves the API.
@@ -335,6 +339,8 @@ type Server struct {
 	guests       *sponsorship.Service
 	// guestLife runs the guest lifecycle: reminders, transfer tasks, conversion, deprovisioning (issue #74)
 	guestLife *guestlife.Service
+	// ghCache holds GitHub App installation tokens in memory until shortly before they expire (policy_github.go)
+	ghCache *ghapp.TokenCache
 
 	claimSvc *claim.Service
 	claimLim *claimLimits
@@ -480,7 +486,7 @@ func New(cfg Config) *Server {
 	cfg.Readiness.AWSAllowStaticKeys = cfg.AWSAllowStaticKeys
 	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), clientLimits: newClientLimiter(cfg.ClientRate), provSeal: provSeal, archive: cfg.Archive,
-		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
+		ghCache: ghapp.NewTokenCache(), rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.oauthapps = &oauthapps.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
 	s.ghtokens = &ghtokens.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
 	s.breach = &breach.Service{Rotation: s.rotation}
@@ -609,6 +615,7 @@ func New(cfg Config) *Server {
 	s.registerPolicySodRoutes()
 	s.registerPolicyAgentRoutes()
 	s.registerPolicyDiffRoutes()
+	s.registerPolicyGitHubRoutes()
 	s.registerLPAutoRoutes()
 	s.registerAbacRoutes()
 	s.registerSodRoutes()

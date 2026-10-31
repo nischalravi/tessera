@@ -50,6 +50,50 @@ func with(base map[string]string, kv ...string) map[string]string {
 	return m
 }
 
+// TestGitHubAPIBase: the GitHub API base defaults to GitHub's, a GitHub Enterprise base is allowed, and prod refuses
+// plain http, loopback and private addresses, localhost, user info and odd URLs.
+func TestGitHubAPIBase(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev"}))
+	if err != nil || c.GitHubAPIBase != "https://api.github.com" {
+		t.Fatalf("dev default = %v, %v", c, err)
+	}
+	if c, err = config.Load(env(with(safeProd(), "TESSERA_GITHUB_API_BASE", "https://ghe.example.com/api/v3/"))); err != nil || c.GitHubAPIBase != "https://ghe.example.com/api/v3" {
+		t.Errorf("prod GHE base: %v, %v", c, err)
+	}
+	if _, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_GITHUB_API_BASE": "http://127.0.0.1:9999"})); err != nil {
+		t.Errorf("dev loopback base: %v", err)
+	}
+	for _, bad := range []string{"http://ghe.example.com/api/v3", "https://127.0.0.1", "https://10.1.2.3/api", "https://[::1]/", "https://169.254.169.254/",
+		"https://localhost/api", "https://user:pw@ghe.example.com", "https://ghe.example.com/?x=1", "ftp://ghe.example.com", "ghe.example.com",
+		"https://ghe.example.com", "https://ghe.example.com/api/v4", "https://ghe.example.com/api/v3/extra", "https://api.github.com/api/v3"} {
+		if _, err := config.Load(env(with(safeProd(), "TESSERA_GITHUB_API_BASE", bad))); err == nil || !strings.Contains(err.Error(), "TESSERA_GITHUB_API_BASE") {
+			t.Errorf("prod base %q: err = %v, want refused", bad, err)
+		}
+	}
+}
+
+// TestGitHubAllowPersonalToken: the deprecated stored personal token is on by default in dev and test, off in prod,
+// and prod refuses it on.
+func TestGitHubAllowPersonalToken(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{"dev default", map[string]string{"TESSERA_ENV": "dev"}, true},
+		{"dev off", map[string]string{"TESSERA_ENV": "dev", "TESSERA_GITHUB_ALLOW_PERSONAL_TOKEN": "0"}, false},
+		{"prod default", safeProd(), false},
+	} {
+		c, err := config.Load(env(tc.env))
+		if err != nil || c.GitHubAllowPersonalToken != tc.want {
+			t.Errorf("%s: allow = %v, %v; want %v", tc.name, c != nil && c.GitHubAllowPersonalToken, err, tc.want)
+		}
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_GITHUB_ALLOW_PERSONAL_TOKEN", "1"))); err == nil || !strings.Contains(err.Error(), "TESSERA_GITHUB_ALLOW_PERSONAL_TOKEN must not be set") {
+		t.Errorf("prod with the personal token: err = %v", err)
+	}
+}
+
 // TestAWSAllowStaticKeys: stored AWS access keys are allowed by default in dev
 // and test, off by default in prod, and prod refuses the flag being on.
 func TestAWSAllowStaticKeys(t *testing.T) {
