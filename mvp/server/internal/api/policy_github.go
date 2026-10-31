@@ -43,7 +43,10 @@ func (s *Server) registerPolicyGitHubRoutes() {
 	s.handle(http.MethodGet, "/api/policy/github/app", read, need(auth.PermConnectionsRead), s.rd(s.getGitHubApp))
 	s.handle(http.MethodPut, "/api/policy/github/app", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.putGitHubApp))
 	// phased: the preview is computed in a read transaction, the post is made with none open, and its outcome is then recorded
-	s.handle(http.MethodPost, "/api/policy/github/check", phased, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.githubCheck).answersRead = true
+	rt := s.handle(http.MethodPost, "/api/policy/github/check", phased, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.githubCheck)
+	rt.answersRead = true
+	// the preview's deadline, and the time the post may take after it
+	rt.timeout = s.cfg.PolicyDiffTimeout + 60*time.Second
 }
 
 // githubKeyAAD binds the sealed private key to its tenant, table and column.

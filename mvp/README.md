@@ -1999,6 +1999,12 @@ the plan routes. Body (`files` and `operations` may each be empty, not both):
 - **Ceiling.** The bundle's writes plus the AWS operations over `TESSERA_POLICY_MAX_STEPS` (default 20,000) is `413
   plan_too_large`, before anything is replayed. Per-file and per-bundle limits are the loader's (256 KiB, 4 MiB, 2,000
   files). Every read is the session's tenant: another tenant's identities, accounts, groups and snapshots cannot appear.
+- **Deadline.** This route has its own deadline, `TESSERA_POLICY_DIFF_TIMEOUT` (default `90s`, 5 s to 5 m, a Go duration
+  or whole seconds), because a preview at the gate size outlasts the 30 s every other route keeps. When the deadline
+  passes or the client disconnects, the simulation (between identities and policies), the AWS diff and the read
+  transaction stop at their next step: the answer is `503 Request timed out` (or nothing, for a closed connection), never a
+  partial result, and the request's audit event is still written. A client that retries after a 503 does not pile up
+  overlapping runs.
 - **Cost.** `./run.sh bench` includes `BenchmarkBlastRadius`: a tenant of 10,000 identities (each owning an AWS principal
   in one of 50 accounts, 50,000 resources, ten principals per permission set), a role-like change of 1,000 added and 200
   removed grants and one managed policy that opens a bucket to reading, with a cold memo each time; it fails if p95 is

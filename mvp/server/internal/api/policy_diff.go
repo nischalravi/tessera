@@ -44,7 +44,10 @@ import (
 // TESSERA_POLICY_MAX_STEPS. The request's audit event carries the totals.
 
 func (s *Server) registerPolicyDiffRoutes() {
-	s.handle(http.MethodPost, "/api/policy/diff", read, needStepUp(auth.PermGraphRead, auth.StepUpPolicy), s.policyDiff).answersRead = true
+	rt := s.handle(http.MethodPost, "/api/policy/diff", read, needStepUp(auth.PermGraphRead, auth.StepUpPolicy), s.policyDiff)
+	rt.answersRead = true
+	// a large preview takes longer than the 30 s every other route gets (the AC-8 gate is 60 s at 10,000 identities)
+	rt.timeout = s.cfg.PolicyDiffTimeout
 }
 
 const maxOperationSource = 200
@@ -96,7 +99,14 @@ type policyDiffView struct {
 	DiffSHA256 string `json:"diff_sha256"`
 }
 
-func (s *Server) policyDiff(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+func (s *Server) policyDiff(w http.ResponseWriter, r *http.Request, p *params) (out any, err error) {
+	if end := s.policyDiffHooks.end; end != nil {
+		defer func() { end(err) }()
+	}
+	return s.policyDiffRun(w, r, p)
+}
+
+func (s *Server) policyDiffRun(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
 	var in policyDiffIn
 	if err := decodeBody(r, &in, false); err != nil {
 		return nil, err
@@ -193,7 +203,12 @@ func (s *Server) computePolicyDiff(ctx context.Context, tx *store.TenantTx, in *
 			return nil, nil, err
 		}
 	}
-	if graphRes, err = simulate.Run(tx, c.Request, simulate.Inputs{Now: now, Policies: before, AfterPolicies: afterPolicies}); err != nil {
+	if before := s.policyDiffHooks.before; before != nil {
+		before(ctx)
+	}
+	// the request's context carries the route deadline and the client's disconnect: a preview that outlives either
+	// stops here, at its next step, and releases the read transaction, instead of running on after the 503
+	if graphRes, err = simulate.RunContext(ctx, tx, c.Request, simulate.Inputs{Now: now, Policies: before, AfterPolicies: afterPolicies}); err != nil {
 		return nil, nil, err
 	}
 
@@ -206,6 +221,9 @@ func (s *Server) computePolicyDiff(ctx context.Context, tx *store.TenantTx, in *
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	people, err := tenantPeople(tx)
 	if err != nil {
 		return nil, nil, err
