@@ -2116,8 +2116,8 @@ token of `PUT /api/aws/pr-comment`.
 - **In place.** `github_pr_checks` (schema `0957_github_app.sql`, Postgres 0965) remembers, per repository and pull request,
   the commit, check run id and comment id. A re-run on the same commit updates the check run, a new commit gets a new check
   run, and the comment is always updated in place (created again if it was deleted). A request first claims the pull
-  request (`github_pr_checks` claim row in `github_pr_check_claims`, schema `0960`, Postgres 0968; a claim expires after 2
-  minutes), and reads the record under the claim, so overlapping runs never create a second check run or comment: a run that
+  request (`github_pr_checks` claim row in `github_pr_check_claims`, schema `0960`, Postgres 0968; a claim expires after the route timeout (`TESSERA_POLICY_DIFF_TIMEOUT` + 60 s) plus
+  1 minute), and reads the record under the claim, so overlapping runs never create a second check run or comment: a run that
   cannot get the claim answers `409 check_in_progress` (retry).
 - **App auth** (`ghapp.AppJWT`, `ghapp.Client`): an RS256 JWT with `iss` = App id, `iat` 60 s in the past and `exp` 9 minutes
   after `iat` (8 minutes after now, so it stays under GitHub's 10 minutes even if this clock runs 60 s fast), signed in memory; exchanged at `POST /app/installations/{id}/access_tokens` for a token limited to the one

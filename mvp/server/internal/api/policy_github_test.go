@@ -816,3 +816,19 @@ func TestGitHubApp_PutKeepsOmittedFields(t *testing.T) {
 		t.Errorf("after enabling = %v", on)
 	}
 }
+
+// The claim on a pull request outlives the slowest check the configuration allows: the route timeout plus a minute.
+func TestGitHubClaimTTLTracksTimeout(t *testing.T) {
+	for _, d := range []time.Duration{30 * time.Second, time.Minute, 5 * time.Minute} {
+		if got, want := githubClaimTTL(d), d+2*time.Minute; got != want {
+			t.Errorf("githubClaimTTL(%v) = %v, want %v", d, got, want)
+		}
+		if githubClaimTTL(d) <= githubCheckTimeout(d) {
+			t.Errorf("claim TTL %v does not outlast the route timeout %v", githubClaimTTL(d), githubCheckTimeout(d))
+		}
+	}
+	srv := newIsolationServerWith(storetest.TwoTenants(t), func(c *Config) { withAWSCatalog(c); c.PolicyDiffTimeout = 5 * time.Minute })
+	if got := githubClaimTTL(srv.cfg.PolicyDiffTimeout); got != 7*time.Minute {
+		t.Errorf("configured TTL = %v, want 7m", got)
+	}
+}

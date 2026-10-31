@@ -42,9 +42,14 @@ import (
 // (github_pr_check_claims) taken before GitHub is called; a request that cannot get it answers 409 check_in_progress. A
 // GitHub webhook trigger is not built: CI calls this route.
 
-// githubClaimTTL is how long a request's claim on a pull request holds before another may replace it (the post is
-// bounded by 45 seconds).
-const githubClaimTTL = 2 * time.Minute
+// githubCheckTimeout is how long the check route may run: the preview's deadline and the time the post may take after it.
+func githubCheckTimeout(diffTimeout time.Duration) time.Duration { return diffTimeout + 60*time.Second }
+
+// githubClaimTTL is how long a request's claim on a pull request holds before another may replace it: the route's
+// whole timeout plus a minute, so a slow check never outlives its claim.
+func githubClaimTTL(diffTimeout time.Duration) time.Duration {
+	return githubCheckTimeout(diffTimeout) + time.Minute
+}
 
 func (s *Server) registerPolicyGitHubRoutes() {
 	s.handle(http.MethodGet, "/api/policy/github/app", read, need(auth.PermConnectionsRead), s.rd(s.getGitHubApp))
@@ -53,7 +58,7 @@ func (s *Server) registerPolicyGitHubRoutes() {
 	rt := s.handle(http.MethodPost, "/api/policy/github/check", phased, need(auth.PermPolicyGitHubCheck), s.githubCheck)
 	rt.answersRead = true
 	// the preview's deadline, and the time the post may take after it
-	rt.timeout = s.cfg.PolicyDiffTimeout + 60*time.Second
+	rt.timeout = githubCheckTimeout(s.cfg.PolicyDiffTimeout)
 }
 
 // githubKeyAAD binds the sealed private key to its tenant, table and column.
@@ -292,7 +297,7 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 	var prev *store.GitHubPRCheck
 	if err := p.scope.Write(ctx, func(c *store.TenantTx) error {
 		var err error
-		if claimed, err = c.ClaimGitHubPRCheck(st.Repo, in.PullNumber, now, githubClaimTTL); err != nil || !claimed {
+		if claimed, err = c.ClaimGitHubPRCheck(st.Repo, in.PullNumber, now, githubClaimTTL(s.cfg.PolicyDiffTimeout)); err != nil || !claimed {
 			return err
 		}
 		prev, err = c.GitHubPRCheck(st.Repo, in.PullNumber)
