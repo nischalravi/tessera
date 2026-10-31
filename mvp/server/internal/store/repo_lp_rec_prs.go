@@ -40,8 +40,13 @@ var (
 		ON CONFLICT (tenant_id, rec_id, repo) DO UPDATE SET branch = excluded.branch, pull_number = excluded.pull_number,
 			head_sha = excluded.head_sha, role_key = excluded.role_key, body_sha256 = excluded.body_sha256,
 			state = excluded.state, updated_at = excluded.updated_at`)
-	lpRecPRSince = tq("lp_rec_prs.created_since", `
-		SELECT COUNT(*) FROM lp_rec_prs p WHERE p.tenant_id = @tenant AND p.created_at >= @since`)
+	lpRecPRLock = tq("lp_rec_prs.lock_attempts", `
+		UPDATE github_app_settings SET updated_at = updated_at WHERE tenant_id = @tenant`)
+	lpRecPRAttempts = tq("lp_rec_pr_attempts.since", `
+		SELECT COUNT(*) FROM lp_rec_pr_attempts a WHERE a.tenant_id = @tenant AND a.created_at >= @since`)
+	lpRecPRAttemptIns = tq("lp_rec_pr_attempts.insert", `
+		INSERT INTO lp_rec_pr_attempts (tenant_id, id, rec_id, repo, created_by, created_at)
+		VALUES (@tenant, @id, @rec_id, @repo, @created_by, @created_at)`)
 )
 
 // LPRecPR returns the pull request recorded for the recommendation on the repository, or nil when there is none.
@@ -73,7 +78,23 @@ func (tx *TenantTx) PutLPRecPR(p *LPRecPR, now time.Time) error {
 	return err
 }
 
-// LPRecPRsCreatedSince counts the pull requests first recorded at or after since (the hourly cap).
-func (tx *TenantTx) LPRecPRsCreatedSince(since time.Time) (int, error) {
-	return tx.count(lpRecPRSince, sql.Named("since", RT(since)))
+// LPRecPRAttemptsSince counts the attempts reserved at or after since (the hourly cap).
+func (tx *TenantTx) LPRecPRAttemptsSince(since time.Time) (int, error) {
+	return tx.count(lpRecPRAttempts, sql.Named("since", RT(since)))
+}
+
+// ReserveLPRecPRAttempt takes one of the limit attempts allowed since the window start, or reports false when they are
+// used. It locks the tenant's GitHub App settings row first (a no-op update), so two concurrent reservations of one tenant
+// run one after the other even on Postgres, and the count sees the earlier insert.
+func (tx *TenantTx) ReserveLPRecPRAttempt(recID, repo, by string, now, windowStart time.Time, limit int) (bool, error) {
+	if _, err := tx.exec(lpRecPRLock); err != nil {
+		return false, err
+	}
+	n, err := tx.LPRecPRAttemptsSince(windowStart)
+	if err != nil || n >= limit {
+		return false, err
+	}
+	_, err = tx.exec(lpRecPRAttemptIns, sql.Named("id", NewID()), sql.Named("rec_id", recID), sql.Named("repo", repo),
+		sql.Named("created_by", by), sql.Named("created_at", RT(now)))
+	return err == nil, err
 }

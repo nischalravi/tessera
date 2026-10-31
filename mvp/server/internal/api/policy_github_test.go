@@ -153,6 +153,10 @@ func (g *appGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if r.Method == http.MethodGet && r.URL.Path == "/app" { // the App itself, read with the App JWT (LP-9: the login of its pull requests)
+		send(http.StatusOK, map[string]any{"slug": "tessera-app"})
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/access_tokens") && r.Method == http.MethodPost {
 		parts := strings.Split(bearer, ".")
 		sig, err := base64.RawURLEncoding.DecodeString(parts[len(parts)-1])

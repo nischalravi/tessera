@@ -34,15 +34,18 @@ type RightSize struct {
 	UnusedDays      int
 	LastUsed        string // "" when never seen
 	Fidelity        string // exact: the evaluator found the grant unconditional
-	ExplanationID   string
-	Preview         Preview
+	// RepoDiffers: the role file in the repository is not the one Tessera exports, so the simulation below is of Tessera's
+	// export with the same edit, and the check run is neutral.
+	RepoDiffers   bool
+	ExplanationID string
+	Preview       Preview
 }
 
 // plain cuts text from the estate to one line for a title or a commit message, where markdown is not rendered but a
 // mention can still notify: control characters go, and "@" is written "(at)".
 func plain(s string, n int) string {
 	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || r == 0x2028 || r == 0x2029 {
+		if unsafeRune(r) || r == 0x200d {
 			return ' '
 		}
 		return r
@@ -104,6 +107,9 @@ func RightSizeBody(rs RightSize) string {
 	if r := rs.Preview.Report; r != nil {
 		b.WriteString("\n### Simulation of this change\n")
 		writeBlastTable(&b, r)
+	}
+	if rs.RepoDiffers {
+		b.WriteString("\n**The role file in the repository differs from the one Tessera exports.** The simulation above is of Tessera's export with the same edit, not of this file: review the file's own diff.\n")
 	}
 	if rs.UsedLost > 0 {
 		b.WriteString("\n**Some of what this removes was used.** Check the usage before approving.\n")

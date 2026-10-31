@@ -120,6 +120,10 @@ func ErrCode(err error) string {
 		return "head_sha_mismatch"
 	case errors.Is(err, ErrPullNotFound):
 		return "pull_request_not_found"
+	case errors.Is(err, ErrBranchConflict):
+		return "branch_conflict"
+	case errors.Is(err, ErrPullConflict):
+		return "pull_request_conflict"
 	case errors.Is(err, ErrBadInput), errors.Is(err, ErrAppID), errors.Is(err, ErrKey):
 		return "invalid_settings"
 	case errors.As(err, &rl):

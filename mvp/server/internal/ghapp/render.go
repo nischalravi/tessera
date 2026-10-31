@@ -144,10 +144,7 @@ func code(s string, n int) string {
 		switch {
 		case r == '`':
 			return '\''
-		case r < 0x20 || r == 0x7f || r == ' ' || r == ' ':
-			return ' '
-		case r == 0x85 || isBidi(r):
-			// next line, and the bidirectional controls: an unterminated override would reorder the rest of the line
+		case unsafeRune(r):
 			return ' '
 		}
 		return r
@@ -161,6 +158,15 @@ func code(s string, n int) string {
 // isBidi reports a Unicode bidirectional control: the marks, embeddings, overrides and isolates.
 func isBidi(r rune) bool {
 	return r == 0x061c || r == 0x200e || r == 0x200f || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
+}
+
+// unsafeRune reports a rune that is replaced by a space in any text from the estate, whether it ends up in a code span, a
+// title or a commit message: control characters, line and paragraph separators, next line, the bidirectional controls (an
+// unterminated override would reorder the rest of the line) and the zero-width and format characters that hide text. The
+// zero-width joiner (U+200D) is kept in a code span, where it joins emoji; a title or commit message drops it too (plain).
+func unsafeRune(r rune) bool {
+	return r < 0x20 || r == 0x7f || r == 0x85 || r == 0x2028 || r == 0x2029 || isBidi(r) ||
+		(r >= 0x200b && r <= 0x200f && r != 0x200d) || (r >= 0x2060 && r <= 0x2069) || r == 0xfeff
 }
 
 // Title is the check run's title.

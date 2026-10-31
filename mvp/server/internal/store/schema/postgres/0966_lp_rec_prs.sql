@@ -9,7 +9,7 @@ CREATE TABLE lp_rec_prs (
   rec_id TEXT NOT NULL CHECK (length(rec_id) BETWEEN 1 AND 64),
   repo TEXT NOT NULL CHECK (length(repo) <= 201),
   branch TEXT NOT NULL CHECK (length(branch) BETWEEN 1 AND 200),
-  pull_number BIGINT NOT NULL CHECK (pull_number >= 1),
+  pull_number BIGINT NOT NULL CHECK (pull_number >= 0),
   head_sha TEXT NOT NULL CHECK (length(head_sha) <= 64),
   role_key TEXT NOT NULL DEFAULT '' CHECK (length(role_key) <= 200),
   body_sha256 TEXT NOT NULL DEFAULT '' CHECK (length(body_sha256) <= 64),
@@ -19,4 +19,3 @@ CREATE TABLE lp_rec_prs (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (tenant_id, rec_id, repo)
 );
-CREATE INDEX lp_rec_prs_created ON lp_rec_prs (tenant_id, created_at);

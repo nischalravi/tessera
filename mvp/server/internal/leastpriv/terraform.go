@@ -93,13 +93,14 @@ func label(name string) string {
 // comment cuts text from the estate to one short line of plain characters, for a Terraform comment.
 func comment(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || r == 0x2028 || r == 0x2029 {
-			return ' '
+		if r < 0x20 || r == 0x7f || r == 0x85 || r == 0x2028 || r == 0x2029 || r == 0x061c || r == 0xfeff ||
+			(r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2060 && r <= 0x2069) {
+			return ' ' // the same set as ghapp's unsafeRune: controls, separators, bidi and zero-width characters
 		}
 		return r
 	}, s)
-	if len(s) > 200 {
-		s = s[:200] + "..."
+	if rs := []rune(s); len(rs) > 200 {
+		s = string(rs[:200]) + "..."
 	}
 	return s
 }

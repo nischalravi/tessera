@@ -34,12 +34,14 @@ type gitRepo struct {
 	mu       sync.Mutex
 	branches map[string]string            // branch -> commit
 	commits  map[string]map[string]string // commit -> path -> content
+	parents  map[string]string            // commit -> its parent
 	pulls    map[int]*fakePull
 	next     int
 	nCommits int
 }
 
 type fakePull struct {
+	Author      string
 	Number      int
 	Branch      string
 	Title, Body string
@@ -47,7 +49,7 @@ type fakePull struct {
 }
 
 func newGitRepo(files map[string]string) *gitRepo {
-	g := &gitRepo{branches: map[string]string{}, commits: map[string]map[string]string{}, pulls: map[int]*fakePull{}, next: 40}
+	g := &gitRepo{branches: map[string]string{}, commits: map[string]map[string]string{}, parents: map[string]string{}, pulls: map[int]*fakePull{}, next: 40}
 	g.branches["main"] = g.commit(files)
 	return g
 }
@@ -99,7 +101,7 @@ func (g *gitRepo) openPulls() []*fakePull {
 
 func (g *gitRepo) pullJSON(p *fakePull) map[string]any {
 	return map[string]any{"number": p.Number, "state": p.State, "html_url": "https://github.com/o/policy/pull/" + strconv.Itoa(p.Number),
-		"head": map[string]string{"sha": g.branches[p.Branch]}}
+		"head": map[string]string{"sha": g.branches[p.Branch]}, "user": map[string]string{"login": p.Author}}
 }
 
 const repoBase = "/repos/o/policy"
@@ -131,8 +133,7 @@ func (g *gitRepo) serve(r *http.Request, body map[string]any, send func(int, any
 			send(422, map[string]string{"message": "Object does not exist"})
 			return true
 		}
-		g.branches[name] = g.commit(files)
-		g.nCommits-- // a branch is not a commit of its own: keep the count of real commits
+		_ = files
 		g.branches[name] = str("sha")
 		send(201, map[string]any{"ref": str("ref")})
 	case strings.HasPrefix(path, repoBase+"/contents/"):
@@ -165,8 +166,33 @@ func (g *gitRepo) serve(r *http.Request, body map[string]any, send func(int, any
 		}
 		next[p] = string(raw)
 		sha := g.commit(next)
+		g.parents[sha] = g.branches[branch]
 		g.branches[branch] = sha
 		send(200, map[string]any{"commit": map[string]string{"sha": sha}})
+	case r.Method == http.MethodGet && strings.HasPrefix(path, repoBase+"/compare/"):
+		spec := strings.TrimPrefix(path, repoBase+"/compare/")
+		b, h, _ := strings.Cut(spec, "...")
+		baseFiles, ok1 := g.resolve(b)
+		headFiles, ok2 := g.resolve(h)
+		if !ok1 || !ok2 {
+			send(404, map[string]string{"message": "Not Found"})
+			return true
+		}
+		var files []map[string]string
+		for p, c := range headFiles {
+			if baseFiles[p] != c {
+				files = append(files, map[string]string{"filename": p})
+			}
+		}
+		headSHA := h
+		if sha, ok := g.branches[h]; ok {
+			headSHA = sha
+		}
+		ahead := 0
+		for c := headSHA; c != g.branches[b] && c != ""; c = g.parents[c] {
+			ahead++
+		}
+		send(200, map[string]any{"ahead_by": ahead, "files": files})
 	case r.Method == http.MethodGet && path == repoBase+"/pulls":
 		q := r.URL.Query()
 		var out []any
@@ -187,7 +213,7 @@ func (g *gitRepo) serve(r *http.Request, body map[string]any, send func(int, any
 			}
 		}
 		g.next++
-		p := &fakePull{Number: g.next, Branch: str("head"), Title: str("title"), Body: str("body"), State: "open"}
+		p := &fakePull{Author: "tessera-app[bot]", Number: g.next, Branch: str("head"), Title: str("title"), Body: str("body"), State: "open"}
 		g.pulls[p.Number] = p
 		send(201, g.pullJSON(p))
 	case strings.HasPrefix(path, repoBase+"/pulls/"):
@@ -672,5 +698,169 @@ func TestLPRecPR_CrossTenant(t *testing.T) {
 	}
 	if len(gh.got) != 0 {
 		t.Errorf("a refused request reached GitHub: %v", gh.got)
+	}
+}
+
+// ---------------------------------------------------------------- nothing on the repository is trusted
+
+// A branch of the name that someone else made, with a commit of their own, is refused: no pull request is touched and no
+// check run is posted on their commit.
+func TestLPRecPR_PreExistingBranchIsNotAdopted(t *testing.T) {
+	for name, files := range map[string]func(w *lpPRWorld) map[string]string{
+		"a commit that adds a file":              func(w *lpPRWorld) map[string]string { return map[string]string{"roles/admins.yaml": "schema: x\n"} },
+		"a commit that edits only the role file": func(w *lpPRWorld) map[string]string { return map[string]string{w.role: "schema: tessera.role/v1\n"} },
+	} {
+		w := lpPRSetup(t)
+		branch := "tessera/rightsize-grant-" + w.rec
+		w.repo.mu.Lock()
+		main := w.repo.branches["main"]
+		extra := map[string]string{}
+		for k, v := range w.repo.commits[main] {
+			extra[k] = v
+		}
+		for k, v := range files(w) {
+			extra[k] = v
+		}
+		evil := w.repo.commit(extra)
+		w.repo.parents[evil] = main
+		w.repo.branches[branch] = evil
+		w.repo.mu.Unlock()
+
+		rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", "")
+		if rec.Code != 409 || !strings.Contains(rec.Body.String(), "branch_conflict") {
+			t.Errorf("%s: %d %.300s, want 409 branch_conflict", name, rec.Code, rec.Body)
+		}
+		if len(w.repo.openPulls()) != 0 || len(w.gh.checks) != 0 || w.gh.calls("PUT "+repoBase+"/contents") != 0 || w.repo.branches[branch] != evil {
+			t.Errorf("%s: a pull request, a check run or a commit was made on the foreign branch", name)
+		}
+		if !w.c.audited("lp.recommendation.pull_request.failed") {
+			t.Errorf("%s: the refusal was not audited", name)
+		}
+	}
+}
+
+// A branch that holds nothing of its own (at the base head) is used; a pull request on it that the App did not open is not.
+func TestLPRecPR_ForeignPullRequestIsNotAdopted(t *testing.T) {
+	w := lpPRSetup(t)
+	branch := "tessera/rightsize-grant-" + w.rec
+	w.repo.mu.Lock()
+	w.repo.branches[branch] = w.repo.branches["main"]
+	w.repo.next++
+	w.repo.pulls[w.repo.next] = &fakePull{Author: "attacker", Number: w.repo.next, Branch: branch, Title: "theirs", Body: "theirs", State: "open"}
+	n := w.repo.next
+	w.repo.mu.Unlock()
+	rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", "")
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "pull_request_conflict") {
+		t.Fatalf("%d %.300s, want 409 pull_request_conflict", rec.Code, rec.Body)
+	}
+	if p := w.repo.pulls[n]; p.Title != "theirs" || p.Body != "theirs" || len(w.gh.checks) != 0 || w.gh.calls("PUT "+repoBase+"/contents") != 0 {
+		t.Errorf("their pull request was touched: %+v, %d check runs", p, len(w.gh.checks))
+	}
+	// an empty branch of ours (made by a failed earlier request) is reused
+	w2 := lpPRSetup(t)
+	w2.repo.mu.Lock()
+	w2.repo.branches["tessera/rightsize-grant-"+w2.rec] = w2.repo.branches["main"]
+	w2.repo.mu.Unlock()
+	w2.open(200)
+}
+
+// When the repository's role file is not what Tessera exports, the body says so and the check is neutral.
+func TestLPRecPR_RepoFileDiffersIsStated(t *testing.T) {
+	w := lpPRSetup(t)
+	w.repo.mu.Lock()
+	main := w.repo.commits[w.repo.branches["main"]]
+	main[w.role] = strings.Replace(main[w.role], "description: \"\"", "description: edited in the repository", 1)
+	w.repo.mu.Unlock()
+	v := w.open(200)
+	if v["conclusion"] != "neutral" {
+		t.Errorf("conclusion = %v, want neutral", v["conclusion"])
+	}
+	if b := w.repo.openPulls()[0].Body; !strings.Contains(b, "differs from the one Tessera exports") {
+		t.Errorf("body does not say the file differs:\n%s", b)
+	}
+}
+
+// ---------------------------------------------------------------- the cap
+
+func (w *lpPRWorld) reserve(n int) {
+	w.t.Helper()
+	w.c.write(func(tx *store.TenantTx) error {
+		for i := 0; i < n; i++ {
+			if ok, err := tx.ReserveLPRecPRAttempt("grant-0", "o/policy", "x", testkit.Now, testkit.Now.Add(-time.Hour), 1000); err != nil || !ok {
+				return fmt.Errorf("reserve: %v %v", ok, err)
+			}
+		}
+		return nil
+	})
+}
+
+func (c rdClient) write(fn func(tx *store.TenantTx) error) {
+	c.t.Helper()
+	testkit.Write(c.t, c.st, fn)
+}
+
+// Every request counts: repeats and closed-then-repeat requests use attempts, and the cap refuses before GitHub is called
+// and before the preview is computed.
+func TestLPRecPR_AttemptCap(t *testing.T) {
+	w := lpPRSetup(t)
+	w.reserve(lpRecPRHourlyCap - 3)
+	w.open(200)
+	// close it and repeat: a new pull request, a new attempt
+	first := w.repo.openPulls()[0].Number
+	w.repo.mu.Lock()
+	w.repo.pulls[first].State = "closed"
+	w.repo.mu.Unlock()
+	w.open(200)
+	w.open(200) // a repeat is an attempt too
+	calls := len(w.gh.got)
+	rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", "")
+	if rec.Code != 429 || !strings.Contains(rec.Body.String(), "pull_request_rate_limited") || len(w.gh.got) != calls {
+		t.Errorf("past the cap: %d %.200s (%d new GitHub calls)", rec.Code, rec.Body, len(w.gh.got)-calls)
+	}
+	w.c.read(func(tx *store.TenantTx) error {
+		if n, err := tx.LPRecPRAttemptsSince(testkit.Now.Add(-time.Hour)); err != nil || n != lpRecPRHourlyCap {
+			t.Errorf("attempts = %d, %v; want %d", n, err, lpRecPRHourlyCap)
+		}
+		return nil
+	})
+}
+
+// A failed request counts, and concurrent requests cannot take more attempts than the cap allows.
+func TestLPRecPR_AttemptCapConcurrentAndFailures(t *testing.T) {
+	w := lpPRSetup(t)
+	w.reserve(lpRecPRHourlyCap - 6)
+	w.gh.mu.Lock()
+	w.gh.fail["GET "+repoBase] = ghFail{status: 500}
+	w.gh.mu.Unlock()
+	if rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", ""); rec.Code != 502 {
+		t.Fatalf("failing request = %d %.200s", rec.Code, rec.Body)
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	limited := 0
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", "")
+			if rec.Code == 429 {
+				mu.Lock()
+				limited++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	w.c.read(func(tx *store.TenantTx) error {
+		if n, err := tx.LPRecPRAttemptsSince(testkit.Now.Add(-time.Hour)); err != nil || n != lpRecPRHourlyCap {
+			t.Errorf("attempts = %d, %v; want exactly %d", n, err, lpRecPRHourlyCap)
+		}
+		return nil
+	})
+	if limited != 5 {
+		t.Errorf("%d of 10 concurrent requests were limited, want 5 (one attempt was used by the failure, 5 by the rest)", limited)
+	}
+	if len(w.repo.openPulls()) > 1 {
+		t.Errorf("%d open pull requests", len(w.repo.openPulls()))
 	}
 }

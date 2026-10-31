@@ -157,3 +157,66 @@ func TestRepoCallsDoNotFollowRedirects(t *testing.T) {
 		t.Errorf("a 301 = %v, want a status error", err)
 	}
 }
+
+// A pull request link is kept only when it names github.com or the API base's host and is /<owner>/<repo>/pull/<n>.
+func TestPullURLIsChecked(t *testing.T) {
+	f := newFake(t)
+	c, _ := f.client(t)
+	cr := creds(t)
+	blob := strings.Repeat("a", 40)
+	for url, want := range map[string]bool{
+		"https://github.com/o/policy/pull/41":              true,
+		"https://evil.example/o/policy/pull/41":            false,
+		"https://github.com/o/other/pull/41":               false,
+		"https://github.com/o/policy/pull/42":              false,
+		"https://github.com/o/policy/pull/41?x=1":          false,
+		"https://github.com.evil.example/o/policy/pull/41": false,
+		"https://user@github.com/o/policy/pull/41":         false,
+		"http://github.com/o/policy/pull/41":               false,
+		"javascript:alert(1)":                              false,
+	} {
+		f.failNext("GET /repos/o/policy/pulls/41", reply{status: 200, body: `{"number":41,"state":"open","html_url":"` + url + `","head":{"sha":"` + blob + `"},"user":{"login":"app[bot]"}}`})
+		p, err := c.GetPull(context.Background(), cr, 41)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (p.HTMLURL != "") != want || p.Author != "app[bot]" {
+			t.Errorf("%q: kept = %q, want kept %v", url, p.HTMLURL, want)
+		}
+	}
+}
+
+func TestAppSlugAndCompare(t *testing.T) {
+	f := newFake(t)
+	c, _ := f.client(t)
+	cr := creds(t)
+	ctx := context.Background()
+	f.failNext("GET /app", reply{status: 200, body: `{"slug":"tessera-app"}`}, reply{status: 200, body: `{"slug":"bad slug\n"}`}, reply{status: 401, body: `{}`})
+	if s, err := c.AppSlug(ctx, cr); err != nil || s != "tessera-app" {
+		t.Errorf("AppSlug = %q, %v", s, err)
+	}
+	if _, err := c.AppSlug(ctx, cr); err == nil {
+		t.Error("an unusable slug was accepted")
+	}
+	if _, err := c.AppSlug(ctx, cr); !errors.Is(err, ghapp.ErrAppAuth) {
+		t.Errorf("AppSlug refused = %v", err)
+	}
+	f.failNext("GET /repos/o/policy/compare/main...tessera/x", reply{status: 200, body: `{"ahead_by":2,"files":[{"filename":"roles/a.yaml"},{"filename":"b.yaml","previous_filename":"c.yaml"}]}`})
+	cmp, err := c.CompareBranch(ctx, cr, "main", "tessera/x")
+	if err != nil || cmp.AheadBy != 2 || strings.Join(cmp.Files, ",") != "roles/a.yaml,b.yaml,c.yaml" {
+		t.Errorf("CompareBranch = %+v, %v", cmp, err)
+	}
+	var many strings.Builder
+	many.WriteString(`{"ahead_by":1,"files":[`)
+	for i := 0; i < 100; i++ {
+		if i > 0 {
+			many.WriteString(",")
+		}
+		many.WriteString(`{"filename":"a"}`)
+	}
+	many.WriteString(`]}`)
+	f.failNext("GET /repos/o/policy/compare/main...tessera/x", reply{status: 200, body: many.String()})
+	if _, err := c.CompareBranch(ctx, cr, "main", "tessera/x"); !errors.Is(err, ghapp.ErrNotAFile) {
+		t.Errorf("a comparison that may hold more files than listed = %v, want refusal", err)
+	}
+}

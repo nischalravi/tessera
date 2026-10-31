@@ -106,3 +106,21 @@ func TestRightSizeBodyListsAreCapped(t *testing.T) {
 		t.Error("used permissions are not called out")
 	}
 }
+
+// Bidirectional and zero-width characters cannot reorder or hide text in the title, the commit message or a code span.
+func TestRightSizeStripsBidiAndFormatCharacters(t *testing.T) {
+	hostile := "a\u202Eb\u200Bc\u200Dd\u2066e\u2069f\ufeffg\u061Ch\u0085i\u2060j\u200Fk"
+	rs := fixtureRightSize()
+	rs.IdentityName, rs.Group, rs.RoleKey = hostile, hostile, hostile
+	for name, s := range map[string]string{"title": ghapp.RightSizeTitle(rs), "commit": ghapp.RightSizeCommitMessage(rs), "body": ghapp.RightSizeBody(rs)} {
+		for _, r := range s {
+			// the zero-width joiner stays in a code span (emoji sequences), as the policy check's renderer keeps it
+			if r == 0x200d && name != "body" {
+				t.Errorf("%s keeps the zero-width joiner: %q", name, s)
+			}
+			if r == 0x202e || r == 0x200b || r == 0x2066 || r == 0x2069 || r == 0xfeff || r == 0x061c || r == 0x85 || r == 0x2060 || r == 0x200f {
+				t.Errorf("%s keeps U+%04X: %q", name, r, s)
+			}
+		}
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -25,6 +26,10 @@ var (
 	ErrBranchNotFound = errors.New("ghapp: branch not found")
 	// ErrStaleBase: GitHub refused the commit because the file or branch moved under it (409).
 	ErrStaleBase = errors.New("ghapp: the file changed on the branch while the commit was made")
+	// ErrBranchConflict: the branch exists and is not one Tessera made or can show to hold only its own edit.
+	ErrBranchConflict = errors.New("ghapp: the branch exists and is not Tessera's")
+	// ErrPullConflict: an open pull request on the branch was not opened by the App, or is not at the branch's head.
+	ErrPullConflict = errors.New("ghapp: an open pull request on the branch is not Tessera's")
 	// ErrNotAFile: the path is a directory, a symlink or a file too large for the contents API.
 	ErrNotAFile = errors.New("ghapp: path is not a regular file the contents API returns")
 )
@@ -198,6 +203,8 @@ type Pull struct {
 	HTMLURL string
 	State   string // open, closed
 	HeadSHA string
+	// Author is the login of whoever opened it (the App's bot is "<slug>[bot]").
+	Author string
 }
 
 type pullJSON struct {
@@ -207,14 +214,28 @@ type pullJSON struct {
 	Head    struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
 }
 
-func (p *pullJSON) pull() *Pull {
+// htmlHosts are the hosts a pull request link may name: github.com and the host of the configured API base.
+func (c *Client) htmlHosts() []string {
+	hosts := []string{"github.com"}
+	if u, err := url.Parse(c.APIBase); err == nil && c.APIBase != "" && u.Host != "" {
+		hosts = append(hosts, u.Host)
+	}
+	return hosts
+}
+
+// pull reads a pull request; its link is kept only when it names a known host and is /<owner>/<repo>/pull/<number>.
+func (c *Client) pull(p *pullJSON, repo string) *Pull {
 	u := ""
-	if strings.HasPrefix(p.HTMLURL, "https://") && len(p.HTMLURL) <= 300 {
+	if pu, err := url.Parse(p.HTMLURL); err == nil && pu.Scheme == "https" && len(p.HTMLURL) <= 300 && pu.User == nil && pu.RawQuery == "" &&
+		pu.Fragment == "" && slices.Contains(c.htmlHosts(), pu.Host) && pu.Path == "/"+repo+"/pull/"+strconv.Itoa(p.Number) {
 		u = p.HTMLURL
 	}
-	return &Pull{Number: p.Number, HTMLURL: u, State: p.State, HeadSHA: p.Head.SHA}
+	return &Pull{Number: p.Number, HTMLURL: u, State: p.State, HeadSHA: p.Head.SHA, Author: p.User.Login}
 }
 
 // FindOpenPull returns the open pull request whose head is branch of this repository, or nil.
@@ -234,7 +255,7 @@ func (c *Client) FindOpenPull(ctx context.Context, cr *Credentials, branch strin
 	if len(out) == 0 || out[0].Number < 1 {
 		return nil, nil
 	}
-	return out[0].pull(), nil
+	return c.pull(&out[0], cr.Repo), nil
 }
 
 // GetPull reads pull request number (ErrPullNotFound when it does not exist).
@@ -253,7 +274,7 @@ func (c *Client) GetPull(ctx context.Context, cr *Credentials, number int) (*Pul
 	if json.Unmarshal(r.body, &out) != nil || out.Number != number {
 		return nil, errors.New("ghapp: unreadable pull request")
 	}
-	return out.pull(), nil
+	return c.pull(&out, cr.Repo), nil
 }
 
 // CreatePull opens a pull request from branch into base. exists is true when GitHub answers 422 because one is open
@@ -274,7 +295,7 @@ func (c *Client) CreatePull(ctx context.Context, cr *Credentials, title, branch,
 	if json.Unmarshal(r.body, &out) != nil || out.Number < 1 {
 		return nil, false, errors.New("ghapp: GitHub created the pull request but returned no number")
 	}
-	return out.pull(), false, nil
+	return c.pull(&out, cr.Repo), false, nil
 }
 
 // UpdatePull replaces the title and body of an open pull request in place.
@@ -290,5 +311,71 @@ func (c *Client) UpdatePull(ctx context.Context, cr *Credentials, number int, ti
 	if json.Unmarshal(r.body, &out) != nil || out.Number != number {
 		return nil, errors.New("ghapp: unreadable pull request")
 	}
-	return out.pull(), nil
+	return c.pull(&out, cr.Repo), nil
+}
+
+// AppSlug returns the App's slug (GET /app, authenticated with the App JWT, not an installation token), so the login of
+// the pull requests it opens, "<slug>[bot]", is known.
+func (c *Client) AppSlug(ctx context.Context, cr *Credentials) (string, error) {
+	jwt, err := AppJWT(cr.AppID, cr.Key, c.now())
+	if err != nil {
+		return "", err
+	}
+	r, err := c.do(ctx, http.MethodGet, "/app", jwt, nil)
+	if err != nil {
+		return "", err
+	}
+	switch r.status {
+	case http.StatusOK:
+	case http.StatusUnauthorized:
+		return "", ErrAppAuth
+	default:
+		return "", &StatusError{Status: r.status, Op: "the App read"}
+	}
+	var out struct {
+		Slug string `json:"slug"`
+	}
+	if json.Unmarshal(r.body, &out) != nil || !slugRE.MatchString(out.Slug) {
+		return "", errors.New("ghapp: GitHub returned no usable App slug")
+	}
+	return out.Slug, nil
+}
+
+var slugRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,99}$`)
+
+// Compare is what a branch has that its base does not: the files changed and how many commits it is ahead.
+type Compare struct {
+	Files   []string
+	AheadBy int
+}
+
+// CompareBranch reads GET /repos/{repo}/compare/{base}...{head}: the files the head changed against the merge base. A
+// comparison of more files than the answer holds (300) is ErrNotAFile, so it is never read as a short list.
+func (c *Client) CompareBranch(ctx context.Context, cr *Credentials, base, head string) (*Compare, error) {
+	if !ValidRepo(cr.Repo) || !ValidBranch(base) || !(ValidBranch(head) || ValidSHA(head)) {
+		return nil, ErrBadInput
+	}
+	r, err := c.api(ctx, cr, http.MethodGet, "/repos/"+cr.Repo+"/compare/"+escPath(base)+"..."+escPath(head)+"?per_page=100", nil, http.StatusOK, "the comparison")
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		AheadBy int `json:"ahead_by"`
+		Files   []struct {
+			Filename string `json:"filename"`
+			Previous string `json:"previous_filename"`
+		} `json:"files"`
+		TotalCommits int `json:"total_commits"`
+	}
+	if json.Unmarshal(r.body, &out) != nil || len(out.Files) >= 100 || out.AheadBy < 0 {
+		return nil, ErrNotAFile
+	}
+	cmp := &Compare{AheadBy: out.AheadBy}
+	for _, f := range out.Files {
+		cmp.Files = append(cmp.Files, f.Filename)
+		if f.Previous != "" { // a rename touches two paths
+			cmp.Files = append(cmp.Files, f.Previous)
+		}
+	}
+	return cmp, nil
 }

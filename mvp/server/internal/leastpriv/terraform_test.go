@@ -3,6 +3,7 @@ package leastpriv
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const tfDoc = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::b/${aws:username}/*"}]}`
@@ -62,5 +63,21 @@ func TestTerraformNamesAreCutToPlainText(t *testing.T) {
 	}
 	if !strings.Contains(got, `path   = "/9-start/"`) {
 		t.Errorf("path missing:\n%s", got)
+	}
+}
+
+func TestTerraformCommentStripsFormatCharactersAndCutsOnRunes(t *testing.T) {
+	got, err := Terraform(TerraformInput{ID: "a\u202Eb\u200Bc\ufeffd\u2066e", PolicyARN: "arn:aws:iam::111111111111:policy/P", Document: tfDoc,
+		UnusedDays: 90, Confidence: strings.Repeat("é", 300), Removed: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range got {
+		if r == 0x202e || r == 0x200b || r == 0xfeff || r == 0x2066 {
+			t.Errorf("a format character survived: %U", r)
+		}
+	}
+	if !strings.Contains(got, strings.Repeat("é", 200)+"...") || strings.Contains(got, strings.Repeat("é", 201)) || !utf8.ValidString(got) {
+		t.Errorf("the comment is not cut on a rune boundary:\n%s", got)
 	}
 }
