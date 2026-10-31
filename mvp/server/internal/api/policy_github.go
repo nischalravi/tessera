@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
@@ -21,12 +22,14 @@ import (
 // GitHub App check run for policy pull requests (issue #656, AC-10):
 //
 //	GET  /api/policy/github/app    the tenant's GitHub App settings (connections.read); the private key is never returned
-//	PUT  /api/policy/github/app    {enabled, app_id, installation_id, repo, private_key, remove_key}   (connections.manage, STEP_UP_POLICY)
+//	PUT  /api/policy/github/app    {enabled, app_id, installation_id, repo, private_key, remove_key, rotate_webhook_secret, remove_webhook_secret}   (connections.manage, STEP_UP_POLICY)
 //	POST /api/policy/github/check  {repo, pull_number, head_sha, files, operations, terraform_plan, base_snapshot, profile}
 //
 // The App replaces the stored personal token of PUT /api/aws/pr-comment. Its private key (PEM) is validated, sealed with
 // internal/seal (AAD bound to tenant, table and column) and never returned: the settings show a "set" flag and the key's
-// SHA-256 fingerprint, and sending a new private_key rotates it. A request signs a 9-minute App JWT in memory, exchanges
+// SHA-256 fingerprint, and sending a new private_key rotates it. The webhook secret (issue #771) is kept the same way
+// (github_webhook_secrets, AAD bound to tenant, table and column): rotate_webhook_secret makes a new 256-bit one and returns it
+// once in that answer; GET only says it is set. A request signs a 9-minute App JWT in memory, exchanges
 // it for an installation token limited to the configured repository and the checks and pull_requests permissions
 // (internal/ghapp), and drops the key again.
 //
@@ -39,8 +42,8 @@ import (
 // settings stay connections.manage with step-up. head_sha must be the pull request's head now. The check is advisory: the
 // caller supplies the bundle, plan and operations, and the comment says so. It acts only on the one repository the tenant
 // configured and is refused until the tenant has enabled the App. Posting is serialized per pull request by a claim row
-// (github_pr_check_claims) taken before GitHub is called; a request that cannot get it answers 409 check_in_progress. A
-// GitHub webhook trigger is not built: CI calls this route.
+// (github_pr_check_claims) taken before GitHub is called; a request that cannot get it answers 409 check_in_progress.
+// The pull_request webhook (policy_github_webhook.go, issue #771) is the second trigger and shares publishGitHubCheck.
 
 // githubCheckTimeout is how long the check route may run: the preview's deadline and the time the post may take after it.
 func githubCheckTimeout(diffTimeout time.Duration) time.Duration { return diffTimeout + 60*time.Second }
@@ -64,6 +67,11 @@ func (s *Server) registerPolicyGitHubRoutes() {
 // githubKeyAAD binds the sealed private key to its tenant, table and column.
 func githubKeyAAD(t tenancy.ID) []byte { return seal.AAD(t, "github_app_settings", "key_enc") }
 
+// githubWebhookAAD binds the sealed webhook secret to its tenant, table and column.
+func githubWebhookAAD(t tenancy.ID) []byte {
+	return seal.AAD(t, "github_webhook_secrets", "secret_enc")
+}
+
 type githubAppView struct {
 	Enabled        bool              `json:"enabled"`
 	AppID          string            `json:"app_id"`
@@ -79,6 +87,24 @@ type githubAppView struct {
 	// ContentsPermissions are what the right-sizing pull requests of LP-9 ask the installation for (contents:write added);
 	// the installation must have accepted them, or those routes answer installation_scope_mismatch.
 	ContentsPermissions map[string]string `json:"contents_permissions"`
+	// The pull_request webhook (issue #771): where GitHub delivers to, whether the shared secret is set and since when.
+	// The secret itself is never returned, except once, in the answer to the PUT that rotated it (WebhookSecret).
+	WebhookPath        string  `json:"webhook_path"`
+	WebhookSecretSet   bool    `json:"webhook_secret_set"`
+	WebhookSecretSetAt *string `json:"webhook_secret_set_at"`
+	WebhookSecret      string  `json:"webhook_secret,omitempty"`
+}
+
+func githubWebhookPath(slug string) string { return "/public/t/" + slug + "/github/webhook" }
+
+// withWebhook adds the webhook half of the settings to v.
+func withWebhook(v githubAppView, slug string, hs *store.GitHubWebhookSecret) githubAppView {
+	v.WebhookPath = githubWebhookPath(slug)
+	if hs != nil {
+		at := store.RT(hs.SetAt)
+		v.WebhookSecretSet, v.WebhookSecretSetAt = true, &at
+	}
+	return v
 }
 
 func (s *Server) githubAppViewOf(st *store.GitHubAppSettings) githubAppView {
@@ -100,11 +126,20 @@ func (s *Server) githubAppViewOf(st *store.GitHubAppSettings) githubAppView {
 }
 
 func (s *Server) getGitHubApp(r *http.Request, _ *params) (int, any, error) {
-	st, err := store.TxFrom(r.Context()).GitHubAppSettings()
+	tx := store.TxFrom(r.Context())
+	st, err := tx.GitHubAppSettings()
 	if err != nil {
 		return 0, nil, err
 	}
-	return http.StatusOK, s.githubAppViewOf(st), nil
+	hs, err := tx.GitHubWebhookSecret()
+	if err != nil {
+		return 0, nil, err
+	}
+	slug, err := s.slugOf(r, tx.Tenant())
+	if err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, withWebhook(s.githubAppViewOf(st), slug, hs), nil
 }
 
 // putGitHubApp stores the App settings. A field the request omits (app_id, installation_id, repo) keeps its stored
@@ -118,6 +153,10 @@ func (s *Server) putGitHubApp(r *http.Request, _ *params) (int, any, error) {
 		Repo           *string `json:"repo"`
 		PrivateKey     *string `json:"private_key"`
 		RemoveKey      bool    `json:"remove_key"`
+		// RotateWebhookSecret makes a new webhook secret (shown once in the answer); RemoveWebhookSecret deletes it, and the
+		// receiver then refuses every delivery.
+		RotateWebhookSecret bool `json:"rotate_webhook_secret"`
+		RemoveWebhookSecret bool `json:"remove_webhook_secret"`
 	}
 	if err := decodeBody(r, &in, false); err != nil {
 		return 0, nil, err
@@ -131,6 +170,12 @@ func (s *Server) putGitHubApp(r *http.Request, _ *params) (int, any, error) {
 		return 0, nil, badRequest("invalid_repo", "repo must be owner/name")
 	case in.RemoveKey && in.PrivateKey != nil:
 		return 0, nil, badRequest("invalid_private_key", "send either private_key or remove_key, not both")
+	case in.RotateWebhookSecret && in.RemoveWebhookSecret:
+		return 0, nil, badRequest("invalid_webhook_secret", "send either rotate_webhook_secret or remove_webhook_secret, not both")
+	}
+	slug, err := s.slugOf(r, store.TxFrom(r.Context()).Tenant())
+	if err != nil {
+		return 0, nil, err
 	}
 	var newKey []byte
 	var fingerprint string
@@ -143,7 +188,7 @@ func (s *Server) putGitHubApp(r *http.Request, _ *params) (int, any, error) {
 		newKey = []byte(*in.PrivateKey)
 	}
 	var out githubAppView
-	err := s.write(r, func(c *store.TenantTx, now time.Time) error {
+	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
 		cur, err := c.GitHubAppSettings()
 		if err != nil {
 			return err
@@ -178,12 +223,39 @@ func (s *Server) putGitHubApp(r *http.Request, _ *params) (int, any, error) {
 		if err := c.PutGitHubAppSettings(next, now); err != nil {
 			return err
 		}
-		if err := c.Audit(now, actor(r), "policy.github_app.settings", ojson.Object{{Key: "enabled", Value: next.Enabled},
-			{Key: "app_id", Value: next.AppID}, {Key: "installation_id", Value: next.InstallationID}, {Key: "repo", Value: next.Repo},
-			{Key: "key_changed", Value: newKey != nil}, {Key: "key_removed", Value: in.RemoveKey}, {Key: "key_fingerprint", Value: next.KeyFingerprint}}); err != nil {
+		hs, err := c.GitHubWebhookSecret()
+		if err != nil {
 			return err
 		}
-		out = s.githubAppViewOf(next)
+		var shown string
+		switch {
+		case in.RemoveWebhookSecret:
+			if err := c.DeleteGitHubWebhookSecret(); err != nil {
+				return err
+			}
+			hs = nil
+		case in.RotateWebhookSecret:
+			if s.cfg.Sealer == nil {
+				return &readiness.Error{Status: http.StatusServiceUnavailable, Code: "no_kek", Msg: "the server has no key for sealing secrets"}
+			}
+			shown = "whsec_" + hex.EncodeToString(seal.RandomBytes(32))
+			enc, err := s.cfg.Sealer.Seal([]byte(shown), githubWebhookAAD(c.Tenant()))
+			if err != nil {
+				return err
+			}
+			if err := c.PutGitHubWebhookSecret(enc, actor(r), now); err != nil {
+				return err
+			}
+			hs = &store.GitHubWebhookSecret{SetAt: now}
+		}
+		if err := c.Audit(now, actor(r), "policy.github_app.settings", ojson.Object{{Key: "enabled", Value: next.Enabled},
+			{Key: "app_id", Value: next.AppID}, {Key: "installation_id", Value: next.InstallationID}, {Key: "repo", Value: next.Repo},
+			{Key: "key_changed", Value: newKey != nil}, {Key: "key_removed", Value: in.RemoveKey}, {Key: "key_fingerprint", Value: next.KeyFingerprint},
+			{Key: "webhook_secret_rotated", Value: in.RotateWebhookSecret}, {Key: "webhook_secret_removed", Value: in.RemoveWebhookSecret}}); err != nil {
+			return err
+		}
+		out = withWebhook(s.githubAppViewOf(next), slug, hs)
+		out.WebhookSecret = shown
 		return nil
 	})
 	if err != nil {
@@ -246,7 +318,6 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 	}
 	pr := principal(r)
 	ctx := r.Context()
-	now := s.clock()
 	client, err := s.githubClient(s.clock)
 	if err != nil {
 		return nil, err
@@ -274,13 +345,41 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 		return nil, err
 	}
 
+	out, err := s.publishGitHubCheck(ctx, p.scope, client, st, in.PullNumber, in.HeadSHA, view, extras, ghPublishOpts{Actor: pr.Display})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ghPublishOpts says who a check is posted for and how it waits.
+type ghPublishOpts struct {
+	// Actor is the audit actor of the outcome event.
+	Actor string
+	// ClaimWait is how long to wait for the pull request's claim when another request holds it (the webhook, whose
+	// delivery GitHub does not retry); zero refuses at once with 409 check_in_progress.
+	ClaimWait time.Duration
+	// Extra is added to the outcome event's detail (the webhook adds its trigger and delivery id).
+	Extra ojson.Object
+}
+
+// githubClaimPoll is how often a waiting request tries the claim again.
+var githubClaimPoll = 500 * time.Millisecond
+
+// publishGitHubCheck posts the check run and the comment for a computed preview on one pull request and records the
+// outcome: the part of a check that both the API trigger and the webhook share. It claims the pull request first, so
+// two requests for one pull request never both create a check run or a comment, and refuses a head that is no longer
+// the pull request's (409 stale_head_sha), so a re-run for an older commit never overwrites a newer one's result.
+func (s *Server) publishGitHubCheck(ctx context.Context, scope readiness.Scope, client *ghapp.Client, st *store.GitHubAppSettings,
+	pull int, headSHA string, view *policyDiffView, extras *diffExtras, o ghPublishOpts) (*githubCheckView, error) {
+	now := s.clock()
 	preview := previewOf(view, extras)
 	verdict := ghapp.Evaluate(preview)
-	chk := ghapp.Check{HeadSHA: in.HeadSHA, Conclusion: verdict.Conclusion, Title: ghapp.Title(preview, verdict), Summary: ghapp.Summary(preview, verdict, in.HeadSHA)}
-	comment := ghapp.Comment(preview, verdict, in.HeadSHA)
+	chk := ghapp.Check{HeadSHA: headSHA, Conclusion: verdict.Conclusion, Title: ghapp.Title(preview, verdict), Summary: ghapp.Summary(preview, verdict, headSHA)}
+	comment := ghapp.Comment(preview, verdict, headSHA)
 
 	// the private key is opened only to sign the App JWT, with no transaction open, and is not kept
-	pemKey, err := s.cfg.Sealer.Open(st.KeyEnc, githubKeyAAD(p.scope.Tenant))
+	pemKey, err := s.cfg.Sealer.Open(st.KeyEnc, githubKeyAAD(scope.Tenant))
 	if err != nil {
 		s.log.Error("github app key cannot be opened")
 		return nil, &readiness.Error{Status: http.StatusServiceUnavailable, Code: "github_key_unreadable", Msg: "the stored GitHub App private key cannot be opened; set it again"}
@@ -289,28 +388,39 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 	if err != nil {
 		return nil, &readiness.Error{Status: http.StatusServiceUnavailable, Code: "github_key_unreadable", Msg: "the stored GitHub App private key cannot be read; set it again"}
 	}
-	cr := &ghapp.Credentials{AppID: st.AppID, InstallationID: st.InstallationID, Repo: st.Repo, Key: key, Scope: p.scope.Tenant.String(), KeyID: st.KeyFingerprint}
+	cr := &ghapp.Credentials{AppID: st.AppID, InstallationID: st.InstallationID, Repo: st.Repo, Key: key, Scope: scope.Tenant.String(), KeyID: st.KeyFingerprint}
 
 	// claim the pull request before anything is posted, and read the earlier record only once the claim is held: two
 	// requests for one pull request can then never both create a check run or a comment (issue #781)
 	var claimed bool
 	var prev *store.GitHubPRCheck
-	if err := p.scope.Write(ctx, func(c *store.TenantTx) error {
-		var err error
-		if claimed, err = c.ClaimGitHubPRCheck(st.Repo, in.PullNumber, now, githubClaimTTL(s.cfg.PolicyDiffTimeout)); err != nil || !claimed {
+	waitUntil := time.Now().Add(o.ClaimWait)
+	for {
+		if err := scope.Write(ctx, func(c *store.TenantTx) error {
+			var err error
+			if claimed, err = c.ClaimGitHubPRCheck(st.Repo, pull, s.clock(), githubClaimTTL(s.cfg.PolicyDiffTimeout)); err != nil || !claimed {
+				return err
+			}
+			prev, err = c.GitHubPRCheck(st.Repo, pull)
 			return err
+		}); err != nil {
+			return nil, err
 		}
-		prev, err = c.GitHubPRCheck(st.Repo, in.PullNumber)
-		return err
-	}); err != nil {
-		return nil, err
+		if claimed || !time.Now().Before(waitUntil) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(githubClaimPoll):
+		}
 	}
 	if !claimed {
 		return nil, &readiness.Error{Status: http.StatusConflict, Code: "check_in_progress", Msg: "another check of this pull request is being posted; retry in a moment"}
 	}
 	defer func() {
 		if claimed { // an early return or a failed record: do not make the next request wait for the claim to expire
-			_ = p.scope.Write(context.WithoutCancel(ctx), func(c *store.TenantTx) error { return c.ReleaseGitHubPRCheck(st.Repo, in.PullNumber) })
+			_ = scope.Write(context.WithoutCancel(ctx), func(c *store.TenantTx) error { return c.ReleaseGitHubPRCheck(st.Repo, pull) })
 		}
 	}()
 	prev0 := ghapp.Previous{}
@@ -321,14 +431,15 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 	defer cancel()
 	// head_sha must be the pull request's head now (this also proves pull_number is a pull request)
 	var pub *ghapp.Published
-	perr := client.VerifyHead(pctx, cr, in.PullNumber, in.HeadSHA)
+	perr := client.VerifyHead(pctx, cr, pull, headSHA)
 	if perr == nil {
-		pub, perr = client.Publish(pctx, cr, in.PullNumber, chk, comment, prev0)
+		pub, perr = client.Publish(pctx, cr, pull, chk, comment, prev0)
 	}
 
 	// record what was posted (even half of it, so a re-run updates it), and the event
-	detail := ojson.Object{{Key: "repo", Value: st.Repo}, {Key: "pull_number", Value: in.PullNumber}, {Key: "head_sha", Value: in.HeadSHA},
+	detail := ojson.Object{{Key: "repo", Value: st.Repo}, {Key: "pull_number", Value: pull}, {Key: "head_sha", Value: headSHA},
 		{Key: "conclusion", Value: verdict.Conclusion}, {Key: "bundle_sha256", Value: view.BundleSHA256}, {Key: "diff_sha256", Value: view.DiffSHA256}}
+	detail = append(detail, o.Extra...)
 	action := "policy.github_check.posted"
 	code := ""
 	if perr != nil {
@@ -338,12 +449,12 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 	if pub != nil {
 		detail = append(detail, ojson.KV{Key: "check_run_id", Value: pub.CheckRunID}, ojson.KV{Key: "comment_id", Value: pub.CommentID})
 	}
-	werr := p.scope.Write(ctx, func(c *store.TenantTx) error {
-		if err := c.ReleaseGitHubPRCheck(st.Repo, in.PullNumber); err != nil {
+	werr := scope.Write(ctx, func(c *store.TenantTx) error {
+		if err := c.ReleaseGitHubPRCheck(st.Repo, pull); err != nil {
 			return err
 		}
 		if pub != nil && pub.CheckRunID > 0 {
-			rec := &store.GitHubPRCheck{Repo: st.Repo, PullNumber: in.PullNumber, HeadSHA: in.HeadSHA, CheckRunID: pub.CheckRunID, CommentID: pub.CommentID,
+			rec := &store.GitHubPRCheck{Repo: st.Repo, PullNumber: pull, HeadSHA: headSHA, CheckRunID: pub.CheckRunID, CommentID: pub.CommentID,
 				Conclusion: verdict.Conclusion, DiffSHA256: view.DiffSHA256}
 			if pub.CommentID == 0 && prev != nil && prev.CommentID > 0 {
 				rec.CommentID = prev.CommentID
@@ -352,7 +463,7 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 				return err
 			}
 		}
-		return c.Audit(now, pr.Display, action, detail)
+		return c.Audit(now, o.Actor, action, detail)
 	})
 	if werr == nil {
 		claimed = false
@@ -377,7 +488,7 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 		return nil, &readiness.Error{Status: status, Code: errCode, Msg: "the check could not be posted to GitHub",
 			Extra: map[string]any{"reason": code, "conclusion": verdict.Conclusion, "diff_sha256": view.DiffSHA256}}
 	}
-	return &githubCheckView{Status: "posted", Repo: st.Repo, PullNumber: in.PullNumber, HeadSHA: in.HeadSHA, Conclusion: verdict.Conclusion,
+	return &githubCheckView{Status: "posted", Repo: st.Repo, PullNumber: pull, HeadSHA: headSHA, Conclusion: verdict.Conclusion,
 		Reasons: verdict.Reasons, Title: chk.Title, CheckRunID: pub.CheckRunID, CheckURL: pub.CheckURL, CheckCreated: pub.CheckCreated,
 		CommentID: pub.CommentID, CommentURL: pub.CommentURL, CommentCreated: pub.CommentCreated, BundleSHA256: view.BundleSHA256,
 		DiffSHA256: view.DiffSHA256, Summary: chk.Summary}, nil

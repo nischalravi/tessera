@@ -405,8 +405,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
-		if strings.HasPrefix(rt.Pattern, "/api/ssf/transmitters/{id}") || strings.HasPrefix(rt.Pattern, "/public/t/{slug}/ssf/") || rt.Pattern == "/public/t/{slug}/lp/denials" {
-			continue // TestSSFAPI_CrossTenant, TestLPDenial_OtherTenantsSlug (a bearer secret per tenant, not a fixture id)
+		if strings.HasPrefix(rt.Pattern, "/api/ssf/transmitters/{id}") || strings.HasPrefix(rt.Pattern, "/public/t/{slug}/ssf/") || rt.Pattern == "/public/t/{slug}/lp/denials" ||
+			rt.Pattern == "/public/t/{slug}/github/webhook" {
+			continue // TestSSFAPI_CrossTenant, TestLPDenial_OtherTenantsSlug, TestGitHubWebhook_OtherTenantsSlug (a secret per tenant, not a fixture id)
 		}
 		if rt.Pattern == "/api/agents/{id}/revoke" {
 			continue // TestAgentsAPI (a UUID, not a fixture id)

@@ -78,6 +78,7 @@ type appGitHub struct {
 	mints    int
 	current  string
 	tokens   []string
+	valid    map[string]bool // the installation tokens minted (the webhook mints a contents:read one and a checks one)
 	jwts     []string
 	checks   map[int64]map[string]any
 	comments map[int64]string
@@ -172,10 +173,15 @@ func (g *appGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		g.mints++
 		g.current = "ghs_apptoken" + strconv.Itoa(g.mints)
 		g.tokens = append(g.tokens, g.current)
+		if g.valid == nil {
+			g.valid = map[string]bool{}
+		}
+		g.valid[g.current] = true
 		send(http.StatusCreated, map[string]any{"token": g.current, "expires_at": "2099-01-01T00:00:00Z", "permissions": body["permissions"]})
 		return
 	}
-	if bearer != g.current || g.current == "" {
+	// every token minted is good (GitHub's all are, for their hour) until a test clears current to invalidate them
+	if !g.valid[bearer] || g.current == "" {
 		send(http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
 		return
 	}
