@@ -132,6 +132,8 @@ func (s *Server) policyDiffRun(_ http.ResponseWriter, r *http.Request, _ *params
 
 // diffExtras is what the pull request check needs of a preview beyond its answer.
 type diffExtras struct {
+	// graph is the simulation of the bundle's graph edits (the merge sync keeps its permission changes as the prediction).
+	graph *simulate.Result
 	// sodPolicies are the ids of the effective policies after the change that are separation-of-duties rules.
 	sodPolicies map[string]bool
 }
@@ -247,7 +249,7 @@ func (s *Server) computePolicyDiff(ctx context.Context, tx *store.TenantTx, in *
 	sum := sha256.Sum256(raw)
 	view.DiffSHA256 = hex.EncodeToString(sum[:])
 
-	return view, &diffExtras{sodPolicies: sodPolicyIDs(afterPolicies)}, nil
+	return view, &diffExtras{graph: graphRes, sodPolicies: sodPolicyIDs(afterPolicies)}, nil
 }
 
 // sodPolicyIDs are the ids of the separation-of-duties policies among ps.

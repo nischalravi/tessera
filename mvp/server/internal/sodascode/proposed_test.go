@@ -71,3 +71,24 @@ func TestProposed(t *testing.T) {
 		t.Errorf("Proposed changed the stored risk: %s", now)
 	}
 }
+
+// A tenant with no stored ruleset is checked against its legacy YAML SoD risks; the first ruleset an apply writes replaces
+// them, so the proposed set holds the bundle's risks only. A bundle that writes no ruleset leaves them (issue #657).
+func TestProposed_FirstRulesetReplacesLegacyRisks(t *testing.T) {
+	w := newWorld(t)
+	legacy := []*sod.Risk{{ID: "legacy", Key: "legacy-risk", Ruleset: sod.RulesetRef{Key: "legacy"}}}
+	var withBundle, without []*sod.Risk
+	w.tx(func(c *store.TenantTx) (err error) {
+		if withBundle, err = sodascode.Proposed(c, w.baseline(), w.opt, legacy); err != nil {
+			return err
+		}
+		without, err = sodascode.Proposed(c, bundle(w.f.B.Slug, "partial", nil), w.opt, legacy)
+		return err
+	})
+	if len(withBundle) != 1 || withBundle[0].Key != "pay-create-approve" {
+		t.Errorf("with a ruleset in the bundle: %+v", withBundle)
+	}
+	if len(without) != 1 || without[0].Key != "legacy-risk" {
+		t.Errorf("with no ruleset in the bundle: %+v", without)
+	}
+}

@@ -355,12 +355,25 @@ func Validate(tx *store.TenantTx, files policybundle.Files, opt Options) error {
 
 // Proposed is the risks checked after the bundle is applied, given those checked now: a risk the bundle lists
 // replaces the one of its key, and a ruleset the bundle retires (or, in full mode, a listed ruleset's risk that it no
-// longer lists) drops out. Functions are the ones the file of each risk defines. It writes nothing; run it in a read
+// longer lists) drops out; the first ruleset a tenant gets drops the legacy YAML risks it was checked against. Functions are the ones the file of each risk defines. It writes nothing; run it in a read
 // transaction.
 func Proposed(tx *store.TenantTx, files policybundle.Files, opt Options, current []*sod.Risk) ([]*sod.Risk, error) {
 	p, err := prepare(tx, files, opt)
 	if err != nil {
 		return nil, err
+	}
+	// a tenant with no stored ruleset is checked against its legacy YAML SoD policies (sod.Load); the first ruleset an apply
+	// writes replaces them all, so none of the risks checked now is left in place (issue #657: the prediction check of the
+	// merge sync found the preview keeping them)
+	if n, err := tx.CountSodRulesets(); err != nil {
+		return nil, err
+	} else if n == 0 {
+		for _, it := range p.items {
+			if it.doc != nil {
+				current = nil
+				break
+			}
+		}
 	}
 	dropKey, dropRuleset := map[string]bool{}, map[string]bool{}
 	for _, it := range p.items {
