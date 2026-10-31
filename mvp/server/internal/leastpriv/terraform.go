@@ -34,7 +34,7 @@ func Terraform(in TerraformInput) (string, error) {
 	if err := json.Indent(&doc, []byte(in.Document), "", "  "); err != nil {
 		return "", errors.New("leastpriv: the right-sized document is not JSON")
 	}
-	body := hclEscape(doc.String())
+	body := hclEscape(jsonEscapeUnsafe(doc.String()))
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Tessera right-sizing suggestion %s: the policy below keeps what was used in the last %d days", comment(in.ID), in.UnusedDays)
 	if in.Removed >= 0 {
@@ -90,11 +90,31 @@ func label(name string) string {
 	return l
 }
 
+// unsafeRune is the set ghapp's unsafeRune strips: controls, separators, bidi and zero-width characters.
+func unsafeRune(r rune) bool {
+	return r < 0x20 || r == 0x7f || r == 0x85 || r == 0x2028 || r == 0x2029 || r == 0x061c || r == 0xfeff ||
+		(r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2060 && r <= 0x2069)
+}
+
+// jsonEscapeUnsafe writes every unsafe rune of an indented JSON document other than its newlines as a \uXXXX escape (issue
+// #794). Valid JSON holds such a rune only inside a string (outside, there is only ASCII whitespace), where the escape
+// is the same character, so the policy is unchanged while nothing invisible or reordering reaches the snippet.
+func jsonEscapeUnsafe(doc string) string {
+	var b strings.Builder
+	for _, r := range doc {
+		if r != '\n' && r != ' ' && unsafeRune(r) {
+			fmt.Fprintf(&b, "\\u%04x", r)
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // comment cuts text from the estate to one short line of plain characters, for a Terraform comment.
 func comment(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || r == 0x85 || r == 0x2028 || r == 0x2029 || r == 0x061c || r == 0xfeff ||
-			(r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2060 && r <= 0x2069) {
+		if unsafeRune(r) {
 			return ' ' // the same set as ghapp's unsafeRune: controls, separators, bidi and zero-width characters
 		}
 		return r

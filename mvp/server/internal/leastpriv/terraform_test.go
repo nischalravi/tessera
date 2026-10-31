@@ -1,6 +1,8 @@
 package leastpriv
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -79,5 +81,35 @@ func TestTerraformCommentStripsFormatCharactersAndCutsOnRunes(t *testing.T) {
 	}
 	if !strings.Contains(got, strings.Repeat("é", 200)+"...") || strings.Contains(got, strings.Repeat("é", 201)) || !utf8.ValidString(got) {
 		t.Errorf("the comment is not cut on a rune boundary:\n%s", got)
+	}
+}
+
+// Bidi, zero-width and separator characters inside the document's strings are written as JSON escapes (issue #794): the
+// snippet holds none of them raw, and its document decodes to the same policy.
+func TestTerraformDocumentEscapesUnsafeRunes(t *testing.T) {
+	doc := "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"a\u202eb\u2066c\u200bd\",\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\"," +
+		"\"Resource\":\"arn:aws:s3:::bucket\u202e/*\",\"Condition\":{\"StringLike\":{\"aws:PrincipalTag/team\":\"x\u2028y\ufeffz\u0085\"}}}]}"
+	got, err := Terraform(TerraformInput{ID: "c", PolicyARN: "arn:aws:iam::111111111111:policy/P", Document: doc, UnusedDays: 90, Confidence: "high", Removed: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range got {
+		if r != '\n' && unsafeRune(r) {
+			t.Errorf("an unsafe character reached the snippet: %U", r)
+		}
+	}
+	start, end := strings.Index(got, "<<-POLICY\n"), strings.LastIndex(got, "  POLICY\n")
+	if start < 0 || end < start {
+		t.Fatalf("no heredoc:\n%s", got)
+	}
+	var want, have any
+	if err := json.Unmarshal([]byte(doc), &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(got[start+len("<<-POLICY\n"):end]), &have); err != nil {
+		t.Fatalf("the heredoc is not JSON: %v\n%s", err, got)
+	}
+	if !reflect.DeepEqual(want, have) {
+		t.Errorf("the document changed:\nwant %v\nhave %v", want, have)
 	}
 }
