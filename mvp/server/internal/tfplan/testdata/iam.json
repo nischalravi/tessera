@@ -1,0 +1,91 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "aws_iam_policy.s3_read", "mode": "managed", "type": "aws_iam_policy", "name": "s3_read", "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {"arn": "arn:aws:iam::111111111111:policy/S3Read", "name": "S3Read", "path": "/", "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::prod-pii/*\"}]}"},
+        "after": {"arn": "arn:aws:iam::111111111111:policy/S3Read", "name": "S3Read", "path": "/", "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:*\",\"Resource\":\"arn:aws:s3:::prod-pii/*\"}]}"},
+        "after_unknown": {}, "before_sensitive": {}, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_iam_policy.deploy", "mode": "managed", "type": "aws_iam_policy", "name": "deploy",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"name": "deploy", "path": "/", "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:PutObject\",\"Resource\":\"arn:aws:s3:::prod-pii/*\"}]}"},
+        "after_unknown": {"arn": true, "id": true, "policy_id": true, "tags_all": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_iam_role_policy_attachment.deploy", "mode": "managed", "type": "aws_iam_role_policy_attachment", "name": "deploy",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"role": "DataEngineer"},
+        "after_unknown": {"id": true, "policy_arn": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_iam_user_policy_attachment.alice_s3", "mode": "managed", "type": "aws_iam_user_policy_attachment", "name": "alice_s3",
+      "change": {
+        "actions": ["delete"],
+        "before": {"id": "alice-20260101", "user": "alice", "policy_arn": "arn:aws:iam::111111111111:policy/S3Read"},
+        "after": null, "after_unknown": {}, "before_sensitive": {}, "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_iam_group_policy_attachment.eng", "mode": "managed", "type": "aws_iam_group_policy_attachment", "name": "eng",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"group": "eng", "policy_arn": "arn:aws:iam::111111111111:policy/S3Read"},
+        "after_unknown": {"id": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_iam_role_policy.decrypt", "mode": "managed", "type": "aws_iam_role_policy", "name": "decrypt",
+      "change": {
+        "actions": ["delete", "create"],
+        "before": {"role": "DataEngineer", "name": "decrypt", "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"kms:Decrypt\",\"Resource\":\"arn:aws:kms:us-east-1:111111111111:key/k1\"}]}"},
+        "after": {"role": "DataEngineer", "name": "decrypt-v2", "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"kms:*\",\"Resource\":\"arn:aws:kms:us-east-1:111111111111:key/k1\"}]}"},
+        "after_unknown": {"id": true}, "before_sensitive": {}, "after_sensitive": {}, "replace_paths": [["name"]]
+      }
+    },
+    {
+      "address": "aws_iam_user_policy.assume", "mode": "managed", "type": "aws_iam_user_policy", "name": "assume",
+      "change": {
+        "actions": ["update"],
+        "before": {"user": "alice", "name": "assume", "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"sts:AssumeRole\",\"Resource\":\"arn:aws:iam::111111111111:role/DataEngineer\"}]}"},
+        "after": {"user": "alice", "name": "assume", "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"sts:*\",\"Resource\":\"*\"}]}"},
+        "after_unknown": {}, "before_sensitive": {}, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_iam_group_policy.list", "mode": "managed", "type": "aws_iam_group_policy", "name": "list",
+      "change": {
+        "actions": ["delete"],
+        "before": {"group": "eng", "name": "list", "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:ListBucket\",\"Resource\":\"arn:aws:s3:::prod-pii\"}]}"},
+        "after": null, "after_unknown": {}, "before_sensitive": {}, "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_iam_role.engineer", "mode": "managed", "type": "aws_iam_role", "name": "engineer",
+      "change": {
+        "actions": ["update"],
+        "before": {"arn": "arn:aws:iam::111111111111:role/DataEngineer", "name": "DataEngineer", "path": "/", "managed_policy_arns": [], "inline_policy": [], "assume_role_policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Action\":\"sts:AssumeRole\"}]}"},
+        "after": {"arn": "arn:aws:iam::111111111111:role/DataEngineer", "name": "DataEngineer", "path": "/", "managed_policy_arns": [], "inline_policy": [], "assume_role_policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"*\"},\"Action\":\"sts:AssumeRole\"}]}"},
+        "after_unknown": {}, "before_sensitive": {}, "after_sensitive": {}
+      }
+    }
+  ],
+  "configuration": {
+    "root_module": {
+      "resources": [
+        {"address": "aws_iam_role_policy_attachment.deploy", "mode": "managed", "type": "aws_iam_role_policy_attachment", "name": "deploy",
+         "expressions": {"role": {"constant_value": "DataEngineer"}, "policy_arn": {"references": ["aws_iam_policy.deploy.arn", "aws_iam_policy.deploy"]}}}
+      ]
+    }
+  }
+}

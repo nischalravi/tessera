@@ -1,0 +1,72 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {"root_module": {}},
+  "resource_changes": [
+    {
+      "address": "aws_s3_bucket_policy.pii", "mode": "managed", "type": "aws_s3_bucket_policy", "name": "pii",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"bucket": "prod-pii", "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::prod-pii/*\"}]}"},
+        "after_unknown": {"id": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_s3_bucket_policy.ghost", "mode": "managed", "type": "aws_s3_bucket_policy", "name": "ghost",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"bucket": "not-collected", "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[]}"},
+        "after_unknown": {"id": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_organizations_policy.deny_s3", "mode": "managed", "type": "aws_organizations_policy", "name": "deny_s3",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"name": "deny-s3", "type": "SERVICE_CONTROL_POLICY", "content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":\"s3:*\",\"Resource\":\"*\"}]}"},
+        "after_unknown": {"arn": true, "id": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_organizations_policy_attachment.deny_prod", "mode": "managed", "type": "aws_organizations_policy_attachment", "name": "deny_prod",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"target_id": "ou-prod"},
+        "after_unknown": {"id": true, "policy_id": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_organizations_policy_attachment.full_prod", "mode": "managed", "type": "aws_organizations_policy_attachment", "name": "full_prod",
+      "change": {
+        "actions": ["delete"],
+        "before": {"id": "ou-prod:p-FullAWSAccess", "target_id": "ou-prod", "policy_id": "p-FullAWSAccess"},
+        "after": null, "after_unknown": {}, "before_sensitive": {}, "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_organizations_policy.rcp", "mode": "managed", "type": "aws_organizations_policy", "name": "rcp",
+      "change": {
+        "actions": ["update"],
+        "before": {"arn": "arn:aws:organizations::aws:policy/resource_control_policy/p-RCPFullAWSAccess", "id": "p-RCPFullAWSAccess", "type": "RESOURCE_CONTROL_POLICY", "content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"*\",\"Resource\":\"*\"}]}"},
+        "after": {"arn": "arn:aws:organizations::aws:policy/resource_control_policy/p-RCPFullAWSAccess", "id": "p-RCPFullAWSAccess", "type": "RESOURCE_CONTROL_POLICY", "content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"*\",\"Resource\":\"*\"},{\"Effect\":\"Deny\",\"Principal\":\"*\",\"Action\":\"s3:*\",\"Resource\":\"*\",\"Condition\":{\"StringNotEquals\":{\"aws:PrincipalOrgID\":\"o-estate\"}}}]}"},
+        "after_unknown": {}, "before_sensitive": {}, "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_organizations_policy.tags", "mode": "managed", "type": "aws_organizations_policy", "name": "tags",
+      "change": {
+        "actions": ["create"], "before": null,
+        "after": {"name": "tags", "type": "TAG_POLICY", "content": "{\"tags\":{}}"},
+        "after_unknown": {"arn": true, "id": true}, "before_sensitive": false, "after_sensitive": {}
+      }
+    }
+  ],
+  "configuration": {
+    "root_module": {
+      "resources": [
+        {"address": "aws_organizations_policy_attachment.deny_prod", "mode": "managed", "type": "aws_organizations_policy_attachment", "name": "deny_prod",
+         "expressions": {"target_id": {"constant_value": "ou-prod"}, "policy_id": {"references": ["aws_organizations_policy.deny_s3.id", "aws_organizations_policy.deny_s3"]}}}
+      ]
+    }
+  }
+}

@@ -68,6 +68,9 @@ func (o Options) limit() int {
 	return rolesascode.DefaultMaxSteps
 }
 
+// Limit is the most steps a change may make (MaxSteps, or the default).
+func (o Options) Limit() int { return o.limit() }
+
 // KindSummary is what the bundle does to one kind of object, as that kind's plan counts it.
 type KindSummary struct {
 	Kind      string `json:"kind"` // agents, jit, roles or sod

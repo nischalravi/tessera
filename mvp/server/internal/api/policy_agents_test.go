@@ -205,7 +205,8 @@ func TestPolicyBundleApply_BlankCommitRefusedAtFiling(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &exp); err != nil {
 				t.Fatal(err)
 			}
-			for _, commit := range []string{" ", " \t\n "} {
+			// "\u200b", "\u2060" and "\ufeff" show nothing in the approvals inbox, so they are as blank as a space (issue #764)
+			for _, commit := range []string{" ", " \t\n ", "\u200b", "\u2060\u200d", "\ufeff", "\u00a0"} {
 				raw, _ := json.Marshal(map[string]any{"commit": commit, "files": exp.Files})
 				if rec := reqDo(h, ta1, "POST", "/api/policy/"+kind+"/apply", string(raw)); rec.Code != 422 || !strings.Contains(rec.Body.String(), "commit") {
 					t.Errorf("commit %q: %d %s", commit, rec.Code, rec.Body)

@@ -3,7 +3,6 @@ package admin
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/roles"
 	"github.com/nischalravi/tessera/mvp/server/internal/sodascode"
@@ -52,7 +51,7 @@ func (e *env) sodOptions() (sodascode.Options, error) {
 // planSodBundle files a request only for a bundle that is valid and whose plan is the one named now: what the
 // requester reviewed. Two people always.
 func planSodBundle(e *env, v *rolesBundlePayload) (plan, error) {
-	if strings.TrimSpace(v.Commit) == "" || len(v.Commit) > sodascode.MaxCommit {
+	if blankCommit(v.Commit) || len(v.Commit) > sodascode.MaxCommit {
 		return plan{}, invalid("commit is 1 to %d characters", sodascode.MaxCommit)
 	}
 	if len(v.Files) == 0 {
