@@ -226,16 +226,18 @@ func TestRoleMiningAPI_Queued(t *testing.T) {
 	if rec := reqDo(h, admin, "POST", "/api/role-mining/runs", `{}`); rec.Code != 409 {
 		t.Errorf("second run: %d %s", rec.Code, rec.Body)
 	}
-	for range 8 { // four jobs run at a time
+	// four jobs run at a time and every tenant's scheduled jobs (about twenty kinds, all due at once) share the slots, in no
+	// fixed order, so the run is claimed within a bounded number of ticks, not a fixed few: tick until it is done
+	var got miningRunResp
+	for i := 0; i < 40 && got.Run.Status != "succeeded"; i++ {
 		if err := srv.Queue().Tick(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		srv.Queue().Wait()
-	}
-	var got miningRunResp
-	rec = reqDo(h, admin, "GET", "/api/role-mining/runs/"+run.ID, "")
-	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
-		t.Fatalf("get run: %d %s", rec.Code, rec.Body)
+		rec = reqDo(h, admin, "GET", "/api/role-mining/runs/"+run.ID, "")
+		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
+			t.Fatalf("get run: %d %s", rec.Code, rec.Body)
+		}
 	}
 	if got.Run.Status != "succeeded" || len(got.Candidates) == 0 || got.Run.SnapshotHash == "" {
 		t.Errorf("run after the queue ran = %+v", got.Run)
