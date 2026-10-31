@@ -146,6 +146,9 @@ func code(s string, n int) string {
 			return '\''
 		case r < 0x20 || r == 0x7f || r == ' ' || r == ' ':
 			return ' '
+		case r == 0x85 || isBidi(r):
+			// next line, and the bidirectional controls: an unterminated override would reorder the rest of the line
+			return ' '
 		}
 		return r
 	}, s)
@@ -153,6 +156,11 @@ func code(s string, n int) string {
 		s = string([]rune(s)[:n]) + "..."
 	}
 	return "`" + strings.TrimSpace(s) + "`"
+}
+
+// isBidi reports a Unicode bidirectional control: the marks, embeddings, overrides and isolates.
+func isBidi(r rune) bool {
+	return r == 0x061c || r == 0x200e || r == 0x200f || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
 }
 
 // Title is the check run's title.
