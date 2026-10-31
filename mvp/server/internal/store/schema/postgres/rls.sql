@@ -2579,6 +2579,13 @@ CREATE POLICY tenant_isolation ON lp_rec_pr_attempts
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE github_pr_check_claims ENABLE ROW LEVEL SECURITY;
+ALTER TABLE github_pr_check_claims FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON github_pr_check_claims;
+CREATE POLICY tenant_isolation ON github_pr_check_claims
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE policy_syncs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE policy_syncs FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON policy_syncs;

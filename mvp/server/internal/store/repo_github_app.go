@@ -56,6 +56,14 @@ var (
 		ON CONFLICT (tenant_id, repo, pull_number) DO UPDATE SET head_sha = excluded.head_sha,
 			check_run_id = excluded.check_run_id, comment_id = excluded.comment_id, conclusion = excluded.conclusion,
 			diff_sha256 = excluded.diff_sha256, updated_at = excluded.updated_at`)
+	ghClaimExpire = tq("github_pr_check_claims.expire", `
+		DELETE FROM github_pr_check_claims WHERE tenant_id = @tenant AND repo = @repo AND pull_number = @pull_number AND claimed_at < @stale`)
+	ghClaimIns = tq("github_pr_check_claims.insert", `
+		INSERT INTO github_pr_check_claims (tenant_id, repo, pull_number, claimed_at)
+		VALUES (@tenant, @repo, @pull_number, @claimed_at)
+		ON CONFLICT (tenant_id, repo, pull_number) DO NOTHING`)
+	ghClaimDel = tq("github_pr_check_claims.delete", `
+		DELETE FROM github_pr_check_claims WHERE tenant_id = @tenant AND repo = @repo AND pull_number = @pull_number`)
 )
 
 // GitHubAppSettings returns the tenant's settings; a tenant that never set them gets the zero value (off, no key).
@@ -113,5 +121,26 @@ func (tx *TenantTx) PutGitHubPRCheck(c *GitHubPRCheck, now time.Time) error {
 	_, err := tx.exec(ghCheckPut, sql.Named("repo", c.Repo), sql.Named("pull_number", c.PullNumber), sql.Named("head_sha", c.HeadSHA),
 		sql.Named("check_run_id", c.CheckRunID), sql.Named("comment_id", c.CommentID), sql.Named("conclusion", c.Conclusion),
 		sql.Named("diff_sha256", c.DiffSHA256), sql.Named("updated_at", RT(now)))
+	return err
+}
+
+// ClaimGitHubPRCheck takes the claim on a pull request before GitHub is called, or reports false when another request
+// holds it. A claim older than ttl (a request that died) is replaced. Release it with ReleaseGitHubPRCheck, or record
+// the outcome in the same transaction that releases it.
+func (tx *TenantTx) ClaimGitHubPRCheck(repo string, number int, now time.Time, ttl time.Duration) (bool, error) {
+	if _, err := tx.exec(ghClaimExpire, sql.Named("repo", repo), sql.Named("pull_number", number), sql.Named("stale", RT(now.Add(-ttl)))); err != nil {
+		return false, err
+	}
+	res, err := tx.exec(ghClaimIns, sql.Named("repo", repo), sql.Named("pull_number", number), sql.Named("claimed_at", RT(now)))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// ReleaseGitHubPRCheck gives up the claim on a pull request.
+func (tx *TenantTx) ReleaseGitHubPRCheck(repo string, number int) error {
+	_, err := tx.exec(ghClaimDel, sql.Named("repo", repo), sql.Named("pull_number", number))
 	return err
 }
