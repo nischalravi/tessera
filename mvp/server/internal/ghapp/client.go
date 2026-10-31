@@ -31,6 +31,10 @@ var Permissions = map[string]string{"checks": "write", "pull_requests": "write"}
 // Only requests that set Credentials.Contents get them; the check run never does.
 var ContentsPermissions = map[string]string{"checks": "write", "pull_requests": "write", "contents": "write"}
 
+// ContentsReadPermissions are what a token is asked for when the request only reads the repository (the merge sync of
+// AC-11, bundle.go): contents:read, with no check, pull request or write permission.
+var ContentsReadPermissions = map[string]string{"contents": "read"}
+
 // Limits.
 const (
 	// RefreshMargin: a cached token is replaced this long before its expires_at.
@@ -149,13 +153,19 @@ type Credentials struct {
 	KeyID string
 	// Contents asks for ContentsPermissions instead of Permissions; its tokens are cached apart.
 	Contents bool
+	// ContentsRead asks for ContentsReadPermissions only: contents:read and nothing else (the merge sync of AC-11 reads the
+	// policy bundle at a commit and writes nothing). Its tokens are cached apart. It wins over Contents.
+	ContentsRead bool
 }
 
 func (cr *Credentials) cacheKey() string {
-	return strings.Join([]string{cr.Scope, cr.AppID, strconv.FormatInt(cr.InstallationID, 10), cr.Repo, cr.KeyID, strconv.FormatBool(cr.Contents)}, "|")
+	return strings.Join([]string{cr.Scope, cr.AppID, strconv.FormatInt(cr.InstallationID, 10), cr.Repo, cr.KeyID, strconv.FormatBool(cr.Contents), strconv.FormatBool(cr.ContentsRead)}, "|")
 }
 
 func (cr *Credentials) permissions() map[string]string {
+	if cr.ContentsRead {
+		return ContentsReadPermissions
+	}
 	if cr.Contents {
 		return ContentsPermissions
 	}

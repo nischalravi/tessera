@@ -2579,6 +2579,20 @@ CREATE POLICY tenant_isolation ON lp_rec_pr_attempts
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE policy_syncs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE policy_syncs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON policy_syncs;
+CREATE POLICY tenant_isolation ON policy_syncs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE policy_sync_findings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE policy_sync_findings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON policy_sync_findings;
+CREATE POLICY tenant_isolation ON policy_sync_findings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN

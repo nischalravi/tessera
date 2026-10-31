@@ -37,6 +37,8 @@ type gitRepo struct {
 	race func(g *gitRepo)
 	// pullHead, when set, is the head sha every pull request answer reports
 	pullHead string
+	// extra, when set, answers a route first (the merge sync test of AC-11 adds trees, blobs and ancestry); it runs with mu held
+	extra    func(g *gitRepo, r *http.Request, body map[string]any, send func(int, any)) bool
 	mu       sync.Mutex
 	branches map[string]string            // branch -> commit
 	commits  map[string]map[string]string // commit -> path -> content
@@ -128,6 +130,9 @@ const repoBase = "/repos/o/policy"
 func (g *gitRepo) serve(r *http.Request, body map[string]any, send func(int, any)) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.extra != nil && g.extra(g, r, body, send) {
+		return true
+	}
 	path := r.URL.Path
 	str := func(k string) string { s, _ := body[k].(string); return s }
 	switch {

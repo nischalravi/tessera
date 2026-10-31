@@ -199,6 +199,20 @@ func ProposalPayload(kind, id string, body json.RawMessage) (json.RawMessage, er
 // proposerUser checks that the machine client may propose now and returns the user it is filed in the name of: the
 // client's owner. A client with no active owner, a disabled one or one without the scope proposes nothing.
 func (e *env) proposerUser(clientID string) (uuid.UUID, error) {
+	return e.proposerUserFor(clientID, auth.ScopeConfigPropose)
+}
+
+// proposerScope is the scope a machine client needs to file a request of the type: config.propose for a config.proposal,
+// and tessera:policy-sync for a policy.sync.apply (issue #657).
+func proposerScope(typeName string) auth.Scope {
+	if typeName == TypePolicySyncApply {
+		return auth.ScopePolicySync
+	}
+	return auth.ScopeConfigPropose
+}
+
+// proposerUserFor is proposerUser for a client that must hold the given scope.
+func (e *env) proposerUserFor(clientID string, scope auth.Scope) (uuid.UUID, error) {
 	cl, err := e.tx.APIClientByClientID(clientID)
 	if errors.Is(err, store.ErrNotFound) {
 		return uuid.Nil, newErr(403, "forbidden", "unknown client")
@@ -208,8 +222,8 @@ func (e *env) proposerUser(clientID string) (uuid.UUID, error) {
 	switch {
 	case cl.Kind != "machine" || cl.Status != store.ClientActive:
 		return uuid.Nil, newErr(403, "forbidden", "the client is not an active machine client")
-	case !slices.Contains(cl.AllowedScopes, string(auth.ScopeConfigPropose)):
-		return uuid.Nil, newErr(403, "forbidden", "the client does not hold the %s scope", auth.ScopeConfigPropose)
+	case !slices.Contains(cl.AllowedScopes, string(scope)):
+		return uuid.Nil, newErr(403, "forbidden", "the client does not hold the %s scope", scope)
 	case cl.OwnerUserID == nil:
 		return uuid.Nil, newErr(403, "owner_required", "a client that proposes changes needs an owner, the person accountable for it")
 	}
@@ -235,18 +249,22 @@ const (
 // active machine client holding config.propose with an active owner, the same test as at submit. A proposal filed by a
 // credential the tenant has since withdrawn is refused, 409 proposer_revoked, and the caller marks the request failed.
 func (e *env) proposerStillValid(ch *store.AdminChange) error {
-	if ch.Type != TypeConfigProposal {
+	if ch.Type != TypeConfigProposal && ch.Type != TypePolicySyncApply {
 		return nil
 	}
 	client, err := e.tx.AdminChangeProposer(ch.ID)
 	if err != nil {
 		return err
 	}
-	revoked := conflict(ReasonProposerRevoked, "the client that filed this proposal is revoked, lost %s or has no active owner", auth.ScopeConfigPropose)
+	scope := proposerScope(ch.Type)
+	revoked := conflict(ReasonProposerRevoked, "the client that filed this proposal is revoked, lost %s or has no active owner", scope)
 	if client == "" {
+		if ch.Type == TypePolicySyncApply {
+			return nil // a person filed it
+		}
 		return revoked
 	}
-	if _, err := e.proposerUser(client); err != nil {
+	if _, err := e.proposerUserFor(client, scope); err != nil {
 		var ae *Error
 		if errors.As(err, &ae) {
 			return revoked
@@ -595,4 +613,18 @@ func ProposalResult(tx *store.TenantTx, ch *store.AdminChange) string {
 		}
 	}
 	return ""
+}
+
+// SubmitPolicySync files a policy.sync.apply request (issue #657). A person needs admin.change.request and a fresh
+// STEP_UP_ADMIN like any change request; a machine client (CI) needs the tessera:policy-sync scope and is filed in the
+// name of its owner, so the owner can never approve it either. The request waits for a different human admin.
+func (s *Service) SubmitPolicySync(ctx context.Context, p *auth.Principal, payload json.RawMessage) (*store.AdminChange, error) {
+	in := SubmitInput{Type: TypePolicySyncApply, Payload: payload}
+	if p != nil && p.Kind == auth.KindAPIClient && p.ClientID != "" {
+		if d := auth.Check(p, auth.PermPolicySync, nil, s.now()); d != nil {
+			return nil, denied(d)
+		}
+		return s.submit(ctx, p, in, p.ClientID)
+	}
+	return s.Submit(ctx, p, in)
 }

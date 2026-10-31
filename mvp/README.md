@@ -2153,6 +2153,46 @@ from disk. Rotate by generating a second key in GitHub, sending it, checking `ke
 in GitHub. CI (a machine client with scope `tessera:policy-github-check`) then calls `POST /api/policy/github/check` with the commit's `head_sha` (the PR head, not the merge commit),
 the bundle files and the plan JSON.
 
+##### Merge sync, prediction check and rollback (AC-11)
+
+Issue #657 (`internal/admin/change_policy_sync.go`, `internal/syncverify`, `internal/ghapp/bundle.go`, `internal/api/policy_sync.go`;
+schema `0961_policy_syncs.sql` and `0962_policy_sync_findings.sql`, Postgres `0969` and `0970`). There is no webhook: an
+authenticated caller triggers the sync after a merge.
+
+| Route | Needs | What |
+|---|---|---|
+| `POST /api/policy/github/sync` `{sha}` | `policy.sync` (a tenant admin with a fresh step-up, or CI with scope `tessera:policy-sync`) | read the policy bundle at that commit through the GitHub App and file ONE change request (`policy.sync.apply`) with the plan digest of every kind, the commit and the prediction. `201` `{status: "filed", sync, change_request, plan, no_changes, blast}`; a repeat answers `200` `{status: "existing", sync}` |
+| `POST /api/policy/github/rollback` `{to_sha}` | `policy.sync` | the same for the bundle of an earlier commit Tessera applied (`kind: rollback`), so the plan returns to that state. `422 rollback_target_unknown` for a commit never synced, `409 already_at_commit` |
+| `GET /api/policy/github/sync` | `connections.read` | `{enabled, repo, last_synced, syncs}`: the last synced commit (the newest applied sync), the latest 20 syncs with their change status, `check_status` (`pending`, `verified`, `mismatch`), the check's detail, the prediction's counts and, for a mismatch, the findings (`kind`, `subject`, `predicted`, `observed`) |
+
+- **Reading the commit.** Tessera asks GitHub for a token limited to the one configured repository with `contents: read` only
+  (the checks and pull request permissions of the check run, and the `contents: write` of the right-sizing pull request, are not
+  asked for; the installation must have accepted `contents: read`, else `installation_scope_mismatch`). It first checks that
+  the commit is the head of the default branch or one of its ancestors (`409 sha_not_on_default_branch`; `422 commit_not_found`)
+  and, for a sync, a descendant of the last synced commit (`409 not_a_descendant`: use rollback to go back). The bundle is read
+  as trees and blobs, only `tessera.yaml`, `schema/tessera.cedarschema` and the `roles`, `birthright`, `jit`, `sod`, `agents`,
+  `invariants` and `tests` folders; symlinks and submodules are refused (`422 bundle_unreadable`) and the limits of a bundle apply
+  (2,000 files, 4 MiB, 256 KiB a file: `413 bundle_too_large`). A bundle that does not load, or names another tenant, is
+  `422 invalid_bundle` with the diagnostics. A commit with no policy files is `422 empty_bundle`.
+- **One request, two people.** The request carries the bundle files, a plan digest per kind (roles, agents, sod, jit) and one
+  digest of them all, and the AC-8 blast-radius prediction (the permissions each identity gains and loses, and the violations
+  introduced and resolved). A different human admin approves it with a step-up (`403 self_approval_refused` for the requester; CI
+  is filed in the name of its owner, who cannot approve either, and the client itself never can). Approval plans again and refuses a stale plan
+  (`409 stale_plan`); the apply runs every kind's writer with its digest in ONE transaction with each kind's audit event and
+  `policy.sync.applied`, and records the commit in `policy_syncs`. A commit is filed once: a repeat while the request is open, or
+  when it was applied and is still the last sync, answers the same sync; a rejected, cancelled, expired or failed request frees
+  the commit. A sync that changes nothing is still filed and approved (it is how the first commit is recorded).
+- **Prediction check.** In the apply's transaction the store's state is read before the writes and after
+  (`internal/syncverify`: every identity's effective permissions, and the policy violations) and compared with the prediction:
+  predicted gains must be held, predicted losses gone, introduced violations present, resolved ones gone, and nothing unpredicted
+  may have changed (unless the prediction was cut at 2,000 permission changes or 500 violations, when only the named ones are
+  checked). Agreement marks the sync `verified` (`policy.sync.verified`); a difference marks it `mismatch`, writes one
+  `policy_sync_findings` row per difference (at most 100) and audits `policy.sync.mismatch`. The apply stands: a human decides what
+  to do. `admin.Service.SyncObserve` is the seam for a connector re-collect (or a test's fake target that drops a change).
+- **Audit.** `admin.change.submitted/approved/applied`, `policy.<kind>.applied`, `policy.sync.applied`, then
+  `policy.sync.verified` or `policy.sync.mismatch`, all in the apply's transaction. Not built: the admin UI panel (the data is in
+  `GET /api/policy/github/sync`), a webhook trigger, and re-collecting from a live write-back target.
+
 #### Role mining
 
 **Directory → Roles → Mining** (issue #298, `internal/roles/mining`, schema `0420_role_mining.sql`,

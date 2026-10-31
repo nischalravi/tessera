@@ -354,6 +354,9 @@ POST   /api/policy/agents/apply                      admin.change.request  STEP_
 POST   /api/policy/diff                              graph.read      STEP_UP_POLICY  # issue #654 (AC-8: changes nothing; the unified blast-radius preview)
 GET    /api/policy/github/app                        connections.read -  # issue #656 (AC-10: the GitHub App settings; the private key is never returned)
 PUT    /api/policy/github/app                        connections.manage STEP_UP_POLICY  # issue #656
+GET    /api/policy/github/sync                       connections.read -  # issue #657 (AC-11: the last synced commit, the syncs and the findings of a prediction check that did not match)
+POST   /api/policy/github/sync                       policy.sync     -  # issue #657 (AC-11: a scope-only permission for CI and a tenant admin's; it files one policy.sync.apply change request, so the filing needs a step-up for a person (checked in internal/admin) and approval stays admin.change.approve with STEP_UP_ADMIN)
+POST   /api/policy/github/rollback                   policy.sync     -  # issue #657 (AC-11: the same for an earlier synced commit)
 POST   /api/policy/github/check                      policy.github.check -  # issue #656 (a machine client's scope-only permission: it cannot meet step-up; the preview, then a check run and one comment on the configured repository)
 GET    /api/abac/policies                            graph.read      -  # issue #162
 POST   /api/abac/policies                            roles.manage    STEP_UP_POLICY  # issue #162
