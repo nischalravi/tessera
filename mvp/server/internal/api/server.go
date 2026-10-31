@@ -87,6 +87,10 @@ const DefaultMaxBodyBytes = 1 << 20
 // DefaultHandlerTimeout bounds the time a handler may run.
 const DefaultHandlerTimeout = 30 * time.Second
 
+// DefaultPolicyDiffTimeout bounds POST /api/policy/diff, whose large previews outlast DefaultHandlerTimeout
+// (TESSERA_POLICY_DIFF_TIMEOUT). Every other route keeps HandlerTimeout.
+const DefaultPolicyDiffTimeout = 90 * time.Second
+
 // DefaultStreamTimeout bounds a streamed response (GET /api/audit/export).
 // Streams bypass http.TimeoutHandler, which would buffer the whole body in
 // memory and cut it at HandlerTimeout; instead the request context gets this
@@ -125,6 +129,9 @@ type Config struct {
 	MaxBodyBytes   int64         // defaults to DefaultMaxBodyBytes
 	HandlerTimeout time.Duration // defaults to DefaultHandlerTimeout; <0 disables
 	StreamTimeout  time.Duration // defaults to DefaultStreamTimeout; streamed routes only
+	// PolicyDiffTimeout is the deadline of POST /api/policy/diff (defaults to DefaultPolicyDiffTimeout); it applies
+	// only while HandlerTimeout is enabled.
+	PolicyDiffTimeout time.Duration
 	// Readiness is the deployment-readiness service (defaults to the
 	// embedded templates and Env).
 	Readiness *readiness.Service
@@ -308,6 +315,12 @@ type Server struct {
 	clock  timeutil.Clock
 	log    *slog.Logger
 	routes []*route
+	// policyDiffHooks are set by tests only: before runs ahead of the simulation (a test stalls there until the
+	// deadline), end sees how the handler finished, so a test can show the work stopped.
+	policyDiffHooks struct {
+		before func(ctx context.Context)
+		end    func(err error)
+	}
 	// stepUps is the catalog of actions the tenant step-up policy may name,
 	// built from the routes on first use (stepup_policy.go).
 	stepUps     stepup.Catalog
@@ -386,6 +399,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.HandlerTimeout == 0 {
 		cfg.HandlerTimeout = DefaultHandlerTimeout
+	}
+	if cfg.PolicyDiffTimeout <= 0 {
+		cfg.PolicyDiffTimeout = DefaultPolicyDiffTimeout
 	}
 	if cfg.StreamTimeout <= 0 {
 		cfg.StreamTimeout = DefaultStreamTimeout
@@ -705,7 +721,14 @@ type streamDeadlineKey struct{}
 // is sized for ordinary responses).
 func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if rt, _, _ := s.find(r.Method, r.URL.Path); rt == nil || !rt.stream {
+		rt, _, _ := s.find(r.Method, r.URL.Path)
+		if rt != nil && rt.timeout > 0 && !rt.stream {
+			// the server's WriteTimeout is sized for HandlerTimeout; leave room for the 503 after this route's deadline
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(rt.timeout + 15*time.Second))
+			http.TimeoutHandler(stream, rt.timeout, `{"detail":"Request timed out"}`).ServeHTTP(&abortWriter{ResponseWriter: w, r: r}, r)
+			return
+		}
+		if rt == nil || !rt.stream {
 			timed.ServeHTTP(&abortWriter{ResponseWriter: w, r: r}, r)
 			return
 		}
@@ -848,6 +871,8 @@ type route struct {
 	h       handlerFunc
 	// stream: the handler streams its response (StreamTimeout, unbuffered).
 	stream bool
+	// timeout, when set, replaces HandlerTimeout for this route: a long computation that stops with its context.
+	timeout time.Duration
 	// answersRead: a non-GET route whose response is computed data; it fails
 	// closed like a read when its http.request event cannot be written
 	// (audit.AnswersRead).

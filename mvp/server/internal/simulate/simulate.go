@@ -3,6 +3,7 @@
 package simulate
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -96,6 +97,12 @@ type Result struct {
 // Run simulates req. Missing inputs (usage, base graph) are built from c.
 // It returns *graph.UnknownNodeError for edges or accounts not in the graph.
 func Run(c *store.TenantTx, req Request, in Inputs) (*Result, error) {
+	return RunContext(context.Background(), c, req, in)
+}
+
+// RunContext is Run, stopping with ctx's error (and no partial result) once ctx is done: it checks between the phases
+// and, inside the long ones, between identities and policies, so a cancelled run ends within one step.
+func RunContext(ctx context.Context, c *store.TenantTx, req Request, in Inputs) (*Result, error) {
 	var err error
 	if in.Usage == nil {
 		if in.Usage, err = usage.Build(c, in.Now); err != nil {
@@ -107,6 +114,9 @@ func Run(c *store.TenantTx, req Request, in Inputs) (*Result, error) {
 		if base, err = graph.Build(c, in.Now); err != nil {
 			return nil, err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	after := base.Copy()
 	applied := []ojson.Object{}
@@ -153,7 +163,20 @@ func Run(c *store.TenantTx, req Request, in Inputs) (*Result, error) {
 			{Key: "label", Value: base.Label(graph.Key("account", aid))}})
 	}
 
-	effBefore, effAfter := base.AllEffective(), after.AllEffective()
+	// each snapshot caches its identities' permissions, so the policy evaluations below reuse these
+	effBefore, err := base.AllEffectiveContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// a change that edits no graph edge and no account (an operations-only preview) leaves the graph as it is: the
+	// second side is the first, and is not computed again
+	graphSame := len(req.RemoveEdgeIDs) == 0 && len(req.RemoveEdges) == 0 && len(req.AddEdges) == 0 && len(req.DisableAccountIDs) == 0
+	effAfter := effBefore
+	if !graphSame {
+		if effAfter, err = after.AllEffectiveContext(ctx); err != nil {
+			return nil, err
+		}
+	}
 	changes := graph.DiffEffective(effBefore, effAfter)
 	iids := make([]int64, 0, len(changes))
 	for iid := range changes {
@@ -163,6 +186,9 @@ func Run(c *store.TenantTx, req Request, in Inputs) (*Result, error) {
 
 	res := &Result{Changes: applied, Identities: []IdentityChange{}}
 	for _, iid := range iids {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		ch := changes[iid]
 		node := base.Node(graph.Key("identity", iid))
 		ic := IdentityChange{IdentityID: iid, Name: node.Label, Type: node.Type, Removed: []Removed{}, Added: []Added{}}
@@ -192,7 +218,7 @@ func Run(c *store.TenantTx, req Request, in Inputs) (*Result, error) {
 		res.Identities = append(res.Identities, ic)
 	}
 
-	vBefore, err := policy.Evaluate(in.Policies, policy.NewContext(base, c, in.Now))
+	vBefore, err := policy.EvaluateContext(ctx, in.Policies, policy.NewContext(base, c, in.Now))
 	if err != nil {
 		return nil, fmt.Errorf("simulate: evaluate before: %w", err)
 	}
@@ -200,9 +226,11 @@ func Run(c *store.TenantTx, req Request, in Inputs) (*Result, error) {
 	if in.AfterPolicies != nil {
 		afterPolicies = in.AfterPolicies
 	}
-	vAfter, err := policy.Evaluate(afterPolicies, policy.NewContext(after, c, in.Now))
-	if err != nil {
-		return nil, fmt.Errorf("simulate: evaluate after: %w", err)
+	vAfter := vBefore
+	if !graphSame || !sameList(in.Policies, afterPolicies) {
+		if vAfter, err = policy.EvaluateContext(ctx, afterPolicies, policy.NewContext(after, c, in.Now)); err != nil {
+			return nil, fmt.Errorf("simulate: evaluate after: %w", err)
+		}
 	}
 	res.Violations = policy.DiffViolations(vBefore, vAfter)
 	res.Summary.ViolationsBefore = len(vBefore)
@@ -210,4 +238,9 @@ func Run(c *store.TenantTx, req Request, in Inputs) (*Result, error) {
 	res.Summary.ViolationsResolved = len(res.Violations.Resolved)
 	res.Summary.ViolationsIntroduced = len(res.Violations.Introduced)
 	return res, nil
+}
+
+// sameList reports that a and b are the same slice (the caller passed one set of policies for both sides).
+func sameList(a, b []*policy.Policy) bool {
+	return len(a) == len(b) && (len(a) == 0 || &a[0] == &b[0])
 }

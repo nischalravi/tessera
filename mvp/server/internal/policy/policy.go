@@ -20,6 +20,7 @@
 package policy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -767,8 +768,16 @@ var Evaluators = map[string]func(*Policy, *Context) ([]Violation, error){
 // Evaluate runs every enabled policy and sorts findings by severity, policy id
 // and identity name.
 func Evaluate(policies []*Policy, c *Context) ([]Violation, error) {
+	return EvaluateContext(context.Background(), policies, c)
+}
+
+// EvaluateContext is Evaluate, stopping with ctx's error between policies when ctx is done.
+func EvaluateContext(ctx context.Context, policies []*Policy, c *Context) ([]Violation, error) {
 	out := []Violation{}
 	for _, p := range policies {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !p.Enabled {
 			continue
 		}
