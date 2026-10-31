@@ -119,3 +119,27 @@ func TestTitle(t *testing.T) {
 		}
 	}
 }
+
+// Bidirectional controls and U+0085 in tenant text must not reach the comment (an unterminated override reorders the
+// rest of its line); ordinary non-Latin text and emoji joiners are kept (issue #779).
+func TestSummaryStripsBidiControls(t *testing.T) {
+	evil := ref("p1", false)
+	evil.IdentityName = "Eve\u202e" + "dim\u2066x\u2069\u200f\u061c\u200e"
+	evil.Message = "a\u0085b\u202a\u202b\u202c\u202d\u2067\u2068 end"
+	r := report(0, 1, []blast.ViolationRef{evil}, nil)
+	r.ByResource = []blast.ResourceDelta{{Resource: "arn:\u202eaws", IdentitiesGaining: 1}}
+	p := ghapp.Preview{Report: r, Terraform: &ghapp.TerraformInfo{Conditional: true, Findings: []ghapp.TFFinding{{Address: "x\u202e.y", Type: "t\u2066", Status: "unresolved", Reason: "r\u202e"}}}}
+	out := ghapp.Comment(p, ghapp.Evaluate(p), sha1c)
+	for _, c := range "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\u0085" {
+		if strings.ContainsRune(out, c) {
+			t.Errorf("the comment still has U+%04X:\n%q", c, out)
+		}
+	}
+	keep := ref("p2", false)
+	keep.IdentityName = "改善 \U0001F468\u200d\U0001F469 Zoë"
+	r2 := report(0, 1, []blast.ViolationRef{keep}, nil)
+	p2 := ghapp.Preview{Report: r2}
+	if out := ghapp.Comment(p2, ghapp.Evaluate(p2), sha1c); !strings.Contains(out, "`改善 \U0001F468\u200d\U0001F469 Zoë`") {
+		t.Errorf("ordinary text was changed:\n%s", out)
+	}
+}
