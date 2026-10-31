@@ -40,3 +40,17 @@ func RemoveRoleEntitlement(text []byte, entitlement string) ([]byte, error) {
 	r.Entitlements = kept
 	return yaml.Marshal(r)
 }
+
+// NormalizeRole is the role file as Tessera writes it back: decoded with the strict reader and rendered again, so
+// comments and formatting that the renderer does not reproduce are gone. It fails as RemoveRoleEntitlement does when the
+// file is not a role Tessera can read.
+func NormalizeRole(text []byte) ([]byte, error) {
+	var r Role
+	if err := decode(text, &r); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrRoleUnreadable, err)
+	}
+	if r.Schema != TagRole {
+		return nil, fmt.Errorf("%w: schema is %q; expected %q", ErrRoleUnreadable, r.Schema, TagRole)
+	}
+	return yaml.Marshal(r)
+}

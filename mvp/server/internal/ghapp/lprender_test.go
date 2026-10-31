@@ -124,3 +124,20 @@ func TestRightSizeStripsBidiAndFormatCharacters(t *testing.T) {
 		}
 	}
 }
+
+// The body never says nobody uses the entitlement, warns when another member used it, and says a rewritten file is rewritten.
+func TestRightSizeBodyTruth(t *testing.T) {
+	rs := fixtureRightSize()
+	rs.RoleMembers, rs.MembersUsing, rs.FileRewritten = 3, 1, true
+	body := ghapp.RightSizeBody(rs)
+	for _, want := range []string{"Role members who lose it | 3 (1 used it in the window) |", "**1 role member(s) used what this removes.**", "Tessera rewrites the role file in full"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q:\n%s", want, body)
+		}
+	}
+	for _, b := range []string{body, ghapp.RightSizeBody(fixtureRightSize())} {
+		if strings.Contains(b, "nobody is using") {
+			t.Errorf("body claims nobody uses it:\n%s", b)
+		}
+	}
+}
