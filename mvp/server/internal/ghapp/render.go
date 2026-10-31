@@ -2,7 +2,6 @@ package ghapp
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -59,8 +58,9 @@ type Verdict struct {
 
 // Evaluate decides the conclusion, deterministically from the preview:
 //
-//   - failure when the change introduces a policy violation: the count of any rule is higher after than before, or a
-//     new agent-out-of-scope, agent-exceeds-owner or separation-of-duties finding appears. A finding that rests only
+//   - failure when the change introduces any policy violation, whatever else it resolves (a violation moved from one
+//     identity to another is a new exposure), or a new agent-out-of-scope, agent-exceeds-owner or
+//     separation-of-duties finding appears. Failure wins over neutral. A finding that rests only
 //     on approximate evidence (low fidelity) never fails a check. When the report's lists are cut it cannot tell which
 //     rules the new findings belong to, so any new finding fails.
 //   - neutral when the answer is conditional: a Terraform change unknown until apply or unsupported but access
@@ -102,15 +102,12 @@ func Evaluate(p Preview) Verdict {
 		if sod > 0 {
 			fail = append(fail, fmt.Sprintf("%d new separation-of-duties finding(s).", sod))
 		}
-		var rules []string
-		for id, n := range intro {
-			if n > res[id] {
-				rules = append(rules, id)
-			}
+		nres := 0
+		for _, n := range res {
+			nres += n
 		}
-		sort.Strings(rules)
-		for _, id := range rules {
-			fail = append(fail, fmt.Sprintf("Rule %s has %d more finding(s) after than before (%d introduced, %d resolved).", code(id, 60), intro[id]-res[id], intro[id], res[id]))
+		if nintro := len(v.Introduced) - low; nintro > 0 {
+			fail = append(fail, fmt.Sprintf("%d new policy violation(s), %d resolved; resolved violations never offset a new one.", nintro, nres))
 		}
 		if low > 0 {
 			neutral = append(neutral, fmt.Sprintf("%d new finding(s) rest on approximate evidence; they are reported and never block.", low))
@@ -171,13 +168,13 @@ func unsafeRune(r rune) bool {
 
 // Title is the check run's title.
 func Title(p Preview, v Verdict) string {
-	n := 0
+	n, resolved := 0, 0
 	if p.Report != nil {
-		n = p.Report.Violations.IntroducedTotal
+		n, resolved = p.Report.Violations.IntroducedTotal, p.Report.Violations.ResolvedTotal
 	}
 	switch v.Conclusion {
 	case Failure:
-		return fmt.Sprintf("Policy preview: %d new violation(s)", n)
+		return fmt.Sprintf("Policy preview: %d new violation(s), %d resolved", n, resolved)
 	case Neutral:
 		return "Policy preview: conditional, review needed"
 	}

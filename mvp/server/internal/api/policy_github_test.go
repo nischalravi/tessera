@@ -88,6 +88,8 @@ type appGitHub struct {
 	head     string           // the pull request's head; ghHead when empty
 	// fail answers the next request of a route ("METHOD path") with the status and headers
 	fail map[string]ghFail
+	// delay holds a check run create open, to widen the window in which requests for one pull request overlap
+	delay time.Duration
 }
 
 type ghFail struct {
@@ -188,6 +190,7 @@ func (g *appGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		send(http.StatusOK, map[string]any{"head": map[string]string{"sha": h}})
 	case route == "POST /repos/o/policy/check-runs":
+		time.Sleep(g.delay)
 		g.nextID++
 		g.checks[g.nextID] = body
 		send(http.StatusCreated, map[string]any{"id": g.nextID, "html_url": "https://github.com/o/policy/runs/1"})
@@ -718,4 +721,98 @@ func body_(rec *httptest.ResponseRecorder) map[string]any {
 	var m map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &m)
 	return m
+}
+
+// Concurrent first checks of one pull request create one check run and one comment (issue #781): the others either update
+// them or are refused 409 check_in_progress, and once the claim is released a later check is accepted.
+func TestGitHubCheck_ConcurrentChecksCreateOnce(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	persistEstate(t, f.DB, f.B.ID, nil)
+	gh, withGH := newAppGitHub(t, nil)
+	gh.delay = 300 * time.Millisecond
+	h := newIsolationServerWith(f, withGH).Handler()
+	admin := ghAdmin(t, f, f.B, "admin@b.example")
+	_, pemKey := ghTestKey(t)
+	putApp(t, h, admin, pemKey, true)
+	noop := map[string]any{"files": map[string]string{"tessera.yaml": fmt.Sprintf("schema: tessera.repo/v1\ntenant: %s\nmanage:\n    roles: partial\n", f.B.Slug)}}
+
+	const n = 6
+	codes := make([]int, n)
+	bodies := make([]string, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := reqDo(h, admin, "POST", "/api/policy/github/check", checkBody(t, ghHead, 9, noop))
+			codes[i], bodies[i] = rec.Code, rec.Body.String()
+		}(i)
+	}
+	wg.Wait()
+	ok, busy := 0, 0
+	for i, c := range codes {
+		switch {
+		case c == 200:
+			ok++
+		case c == 409 && strings.Contains(bodies[i], "check_in_progress"):
+			busy++
+		default:
+			t.Errorf("request %d = %d %.300s", i, c, bodies[i])
+		}
+	}
+	if ok < 1 || busy < 1 {
+		t.Errorf("%d accepted, %d refused as in progress; want at least one of each", ok, busy)
+	}
+	if c := gh.calls("POST /repos/o/policy/check-runs"); c != 1 {
+		t.Errorf("%d check run creates, want 1", c)
+	}
+	if c := gh.calls("POST /repos/o/policy/issues/9/comments"); c != 1 {
+		t.Errorf("%d comment creates, want 1", c)
+	}
+	gh.onlyComment(t)
+
+	// the claim was released: the next check updates in place
+	gh.delay = 0
+	rec := reqDo(h, admin, "POST", "/api/policy/github/check", checkBody(t, ghHead, 9, noop))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"check_created":false`) || !strings.Contains(rec.Body.String(), `"comment_created":false`) {
+		t.Errorf("later check = %d %.300s, want an in-place update", rec.Code, rec.Body)
+	}
+	if c := gh.calls("POST /repos/o/policy/check-runs"); c != 1 {
+		t.Errorf("%d check run creates after the later check, want 1", c)
+	}
+}
+
+// PUT with enabled:false only toggles: the other fields and the sealed key stay, and omitted fields stay on any PUT.
+func TestGitHubApp_PutKeepsOmittedFields(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	_, withGH := newAppGitHub(t, nil)
+	h := newIsolationServerWith(f, withGH).Handler()
+	admin := ghAdmin(t, f, f.B, "admin@b.example")
+	_, pemKey := ghTestKey(t)
+	putApp(t, h, admin, pemKey, true)
+	get := func() map[string]any {
+		t.Helper()
+		var v map[string]any
+		if err := json.Unmarshal(reqDo(h, admin, "GET", "/api/policy/github/app", "").Body.Bytes(), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	before := get()
+	if rec := reqDo(h, admin, "PUT", "/api/policy/github/app", `{"enabled":false}`); rec.Code != 200 {
+		t.Fatalf("disable = %d %s", rec.Code, rec.Body)
+	}
+	off := get()
+	if off["enabled"] != false || off["app_id"] != "4242" || off["installation_id"] != float64(77) || off["repo"] != "o/policy" ||
+		off["key_set"] != true || off["key_fingerprint"] != before["key_fingerprint"] {
+		t.Errorf("after disabling = %v, want only enabled changed", off)
+	}
+	// enabling again needs nothing else, and a field sent replaces the stored one
+	if rec := reqDo(h, admin, "PUT", "/api/policy/github/app", `{"enabled":true,"repo":"o/other"}`); rec.Code != 200 {
+		t.Fatalf("enable = %d %s", rec.Code, rec.Body)
+	}
+	on := get()
+	if on["enabled"] != true || on["app_id"] != "4242" || on["installation_id"] != float64(77) || on["repo"] != "o/other" || on["key_set"] != true {
+		t.Errorf("after enabling = %v", on)
+	}
 }

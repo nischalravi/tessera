@@ -12,7 +12,7 @@ import (
 // githubAppCovered lists the GitHub App repository methods the test below exercises
 // (TestIsolation_EveryTenantTxMethodCovered).
 func githubAppCovered() map[string]bool {
-	return map[string]bool{"GitHubAppSettings": true, "PutGitHubAppSettings": true, "GitHubPRCheck": true, "PutGitHubPRCheck": true}
+	return map[string]bool{"GitHubAppSettings": true, "PutGitHubAppSettings": true, "GitHubPRCheck": true, "PutGitHubPRCheck": true, "ClaimGitHubPRCheck": true, "ReleaseGitHubPRCheck": true}
 }
 
 // The GitHub App settings and the posted checks (schema/0957, issue #656) are a tenant's own: the same repository and
@@ -69,5 +69,42 @@ func TestIsolation_GitHubApp(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A claim on a pull request (schema/0960, issue #781) is a tenant's own and is held by one request at a time: the same
+// repository and pull request in the other tenant is a separate claim, a second claim is refused until the first is
+// released or older than its time to live.
+func TestIsolation_GitHubPRCheckClaims(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	at := storetest.Now
+	claim := func(tn storetest.Tenant, now time.Time) (ok bool) {
+		t.Helper()
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			var err error
+			ok, err = c.ClaimGitHubPRCheck("o/policy", 5, now, time.Minute)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if !claim(f.A, at) || !claim(f.B, at) {
+		t.Fatal("each tenant must get its own claim on the same pull request")
+	}
+	if claim(f.A, at.Add(time.Second)) {
+		t.Error("a second claim on the same pull request was granted")
+	}
+	// B releasing its claim does not free A's
+	inB(t, f, func(c *store.TenantTx) error { return c.ReleaseGitHubPRCheck("o/policy", 5) })
+	if claim(f.A, at.Add(2*time.Second)) {
+		t.Error("B's release freed A's claim")
+	}
+	if !claim(f.B, at.Add(2*time.Second)) {
+		t.Error("B could not claim after its release")
+	}
+	// a claim older than the time to live is replaced
+	if !claim(f.A, at.Add(2*time.Minute)) {
+		t.Error("an expired claim was not replaced")
 	}
 }

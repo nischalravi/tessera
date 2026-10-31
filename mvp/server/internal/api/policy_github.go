@@ -38,8 +38,13 @@ import (
 // step-up, so the route has its own narrow permission, policy.github.check (scope tessera:policy-github-check); the App's
 // settings stay connections.manage with step-up. head_sha must be the pull request's head now. The check is advisory: the
 // caller supplies the bundle, plan and operations, and the comment says so. It acts only on the one repository the tenant
-// configured and is refused until the tenant has enabled the App. A
+// configured and is refused until the tenant has enabled the App. Posting is serialized per pull request by a claim row
+// (github_pr_check_claims) taken before GitHub is called; a request that cannot get it answers 409 check_in_progress. A
 // GitHub webhook trigger is not built: CI calls this route.
+
+// githubClaimTTL is how long a request's claim on a pull request holds before another may replace it (the post is
+// bounded by 45 seconds).
+const githubClaimTTL = 2 * time.Minute
 
 func (s *Server) registerPolicyGitHubRoutes() {
 	s.handle(http.MethodGet, "/api/policy/github/app", read, need(auth.PermConnectionsRead), s.rd(s.getGitHubApp))
@@ -97,14 +102,15 @@ func (s *Server) getGitHubApp(r *http.Request, _ *params) (int, any, error) {
 	return http.StatusOK, s.githubAppViewOf(st), nil
 }
 
-// putGitHubApp stores the App settings. private_key is optional (omit it to keep the stored key; send a new one to
+// putGitHubApp stores the App settings. A field the request omits (app_id, installation_id, repo) keeps its stored
+// value; one sent, even empty, replaces it. private_key is optional (omit it to keep the stored key; send a new one to
 // rotate it); remove_key deletes the stored key (and so turns the feature off).
 func (s *Server) putGitHubApp(r *http.Request, _ *params) (int, any, error) {
 	var in struct {
 		Enabled        bool    `json:"enabled"`
-		AppID          string  `json:"app_id"`
-		InstallationID int64   `json:"installation_id"`
-		Repo           string  `json:"repo"`
+		AppID          *string `json:"app_id"`
+		InstallationID *int64  `json:"installation_id"`
+		Repo           *string `json:"repo"`
 		PrivateKey     *string `json:"private_key"`
 		RemoveKey      bool    `json:"remove_key"`
 	}
@@ -112,11 +118,11 @@ func (s *Server) putGitHubApp(r *http.Request, _ *params) (int, any, error) {
 		return 0, nil, err
 	}
 	switch {
-	case in.AppID != "" && !ghapp.ValidAppID(in.AppID):
+	case in.AppID != nil && *in.AppID != "" && !ghapp.ValidAppID(*in.AppID):
 		return 0, nil, badRequest("invalid_app_id", "app_id must be the digits GitHub shows on the App's page")
-	case in.InstallationID < 0 || in.InstallationID > 1<<53:
+	case in.InstallationID != nil && (*in.InstallationID < 0 || *in.InstallationID > 1<<53):
 		return 0, nil, badRequest("invalid_installation_id", "installation_id must be a positive integer")
-	case in.Repo != "" && !ghapp.ValidRepo(in.Repo):
+	case in.Repo != nil && *in.Repo != "" && !ghapp.ValidRepo(*in.Repo):
 		return 0, nil, badRequest("invalid_repo", "repo must be owner/name")
 	case in.RemoveKey && in.PrivateKey != nil:
 		return 0, nil, badRequest("invalid_private_key", "send either private_key or remove_key, not both")
@@ -137,8 +143,18 @@ func (s *Server) putGitHubApp(r *http.Request, _ *params) (int, any, error) {
 		if err != nil {
 			return err
 		}
-		next := &store.GitHubAppSettings{Enabled: in.Enabled, AppID: in.AppID, InstallationID: in.InstallationID, Repo: in.Repo,
+		// a field the request omits keeps its stored value, so {"enabled": false} only turns the feature off
+		next := &store.GitHubAppSettings{Enabled: in.Enabled, AppID: cur.AppID, InstallationID: cur.InstallationID, Repo: cur.Repo,
 			KeyEnc: cur.KeyEnc, KeyFingerprint: cur.KeyFingerprint, KeySetAt: cur.KeySetAt, UpdatedBy: actor(r), UpdatedAt: now}
+		if in.AppID != nil {
+			next.AppID = *in.AppID
+		}
+		if in.InstallationID != nil {
+			next.InstallationID = *in.InstallationID
+		}
+		if in.Repo != nil {
+			next.Repo = *in.Repo
+		}
 		switch {
 		case in.RemoveKey:
 			next.KeyEnc, next.KeyFingerprint, next.KeySetAt = nil, "", ""
@@ -233,7 +249,6 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 
 	// the settings and the preview, in one read transaction
 	var st *store.GitHubAppSettings
-	var prev *store.GitHubPRCheck
 	var view *policyDiffView
 	var extras *diffExtras
 	err = p.scope.Read(ctx, func(tx *store.TenantTx) error {
@@ -247,9 +262,6 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 		if !strings.EqualFold(in.Repo, st.Repo) {
 			return badRequest("repo_not_configured", "repo is not the repository the GitHub App is configured for")
 		}
-		if prev, err = tx.GitHubPRCheck(st.Repo, in.PullNumber); err != nil {
-			return err
-		}
 		view, extras, err = s.computePolicyDiff(ctx, tx, &in.policyDiffIn)
 		return err
 	})
@@ -257,10 +269,6 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 		return nil, err
 	}
 
-	prev0 := ghapp.Previous{}
-	if prev != nil {
-		prev0 = ghapp.Previous{HeadSHA: prev.HeadSHA, CheckRunID: prev.CheckRunID, CommentID: prev.CommentID}
-	}
 	preview := previewOf(view, extras)
 	verdict := ghapp.Evaluate(preview)
 	chk := ghapp.Check{HeadSHA: in.HeadSHA, Conclusion: verdict.Conclusion, Title: ghapp.Title(preview, verdict), Summary: ghapp.Summary(preview, verdict, in.HeadSHA)}
@@ -277,6 +285,33 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 		return nil, &readiness.Error{Status: http.StatusServiceUnavailable, Code: "github_key_unreadable", Msg: "the stored GitHub App private key cannot be read; set it again"}
 	}
 	cr := &ghapp.Credentials{AppID: st.AppID, InstallationID: st.InstallationID, Repo: st.Repo, Key: key, Scope: p.scope.Tenant.String(), KeyID: st.KeyFingerprint}
+
+	// claim the pull request before anything is posted, and read the earlier record only once the claim is held: two
+	// requests for one pull request can then never both create a check run or a comment (issue #781)
+	var claimed bool
+	var prev *store.GitHubPRCheck
+	if err := p.scope.Write(ctx, func(c *store.TenantTx) error {
+		var err error
+		if claimed, err = c.ClaimGitHubPRCheck(st.Repo, in.PullNumber, now, githubClaimTTL); err != nil || !claimed {
+			return err
+		}
+		prev, err = c.GitHubPRCheck(st.Repo, in.PullNumber)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if !claimed {
+		return nil, &readiness.Error{Status: http.StatusConflict, Code: "check_in_progress", Msg: "another check of this pull request is being posted; retry in a moment"}
+	}
+	defer func() {
+		if claimed { // an early return or a failed record: do not make the next request wait for the claim to expire
+			_ = p.scope.Write(context.WithoutCancel(ctx), func(c *store.TenantTx) error { return c.ReleaseGitHubPRCheck(st.Repo, in.PullNumber) })
+		}
+	}()
+	prev0 := ghapp.Previous{}
+	if prev != nil {
+		prev0 = ghapp.Previous{HeadSHA: prev.HeadSHA, CheckRunID: prev.CheckRunID, CommentID: prev.CommentID}
+	}
 	pctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	// head_sha must be the pull request's head now (this also proves pull_number is a pull request)
@@ -299,6 +334,9 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 		detail = append(detail, ojson.KV{Key: "check_run_id", Value: pub.CheckRunID}, ojson.KV{Key: "comment_id", Value: pub.CommentID})
 	}
 	werr := p.scope.Write(ctx, func(c *store.TenantTx) error {
+		if err := c.ReleaseGitHubPRCheck(st.Repo, in.PullNumber); err != nil {
+			return err
+		}
 		if pub != nil && pub.CheckRunID > 0 {
 			rec := &store.GitHubPRCheck{Repo: st.Repo, PullNumber: in.PullNumber, HeadSHA: in.HeadSHA, CheckRunID: pub.CheckRunID, CommentID: pub.CommentID,
 				Conclusion: verdict.Conclusion, DiffSHA256: view.DiffSHA256}
@@ -311,6 +349,9 @@ func (s *Server) githubCheck(_ http.ResponseWriter, r *http.Request, p *params) 
 		}
 		return c.Audit(now, pr.Display, action, detail)
 	})
+	if werr == nil {
+		claimed = false
+	}
 	if werr != nil {
 		s.log.Error("github check audit failed", "err", werr)
 		return nil, &readiness.Error{Status: http.StatusServiceUnavailable, Code: "audit_unavailable", Msg: "the outcome could not be recorded"}

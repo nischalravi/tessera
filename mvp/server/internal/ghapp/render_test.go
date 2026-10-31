@@ -41,7 +41,8 @@ func TestEvaluateConclusions(t *testing.T) {
 		{"no change", ghapp.Preview{Report: report(4, 4, nil, nil)}, ghapp.Success},
 		{"resolves only", ghapp.Preview{Report: report(4, 3, nil, []blast.ViolationRef{ref("p1", false)})}, ghapp.Success},
 		{"new violation of a rule", ghapp.Preview{Report: report(4, 5, []blast.ViolationRef{ref("p1", false)}, nil)}, ghapp.Failure},
-		{"one introduced, one resolved of the same rule", ghapp.Preview{Report: report(4, 4, []blast.ViolationRef{ref("p1", false)}, []blast.ViolationRef{ref("p1", false)})}, ghapp.Success},
+		{"one introduced, one resolved of the same rule", ghapp.Preview{Report: report(4, 4, []blast.ViolationRef{ref("p1", false)}, []blast.ViolationRef{ref("p1", false)})}, ghapp.Failure},
+		{"introduced for one identity, resolved for another of the same rule", ghapp.Preview{Report: report(1, 1, []blast.ViolationRef{{Key: "p1:77", PolicyID: "p1", Severity: "high", IdentityName: "Mallory"}}, []blast.ViolationRef{{Key: "p1:33", PolicyID: "p1", Severity: "high", IdentityName: "Priya"}})}, ghapp.Failure},
 		{"introduced one rule, resolved another", ghapp.Preview{Report: report(4, 4, []blast.ViolationRef{ref("p1", false)}, []blast.ViolationRef{ref("p2", false)})}, ghapp.Failure},
 		{"new agent out of scope", ghapp.Preview{Report: report(4, 4, []blast.ViolationRef{ref("agent-out-of-scope", false)}, []blast.ViolationRef{ref("agent-out-of-scope", false)})}, ghapp.Failure},
 		{"new agent exceeds owner", ghapp.Preview{Report: report(0, 1, []blast.ViolationRef{ref("agent-exceeds-owner", false)}, nil)}, ghapp.Failure},
@@ -52,6 +53,11 @@ func TestEvaluateConclusions(t *testing.T) {
 		{"terraform fully mapped", ghapp.Preview{Report: report(2, 2, nil, nil), Terraform: &ghapp.TerraformInfo{Resources: 3}}, ghapp.Success},
 		{"approximate results", ghapp.Preview{Report: approx}, ghapp.Neutral},
 		{"failure beats conditional", ghapp.Preview{Report: report(0, 1, []blast.ViolationRef{ref("p1", false)}, nil), Terraform: tfCond}, ghapp.Failure},
+		{"failure beats neutral: new violation plus a low-fidelity one and approximate results", ghapp.Preview{Report: func() *blast.Report {
+			r := report(0, 2, []blast.ViolationRef{ref("p1", false), ref("inv", true)}, nil)
+			r.Summary.Approximate = 1
+			return r
+		}()}, ghapp.Failure},
 		{"no report", ghapp.Preview{}, ghapp.Neutral},
 	} {
 		v := ghapp.Evaluate(tc.p)
@@ -113,7 +119,7 @@ func TestSummaryIsDeterministicAndSafe(t *testing.T) {
 
 func TestTitle(t *testing.T) {
 	p := ghapp.Preview{Report: report(0, 2, []blast.ViolationRef{ref("a", false), ref("b", false)}, nil)}
-	for conclusion, want := range map[string]string{ghapp.Failure: "Policy preview: 2 new violation(s)", ghapp.Neutral: "Policy preview: conditional, review needed", ghapp.Success: "Policy preview: no new violations"} {
+	for conclusion, want := range map[string]string{ghapp.Failure: "Policy preview: 2 new violation(s), 0 resolved", ghapp.Neutral: "Policy preview: conditional, review needed", ghapp.Success: "Policy preview: no new violations"} {
 		if got := ghapp.Title(p, ghapp.Verdict{Conclusion: conclusion}); got != want {
 			t.Errorf("Title(%s) = %q, want %q", conclusion, got, want)
 		}
@@ -141,5 +147,21 @@ func TestSummaryStripsBidiControls(t *testing.T) {
 	p2 := ghapp.Preview{Report: r2}
 	if out := ghapp.Comment(p2, ghapp.Evaluate(p2), sha1c); !strings.Contains(out, "`改善 \U0001F468\u200d\U0001F469 Zoë`") {
 		t.Errorf("ordinary text was changed:\n%s", out)
+	}
+}
+
+// A new violation fails the check even when another resolves; the text says both counts and never "no new violations".
+func TestIntroduceOneResolveOneFails(t *testing.T) {
+	p := ghapp.Preview{Report: report(1, 1, []blast.ViolationRef{ref("p1", false)}, []blast.ViolationRef{ref("p1", false)})}
+	v := ghapp.Evaluate(p)
+	if v.Conclusion != ghapp.Failure {
+		t.Fatalf("conclusion = %s, want failure", v.Conclusion)
+	}
+	if got, want := ghapp.Title(p, v), "Policy preview: 1 new violation(s), 1 resolved"; got != want {
+		t.Errorf("title = %q, want %q", got, want)
+	}
+	s := ghapp.Summary(p, v, sha1c)
+	if strings.Contains(s, "no policy violation") || strings.Contains(s, "no new violations") || !strings.Contains(s, "1 new policy violation(s), 1 resolved") {
+		t.Errorf("summary misstates the result:\n%s", s)
 	}
 }
