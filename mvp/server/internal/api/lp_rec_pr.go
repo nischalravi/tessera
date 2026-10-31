@@ -291,8 +291,6 @@ func githubFailure(err error, msg string, extra map[string]any) error {
 		status, code = http.StatusConflict, "branch_conflict"
 	case errors.Is(err, ghapp.ErrPullConflict):
 		status, code = http.StatusConflict, "pull_request_conflict"
-	case errors.Is(err, ghapp.ErrStaleBase):
-		status, code = http.StatusConflict, "stale_base"
 	case errors.Is(err, ghapp.ErrFileNotFound):
 		status, code = http.StatusUnprocessableEntity, "role_file_not_in_repo"
 	case errors.Is(err, policybundle.ErrEntitlementAbsent):
@@ -501,17 +499,11 @@ func (s *Server) lpPublish(ctx context.Context, c *ghapp.Client, cr *ghapp.Crede
 	}
 	bot := slug + "[bot]"
 
-	// the branch: create it, or accept an existing one only after verifying it
+	// the branch: accept an existing one only after verifying it (a new one is created at the commit, below)
 	tip, err := c.BranchHead(ctx, cr, branch)
+	isNew := errors.Is(err, ghapp.ErrBranchNotFound)
 	switch {
-	case errors.Is(err, ghapp.ErrBranchNotFound):
-		created, err := c.CreateBranch(ctx, cr, branch, baseHead)
-		if err != nil {
-			return nil, nil, err
-		}
-		if !created { // made by someone between the read and the create
-			return nil, nil, ghapp.ErrBranchConflict
-		}
+	case isNew:
 		tip = baseHead
 	case err != nil:
 		return nil, nil, err
@@ -530,39 +522,66 @@ func (s *Server) lpPublish(ctx context.Context, c *ghapp.Client, cr *ghapp.Crede
 		}
 	}
 
-	// the pull request: the recorded one while it is open, else one found by its branch, else a new one
+	// the pull request: the recorded one while it is open, else the App's own among those open on the branch, else a new one
 	var pull *ghapp.Pull
-	if pl.prev != nil && pl.prev.State == store.LPRecPROpen && pl.prev.PullNumber > 0 {
-		if pull, err = c.GetPull(ctx, cr, pl.prev.PullNumber); err != nil && !errors.Is(err, ghapp.ErrPullNotFound) {
-			return nil, nil, err
+	if !isNew {
+		if pl.prev != nil && pl.prev.State == store.LPRecPROpen && pl.prev.PullNumber > 0 {
+			if pull, err = c.GetPull(ctx, cr, pl.prev.PullNumber); err != nil && !errors.Is(err, ghapp.ErrPullNotFound) {
+				return nil, nil, err
+			}
+			if pull != nil && pull.State != "open" {
+				pl.closedSeen, pull = true, nil
+			}
 		}
-		if pull != nil && pull.State != "open" {
-			pl.closedSeen, pull = true, nil
+		if pull == nil {
+			open, err := c.FindOpenPulls(ctx, cr, branch, base)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, o := range open {
+				if o.Author == bot {
+					pull = o
+					break
+				}
+			}
+			if pull == nil && len(open) > 0 {
+				return nil, nil, ghapp.ErrPullConflict // someone else's pull request is open on our branch
+			}
 		}
-	}
-	if pull == nil {
-		if pull, err = c.FindOpenPull(ctx, cr, branch); err != nil {
-			return nil, nil, err
+		if pull != nil && (pull.Author != bot || pull.HeadSHA != tip) {
+			return nil, nil, ghapp.ErrPullConflict
 		}
-	}
-	if pull != nil && (pull.Author != bot || pull.HeadSHA != tip) {
-		return nil, nil, ghapp.ErrPullConflict
 	}
 
-	// the commit, on the verified branch
-	onBranch, err := c.GetFile(ctx, cr, pl.file, tip)
-	if err != nil {
-		return nil, nil, err
-	}
+	// the commit, made on the verified tip through the Git Data API and moved onto the branch without force, so a push that
+	// landed after the verification makes the move fail (branch_conflict) rather than sit under Tessera's commit
 	head := tip
-	if !bytes.Equal(onBranch.Content, want) {
-		if head, err = c.PutFile(ctx, cr, pl.file, branch, ghapp.RightSizeCommitMessage(pl.rs), want, onBranch.SHA); err != nil {
+	if isNew {
+		if head, err = c.CommitFile(ctx, cr, pl.file, baseHead, ghapp.RightSizeCommitMessage(pl.rs), want); err != nil {
+			return nil, nil, err
+		}
+		if err = c.CreateBranchAt(ctx, cr, branch, head); err != nil {
 			return nil, nil, err
 		}
 		out.Committed = true
+	} else {
+		onBranch, err := c.GetFile(ctx, cr, pl.file, tip)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !bytes.Equal(onBranch.Content, want) {
+			if head, err = c.CommitFile(ctx, cr, pl.file, tip, ghapp.RightSizeCommitMessage(pl.rs), want); err != nil {
+				return nil, nil, err
+			}
+			if err = c.MoveBranch(ctx, cr, branch, head); err != nil {
+				return nil, nil, err
+			}
+			out.Committed = true
+		}
 	}
 	out.HeadSHA = head
 
+	// the pull request must be at the head Tessera made or verified before anything is posted or recorded
 	if pull != nil {
 		if pull, err = c.UpdatePull(ctx, cr, pull.Number, title, body); err != nil {
 			return out, nil, err
@@ -577,6 +596,9 @@ func (s *Server) lpPublish(ctx context.Context, c *ghapp.Client, cr *ghapp.Crede
 			return out, nil, ghapp.ErrPullConflict
 		}
 		out.Status = "opened"
+	}
+	if pull.HeadSHA != head {
+		return nil, nil, ghapp.ErrPullConflict
 	}
 	out.PullNumber, out.PullURL = pull.Number, pull.HTMLURL
 

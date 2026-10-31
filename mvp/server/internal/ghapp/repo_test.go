@@ -75,14 +75,14 @@ func TestRepoCalls(t *testing.T) {
 	f.failNext("POST /repos/o/policy/git/refs", reply1(201, `{}`)...)
 	f.failNext("POST /repos/o/policy/git/refs", reply1(422, `{"message":"Reference already exists"}`)...)
 	f.failNext("POST /repos/o/policy/git/refs", reply1(403, `{}`)...)
-	if created, err := c.CreateBranch(ctx, cr, "tessera/x", blob); err != nil || !created {
-		t.Errorf("CreateBranch = %v, %v", created, err)
+	if err := c.CreateBranchAt(ctx, cr, "tessera/x", blob); err != nil {
+		t.Errorf("CreateBranchAt = %v", err)
 	}
-	if created, err := c.CreateBranch(ctx, cr, "tessera/x", blob); err != nil || created {
-		t.Errorf("CreateBranch on an existing branch (422) = %v, %v; want reuse, no error", created, err)
+	if err := c.CreateBranchAt(ctx, cr, "tessera/x", blob); !errors.Is(err, ghapp.ErrBranchConflict) {
+		t.Errorf("CreateBranchAt on an existing branch (422) = %v, want ErrBranchConflict", err)
 	}
-	if _, err := c.CreateBranch(ctx, cr, "tessera/x", blob); !ghapp.IsStatus(err, 403) {
-		t.Errorf("CreateBranch refused = %v", err)
+	if err := c.CreateBranchAt(ctx, cr, "tessera/x", blob); !ghapp.IsStatus(err, 403) {
+		t.Errorf("CreateBranchAt refused = %v", err)
 	}
 
 	f.failNext("GET /repos/o/policy/contents/roles/a.yaml", reply1(200, `{"type":"file","encoding":"base64","size":7,"sha":"`+blob+`","content":"`+file+`"}`)...)
@@ -102,20 +102,46 @@ func TestRepoCalls(t *testing.T) {
 		t.Errorf("GetFile of a missing file = %v", err)
 	}
 
-	f.failNext("PUT /repos/o/policy/contents/roles/a.yaml", reply1(200, `{"commit":{"sha":"`+blob+`"}}`)...)
-	f.failNext("PUT /repos/o/policy/contents/roles/a.yaml", reply1(409, `{"message":"does not match"}`)...)
-	f.failNext("PUT /repos/o/policy/contents/roles/a.yaml", reply1(200, `{"commit":{}}`)...)
-	if sha, err := c.PutFile(ctx, cr, "roles/a.yaml", "tessera/x", "msg", []byte("k: v\n"), blob); err != nil || sha != blob {
-		t.Errorf("PutFile = %q, %v", sha, err)
+	// the commit is made on the verified parent with the Git Data API; its parents are checked
+	tree, blob2, commit := strings.Repeat("1", 40), strings.Repeat("2", 40), strings.Repeat("3", 40)
+	commitSteps := func(parents string) {
+		f.failNext("GET /repos/o/policy/git/commits/"+blob, reply1(200, `{"sha":"`+blob+`","tree":{"sha":"`+tree+`"}}`)...)
+		f.failNext("POST /repos/o/policy/git/blobs", reply1(201, `{"sha":"`+blob2+`"}`)...)
+		f.failNext("POST /repos/o/policy/git/trees", reply1(201, `{"sha":"`+tree+`"}`)...)
+		f.failNext("POST /repos/o/policy/git/commits", reply1(201, `{"sha":"`+commit+`","parents":`+parents+`}`)...)
 	}
-	if _, err := c.PutFile(ctx, cr, "roles/a.yaml", "tessera/x", "msg", []byte("k: v\n"), blob); !errors.Is(err, ghapp.ErrStaleBase) {
-		t.Errorf("PutFile on a moved file (409) = %v, want ErrStaleBase", err)
+	commitSteps(`[{"sha":"` + blob + `"}]`)
+	if sha, err := c.CommitFile(ctx, cr, "roles/a.yaml", blob, "msg", []byte("k: v\n")); err != nil || sha != commit {
+		t.Errorf("CommitFile = %q, %v", sha, err)
 	}
-	if _, err := c.PutFile(ctx, cr, "roles/a.yaml", "tessera/x", "msg", []byte("k: v\n"), blob); err == nil {
-		t.Error("PutFile with no commit in the answer succeeded")
+	for name, parents := range map[string]string{"another parent": `[{"sha":"` + commit + `"}]`, "two parents": `[{"sha":"` + blob + `"},{"sha":"` + commit + `"}]`, "none": `[]`} {
+		commitSteps(parents)
+		if _, err := c.CommitFile(ctx, cr, "roles/a.yaml", blob, "msg", []byte("k: v\n")); !errors.Is(err, ghapp.ErrBranchConflict) {
+			t.Errorf("a commit with %s = %v, want ErrBranchConflict", name, err)
+		}
 	}
-	if _, err := c.PutFile(ctx, cr, "roles/a.yaml", "tessera/x", "msg", make([]byte, ghapp.MaxFileBytes+1), blob); !errors.Is(err, ghapp.ErrBadInput) {
-		t.Errorf("PutFile over the size limit = %v", err)
+	if _, err := c.CommitFile(ctx, cr, "roles/a.yaml", blob, "msg", make([]byte, ghapp.MaxFileBytes+1)); !errors.Is(err, ghapp.ErrBadInput) {
+		t.Errorf("CommitFile over the size limit = %v", err)
+	}
+	// the ref moves without force; a refusal (not a fast-forward) is a branch conflict, and the answer must name the commit
+	f.failNext("PATCH /repos/o/policy/git/refs/heads/tessera/x", reply1(200, `{"object":{"sha":"`+commit+`"}}`)...)
+	f.failNext("PATCH /repos/o/policy/git/refs/heads/tessera/x", reply1(422, `{"message":"Update is not a fast forward"}`)...)
+	f.failNext("PATCH /repos/o/policy/git/refs/heads/tessera/x", reply1(200, `{"object":{"sha":"`+blob+`"}}`)...)
+	if err := c.MoveBranch(ctx, cr, "tessera/x", commit); err != nil {
+		t.Errorf("MoveBranch = %v", err)
+	}
+	if err := c.MoveBranch(ctx, cr, "tessera/x", commit); !errors.Is(err, ghapp.ErrBranchConflict) {
+		t.Errorf("MoveBranch refused = %v", err)
+	}
+	if err := c.MoveBranch(ctx, cr, "tessera/x", commit); !errors.Is(err, ghapp.ErrBranchConflict) {
+		t.Errorf("MoveBranch answering another commit = %v", err)
+	}
+	if f.mintBodies != nil && len(f.log) > 0 {
+		for _, l := range f.log {
+			if strings.HasPrefix(l, "PUT ") && strings.Contains(l, "/contents/") {
+				t.Errorf("the contents API was used: %s", l)
+			}
+		}
 	}
 
 	f.failNext("POST /repos/o/policy/pulls", reply1(201, `{"number":41,"state":"open","html_url":"https://github.com/o/policy/pull/41","head":{"sha":"`+blob+`"}}`)...)
@@ -128,12 +154,12 @@ func TestRepoCalls(t *testing.T) {
 		t.Errorf("CreatePull with one open (422) = %+v, %v, %v", p, exists, err)
 	}
 	f.failNext("GET /repos/o/policy/pulls", reply1(200, `[]`)...)
-	f.failNext("GET /repos/o/policy/pulls", reply1(200, `[{"number":41,"state":"open","head":{"sha":"`+blob+`"}}]`)...)
-	if p, err := c.FindOpenPull(ctx, cr, "tessera/x"); err != nil || p != nil {
-		t.Errorf("FindOpenPull of none = %+v, %v", p, err)
+	f.failNext("GET /repos/o/policy/pulls", reply1(200, `[{"number":40,"state":"open","head":{"sha":"`+blob+`"},"user":{"login":"x"}},{"number":41,"state":"open","head":{"sha":"`+blob+`"},"user":{"login":"app[bot]"}}]`)...)
+	if ps, err := c.FindOpenPulls(ctx, cr, "tessera/x", "main"); err != nil || len(ps) != 0 {
+		t.Errorf("FindOpenPulls of none = %+v, %v", ps, err)
 	}
-	if p, err := c.FindOpenPull(ctx, cr, "tessera/x"); err != nil || p == nil || p.Number != 41 {
-		t.Errorf("FindOpenPull = %+v, %v", p, err)
+	if ps, err := c.FindOpenPulls(ctx, cr, "tessera/x", "main"); err != nil || len(ps) != 2 || ps[1].Author != "app[bot]" {
+		t.Errorf("FindOpenPulls = %+v, %v", ps, err)
 	}
 	f.failNext("PATCH /repos/o/policy/pulls/41", reply1(200, `{"number":41,"state":"open","head":{"sha":"`+blob+`"}}`)...)
 	if p, err := c.UpdatePull(ctx, cr, 41, "t2", "b2"); err != nil || p.Number != 41 {
@@ -151,8 +177,8 @@ func TestRepoCallsDoNotFollowRedirects(t *testing.T) {
 	c, _ := f.client(t)
 	cr := creds(t)
 	cr.Contents = true
-	f.failNext("PUT /repos/o/policy/contents/roles/a.yaml", reply{status: http.StatusMovedPermanently, header: map[string]string{"Location": "https://evil.example/x"}})
-	_, err := c.PutFile(context.Background(), cr, "roles/a.yaml", "tessera/x", "m", []byte("x"), strings.Repeat("a", 40))
+	f.failNext("PATCH /repos/o/policy/git/refs/heads/tessera/x", reply{status: http.StatusMovedPermanently, header: map[string]string{"Location": "https://evil.example/x"}})
+	err := c.MoveBranch(context.Background(), cr, "tessera/x", strings.Repeat("a", 40))
 	if !ghapp.IsStatus(err, http.StatusMovedPermanently) {
 		t.Errorf("a 301 = %v, want a status error", err)
 	}
@@ -201,13 +227,28 @@ func TestAppSlugAndCompare(t *testing.T) {
 	if _, err := c.AppSlug(ctx, cr); !errors.Is(err, ghapp.ErrAppAuth) {
 		t.Errorf("AppSlug refused = %v", err)
 	}
-	f.failNext("GET /repos/o/policy/compare/main...tessera/x", reply{status: 200, body: `{"ahead_by":2,"files":[{"filename":"roles/a.yaml"},{"filename":"b.yaml","previous_filename":"c.yaml"}]}`})
+	f.failNext("GET /repos/o/policy/compare/main...tessera/x", reply{status: 200, body: `{"ahead_by":2,"status":"ahead","files":[{"filename":"roles/a.yaml"},{"filename":"b.yaml","previous_filename":"c.yaml"}]}`})
 	cmp, err := c.CompareBranch(ctx, cr, "main", "tessera/x")
 	if err != nil || cmp.AheadBy != 2 || strings.Join(cmp.Files, ",") != "roles/a.yaml,b.yaml,c.yaml" {
 		t.Errorf("CompareBranch = %+v, %v", cmp, err)
 	}
+	for name, body := range map[string]string{
+		"commits and no files": `{"ahead_by":1,"status":"ahead","files":[]}`,
+		"files and no commits": `{"ahead_by":0,"status":"identical","files":[{"filename":"x"}]}`,
+		"an unknown status":    `{"ahead_by":0,"status":"weird","files":[]}`,
+		"no status":            `{"ahead_by":0,"files":[]}`,
+	} {
+		f.failNext("GET /repos/o/policy/compare/main...tessera/x", reply{status: 200, body: body})
+		if _, err := c.CompareBranch(ctx, cr, "main", "tessera/x"); err == nil {
+			t.Errorf("a comparison with %s was accepted", name)
+		}
+	}
+	f.failNext("GET /repos/o/policy/compare/main...tessera/x", reply{status: 200, body: `{"ahead_by":0,"status":"identical","files":[]}`})
+	if cmp, err := c.CompareBranch(ctx, cr, "main", "tessera/x"); err != nil || cmp.AheadBy != 0 {
+		t.Errorf("an identical branch = %+v, %v", cmp, err)
+	}
 	var many strings.Builder
-	many.WriteString(`{"ahead_by":1,"files":[`)
+	many.WriteString(`{"ahead_by":1,"status":"ahead","files":[`)
 	for i := 0; i < 100; i++ {
 		if i > 0 {
 			many.WriteString(",")

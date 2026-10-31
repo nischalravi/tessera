@@ -24,8 +24,6 @@ var (
 	ErrFileNotFound = errors.New("ghapp: file not found")
 	// ErrBranchNotFound: the branch does not exist.
 	ErrBranchNotFound = errors.New("ghapp: branch not found")
-	// ErrStaleBase: GitHub refused the commit because the file or branch moved under it (409).
-	ErrStaleBase = errors.New("ghapp: the file changed on the branch while the commit was made")
 	// ErrBranchConflict: the branch exists and is not one Tessera made or can show to hold only its own edit.
 	ErrBranchConflict = errors.New("ghapp: the branch exists and is not Tessera's")
 	// ErrPullConflict: an open pull request on the branch was not opened by the App, or is not at the branch's head.
@@ -118,23 +116,6 @@ func (c *Client) BranchHead(ctx context.Context, cr *Credentials, branch string)
 	return out.Object.SHA, nil
 }
 
-// CreateBranch creates refs/heads/{branch} at sha. created is false when the branch already exists (422: reference
-// already exists), which is not an error: the caller reuses it.
-func (c *Client) CreateBranch(ctx context.Context, cr *Credentials, branch, sha string) (created bool, err error) {
-	if !ValidRepo(cr.Repo) || !ValidBranch(branch) || !ValidSHA(sha) {
-		return false, ErrBadInput
-	}
-	_, err = c.api(ctx, cr, http.MethodPost, "/repos/"+cr.Repo+"/git/refs", map[string]string{"ref": "refs/heads/" + branch, "sha": sha},
-		http.StatusCreated, "the branch create")
-	switch {
-	case err == nil:
-		return true, nil
-	case IsStatus(err, http.StatusUnprocessableEntity):
-		return false, nil
-	}
-	return false, err
-}
-
 // File is a file at a ref: its text and the blob id a commit must name to replace it.
 type File struct {
 	Content []byte
@@ -171,30 +152,102 @@ func (c *Client) GetFile(ctx context.Context, cr *Credentials, path, ref string)
 	return &File{Content: b, SHA: out.SHA}, nil
 }
 
-// PutFile commits content as the new text of an existing file on branch (PUT /repos/{repo}/contents/{path}), naming
-// blobSHA, the blob it replaces, so a concurrent change is refused (ErrStaleBase) rather than overwritten. It returns
-// the new commit.
-func (c *Client) PutFile(ctx context.Context, cr *Credentials, path, branch, message string, content []byte, blobSHA string) (string, error) {
-	if !ValidRepo(cr.Repo) || !ValidPath(path) || !ValidBranch(branch) || !ValidSHA(blobSHA) || message == "" || len(content) > MaxFileBytes {
+// CommitFile commits content as the new text of path on top of parent, through the Git Data API: a blob, a tree whose base
+// is the parent's tree, and a commit whose parents are exactly [parent] (the answer is checked). It moves no ref, so nothing
+// is visible until PublishCommit or the ref calls below. Unlike the contents API, which checks only the file's blob, the
+// commit is made on a parent the caller has verified.
+func (c *Client) CommitFile(ctx context.Context, cr *Credentials, path, parent, message string, content []byte) (string, error) {
+	if !ValidRepo(cr.Repo) || !ValidPath(path) || !ValidSHA(parent) || message == "" || len(content) > MaxFileBytes {
 		return "", ErrBadInput
 	}
-	r, err := c.api(ctx, cr, http.MethodPut, "/repos/"+cr.Repo+"/contents/"+escPath(path), map[string]string{
-		"message": message, "content": base64.StdEncoding.EncodeToString(content), "branch": branch, "sha": blobSHA}, http.StatusOK, "the file commit")
+	r, err := c.api(ctx, cr, http.MethodGet, "/repos/"+cr.Repo+"/git/commits/"+parent, nil, http.StatusOK, "the parent commit read")
 	if err != nil {
-		if IsStatus(err, http.StatusConflict) {
-			return "", ErrStaleBase
-		}
 		return "", err
 	}
-	var out struct {
-		Commit struct {
+	var pc struct {
+		Tree struct {
 			SHA string `json:"sha"`
-		} `json:"commit"`
+		} `json:"tree"`
 	}
-	if json.Unmarshal(r.body, &out) != nil || !ValidSHA(out.Commit.SHA) {
-		return "", errors.New("ghapp: GitHub committed the file but returned no commit id")
+	if json.Unmarshal(r.body, &pc) != nil || !ValidSHA(pc.Tree.SHA) {
+		return "", errors.New("ghapp: GitHub returned no usable tree for the parent commit")
 	}
-	return out.Commit.SHA, nil
+	r, err = c.api(ctx, cr, http.MethodPost, "/repos/"+cr.Repo+"/git/blobs", map[string]string{"content": base64.StdEncoding.EncodeToString(content), "encoding": "base64"}, http.StatusCreated, "the blob create")
+	if err != nil {
+		return "", err
+	}
+	var obj struct {
+		SHA string `json:"sha"`
+	}
+	if json.Unmarshal(r.body, &obj) != nil || !ValidSHA(obj.SHA) {
+		return "", errors.New("ghapp: GitHub returned no blob id")
+	}
+	blob := obj.SHA
+	r, err = c.api(ctx, cr, http.MethodPost, "/repos/"+cr.Repo+"/git/trees", map[string]any{"base_tree": pc.Tree.SHA,
+		"tree": []map[string]string{{"path": path, "mode": "100644", "type": "blob", "sha": blob}}}, http.StatusCreated, "the tree create")
+	if err != nil {
+		return "", err
+	}
+	if json.Unmarshal(r.body, &obj) != nil || !ValidSHA(obj.SHA) {
+		return "", errors.New("ghapp: GitHub returned no tree id")
+	}
+	r, err = c.api(ctx, cr, http.MethodPost, "/repos/"+cr.Repo+"/git/commits", map[string]any{"message": message, "tree": obj.SHA, "parents": []string{parent}},
+		http.StatusCreated, "the commit create")
+	if err != nil {
+		return "", err
+	}
+	var cm struct {
+		SHA     string `json:"sha"`
+		Parents []struct {
+			SHA string `json:"sha"`
+		} `json:"parents"`
+	}
+	if json.Unmarshal(r.body, &cm) != nil || !ValidSHA(cm.SHA) {
+		return "", errors.New("ghapp: GitHub returned no commit id")
+	}
+	if len(cm.Parents) != 1 || cm.Parents[0].SHA != parent {
+		return "", ErrBranchConflict // the commit does not sit on exactly the verified parent
+	}
+	return cm.SHA, nil
+}
+
+// MoveBranch moves refs/heads/{branch} to commit with force:false, so GitHub refuses (422) unless the commit is a
+// fast-forward of where the branch is now: a push that landed after the branch was verified is ErrBranchConflict, and the
+// commit is never made the branch's head over it. The answer must name the commit.
+func (c *Client) MoveBranch(ctx context.Context, cr *Credentials, branch, commit string) error {
+	if !ValidRepo(cr.Repo) || !ValidBranch(branch) || !ValidSHA(commit) {
+		return ErrBadInput
+	}
+	r, err := c.api(ctx, cr, http.MethodPatch, "/repos/"+cr.Repo+"/git/refs/heads/"+escPath(branch), map[string]any{"sha": commit, "force": false}, http.StatusOK, "the branch update")
+	if err != nil {
+		if IsStatus(err, http.StatusUnprocessableEntity) || IsStatus(err, http.StatusConflict) {
+			return ErrBranchConflict
+		}
+		return err
+	}
+	var out struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	if json.Unmarshal(r.body, &out) != nil || out.Object.SHA != commit {
+		return ErrBranchConflict
+	}
+	return nil
+}
+
+// CreateBranchAt creates refs/heads/{branch} at commit (a commit made by CommitFile on the base head): the branch never
+// exists at the base with Tessera committing afterwards. A branch that exists already (422) is ErrBranchConflict.
+func (c *Client) CreateBranchAt(ctx context.Context, cr *Credentials, branch, commit string) error {
+	if !ValidRepo(cr.Repo) || !ValidBranch(branch) || !ValidSHA(commit) {
+		return ErrBadInput
+	}
+	_, err := c.api(ctx, cr, http.MethodPost, "/repos/"+cr.Repo+"/git/refs", map[string]string{"ref": "refs/heads/" + branch, "sha": commit},
+		http.StatusCreated, "the branch create")
+	if IsStatus(err, http.StatusUnprocessableEntity) {
+		return ErrBranchConflict
+	}
+	return err
 }
 
 // Pull is a pull request as the client reads it.
@@ -238,13 +291,14 @@ func (c *Client) pull(p *pullJSON, repo string) *Pull {
 	return &Pull{Number: p.Number, HTMLURL: u, State: p.State, HeadSHA: p.Head.SHA, Author: p.User.Login}
 }
 
-// FindOpenPull returns the open pull request whose head is branch of this repository, or nil.
-func (c *Client) FindOpenPull(ctx context.Context, cr *Credentials, branch string) (*Pull, error) {
-	if !ValidRepo(cr.Repo) || !ValidBranch(branch) {
+// FindOpenPulls returns the open pull requests whose head is branch of this repository and whose base is base (at most
+// 30; the caller picks the App's own).
+func (c *Client) FindOpenPulls(ctx context.Context, cr *Credentials, branch, base string) ([]*Pull, error) {
+	if !ValidRepo(cr.Repo) || !ValidBranch(branch) || !ValidBranch(base) {
 		return nil, ErrBadInput
 	}
 	owner, _, _ := strings.Cut(cr.Repo, "/")
-	r, err := c.api(ctx, cr, http.MethodGet, "/repos/"+cr.Repo+"/pulls?state=open&per_page=1&head="+url.QueryEscape(owner+":"+branch), nil, http.StatusOK, "the pull request search")
+	r, err := c.api(ctx, cr, http.MethodGet, "/repos/"+cr.Repo+"/pulls?state=open&per_page=30&base="+url.QueryEscape(base)+"&head="+url.QueryEscape(owner+":"+branch), nil, http.StatusOK, "the pull request search")
 	if err != nil {
 		return nil, err
 	}
@@ -252,10 +306,13 @@ func (c *Client) FindOpenPull(ctx context.Context, cr *Credentials, branch strin
 	if json.Unmarshal(r.body, &out) != nil {
 		return nil, errors.New("ghapp: unreadable pull request list")
 	}
-	if len(out) == 0 || out[0].Number < 1 {
-		return nil, nil
+	var pulls []*Pull
+	for i := range out {
+		if out[i].Number >= 1 {
+			pulls = append(pulls, c.pull(&out[i], cr.Repo))
+		}
 	}
-	return c.pull(&out[0], cr.Repo), nil
+	return pulls, nil
 }
 
 // GetPull reads pull request number (ErrPullNotFound when it does not exist).
@@ -347,6 +404,7 @@ var slugRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,99}$`)
 type Compare struct {
 	Files   []string
 	AheadBy int
+	Status  string // identical, ahead, behind or diverged
 }
 
 // CompareBranch reads GET /repos/{repo}/compare/{base}...{head}: the files the head changed against the merge base. A
@@ -360,7 +418,8 @@ func (c *Client) CompareBranch(ctx context.Context, cr *Credentials, base, head 
 		return nil, err
 	}
 	var out struct {
-		AheadBy int `json:"ahead_by"`
+		AheadBy int    `json:"ahead_by"`
+		Status  string `json:"status"`
 		Files   []struct {
 			Filename string `json:"filename"`
 			Previous string `json:"previous_filename"`
@@ -370,7 +429,16 @@ func (c *Client) CompareBranch(ctx context.Context, cr *Credentials, base, head 
 	if json.Unmarshal(r.body, &out) != nil || len(out.Files) >= 100 || out.AheadBy < 0 {
 		return nil, ErrNotAFile
 	}
-	cmp := &Compare{AheadBy: out.AheadBy}
+	switch out.Status {
+	case "identical", "ahead", "behind", "diverged":
+	default:
+		return nil, ErrNotAFile
+	}
+	// commits the branch has with no file changed (an empty commit) or files without commits are not a state Tessera made
+	if (out.AheadBy > 0 && len(out.Files) == 0) || (out.AheadBy == 0 && len(out.Files) > 0) {
+		return nil, ErrBranchConflict
+	}
+	cmp := &Compare{AheadBy: out.AheadBy, Status: out.Status}
 	for _, f := range out.Files {
 		cmp.Files = append(cmp.Files, f.Filename)
 		if f.Previous != "" { // a rename touches two paths

@@ -31,6 +31,12 @@ import (
 // code does not know): branches with files, commits, and pull requests. A blob id is the SHA-1 of the content, and a commit
 // of an existing file must name the blob it replaces, as GitHub requires.
 type gitRepo struct {
+	blobs map[string]string // blob -> content
+	trees map[string]map[string]string
+	// race, when set, runs once just before the commit is created (the Git Data API), as another writer's push would
+	race func(g *gitRepo)
+	// pullHead, when set, is the head sha every pull request answer reports
+	pullHead string
 	mu       sync.Mutex
 	branches map[string]string            // branch -> commit
 	commits  map[string]map[string]string // commit -> path -> content
@@ -49,7 +55,7 @@ type fakePull struct {
 }
 
 func newGitRepo(files map[string]string) *gitRepo {
-	g := &gitRepo{branches: map[string]string{}, commits: map[string]map[string]string{}, parents: map[string]string{}, pulls: map[int]*fakePull{}, next: 40}
+	g := &gitRepo{branches: map[string]string{}, commits: map[string]map[string]string{}, parents: map[string]string{}, blobs: map[string]string{}, trees: map[string]map[string]string{}, pulls: map[int]*fakePull{}, next: 40}
 	g.branches["main"] = g.commit(files)
 	return g
 }
@@ -64,6 +70,11 @@ func (g *gitRepo) commit(files map[string]string) string {
 	sha := hex.EncodeToString(sum[:])
 	g.commits[sha] = cp
 	return sha
+}
+
+func treeID(commit string) string {
+	sum := sha1.Sum([]byte("tree-of-" + commit)) // #nosec G401
+	return hex.EncodeToString(sum[:])
 }
 
 func blobID(content string) string {
@@ -101,7 +112,14 @@ func (g *gitRepo) openPulls() []*fakePull {
 
 func (g *gitRepo) pullJSON(p *fakePull) map[string]any {
 	return map[string]any{"number": p.Number, "state": p.State, "html_url": "https://github.com/o/policy/pull/" + strconv.Itoa(p.Number),
-		"head": map[string]string{"sha": g.branches[p.Branch]}, "user": map[string]string{"login": p.Author}}
+		"head": map[string]string{"sha": g.headOf(p)}, "user": map[string]string{"login": p.Author}}
+}
+
+func (g *gitRepo) headOf(p *fakePull) string {
+	if g.pullHead != "" {
+		return g.pullHead
+	}
+	return g.branches[p.Branch]
 }
 
 const repoBase = "/repos/o/policy"
@@ -136,6 +154,59 @@ func (g *gitRepo) serve(r *http.Request, body map[string]any, send func(int, any
 		_ = files
 		g.branches[name] = str("sha")
 		send(201, map[string]any{"ref": str("ref")})
+	case r.Method == http.MethodGet && strings.HasPrefix(path, repoBase+"/git/commits/"):
+		sha := strings.TrimPrefix(path, repoBase+"/git/commits/")
+		files, ok := g.commits[sha]
+		if !ok {
+			send(404, map[string]string{"message": "Not Found"})
+			return true
+		}
+		tree := treeID(sha)
+		g.trees[tree] = files
+		send(200, map[string]any{"sha": sha, "tree": map[string]string{"sha": tree}})
+	case r.Method == http.MethodPost && path == repoBase+"/git/blobs":
+		raw, _ := base64.StdEncoding.DecodeString(str("content"))
+		id := blobID(string(raw))
+		g.blobs[id] = string(raw)
+		send(201, map[string]string{"sha": id})
+	case r.Method == http.MethodPost && path == repoBase+"/git/trees":
+		files := map[string]string{}
+		for k, v := range g.trees[str("base_tree")] {
+			files[k] = v
+		}
+		entries, _ := body["tree"].([]any)
+		for _, e := range entries {
+			m, _ := e.(map[string]any)
+			files[fmt.Sprint(m["path"])] = g.blobs[fmt.Sprint(m["sha"])]
+		}
+		sum := sha1.Sum([]byte(fmt.Sprint("tree", len(g.trees), files))) // #nosec G401
+		id := hex.EncodeToString(sum[:])
+		g.trees[id] = files
+		send(201, map[string]string{"sha": id})
+	case r.Method == http.MethodPost && path == repoBase+"/git/commits":
+		if g.race != nil {
+			f := g.race
+			g.race = nil
+			f(g)
+		}
+		ps, _ := body["parents"].([]any)
+		parent := ""
+		if len(ps) > 0 {
+			parent = fmt.Sprint(ps[0])
+		}
+		sha := g.commit(g.trees[str("tree")])
+		g.parents[sha] = parent
+		send(201, map[string]any{"sha": sha, "parents": []map[string]string{{"sha": parent}}})
+	case r.Method == http.MethodPatch && strings.HasPrefix(path, repoBase+"/git/refs/heads/"):
+		b := strings.TrimPrefix(path, repoBase+"/git/refs/heads/")
+		cur, ok := g.branches[b]
+		force, _ := body["force"].(bool)
+		if !ok || (!force && g.parents[str("sha")] != cur) {
+			send(422, map[string]string{"message": "Update is not a fast forward"})
+			return true
+		}
+		g.branches[b] = str("sha")
+		send(200, map[string]any{"object": map[string]string{"sha": str("sha")}})
 	case strings.HasPrefix(path, repoBase+"/contents/"):
 		p := strings.TrimPrefix(path, repoBase+"/contents/")
 		if r.Method == http.MethodGet {
@@ -192,7 +263,11 @@ func (g *gitRepo) serve(r *http.Request, body map[string]any, send func(int, any
 		for c := headSHA; c != g.branches[b] && c != ""; c = g.parents[c] {
 			ahead++
 		}
-		send(200, map[string]any{"ahead_by": ahead, "files": files})
+		status := "identical"
+		if ahead > 0 {
+			status = "ahead"
+		}
+		send(200, map[string]any{"ahead_by": ahead, "status": status, "files": files})
 	case r.Method == http.MethodGet && path == repoBase+"/pulls":
 		q := r.URL.Query()
 		var out []any
@@ -519,8 +594,8 @@ func TestLPRecPR_GitHubFailures(t *testing.T) {
 	fail(t, "POST /app/installations/77/access_tokens", 404, 502, "github_failed", "installation_not_found")
 	// the installation has not accepted contents:write yet
 	fail(t, "POST /app/installations/77/access_tokens", 422, 502, "github_failed", "installation_scope_mismatch")
-	// the file moved under the commit
-	fail(t, "PUT "+repoBase+"/contents/roles/payroll-ops.yaml", 409, 409, "stale_base", "")
+	// the commit cannot be created
+	fail(t, "POST "+repoBase+"/git/commits", 500, 502, "github_failed", "github_500")
 	// a rate limit
 	fail(t, "GET "+repoBase, 429, 503, "github_rate_limited", "")
 }
@@ -730,7 +805,7 @@ func TestLPRecPR_PreExistingBranchIsNotAdopted(t *testing.T) {
 		if rec.Code != 409 || !strings.Contains(rec.Body.String(), "branch_conflict") {
 			t.Errorf("%s: %d %.300s, want 409 branch_conflict", name, rec.Code, rec.Body)
 		}
-		if len(w.repo.openPulls()) != 0 || len(w.gh.checks) != 0 || w.gh.calls("PUT "+repoBase+"/contents") != 0 || w.repo.branches[branch] != evil {
+		if len(w.repo.openPulls()) != 0 || len(w.gh.checks) != 0 || w.gh.calls("POST "+repoBase+"/git/commits") != 0 || w.gh.calls("PATCH "+repoBase+"/git/refs") != 0 || w.gh.calls("POST "+repoBase+"/git/refs") != 0 || w.repo.branches[branch] != evil {
 			t.Errorf("%s: a pull request, a check run or a commit was made on the foreign branch", name)
 		}
 		if !w.c.audited("lp.recommendation.pull_request.failed") {
@@ -753,7 +828,7 @@ func TestLPRecPR_ForeignPullRequestIsNotAdopted(t *testing.T) {
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "pull_request_conflict") {
 		t.Fatalf("%d %.300s, want 409 pull_request_conflict", rec.Code, rec.Body)
 	}
-	if p := w.repo.pulls[n]; p.Title != "theirs" || p.Body != "theirs" || len(w.gh.checks) != 0 || w.gh.calls("PUT "+repoBase+"/contents") != 0 {
+	if p := w.repo.pulls[n]; p.Title != "theirs" || p.Body != "theirs" || len(w.gh.checks) != 0 || w.gh.calls("POST "+repoBase+"/git/commits") != 0 || w.gh.calls("PATCH "+repoBase+"/git/refs") != 0 || w.gh.calls("POST "+repoBase+"/git/refs") != 0 {
 		t.Errorf("their pull request was touched: %+v, %d check runs", p, len(w.gh.checks))
 	}
 	// an empty branch of ours (made by a failed earlier request) is reused
@@ -862,5 +937,87 @@ func TestLPRecPR_AttemptCapConcurrentAndFailures(t *testing.T) {
 	}
 	if len(w.repo.openPulls()) > 1 {
 		t.Errorf("%d open pull requests", len(w.repo.openPulls()))
+	}
+}
+
+// A push that lands between the verification of the branch and Tessera's commit is not built on: the ref update is not a
+// fast-forward, so it is refused, the other writer's commit stays the head, and nothing is posted or recorded.
+func TestLPRecPR_BranchMovesDuringCommit(t *testing.T) {
+	w := lpPRSetup(t)
+	branch := "tessera/rightsize-grant-" + w.rec
+	w.repo.mu.Lock()
+	main := w.repo.branches["main"]
+	w.repo.branches[branch] = main // an empty branch: it verifies
+	var foreign string
+	w.repo.race = func(g *gitRepo) {
+		files := map[string]string{}
+		for k, v := range g.commits[main] {
+			files[k] = v
+		}
+		files["roles/admins.yaml"] = "schema: x\n"
+		foreign = g.commit(files)
+		g.parents[foreign] = main
+		g.branches[branch] = foreign
+	}
+	w.repo.mu.Unlock()
+	rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", "")
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "branch_conflict") {
+		t.Fatalf("%d %.300s, want 409 branch_conflict", rec.Code, rec.Body)
+	}
+	if w.repo.branches[branch] != foreign || len(w.repo.openPulls()) != 0 || len(w.gh.checks) != 0 {
+		t.Errorf("the foreign head was replaced or built on: tip %s, %d pulls, %d checks", w.repo.branches[branch], len(w.repo.openPulls()), len(w.gh.checks))
+	}
+	w.c.read(func(tx *store.TenantTx) error {
+		if p, err := tx.LPRecPR("grant-"+w.rec, "o/policy"); err != nil || p != nil {
+			t.Errorf("a mapping was recorded: %+v, %v", p, err)
+		}
+		return nil
+	})
+}
+
+// A new branch is created at the commit, not at the base: another writer who made the branch first is refused.
+func TestLPRecPR_NewBranchTakenDuringCommit(t *testing.T) {
+	w := lpPRSetup(t)
+	branch := "tessera/rightsize-grant-" + w.rec
+	w.repo.mu.Lock()
+	main := w.repo.branches["main"]
+	w.repo.race = func(g *gitRepo) { g.branches[branch] = main }
+	w.repo.mu.Unlock()
+	rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", "")
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "branch_conflict") || len(w.repo.openPulls()) != 0 || len(w.gh.checks) != 0 {
+		t.Fatalf("%d %.300s", rec.Code, rec.Body)
+	}
+}
+
+// A pull request whose head is not the commit Tessera made or verified gets no check run and no record.
+func TestLPRecPR_PullHeadMustBeOurs(t *testing.T) {
+	w := lpPRSetup(t)
+	w.repo.mu.Lock()
+	w.repo.pullHead = strings.Repeat("b", 40)
+	w.repo.mu.Unlock()
+	rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", "")
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "pull_request_conflict") || len(w.gh.checks) != 0 {
+		t.Fatalf("%d %.300s", rec.Code, rec.Body)
+	}
+	w.c.read(func(tx *store.TenantTx) error {
+		if p, err := tx.LPRecPR("grant-"+w.rec, "o/policy"); err != nil || p != nil {
+			t.Errorf("a mapping was recorded: %+v, %v", p, err)
+		}
+		return nil
+	})
+}
+
+// With several pull requests open on the branch, the App's own is the one updated; someone else's is left alone.
+func TestLPRecPR_PicksTheAppsOwnAmongSeveral(t *testing.T) {
+	w := lpPRSetup(t)
+	branch := "tessera/rightsize-grant-" + w.rec
+	w.repo.mu.Lock()
+	w.repo.branches[branch] = w.repo.branches["main"]
+	w.repo.pulls[90] = &fakePull{Author: "attacker", Number: 90, Branch: branch, Title: "theirs", Body: "theirs", State: "open"}
+	w.repo.pulls[91] = &fakePull{Author: "tessera-app[bot]", Number: 91, Branch: branch, Title: "ours", Body: "old", State: "open"}
+	w.repo.mu.Unlock()
+	v := w.open(200)
+	if v["pull_number"] != float64(91) || v["status"] != "updated" || w.repo.pulls[90].Title != "theirs" || w.repo.pulls[91].Body == "old" {
+		t.Errorf("answer %v; theirs %+v", v, w.repo.pulls[90])
 	}
 }
