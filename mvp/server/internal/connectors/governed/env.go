@@ -33,7 +33,7 @@ type Net struct {
 // endpointKeys are the overrides Net.Endpoints may hold.
 var endpointKeys = map[string]bool{"TESSERA_AZURE_MANAGEMENT_URL": true, "TESSERA_AZURE_AUTHORITY_URL": true,
 	"TESSERA_GCP_CRM_URL": true, "TESSERA_GCP_IAM_URL": true, "TESSERA_GCP_TOKEN_URL": true, "TESSERA_ATLASSIAN_ADMIN_URL": true, "TESSERA_BEDROCK_AGENT_URL": true,
-	"TESSERA_VERTEX_API_URL": true, "TESSERA_VERTEX_TOKEN_URL": true, "TESSERA_FOUNDRY_AUTHORITY_URL": true, "TESSERA_COPILOT_AUTHORITY_URL": true}
+	"TESSERA_GOOGLE_API_URL": true, "TESSERA_GOOGLE_TOKEN_URL": true, "TESSERA_VERTEX_API_URL": true, "TESSERA_VERTEX_TOKEN_URL": true, "TESSERA_FOUNDRY_AUTHORITY_URL": true, "TESSERA_COPILOT_AUTHORITY_URL": true}
 
 // Overrides layers n.Endpoints over getenv. It refuses them outside the dev runtime, and refuses an
 // unknown key, so a production connection can only reach the public cloud endpoints.

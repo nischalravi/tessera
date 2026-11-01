@@ -599,7 +599,17 @@ type Params struct {
 	DataDir string
 	// Prod is true in a production deployment.
 	Prod bool
+	// Customer, Domain and OrgUnits are the scope fields of a connection of a type that is not
+	// in Types but is built from its stored config (GoogleWorkspace): its config's customer,
+	// domain and base_dns.
+	Customer, Domain string
+	OrgUnits         []string
 }
+
+// GoogleWorkspace is the connector type of a Google Workspace connection. It is not a governed
+// type (Lookup does not know it, its checks keep their own prober) but its connector is built from
+// the connection's stored config, through Params.
+const GoogleWorkspace = "google"
 
 // String omits the secret.
 func (p Params) String() string { return "governed.Params{" + p.Type + "}" }

@@ -22,6 +22,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/foundryagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/kubernetes"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/mcpserver"
@@ -40,6 +41,9 @@ import (
 // client); the result reports Stats so the dry run's data checks have counts.
 func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) {
 	rt, hc, now := n.RT, n.HC, n.Now
+	if p.Type == governed.GoogleWorkspace {
+		return stored(p, n)
+	}
 	getenv, err := p.Env()
 	if err != nil {
 		return nil, err
@@ -110,6 +114,31 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 	}
 	return &counted{Connector: cn}, nil
 }
+
+// stored builds the connector of a Google Workspace connection from its stored config (the
+// connection's org units, customer and domain scope the read). The connector replaces an
+// env-configured one of the system (connectors.ConnectionBacked).
+func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
+	getenv, err := n.Overrides(func(string) string { return "" })
+	if err != nil {
+		return nil, err
+	}
+	now := n.Now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	cn, err := google.FromStored(google.Stored{Customer: p.Customer, Domain: p.Domain, OrgUnits: p.OrgUnits, Credential: p.Secret},
+		getenv, n.RT, n.HC, now)
+	if err != nil {
+		return nil, err
+	}
+	return &connectionBacked{counted{Connector: cn}}, nil
+}
+
+// connectionBacked marks a connector built from a connection's stored config.
+type connectionBacked struct{ counted }
+
+func (*connectionBacked) ConnectionBacked() {}
 
 // counted adds the class counts the readiness data checks read (the
 // connector's own result is otherwise untouched): one "user" class over the
