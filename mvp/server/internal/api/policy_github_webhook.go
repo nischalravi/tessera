@@ -41,6 +41,8 @@ import (
 //     answer the same 401, after the same work, so the response does not say which.
 //   - the tenant comes from the URL slug, never from the body, and the payload's installation id and repository are the
 //     ones in that tenant's App settings (403 installation_mismatch otherwise);
+//   - the pull request's head is in that same repository: a pull request from a fork, or from a deleted one, is ignored
+//     (202 fork_pull_request), so an outside author's files are never previewed against the tenant's graph (issue #805);
 //   - the X-GitHub-Delivery id was not handled before (409 replayed_delivery). The id is recorded for 72 hours, atomically,
 //     and forgotten again when the delivery fails for a reason that may pass, so GitHub's redelivery is handled.
 //
@@ -83,6 +85,11 @@ type githubHookPayload struct {
 		Number int `json:"number"`
 		Head   struct {
 			SHA string `json:"sha"`
+			// Repo is the repository the head branch lives in: the tenant's own for a pull request opened inside it, a
+			// fork's otherwise, and null once a fork is deleted.
+			Repo *struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
 		} `json:"head"`
 	} `json:"pull_request"`
 }
@@ -234,6 +241,12 @@ func (s *Server) githubWebhook(_ http.ResponseWriter, r *http.Request, p *params
 	head := in.PullRequest.Head.SHA
 	if in.Installation.ID != st.InstallationID || !strings.EqualFold(in.Repository.FullName, st.Repo) {
 		return reject(http.StatusForbidden, "installation_mismatch", "the delivery is not for this tenant's installation and repository", extra...)
+	}
+	// the head must live in the tenant's own repository: for a pull request from a fork, "repository" is still the base, so
+	// the binding above passes, and the fork's author would have Tessera preview their files against the tenant's graph and
+	// read the result in the comment (issue #805)
+	if hr := in.PullRequest.Head.Repo; hr == nil || !strings.EqualFold(hr.FullName, st.Repo) {
+		return ignore("fork_pull_request", extra...)
 	}
 	if pull < 1 || pull > 1<<31-1 || !ghapp.ValidSHA(head) {
 		return nil, badRequest("invalid_pull_request", "the event names no pull request number or head commit")

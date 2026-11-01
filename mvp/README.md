@@ -2153,7 +2153,8 @@ token of `PUT /api/aws/pr-comment`.
 run the same check as `POST /api/policy/github/check`, on the pull request's own files: Tessera reads the policy bundle at the head commit through a
 `contents: read` installation token (a separate token from the one that posts), previews it, and posts the check run and the comment. Every other action or event
 (including `ping`) answers `202 {"outcome":"ignored"}`, as does a head that is no longer the pull request's head (`stale_head`: a re-run for an older commit never
-overwrites a newer commit's result) and a commit with no policy bundle. A checked delivery answers `202 {"outcome":"checked","conclusion",...}`.
+overwrites a newer commit's result), a commit with no policy bundle, and a pull request whose head is not in the tenant's repository (`fork_pull_request`, also a deleted fork: an outside
+author's files are never previewed against the tenant's graph, issue #805). A checked delivery answers `202 {"outcome":"checked","conclusion",...}`.
 
 | Refusal | Status | Notes |
 |---|---|---|
