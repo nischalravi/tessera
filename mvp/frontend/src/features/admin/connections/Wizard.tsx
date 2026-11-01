@@ -21,6 +21,7 @@ import { CAPABILITIES, CATEGORIES, Capability, Category, filterGallery, groupGal
 import { fieldErrorsByKey, fieldErrorsSummary } from "./fieldErrors";
 import { GOVERNED, settingValues, settingsPatch } from "./governed";
 import { BASE_URL_FIELDS } from "./baseUrl";
+import { PRIVILEGED_GOVERNED } from "./configFields";
 
 // ---------------------------------------------------------------- step 1
 /** The spec as editable text: JSON, since that is what the server stores. */
@@ -452,6 +453,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
               {input("group_filter", "Group filter")}
             </>
           )}
+          {tid === "google" && area("base_dns", "Org units", "Optional, one path per line, for example /Engineering or /Sales/EMEA. Only users in these org units are read; empty reads every user of the customer. Paths start with /, at most 50.")}
           {tid === "sql" && <>
             {input("sql_max_rows", "Row cap", "Empty uses 100000. A read that reaches the cap is partial and the deletion guard holds every removal.", { inputMode: "numeric" })}
             {v.sql_mode === "app" && <>
@@ -461,7 +463,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
           </>}
           {input("exp_users", "Expected users", "From the directory's own console (base.scope.count).", { inputMode: "numeric" })}
           {input("exp_groups", "Expected groups", undefined, { inputMode: "numeric" })}
-          {tid !== "workday" && !gov && area("privileged", "Privileged groups and expected members", "One group per line: Group name: member, member. Members not listed become RF-08 findings.")}
+          {tid !== "workday" && (!gov || PRIVILEGED_GOVERNED.includes(tid)) && area("privileged", "Privileged groups and expected members", "One group per line: Group name: member, member. Members not listed become RF-08 findings.")}
         </div>
       )}
       {step === "mapping" && (

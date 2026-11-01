@@ -330,6 +330,18 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 		if cfg.Domain != "" {
 			host("domain", cfg.Domain)
 		}
+		// base_dns holds the org unit paths whose users are read (empty: all)
+		if len(cfg.BaseDNs) > connsync.MaxOrgUnits {
+			bad("base_dns", "at most %d org units", connsync.MaxOrgUnits)
+		}
+		for i, ou := range cfg.BaseDNs {
+			switch {
+			case !connsync.ValidOrgUnitPath(ou):
+				bad("base_dns", "org unit %d is not a well-formed path: start with /, no trailing /, no quote or backslash, at most %d characters", i+1, connsync.MaxOrgUnitPath)
+			case slices.Index(cfg.BaseDNs, ou) != i:
+				bad("base_dns", "org unit %d is listed twice", i+1)
+			}
+		}
 	case "workday":
 		host("tenant_host", cfg.TenantHost)
 		if cfg.TenantHost != "" && !HostAllowed(cfg.TenantHost, t.HostAllowlist) {

@@ -523,3 +523,15 @@ func testClient(t testing.TB, srv *connsynctest.Server, maxBody int64) *http.Cli
 	}
 	return hc
 }
+
+func TestValidOrgUnitPath(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/": true, "/Eng": true, "/Eng/Platform team": true, "/R&D (EU)": true,
+		"": false, "Eng": false, "/Eng/": false, "//": false, "/Eng//Ops": false, "/E'ng": false, `/E\ng`: false,
+		"/Eng\n": false, "/Eng\x00": false, "/" + strings.Repeat("a", connsync.MaxOrgUnitPath): false,
+	} {
+		if got := connsync.ValidOrgUnitPath(p); got != want {
+			t.Errorf("ValidOrgUnitPath(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
