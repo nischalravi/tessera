@@ -606,9 +606,11 @@ type Params struct {
 	Prod bool
 	// Customer, Domain and OrgUnits are the scope fields of a connection of a type that is not
 	// in Types but is built from its stored config (GoogleWorkspace): its config's customer,
-	// domain and base_dns.
+	// domain, base_dns and admin_email.
 	Customer, Domain string
 	OrgUnits         []string
+	// AdminEmail is the config's admin_email: the administrator to impersonate (empty: the credential's).
+	AdminEmail string
 }
 
 // GoogleWorkspace is the connector type of a Google Workspace connection. It is not a governed

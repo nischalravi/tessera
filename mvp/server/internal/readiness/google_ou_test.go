@@ -62,11 +62,52 @@ func TestValidateConn_GoogleOrgUnits(t *testing.T) {
 	}
 }
 
+// TestValidateConn_GoogleAdminEmail: admin_email is the administrator to impersonate (issue
+// #818): optional in the config, a well-formed address, in the connection's domain when one is
+// set; the message never echoes the input.
+func TestValidateConn_GoogleAdminEmail(t *testing.T) {
+	for name, tc := range map[string]struct {
+		domain, email string
+		good          bool
+	}{
+		"none":                 {"example.com", "", true},
+		"in the domain":        {"example.com", "admin@example.com", true},
+		"domain case":          {"Example.com", "admin@EXAMPLE.com", true},
+		"no domain set":        {"", "admin@example.org", true},
+		"other domain":         {"example.com", "admin@evil.example.org", false},
+		"subdomain":            {"example.com", "admin@sub.example.com", false},
+		"no at":                {"", "admin", false},
+		"no local part":        {"", "@example.com", false},
+		"no domain part":       {"", "admin@", false},
+		"space":                {"", "ad min@example.com", false},
+		"two addresses":        {"", "a@example.com,b@example.com", false},
+		"display name":         {"", "Admin <admin@example.com>", false},
+		"control character":    {"", "admin@example.com\n", false},
+		"too long":             {"", strings.Repeat("a", 250) + "@example.com", false},
+		"ip literal":           {"", "admin@[10.0.0.1]", false},
+		"domain mismatch only": {"example.com", "admin@example.co", false},
+	} {
+		cfg := ConnConfig{Customer: "my_customer", Domain: tc.domain, AdminEmail: tc.email}
+		var bad []FieldError
+		for _, fe := range ValidateConnEnv(cfg, tmplOfID(t, "google"), "google", config.Prod) {
+			if fe.Field == "admin_email" {
+				bad = append(bad, fe)
+				if tc.email != "" && strings.Contains(fe.Msg, tc.email) || tc.domain != "" && strings.Contains(fe.Msg, tc.domain) {
+					t.Errorf("%s: message echoes the input: %q", name, fe.Msg)
+				}
+			}
+		}
+		if (len(bad) == 0) != tc.good {
+			t.Errorf("%s: admin_email errors = %v, want good=%v", name, bad, tc.good)
+		}
+	}
+}
+
 // A live Google Workspace connection's connector is opened from its stored config
 // (issue #814): its org units (base_dns), customer and domain reach the builder with
 // the opened credential, for the sync and for OpenConnector; a dry run opens it too.
 func TestGoogleConnectorIsOpenedFromTheStoredConfig(t *testing.T) {
-	govConfig["google"] = `{"customer":"my_customer","domain":"example.com","correlation_key":"id","base_dns":["/Eng","/Sales/EMEA"]}`
+	govConfig["google"] = `{"customer":"my_customer","domain":"example.com","admin_email":"admin@example.com","correlation_key":"id","base_dns":["/Eng","/Sales/EMEA"]}`
 	t.Cleanup(func() { delete(govConfig, "google") })
 	var opened []governed.Params
 	s := govSvc(t, &opened, stubProber{})
@@ -87,7 +128,7 @@ func TestGoogleConnectorIsOpenedFromTheStoredConfig(t *testing.T) {
 		t.Fatalf("connector built %d times", len(built))
 	}
 	p := built[0]
-	if p.Type != governed.GoogleWorkspace || p.Customer != "my_customer" || p.Domain != "example.com" || p.Secret != govSecret ||
+	if p.Type != governed.GoogleWorkspace || p.Customer != "my_customer" || p.Domain != "example.com" || p.AdminEmail != "admin@example.com" || p.Secret != govSecret ||
 		!slices.Equal(p.OrgUnits, []string{"/Eng", "/Sales/EMEA"}) {
 		t.Errorf("opened with %+v", p)
 	}

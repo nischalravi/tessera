@@ -6496,8 +6496,9 @@ vault references of the connection credential store plug into the same resolver 
 **Google Workspace connections (issue #814).** A live Google Workspace connection (Settings, Connections) is read
 from its own stored config, not from the variables above: its customer, domain and org units (`base_dns`) scope
 the sync, the sealed credential is the service account's JSON key file, and the administrator to impersonate is the
-`admin_email` field of that JSON (next to `type`, `client_email` and `private_key`; the connection's config has no
-field for it). Groups, roles and identities are read, as the variable defaults do. When a tenant has a live Google
+config's `admin_email` (the wizard's Impersonated admin email field, an address in the primary domain when one is
+set; the credential JSON's own `admin_email`, next to `type`, `client_email` and `private_key`, is the fallback and
+the config wins). Groups, roles and identities are read, as the variable defaults do. When a tenant has a live Google
 connection it replaces an env-configured `google` connector, so the connection's org units always apply; the
 `TESSERA_GOOGLE_*` variables remain the fallback for a tenant without one (dev and the single-node default). A
 connection that cannot be opened (no credential, no `admin_email`, a refused setting) is reported in the sync's

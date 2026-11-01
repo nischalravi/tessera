@@ -45,6 +45,7 @@ export const WIZARD_INPUTS: Record<string, FieldInput[]> = {
   use_dirsync: [{ templates: ["ad"], evidence: 'flag\\("use_dirsync"' }],
   customer: [{ templates: ["google"], evidence: 'input\\("customer"' }],
   domain: [{ templates: ["google"], evidence: 'input\\("domain"' }],
+  admin_email: [{ templates: ["google"], evidence: 'input\\("admin_email"' }],
   tenant_host: [{ templates: ["workday"], evidence: 'input\\("tenant_host"' }],
   api_version: [{ templates: ["workday"], evidence: 'input\\("api_version"' }],
   interface: [{ templates: ["workday"], evidence: 'input\\("interface"' }],
