@@ -165,3 +165,15 @@ func TestIntroduceOneResolveOneFails(t *testing.T) {
 		t.Errorf("summary misstates the result:\n%s", s)
 	}
 }
+
+func TestFindingsSummary_EscapesInvisibleCharacters(t *testing.T) {
+	got := ghapp.FindingsSummary([]ghapp.Finding{{Path: "roles/a\u00adb.yaml", Line: 3, Code: "duplicate_name", Message: "x\U000e0041y\ufe0fz `@all`"}}, strings.Repeat("a", 40))
+	for _, r := range []rune{0x00ad, 0xe0041, 0xfe0f} {
+		if strings.ContainsRune(got, r) {
+			t.Errorf("U+%04X reached the text: %q", r, got)
+		}
+	}
+	if !strings.Contains(got, "FAILURE") || !strings.Contains(got, "duplicate_name") {
+		t.Errorf("summary = %q", got)
+	}
+}

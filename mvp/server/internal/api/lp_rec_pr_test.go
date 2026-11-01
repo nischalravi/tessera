@@ -645,8 +645,8 @@ func TestLPRecPR_RepositoryRoleFileUnreadable(t *testing.T) {
 		main := w.repo.commits[w.repo.branches["main"]]
 		main[w.role] = edit(main[w.role])
 		w.repo.mu.Unlock()
-		if rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", ""); rec.Code != 422 || !strings.Contains(rec.Body.String(), "role_file_unreadable") {
-			t.Errorf("%s: %d %s, want 422 role_file_unreadable", name, rec.Code, rec.Body)
+		if rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", ""); rec.Code != 422 || !strings.Contains(rec.Body.String(), "role_file_unreadable") || !strings.Contains(rec.Body.String(), `"reason":"role_file_unreadable"`) {
+			t.Errorf("%s: %d %s, want 422 role_file_unreadable with that reason", name, rec.Code, rec.Body)
 		}
 	}
 }
