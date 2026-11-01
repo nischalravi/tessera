@@ -465,22 +465,33 @@ func (s *Service) validateCreateConfig(in CreateInput, t *template.Resolved, cfg
 	return metadataHostError(cfg)
 }
 
+// namesMetadataHost reports whether a host or URL setting names a cloud metadata service in any form it
+// may be written: a bare host or IP literal, a URL, or a host with a port, user info or path
+// ("169.254.169.254:80", "x@169.254.169.254", "169.254.169.254/latest").
+func namesMetadataHost(v string) bool {
+	v = strings.TrimSpace(v)
+	if safehttp.IsMetadataHost(v) {
+		return true
+	}
+	for _, s := range []string{v, "//" + v} {
+		if u, err := url.Parse(s); err == nil && u.Host != "" && safehttp.IsMetadataHost(u.Hostname()) {
+			return true
+		}
+	}
+	return false
+}
+
 // metadataHostError refuses a config whose host or URL settings name a cloud metadata service, in
 // every environment. The REST spec's URLs are checked by its own validation.
 func metadataHostError(cfg ConnConfig) error {
-	hostOf := func(v string) string {
-		if u, err := url.Parse(strings.TrimSpace(v)); err == nil && u.Host != "" {
-			return u.Hostname()
-		}
-		return v
-	}
-	fields := map[string]string{"host": cfg.Host, "org_url": cfg.OrgURL, "domain": cfg.Domain, "base_url": cfg.BaseURL, "tenant_host": cfg.TenantHost}
+	fields := map[string]string{"host": cfg.Host, "org_url": cfg.OrgURL, "domain": cfg.Domain, "base_url": cfg.BaseURL, "tenant_host": cfg.TenantHost,
+		"settings.host": cfg.Settings["host"]} // the SSH and SFTP connection types name their target here
 	if cfg.SQL != nil {
 		fields["sql.host"] = cfg.SQL.Host
 	}
 	var bad []FieldError
-	for _, f := range []string{"host", "org_url", "domain", "base_url", "tenant_host", "sql.host"} {
-		if v := fields[f]; v != "" && safehttp.IsMetadataHost(hostOf(v)) {
+	for _, f := range []string{"host", "org_url", "domain", "base_url", "tenant_host", "sql.host", "settings.host"} {
+		if v := fields[f]; v != "" && namesMetadataHost(v) {
 			bad = append(bad, FieldError{f, "must not point at a cloud metadata service"})
 		}
 	}
