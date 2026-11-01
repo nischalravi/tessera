@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -84,6 +85,8 @@ type fake struct {
 	headers    []map[string]any  // assertion headers
 	forms      []url.Values
 	override   http.HandlerFunc
+	userQuery  []string          // the query parameter of each users.list request
+	ouUsers    map[string]string // when set: org unit query -> users page body; any other query gets no users
 }
 
 func newFake(t *testing.T) *fake {
@@ -169,6 +172,15 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch p := strings.TrimPrefix(r.URL.Path, dirPrefix); p {
 	case "/users":
+		f.userQuery = append(f.userQuery, q.Get("query"))
+		if f.ouUsers != nil {
+			if b, ok := f.ouUsers[q.Get("query")]; ok {
+				fmt.Fprint(w, b)
+			} else {
+				fmt.Fprint(w, `{"users":[]}`)
+			}
+			return
+		}
 		if q.Get("customer") != "my_customer" && q.Get("domain") == "" {
 			f.t.Errorf("users list without a customer: %s", r.URL.RawQuery)
 		}
@@ -313,6 +325,43 @@ func TestDiscoverFull(t *testing.T) {
 	}
 	if len(edges) != 8 {
 		t.Errorf("edges = %d, want 8 (external, customer-wide and unknown members are dropped): %v", len(edges), edges)
+	}
+}
+
+// TestOrgUnitsRestrictTheUserRead: with org units configured, users are listed
+// once per org unit with an orgUnitPath query, so only those units are read; a
+// user in two units is kept once; with none configured there is no query.
+func TestOrgUnitsRestrictTheUserRead(t *testing.T) {
+	user := func(id, email string) string {
+		return `{"id":"` + id + `","primaryEmail":"` + email + `","name":{"fullName":"X"}}`
+	}
+	f := newFake(t)
+	f.ouUsers = map[string]string{
+		"orgUnitPath='/Eng'":   `{"users":[` + user(ada, "ada@example.com") + `,` + user(ben, "ben@example.com") + `]}`,
+		"orgUnitPath='/Sales'": `{"users":[` + user(ben, "ben@example.com") + `]}`,
+	}
+	cfg := baseCfg(t)
+	cfg.OrgUnits = []string{"/Eng", "/Sales", "/Empty"}
+	res, err := f.connector(cfg).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := acctMap(res); len(got) != 2 || got[ada].Username == "" || got[ben].Username == "" {
+		t.Errorf("accounts = %v, want only ada and ben (cy is outside the org units)", got)
+	}
+	want := []string{"orgUnitPath='/Eng'", "orgUnitPath='/Sales'", "orgUnitPath='/Empty'"}
+	if !slices.Equal(f.userQuery, want) {
+		t.Errorf("user queries = %q, want %q", f.userQuery, want)
+	}
+
+	f = newFake(t)
+	if _, err := f.connector(baseCfg(t)).Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range f.userQuery {
+		if q != "" {
+			t.Errorf("no org units configured, but users were queried with %q", q)
+		}
 	}
 }
 
@@ -836,6 +885,15 @@ func TestNewValidatesConfiguration(t *testing.T) {
 		{"no key", with(func(c *Config) { c.PrivateKey = connsync.Secret{} }), false},
 		{"key is not PEM", with(func(c *Config) { c.PrivateKey = connsync.NewSecret("nope") }), false},
 		{"customer with a path", with(func(c *Config) { c.Customer = "../x" }), false},
+		{"org units", with(func(c *Config) { c.OrgUnits = []string{"/Eng", "/Eng/Platform team"} }), true},
+		{"org unit without a leading slash", with(func(c *Config) { c.OrgUnits = []string{"Eng"} }), false},
+		{"org unit with a quote", with(func(c *Config) { c.OrgUnits = []string{"/E'ng"} }), false},
+		{"too many org units", with(func(c *Config) {
+			c.OrgUnits = make([]string, connsync.MaxOrgUnits+1)
+			for i := range c.OrgUnits {
+				c.OrgUnits[i] = fmt.Sprintf("/ou%d", i)
+			}
+		}), false},
 		{"domain is an IP", with(func(c *Config) { c.Domain = "10.0.0.1" }), false},
 		{"http api", with(func(c *Config) { c.APIURL = "http://admin.googleapis.com" }), false},
 		{"http token url", with(func(c *Config) { c.TokenURL = "http://oauth2.googleapis.com/token" }), false},
@@ -905,11 +963,12 @@ func TestFromEnv(t *testing.T) {
 	off["TESSERA_GOOGLE_EMIT_IDENTITIES"] = "false"
 	off["TESSERA_GOOGLE_MAX_INCREMENTAL_AGE"] = "0"
 	off["TESSERA_GOOGLE_DOMAIN"] = "example.com"
+	off["TESSERA_GOOGLE_ORG_UNITS"] = "/Eng, /Sales/EMEA"
 	c, err = FromEnv(env(off), now0, prodRT, prodClient(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g := c.(*Connector).cfg; g.Groups || g.Roles || g.EmitIdentities || g.MaxIncrementalAge != 0 || g.Domain != "example.com" {
+	if g := c.(*Connector).cfg; g.Groups || g.Roles || g.EmitIdentities || g.MaxIncrementalAge != 0 || g.Domain != "example.com" || !slices.Equal(g.OrgUnits, []string{"/Eng", "/Sales/EMEA"}) {
 		t.Errorf("FromEnv(off) = %+v", g)
 	}
 }

@@ -6468,6 +6468,7 @@ vault references of the connection credential store plug into the same resolver 
 | `TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY` | reference to the service account's JSON key file (`file:/abs/path` or `env:NAME`); only `client_email`, `private_key` and `private_key_id` are used |
 | `TESSERA_GOOGLE_ADMIN_EMAIL` | the administrator the service account impersonates (domain-wide delegation) |
 | `TESSERA_GOOGLE_CUSTOMER`, `TESSERA_GOOGLE_DOMAIN` | default `my_customer`; optionally limit users to one domain |
+| `TESSERA_GOOGLE_ORG_UNITS` | optional, comma-separated org unit paths (`/Engineering,/Sales/EMEA`, at most 50): users are listed once per org unit (`query=orgUnitPath='...'`), so users elsewhere are never read. In the connection wizard the same list is the Org units field on the Google Workspace Scope step (`base_dns`, validated by readiness); the connector reads it from the environment today |
 | `TESSERA_GOOGLE_API_URL`, `TESSERA_GOOGLE_TOKEN_URL` | default `https://admin.googleapis.com` and `https://oauth2.googleapis.com/token` |
 | `TESSERA_GOOGLE_EMIT_IDENTITIES`, `TESSERA_GOOGLE_GROUPS`, `TESSERA_GOOGLE_ROLES` | all default `true`; turn groups or roles off when the delegation does not grant their scope (Google refuses the whole token request if one scope is missing) |
 | `TESSERA_GOOGLE_MAX_INCREMENTAL_AGE` | default `24h` (`0` never): a full read repairs group members this often |
