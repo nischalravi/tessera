@@ -82,7 +82,7 @@ func hookSig(secret string, body []byte) string {
 func (w *hookWorld) payload(action, head string) []byte {
 	b, _ := json.Marshal(map[string]any{"action": action, "number": hookPull, "installation": map[string]any{"id": 77},
 		"repository":   map[string]any{"full_name": "o/policy"},
-		"pull_request": map[string]any{"number": hookPull, "head": map[string]any{"sha": head}}})
+		"pull_request": map[string]any{"number": hookPull, "head": map[string]any{"sha": head, "repo": map[string]any{"full_name": "o/policy"}}}})
 	return b
 }
 
@@ -322,7 +322,7 @@ func TestGitHubWebhook_InstallationAndRepositoryMustMatchTheSlugsTenant(t *testi
 	w := hookSetup(t)
 	mk := func(inst int, repo string) []byte {
 		b, _ := json.Marshal(map[string]any{"action": "opened", "installation": map[string]any{"id": inst}, "repository": map[string]any{"full_name": repo},
-			"pull_request": map[string]any{"number": hookPull, "head": map[string]any{"sha": w.sha}}})
+			"pull_request": map[string]any{"number": hookPull, "head": map[string]any{"sha": w.sha, "repo": map[string]any{"full_name": "o/policy"}}}})
 		return b
 	}
 	for name, body := range map[string][]byte{"other installation": mk(78, "o/policy"), "other repository": mk(77, "o/other"), "no installation": mk(0, "o/policy")} {
@@ -336,6 +336,45 @@ func TestGitHubWebhook_InstallationAndRepositoryMustMatchTheSlugsTenant(t *testi
 	}
 	if n := w.actions(w.e.f.B.ID)["policy.github_webhook.rejected"]; n != 3 {
 		t.Errorf("%d rejected events, want 3", n)
+	}
+}
+
+// A pull request from a fork is never previewed: "repository" is the base, so the installation and repository binding passes,
+// and only the head's repository says whose files these are (issue #805).
+func TestGitHubWebhook_PullRequestFromAForkIsIgnored(t *testing.T) {
+	w := hookSetup(t)
+	mk := func(head any) []byte {
+		pr := map[string]any{"number": hookPull, "head": map[string]any{"sha": w.sha}}
+		if head != nil {
+			pr["head"].(map[string]any)["repo"] = head
+		}
+		b, _ := json.Marshal(map[string]any{"action": "opened", "installation": map[string]any{"id": 77}, "repository": map[string]any{"full_name": "o/policy"}, "pull_request": pr})
+		return b
+	}
+	repo := func(name string) any { return map[string]any{"full_name": name} }
+	for name, body := range map[string][]byte{
+		"fork of another owner":     mk(repo("evil/policy")),
+		"same name, other owner":    mk(repo("o2/policy")),
+		"same owner, other name":    mk(repo("o/policy-fork")),
+		"deleted fork (null repo)":  mk(nil),
+		"empty repository name":     mk(repo("")),
+		"suffix of the tenant repo": mk(repo("evil/o/policy")),
+		"prefix of the tenant repo": mk(repo("o/policy/x")),
+	} {
+		rec := w.deliver(hookReq{body: body})
+		if rec.Code != 202 || !strings.Contains(rec.Body.String(), `"outcome":"ignored"`) || !strings.Contains(rec.Body.String(), "fork_pull_request") {
+			t.Errorf("%s = %d %s, want ignored as fork_pull_request", name, rec.Code, rec.Body)
+		}
+	}
+	if len(w.gh.got) != 0 {
+		t.Errorf("a pull request from a fork reached GitHub: %v", w.gh.got)
+	}
+	if got := w.actions(w.e.f.B.ID); got["policy.github_webhook.ignored"] != 7 || got["policy.github_check.posted"] != 0 {
+		t.Errorf("audit actions = %v, want 7 ignored events and no check", got)
+	}
+	// the pull request's own repository, in another case, is checked; and the delivery ids of the ignored ones were not spent
+	if rec := w.deliver(hookReq{body: mk(repo("O/Policy"))}); rec.Code != 202 || !strings.Contains(rec.Body.String(), `"outcome":"checked"`) {
+		t.Errorf("same repository = %d %s", rec.Code, rec.Body)
 	}
 }
 
