@@ -329,6 +329,12 @@ type HrisEventRecord struct {
 func (*UsageRecord) isEvent()     {}
 func (*HrisEventRecord) isEvent() {}
 
+// ConnectionBacked is implemented by a connector built from a connection's stored
+// config rather than from TESSERA_* variables. When a tenant has such a connection,
+// it is read instead of the env-configured connector of the same system (the
+// environment is the dev fallback).
+type ConnectionBacked interface{ ConnectionBacked() }
+
 // Connector is implemented by every source-system connector.
 type Connector interface {
 	// System is the short system name, e.g. "okta".

@@ -64,6 +64,9 @@ func (s *Service) connectorFor(b *Bundle, now time.Time) (connectors.Connector, 
 	if govLive(b) {
 		return s.Runner.Gov.connector(b, now)
 	}
+	if storedLive(b) {
+		return s.Runner.Gov.storedConnector(b, now)
+	}
 	return nil, conflict("connector_unavailable", "no %s connector is available yet: live connectors arrive with DR-12 to DR-18",
 		b.Conn.ConnectorType)
 }
@@ -78,12 +81,17 @@ func (s *Service) OpenConnector(c *store.TenantTx, ac ActiveConnection, now time
 		return cn, true, nil
 	}
 	t, isGov := governed.Lookup(ac.connectorType)
-	if !isGov || t.Feature {
+	stored := ac.connectorType == governed.GoogleWorkspace
+	if !stored && (!isGov || t.Feature) {
 		return nil, false, nil
 	}
 	b, err := s.liveBundle(c, ac, now)
 	if err != nil {
 		return nil, false, err
+	}
+	if stored {
+		cn, err = s.Runner.Gov.storedConnector(b, now)
+		return cn, err == nil, err
 	}
 	cn, err = s.Runner.Gov.connector(b, now)
 	return cn, err == nil, err
@@ -112,7 +120,7 @@ func (s *Service) GovernedConnectorsTx(c *store.TenantTx, now time.Time) (cns []
 		return nil, nil, err
 	}
 	for _, ac := range live {
-		if gt, ok := governed.Lookup(ac.connectorType); !ok || gt.Feature {
+		if gt, ok := governed.Lookup(ac.connectorType); (!ok || gt.Feature) && ac.connectorType != governed.GoogleWorkspace {
 			continue
 		}
 		cn, _, err := s.OpenConnector(c, ac, now)

@@ -6481,7 +6481,7 @@ vault references of the connection credential store plug into the same resolver 
 | `TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY` | reference to the service account's JSON key file (`file:/abs/path` or `env:NAME`); only `client_email`, `private_key` and `private_key_id` are used |
 | `TESSERA_GOOGLE_ADMIN_EMAIL` | the administrator the service account impersonates (domain-wide delegation) |
 | `TESSERA_GOOGLE_CUSTOMER`, `TESSERA_GOOGLE_DOMAIN` | default `my_customer`; optionally limit users to one domain |
-| `TESSERA_GOOGLE_ORG_UNITS` | optional, comma-separated org unit paths (`/Engineering,/Sales/EMEA`, at most 50): users are listed once per org unit (`query=orgUnitPath='...'`), so users elsewhere are never read. In the connection wizard the same list is the Org units field on the Google Workspace Scope step (`base_dns`, validated by readiness); the connector reads it from the environment today |
+| `TESSERA_GOOGLE_ORG_UNITS` | optional, comma-separated org unit paths (`/Engineering,/Sales/EMEA`, at most 50): users are listed once per org unit (`query=orgUnitPath='...'`), so users elsewhere are never read. In the connection wizard the same list is the Org units field on the Google Workspace Scope step (`base_dns`, validated by readiness); see "Google Workspace connections" below |
 | `TESSERA_GOOGLE_API_URL`, `TESSERA_GOOGLE_TOKEN_URL` | default `https://admin.googleapis.com` and `https://oauth2.googleapis.com/token` |
 | `TESSERA_GOOGLE_EMIT_IDENTITIES`, `TESSERA_GOOGLE_GROUPS`, `TESSERA_GOOGLE_ROLES` | all default `true`; turn groups or roles off when the delegation does not grant their scope (Google refuses the whole token request if one scope is missing) |
 | `TESSERA_GOOGLE_MAX_INCREMENTAL_AGE` | default `24h` (`0` never): a full read repairs group members this often |
@@ -6492,6 +6492,19 @@ vault references of the connection credential store plug into the same resolver 
 | `TESSERA_WORKDAY_WORKERS_PATH`, `TESSERA_WORKDAY_EVENTS_PATH` | default `/ccx/api/{version}/{tenant}/workers` and `/ccx/api/{version}/{tenant}/workerEvents` (`{version}` is `TESSERA_WORKDAY_API_VERSION`, default `v1`, shape `v44.0`); point them at a custom report (RaaS) that returns the JSON below |
 | `TESSERA_WORKDAY_EMIT_IDENTITIES` | `true` (default): Workday is HR-authoritative, its workers are the identities. Set the other connectors' `..._EMIT_IDENTITIES` to `false` |
 | `TESSERA_WORKDAY_EVENT_WINDOW`, `TESSERA_WORKDAY_MAX_INCREMENTAL_AGE` | defaults `720h` (an event older than this is historical) and `24h` (`0` never) |
+
+**Google Workspace connections (issue #814).** A live Google Workspace connection (Settings, Connections) is read
+from its own stored config, not from the variables above: its customer, domain and org units (`base_dns`) scope
+the sync, the sealed credential is the service account's JSON key file, and the administrator to impersonate is the
+`admin_email` field of that JSON (next to `type`, `client_email` and `private_key`; the connection's config has no
+field for it). Groups, roles and identities are read, as the variable defaults do. When a tenant has a live Google
+connection it replaces an env-configured `google` connector, so the connection's org units always apply; the
+`TESSERA_GOOGLE_*` variables remain the fallback for a tenant without one (dev and the single-node default). A
+connection that cannot be opened (no credential, no `admin_email`, a refused setting) is reported in the sync's
+failed list by name and the other connectors are still read. A connection never carries an endpoint override
+(`TESSERA_GOOGLE_API_URL` and `_TOKEN_URL` apply to a dev runtime's fake only). Okta, Entra, Workday, Salesforce,
+SCIM, generic REST, SQL and directory connections are still read from the environment or by their own feature;
+see issue #814 for the list.
 
 Minimum read-only permissions:
 

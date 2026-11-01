@@ -37,11 +37,13 @@ package google
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -236,6 +238,47 @@ func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc 
 		return nil, fmt.Errorf("TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY: %w", err)
 	}
 	return New(cfg, rt, hc, func() time.Time { return time.Now().UTC() })
+}
+
+// Stored is a Google Workspace connection as the readiness service holds it:
+// the scope fields of its stored config and its opened credential.
+type Stored struct {
+	// Customer, Domain and OrgUnits are the connection's customer, domain and
+	// base_dns (org unit paths). Empty values read as they do for FromEnv.
+	Customer, Domain string
+	OrgUnits         []string
+	// Credential is the sealed credential, opened: the service account's JSON key
+	// file. It may carry "admin_email", the administrator to impersonate (the
+	// connection's config has no field for it).
+	Credential string
+}
+
+// FromStored builds the connector of a connection from its stored config
+// instead of TESSERA_GOOGLE_* variables, so the connection's org units, customer
+// and domain scope the sync. Nothing is read from the environment: getenv only
+// supplies the dev endpoint overrides TESSERA_GOOGLE_API_URL and
+// TESSERA_GOOGLE_TOKEN_URL (the caller passes the layer that refuses them outside
+// dev). Groups, roles and identities are read, as FromEnv does by default.
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	cfg := Config{Customer: s.Customer, Domain: s.Domain, OrgUnits: slices.Clone(s.OrgUnits),
+		APIURL: getenv("TESSERA_GOOGLE_API_URL"), TokenURL: getenv("TESSERA_GOOGLE_TOKEN_URL"),
+		EmitIdentities: true, Groups: true, Roles: true, MaxIncrementalAge: 24 * time.Hour}
+	var extra struct {
+		AdminEmail string `json:"admin_email"`
+	}
+	if s.Credential == "" {
+		return nil, errors.New("google: the connection has no stored credential")
+	}
+	_ = json.Unmarshal([]byte(s.Credential), &extra) // a malformed file is reported by parseServiceAccountKey
+	cfg.AdminEmail = strings.TrimSpace(extra.AdminEmail)
+	var err error
+	if cfg.ServiceAccountEmail, cfg.PrivateKey, cfg.KeyID, err = parseServiceAccountKey(s.Credential); err != nil {
+		return nil, fmt.Errorf("google: credential: %w", err)
+	}
+	if cfg.AdminEmail == "" {
+		return nil, errors.New(`google: the credential must name the administrator to impersonate ("admin_email" next to the service account key fields)`)
+	}
+	return New(cfg, rt, hc, now)
 }
 
 func (*Connector) System() string      { return System }
