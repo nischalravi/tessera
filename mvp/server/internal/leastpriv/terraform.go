@@ -90,10 +90,11 @@ func label(name string) string {
 	return l
 }
 
-// unsafeRune is the set ghapp's unsafeRune strips: controls, separators, bidi and zero-width characters.
+// unsafeRune is the set ghapp's unsafeRune strips: controls, separators, bidi, zero-width, soft hyphen, variation selector and tag characters.
 func unsafeRune(r rune) bool {
 	return r < 0x20 || r == 0x7f || r == 0x85 || r == 0x2028 || r == 0x2029 || r == 0x061c || r == 0xfeff ||
-		(r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2060 && r <= 0x2069)
+		(r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2060 && r <= 0x2069) ||
+		r == 0x00ad || r == 0x180e || (r >= 0xfe00 && r <= 0xfe0f) || (r >= 0xe0100 && r <= 0xe01ef) || (r >= 0xe0000 && r <= 0xe007f)
 }
 
 // jsonEscapeUnsafe writes every unsafe rune of an indented JSON document other than its newlines as a \uXXXX escape (issue

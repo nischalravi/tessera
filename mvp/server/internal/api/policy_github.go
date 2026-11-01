@@ -143,11 +143,11 @@ func (s *Server) getGitHubApp(r *http.Request, _ *params) (int, any, error) {
 }
 
 // putGitHubApp stores the App settings. A field the request omits (app_id, installation_id, repo) keeps its stored
-// value; one sent, even empty, replaces it. private_key is optional (omit it to keep the stored key; send a new one to
+// value (enabled too, so rotating the webhook secret never turns the feature off); one sent, even empty, replaces it. private_key is optional (omit it to keep the stored key; send a new one to
 // rotate it); remove_key deletes the stored key (and so turns the feature off).
 func (s *Server) putGitHubApp(r *http.Request, _ *params) (int, any, error) {
 	var in struct {
-		Enabled        bool    `json:"enabled"`
+		Enabled        *bool   `json:"enabled"`
 		AppID          *string `json:"app_id"`
 		InstallationID *int64  `json:"installation_id"`
 		Repo           *string `json:"repo"`
@@ -194,8 +194,11 @@ func (s *Server) putGitHubApp(r *http.Request, _ *params) (int, any, error) {
 			return err
 		}
 		// a field the request omits keeps its stored value, so {"enabled": false} only turns the feature off
-		next := &store.GitHubAppSettings{Enabled: in.Enabled, AppID: cur.AppID, InstallationID: cur.InstallationID, Repo: cur.Repo,
+		next := &store.GitHubAppSettings{Enabled: cur.Enabled, AppID: cur.AppID, InstallationID: cur.InstallationID, Repo: cur.Repo,
 			KeyEnc: cur.KeyEnc, KeyFingerprint: cur.KeyFingerprint, KeySetAt: cur.KeySetAt, UpdatedBy: actor(r), UpdatedAt: now}
+		if in.Enabled != nil {
+			next.Enabled = *in.Enabled
+		}
 		if in.AppID != nil {
 			next.AppID = *in.AppID
 		}
@@ -207,6 +210,9 @@ func (s *Server) putGitHubApp(r *http.Request, _ *params) (int, any, error) {
 		}
 		switch {
 		case in.RemoveKey:
+			if in.Enabled == nil {
+				next.Enabled = false // no key, no feature: removing the key without a word about enabled turns it off, as documented
+			}
 			next.KeyEnc, next.KeyFingerprint, next.KeySetAt = nil, "", ""
 		case newKey != nil:
 			if s.cfg.Sealer == nil {
@@ -217,7 +223,7 @@ func (s *Server) putGitHubApp(r *http.Request, _ *params) (int, any, error) {
 			}
 			next.KeyFingerprint, next.KeySetAt = fingerprint, store.RT(now)
 		}
-		if in.Enabled && (next.AppID == "" || next.InstallationID < 1 || next.Repo == "" || len(next.KeyEnc) == 0) {
+		if next.Enabled && (next.AppID == "" || next.InstallationID < 1 || next.Repo == "" || len(next.KeyEnc) == 0) {
 			return badRequest("incomplete_settings", "enabling the GitHub App needs app_id, installation_id, repo and a private_key")
 		}
 		if err := c.PutGitHubAppSettings(next, now); err != nil {
@@ -361,6 +367,8 @@ type ghPublishOpts struct {
 	ClaimWait time.Duration
 	// Extra is added to the outcome event's detail (the webhook adds its trigger and delivery id).
 	Extra ojson.Object
+	// Findings, when set, replaces the preview: the bundle did not validate, so the check fails and lists them (issue #808).
+	Findings []ghapp.Finding
 }
 
 // githubClaimPoll is how often a waiting request tries the claim again.
@@ -373,10 +381,20 @@ var githubClaimPoll = 500 * time.Millisecond
 func (s *Server) publishGitHubCheck(ctx context.Context, scope readiness.Scope, client *ghapp.Client, st *store.GitHubAppSettings,
 	pull int, headSHA string, view *policyDiffView, extras *diffExtras, o ghPublishOpts) (*githubCheckView, error) {
 	now := s.clock()
-	preview := previewOf(view, extras)
-	verdict := ghapp.Evaluate(preview)
-	chk := ghapp.Check{HeadSHA: headSHA, Conclusion: verdict.Conclusion, Title: ghapp.Title(preview, verdict), Summary: ghapp.Summary(preview, verdict, headSHA)}
-	comment := ghapp.Comment(preview, verdict, headSHA)
+	var verdict ghapp.Verdict
+	var chk ghapp.Check
+	var comment string
+	if o.Findings != nil {
+		view = &policyDiffView{} // nothing was previewed: no bundle or preview hash
+		verdict = ghapp.Verdict{Conclusion: ghapp.Failure, Reasons: []string{"The policy bundle does not validate."}}
+		chk = ghapp.Check{HeadSHA: headSHA, Conclusion: ghapp.Failure, Title: ghapp.FindingsTitle(len(o.Findings)), Summary: ghapp.FindingsSummary(o.Findings, headSHA)}
+		comment = ghapp.FindingsComment(o.Findings, headSHA)
+	} else {
+		preview := previewOf(view, extras)
+		verdict = ghapp.Evaluate(preview)
+		chk = ghapp.Check{HeadSHA: headSHA, Conclusion: verdict.Conclusion, Title: ghapp.Title(preview, verdict), Summary: ghapp.Summary(preview, verdict, headSHA)}
+		comment = ghapp.Comment(preview, verdict, headSHA)
+	}
 
 	// the private key is opened only to sign the App JWT, with no transaction open, and is not kept
 	pemKey, err := s.cfg.Sealer.Open(st.KeyEnc, githubKeyAAD(scope.Tenant))

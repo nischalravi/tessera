@@ -113,3 +113,15 @@ func TestTerraformDocumentEscapesUnsafeRunes(t *testing.T) {
 		t.Errorf("the document changed:\nwant %v\nhave %v", want, have)
 	}
 }
+
+// Soft hyphen, U+180E, variation selectors and tag characters are escaped like the other invisible ones (issue #809).
+func TestJSONEscapeUnsafe_OtherInvisibleCharacters(t *testing.T) {
+	for _, r := range []rune{0x00ad, 0x180e, 0xfe00, 0xfe0f, 0xe0100, 0xe01ef, 0xe0000, 0xe0041, 0xe007f} {
+		if !unsafeRune(r) {
+			t.Errorf("U+%04X is not unsafe", r)
+		}
+		if got := jsonEscapeUnsafe("\"a" + string(r) + "b\""); strings.ContainsRune(got, r) {
+			t.Errorf("U+%04X reached the snippet raw: %q", r, got)
+		}
+	}
+}
