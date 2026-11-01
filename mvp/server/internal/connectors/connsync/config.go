@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // Runtime is what a connector needs from the process configuration: the
@@ -59,6 +60,9 @@ func ParseBaseURL(raw string, rt Runtime) (*url.URL, error) {
 		return nil, errors.New("base URL must not contain user info, a query or a fragment")
 	}
 	host := u.Hostname()
+	if safehttp.IsMetadataHost(host) {
+		return nil, errors.New("base URL must not point at a cloud metadata service")
+	}
 	loop := false
 	if a, err := netip.ParseAddr(host); err == nil && rt.Env == config.Dev && rt.AllowLoopback && a.IsLoopback() {
 		loop = true

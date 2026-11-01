@@ -68,9 +68,11 @@ const System = "workday"
 
 // Default endpoint paths; {tenant} is replaced by the configured tenant.
 const (
-	DefaultWorkersPath = "/ccx/api/v1/{tenant}/workers"
-	DefaultEventsPath  = "/ccx/api/v1/{tenant}/workerEvents"
-	defaultTokenPath   = "/ccx/oauth2/{tenant}/token" // #nosec G101 -- an endpoint path, not a credential
+	DefaultWorkersPath = "/ccx/api/{version}/{tenant}/workers"
+	DefaultEventsPath  = "/ccx/api/{version}/{tenant}/workerEvents"
+	// DefaultAPIVersion applies when the config names none.
+	DefaultAPIVersion = "v1"
+	defaultTokenPath  = "/ccx/oauth2/{tenant}/token" // #nosec G101 -- an endpoint path, not a credential
 )
 
 // pageSize is the page size asked of Workday (its maximum for these endpoints).
@@ -79,6 +81,8 @@ const pageSize = 100
 var (
 	tenantRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 	pathRE   = regexp.MustCompile(`^/[A-Za-z0-9._~{}/-]{0,200}$`)
+	// versionRE is the same shape readiness accepts for api_version.
+	versionRE = regexp.MustCompile(`^v[0-9]{1,3}(\.[0-9]{1,2})?$`)
 )
 
 // Config configures one Workday tenant.
@@ -90,7 +94,11 @@ type Config struct {
 	BaseURL string
 	// TokenURL is the OAuth token endpoint; default BaseURL + /ccx/oauth2/{tenant}/token.
 	TokenURL string
-	// WorkersPath and EventsPath are the endpoint paths (see the package comment).
+	// APIVersion is the API version in the request paths ("v1", "v44.0"); default
+	// DefaultAPIVersion. It must look like v<digits>[.<digits>].
+	APIVersion string
+	// WorkersPath and EventsPath are the endpoint paths (see the package comment);
+	// {tenant} and {version} are replaced.
 	WorkersPath, EventsPath string
 	ClientID                string
 	ClientSecret            connsync.Secret
@@ -125,6 +133,12 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 	}
 	if cfg.ClientID == "" || len(cfg.ClientID) > 256 || cfg.ClientSecret.Empty() {
 		return nil, errors.New("workday: a client id and client secret are required")
+	}
+	if cfg.APIVersion == "" {
+		cfg.APIVersion = DefaultAPIVersion
+	}
+	if !versionRE.MatchString(cfg.APIVersion) {
+		return nil, errors.New("workday: the API version must look like v1 or v44.0")
 	}
 	if cfg.WorkersPath == "" {
 		cfg.WorkersPath = DefaultWorkersPath
@@ -166,14 +180,18 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 		now = time.Now
 	}
 	c := &Connector{cfg: cfg, base: base, now: now,
-		workers: strings.ReplaceAll(cfg.WorkersPath, "{tenant}", url.PathEscape(cfg.Tenant)),
-		events:  strings.ReplaceAll(cfg.EventsPath, "{tenant}", url.PathEscape(cfg.Tenant))}
+		workers: cfg.expand(cfg.WorkersPath), events: cfg.expand(cfg.EventsPath)}
 	c.api = &connsync.Client{HC: hc, Now: now, Header: http.Header{
 		"Accept": {"application/json"}, "User-Agent": {"tessera-connector/workday"}}}
 	c.tok = newTokenSource(cfg, tokenURL, c.api, now)
 	c.api.Authorize = c.tok.authorization
 	c.api.OnUnauthorized = c.tok.invalidate
 	return c, nil
+}
+
+// expand fills {tenant} and {version} in an endpoint path; both values are validated.
+func (cfg Config) expand(p string) string {
+	return strings.NewReplacer("{tenant}", url.PathEscape(cfg.Tenant), "{version}", cfg.APIVersion).Replace(p)
 }
 
 // FromEnv builds the connector from TESSERA_WORKDAY_* variables:
@@ -184,14 +202,15 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 //	TESSERA_WORKDAY_CLIENT_SECRET       reference to the API client secret: file:/abs/path or env:NAME
 //	TESSERA_WORKDAY_REFRESH_TOKEN       optional reference to a refresh token (else client credentials)
 //	TESSERA_WORKDAY_TOKEN_URL           default <base>/ccx/oauth2/<tenant>/token
-//	TESSERA_WORKDAY_WORKERS_PATH        default /ccx/api/v1/{tenant}/workers
-//	TESSERA_WORKDAY_EVENTS_PATH         default /ccx/api/v1/{tenant}/workerEvents
+//	TESSERA_WORKDAY_API_VERSION         default v1; fills {version} in the paths
+//	TESSERA_WORKDAY_WORKERS_PATH        default /ccx/api/{version}/{tenant}/workers
+//	TESSERA_WORKDAY_EVENTS_PATH         default /ccx/api/{version}/{tenant}/workerEvents
 //	TESSERA_WORKDAY_EMIT_IDENTITIES     true (default) or false
 //	TESSERA_WORKDAY_EVENT_WINDOW        duration, default 720h (at least 24h)
 //	TESSERA_WORKDAY_MAX_INCREMENTAL_AGE duration; default 24h, 0 disables
 func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc *http.Client) (connectors.Connector, error) {
 	cfg := Config{Tenant: getenv("TESSERA_WORKDAY_TENANT"), BaseURL: getenv("TESSERA_WORKDAY_BASE_URL"),
-		ClientID: getenv("TESSERA_WORKDAY_CLIENT_ID"), TokenURL: getenv("TESSERA_WORKDAY_TOKEN_URL"),
+		ClientID: getenv("TESSERA_WORKDAY_CLIENT_ID"), APIVersion: getenv("TESSERA_WORKDAY_API_VERSION"), TokenURL: getenv("TESSERA_WORKDAY_TOKEN_URL"),
 		WorkersPath: getenv("TESSERA_WORKDAY_WORKERS_PATH"), EventsPath: getenv("TESSERA_WORKDAY_EVENTS_PATH"),
 		EmitIdentities: true, MaxIncrementalAge: 24 * time.Hour}
 	if v := getenv("TESSERA_WORKDAY_EMIT_IDENTITIES"); v != "" {

@@ -48,6 +48,7 @@ func TestValidate_RESTLive(t *testing.T) {
 	f := fakerest.NewTLS(25)
 	defer f.Close()
 	s, st := newSvc(t), newStore(t)
+	s.Env = "dev" // the fake is on a loopback address, which only dev accepts at save time
 	id := readyREST(t, s, st, restConfig(f.URL))
 
 	v, err := s.Validate(context.Background(), st, id, "admin", clockAt(t0))
@@ -99,6 +100,7 @@ func TestValidate_RESTMappingFails(t *testing.T) {
 	f := fakerest.NewTLS(5)
 	defer f.Close()
 	s, st := newSvc(t), newStore(t)
+	s.Env = "dev" // the fake is on a loopback address, which only dev accepts at save time
 	cfg := strings.Replace(restConfig(f.URL), `"$.id"`, `"$.nope"`, 1)
 	id := readyREST(t, s, st, cfg)
 	s.Runner.REST = RESTLiveOptions{Client: f.Client(), Env: "dev", Secret: func(*Bundle) (string, error) { return fakerest.Bearer, nil }}
@@ -229,5 +231,34 @@ func TestPatchConfig_RESTDestinationChangeClearsTheCredential(t *testing.T) {
 				t.Errorf("moving the destination (%s) kept the stored credential", name)
 			}
 		})
+	}
+}
+
+// Create applies the same environment URL policy as PatchConfig (#574): loopback only in dev, a
+// metadata host never.
+func TestCreate_RESTEnvironmentPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		env, base string
+		wantErr   bool
+	}{
+		{"dev", "http://127.0.0.1:9", false},
+		{"prod", "http://127.0.0.1:9", true},
+		{"dev", "https://metadata.google.internal", true},
+		{"prod", "https://metadata.google.internal", true},
+		{"dev", "http://169.254.169.254", true},
+		{"prod", "https://api.example.com", false},
+	} {
+		s := NewService(template.MustDefault(), tc.env)
+		err := newStore(t).Write(context.Background(), func(c *store.TenantTx) error {
+			_, err := s.Create(c, CreateInput{Name: "Acme REST", ConnectorType: "rest_generic", System: "acme", Config: json.RawMessage(restConfig(tc.base))}, "admin", t0)
+			return err
+		})
+		var re *Error
+		switch {
+		case !tc.wantErr && err != nil:
+			t.Errorf("%s %s: %v", tc.env, tc.base, err)
+		case tc.wantErr && (!errors.As(err, &re) || len(re.Fields) == 0 || re.Fields[0].Field != "rest.base_url"):
+			t.Errorf("%s %s: err = %v", tc.env, tc.base, err)
+		}
 	}
 }

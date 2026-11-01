@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -340,6 +342,9 @@ func (s *Service) Create(c *store.TenantTx, in CreateInput, actor string, now ti
 			return nil, &Error{Status: http.StatusUnprocessableEntity, Code: "invalid_config", Msg: err.Error()}
 		}
 	}
+	if err := s.validateCreateConfig(in, t, cfg); err != nil {
+		return nil, err
+	}
 	ov, err := c.LatestOverlay(t.ID)
 	if err != nil {
 		return nil, err
@@ -420,6 +425,71 @@ type ConfigResult struct {
 	Invalidated []string // items that passed before the edit and no longer do
 }
 
+// restSpecError is the save-time check of a REST spec: the environment's URL policy, and the
+// metadata-host refusal that holds in every environment.
+func (s *Service) restSpecError(spec *restgen.Spec) error {
+	errs := spec.Validate(connsync.Runtime{Env: s.Env, AllowLoopback: s.Env == config.Dev})
+	if len(errs) == 0 {
+		return nil
+	}
+	fields := make([]FieldError, len(errs))
+	for i, e := range errs {
+		fields[i] = FieldError{"rest." + e.Field, e.Msg}
+	}
+	return &Error{Status: http.StatusUnprocessableEntity, Code: "invalid_config", Msg: "the rest spec is not valid", Fields: fields}
+}
+
+// validateCreateConfig applies on create what PATCH .../config applies on save, to the settings the
+// caller sent. A blank draft (no config) is fine: the wizard creates one and fills it in step by step.
+// What PATCH refuses outright is refused here too: a malformed rest_generic spec (a rest_generic
+// create that carries settings must carry its rest spec), and in every type a metadata host. Other
+// shape problems stay advisory, as on PATCH: they show as field errors on the connection.
+func (s *Service) validateCreateConfig(in CreateInput, t *template.Resolved, cfg ConnConfig) error {
+	var sent map[string]json.RawMessage
+	if len(in.Config) > 0 && json.Unmarshal(in.Config, &sent) == nil {
+		for k, v := range sent {
+			if string(v) == "null" {
+				delete(sent, k)
+			}
+		}
+	}
+	if t.ID == "rest_generic" && len(sent) > 0 {
+		if cfg.Rest == nil {
+			return &Error{Status: http.StatusUnprocessableEntity, Code: "invalid_config", Msg: "the rest spec is not valid",
+				Fields: []FieldError{{"rest", "required: the connector spec (base URL, auth, resources and mapping)"}}}
+		}
+		if err := s.restSpecError(cfg.Rest); err != nil {
+			return err
+		}
+	}
+	return metadataHostError(cfg)
+}
+
+// metadataHostError refuses a config whose host or URL settings name a cloud metadata service, in
+// every environment. The REST spec's URLs are checked by its own validation.
+func metadataHostError(cfg ConnConfig) error {
+	hostOf := func(v string) string {
+		if u, err := url.Parse(strings.TrimSpace(v)); err == nil && u.Host != "" {
+			return u.Hostname()
+		}
+		return v
+	}
+	fields := map[string]string{"host": cfg.Host, "org_url": cfg.OrgURL, "domain": cfg.Domain, "base_url": cfg.BaseURL, "tenant_host": cfg.TenantHost}
+	if cfg.SQL != nil {
+		fields["sql.host"] = cfg.SQL.Host
+	}
+	var bad []FieldError
+	for _, f := range []string{"host", "org_url", "domain", "base_url", "tenant_host", "sql.host"} {
+		if v := fields[f]; v != "" && safehttp.IsMetadataHost(hostOf(v)) {
+			bad = append(bad, FieldError{f, "must not point at a cloud metadata service"})
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return &Error{Status: http.StatusUnprocessableEntity, Code: "invalid_config", Msg: "the configuration is not valid", Fields: bad}
+}
+
 // PatchConfig applies a partial config to the in-progress revision (creating
 // one when the connection is active) and moves the revision back through the
 // gates whose evidence the change invalidated.
@@ -437,13 +507,12 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 	}
 	if cfg.Rest != nil && b.Template.ID == "rest_generic" {
 		// the environment's URL policy (https only in prod) applies on save
-		if errs := cfg.Rest.Validate(connsync.Runtime{Env: s.Env, AllowLoopback: s.Env == config.Dev}); len(errs) > 0 {
-			fields := make([]FieldError, len(errs))
-			for i, e := range errs {
-				fields[i] = FieldError{"rest." + e.Field, e.Msg}
-			}
-			return nil, &Error{Status: http.StatusUnprocessableEntity, Code: "invalid_config", Msg: "the rest spec is not valid", Fields: fields}
+		if err := s.restSpecError(cfg.Rest); err != nil {
+			return nil, err
 		}
+	}
+	if err := metadataHostError(cfg); err != nil {
+		return nil, err
 	}
 	before := passing(b.Eval)
 	changed := changedFields(b.Config, cfg)

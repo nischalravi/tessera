@@ -3645,7 +3645,11 @@ writes:                                        # request templates; see below
   All calls go through `internal/safehttp`.
 - **Validation on save** names every bad field (`rest.users.fields.id`, `writes.lookup`, ...). A connection's
   `PATCH /api/connections/{id}/config` takes `"rest"` as an object or as a string of YAML/JSON text, and the server
-  applies the environment's URL policy (https only in prod). `PUT /api/provisioning/targets/{id}` with
+  applies the environment's URL policy (https only in prod). `POST /api/connections` runs the same checks on the
+  settings it is sent (a blank draft is still fine; a `rest_generic` create that carries a config must carry its
+  `rest` spec) and answers `422 invalid_config` with `fields`. Cloud metadata hosts (`metadata.google.internal`,
+  `169.254.169.254`, `fd00:ec2::254` and the like) are refused as a base URL in every environment, on create and
+  on patch. `PUT /api/provisioning/targets/{id}` with
   `"kind": "rest"` takes `"rest"` (without `base_url`, which is the target's own) and a `token`; it answers
   `422 invalid_rest` with `fields`.
 - **Readiness checklist** (`rest_generic` template): the endpoint is reachable over verified TLS, the credential is
@@ -6475,7 +6479,7 @@ vault references of the connection credential store plug into the same resolver 
 | `TESSERA_WORKDAY_CLIENT_ID`, `TESSERA_WORKDAY_CLIENT_SECRET` | the Workday API client (secret is a reference) |
 | `TESSERA_WORKDAY_REFRESH_TOKEN` | optional reference: use the refresh-token grant. Without it the client-credentials grant is used |
 | `TESSERA_WORKDAY_TOKEN_URL` | default `<base>/ccx/oauth2/<tenant>/token` |
-| `TESSERA_WORKDAY_WORKERS_PATH`, `TESSERA_WORKDAY_EVENTS_PATH` | default `/ccx/api/v1/{tenant}/workers` and `/ccx/api/v1/{tenant}/workerEvents`; point them at a custom report (RaaS) that returns the JSON below |
+| `TESSERA_WORKDAY_WORKERS_PATH`, `TESSERA_WORKDAY_EVENTS_PATH` | default `/ccx/api/{version}/{tenant}/workers` and `/ccx/api/{version}/{tenant}/workerEvents` (`{version}` is `TESSERA_WORKDAY_API_VERSION`, default `v1`, shape `v44.0`); point them at a custom report (RaaS) that returns the JSON below |
 | `TESSERA_WORKDAY_EMIT_IDENTITIES` | `true` (default): Workday is HR-authoritative, its workers are the identities. Set the other connectors' `..._EMIT_IDENTITIES` to `false` |
 | `TESSERA_WORKDAY_EVENT_WINDOW`, `TESSERA_WORKDAY_MAX_INCREMENTAL_AGE` | defaults `720h` (an event older than this is historical) and `24h` (`0` never) |
 
