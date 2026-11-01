@@ -127,7 +127,7 @@ func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	cn, err := google.FromStored(google.Stored{Customer: p.Customer, Domain: p.Domain, OrgUnits: p.OrgUnits, Credential: p.Secret},
+	cn, err := google.FromStored(google.Stored{Customer: p.Customer, Domain: p.Domain, OrgUnits: p.OrgUnits, AdminEmail: p.AdminEmail, Credential: p.Secret},
 		getenv, n.RT, n.HC, now)
 	if err != nil {
 		return nil, err

@@ -1087,3 +1087,50 @@ func TestFromStoredScopesTheSyncToTheConnection(t *testing.T) {
 		}
 	}
 }
+
+// TestFromStoredAdminEmail: the administrator to impersonate comes from the connection's
+// config (issue #818), with the credential's own "admin_email" as the fallback; the config wins
+// when both are set, and the sync impersonates the one it used.
+func TestFromStoredAdminEmail(t *testing.T) {
+	cred := func(admin string) string {
+		m := map[string]string{"type": "service_account", "client_email": saEmail, "private_key": keyPEM(t)}
+		if admin != "" {
+			m["admin_email"] = admin
+		}
+		b, _ := json.Marshal(m)
+		return string(b)
+	}
+	for name, tc := range map[string]struct {
+		cfgAdmin, credAdmin string
+		want                string // "" means FromStored refuses
+	}{
+		"config only":         {"cfg@example.com", "", "cfg@example.com"},
+		"credential only":     {"", "cred@example.com", "cred@example.com"},
+		"config wins":         {" cfg@example.com ", "cred@example.com", "cfg@example.com"},
+		"neither":             {"", "", ""},
+		"config not an email": {"root", "cred@example.com", ""},
+	} {
+		f := newFake(t)
+		env := func(k string) string {
+			return map[string]string{"TESSERA_GOOGLE_API_URL": f.srv.URL, "TESSERA_GOOGLE_TOKEN_URL": f.srv.URL + "/token"}[k]
+		}
+		cn, err := FromStored(Stored{Customer: "my_customer", Domain: "example.com", AdminEmail: tc.cfgAdmin, Credential: cred(tc.credAdmin)},
+			env, connsynctest.Runtime, testClient(t, f.srv, 0), func() time.Time { return now0 })
+		if tc.want == "" {
+			if err == nil {
+				t.Errorf("%s: FromStored succeeded", name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if got := cn.(*Connector).cfg.AdminEmail; got != tc.want {
+			t.Errorf("%s: admin = %q, want %q", name, got, tc.want)
+		}
+		if res, err := cn.Discover(context.Background()); err != nil || len(acctMap(res)) == 0 {
+			t.Errorf("%s: sync with the config's admin email: %v", name, err)
+		}
+	}
+}
