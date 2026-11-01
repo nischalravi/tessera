@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -238,7 +239,7 @@ func TestGitHubWebhook_ConstantTimeCompare(t *testing.T) {
 		{"wrong key", hookSig("t", body), false},
 		{"empty", "", false},
 		{"prefix only", "sha256=", false},
-		{"upper-case hex", "sha256=" + strings.ToUpper(strings.TrimPrefix(hookSig("s", body), "sha256=")), true}, // hex decoding is case-blind; the MAC is what is compared
+		{"upper-case hex", "sha256=" + strings.ToUpper(strings.TrimPrefix(hookSig("s", body), "sha256=")), false}, // GitHub sends lower-case hex (issue #809)
 		{"truncated", hookSig("s", body)[:40], false},
 	} {
 		if got := githubSignatureOK([]byte("s"), body, tc.hdr); got != tc.ok {
@@ -660,5 +661,101 @@ func TestGitHubWebhook_PermissionsAndDisabledApp(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	if rec := serve(e.h, req); rec.Code != 401 {
 		t.Errorf("anonymous PUT = %d", rec.Code)
+	}
+}
+
+// A bundle with validation findings gets a failing check that lists them, not a bare 422 and no check (issue #808).
+func TestGitHubWebhook_BundleWithFindingsPostsAFailingCheck(t *testing.T) {
+	w := hookSetup(t)
+	files := map[string]string{}
+	for k, v := range w.files {
+		files[k] = v
+	}
+	files["roles/bad.yaml"] = "schema: tessera.repo/v1\nnot_a_field: `ping @everyone`\n"
+	head := w.repo.push(files)
+	w.gh.mu.Lock()
+	w.gh.head = head
+	w.gh.mu.Unlock()
+	rec := w.ok("opened", head)
+	if rec.Code != 202 || !strings.Contains(rec.Body.String(), `"outcome":"checked"`) || !strings.Contains(rec.Body.String(), `"conclusion":"failure"`) {
+		t.Fatalf("delivery = %d %.300s, want 202 checked failure", rec.Code, rec.Body)
+	}
+	if w.gh.calls("POST /repos/o/policy/check-runs") != 1 {
+		t.Fatalf("GitHub calls = %v, want one check run", w.gh.got)
+	}
+	w.gh.mu.Lock()
+	var chk map[string]any
+	for _, c := range w.gh.checks {
+		chk = c
+	}
+	w.gh.mu.Unlock()
+	out, _ := chk["output"].(map[string]any)
+	summary, _ := out["summary"].(string)
+	if chk["conclusion"] != "failure" || !strings.Contains(summary, "roles/bad.yaml") || strings.Contains(summary, "`ping @everyone`") {
+		t.Errorf("check = %v, want a failure naming roles/bad.yaml with the text escaped", chk)
+	}
+	if !strings.Contains(w.gh.onlyComment(t), "roles/bad.yaml") {
+		t.Error("the comment does not list the findings")
+	}
+	if n := w.actions(w.e.f.B.ID)["policy.github_check.posted"]; n != 1 {
+		t.Errorf("posted events = %d, want 1", n)
+	}
+	// the delivery is handled: a redelivery of the same id is a replay, not a second check
+	if rec := w.deliver(hookReq{delivery: "d-1", body: w.payload("opened", head)}); rec.Code != 409 {
+		t.Errorf("replay = %d %s, want 409", rec.Code, rec.Body)
+	}
+}
+
+func TestGitHubWebhook_SmallDeviations(t *testing.T) {
+	w := hookSetup(t)
+	body := w.payload("opened", w.sha)
+
+	// an upper-case digest of the right MAC is not what GitHub sends
+	good := hookSig(w.secret, body)
+	upper := "sha256=" + strings.ToUpper(strings.TrimPrefix(good, "sha256="))
+	if rec := w.deliver(hookReq{sig: upper, body: body}); rec.Code != 401 {
+		t.Errorf("upper-case hex = %d, want 401", rec.Code)
+	}
+	if rec := w.deliver(hookReq{sig: good, body: body}); rec.Code != 202 {
+		t.Errorf("lower-case hex = %d %s, want 202", rec.Code, rec.Body)
+	}
+
+	// a chunked body over the cap has no Content-Length: 413, not 422
+	req := httptest.NewRequest("POST", "/public/t/"+w.e.f.B.Slug+"/github/webhook", io.NopCloser(strings.NewReader(strings.Repeat(" ", 3<<20))))
+	req.ContentLength = -1
+	req.TransferEncoding = []string{"chunked"}
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-GitHub-Delivery", "chunked-1")
+	req.Header.Set("X-Hub-Signature-256", good)
+	if rec := serve(w.e.h, req); rec.Code != 413 {
+		t.Errorf("chunked 3 MiB = %d %.200s, want 413", rec.Code, rec.Body)
+	}
+
+	// the per-tenant 429 says when to retry in the header too
+	w.e.srv.ghHookLimit = ratelimit.New(ratelimit.ClassTenant, time.Hour, 1, 100)
+	w.deliver(hookReq{event: "ping", body: []byte(`{}`)})
+	if rec := w.deliver(hookReq{event: "ping", body: []byte(`{}`)}); rec.Code != 429 || rec.Header().Get("Retry-After") != "2" {
+		t.Errorf("rate limited = %d Retry-After %q, want 429 and 2", rec.Code, rec.Header().Get("Retry-After"))
+	}
+}
+
+// Rotating or removing the webhook secret changes only the secret: an omitted enabled keeps its value (issue #807).
+func TestGitHubWebhook_SecretChangesKeepEnabled(t *testing.T) {
+	w := hookSetup(t)
+	enabled := func() any {
+		rec := reqDo(w.e.h, w.admin, "GET", "/api/policy/github/app", "")
+		var v map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v["enabled"]
+	}
+	for _, body := range []string{`{"rotate_webhook_secret":true}`, `{"remove_webhook_secret":true}`, `{}`} {
+		if rec := reqDo(w.e.h, w.admin, "PUT", "/api/policy/github/app", body); rec.Code != 200 || enabled() != true {
+			t.Errorf("%s: %d, enabled = %v, want 200 and true", body, rec.Code, enabled())
+		}
+	}
+	if rec := reqDo(w.e.h, w.admin, "PUT", "/api/policy/github/app", `{"enabled":false}`); rec.Code != 200 || enabled() != false {
+		t.Errorf("enabled:false = %d, enabled = %v", rec.Code, enabled())
 	}
 }

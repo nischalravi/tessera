@@ -242,7 +242,7 @@ func (s *Server) lpRecPullRequest(_ http.ResponseWriter, r *http.Request, p *par
 		{Key: "conclusion", Value: plan.verdict.Conclusion}, {Key: "diff_sha256", Value: plan.diffSHA}, {Key: "bundle_sha256", Value: plan.bundle}}
 	action, code := "lp.recommendation.pull_request", ""
 	if gerr != nil {
-		action, code = "lp.recommendation.pull_request.failed", ghapp.ErrCode(gerr)
+		action, code = "lp.recommendation.pull_request.failed", lpErrCode(gerr)
 		detail = append(detail, ojson.KV{Key: "error", Value: code})
 	}
 	if out != nil && out.HeadSHA != "" {
@@ -300,6 +300,18 @@ func (s *Server) lpRecPullRequest(_ http.ResponseWriter, r *http.Request, p *par
 func lpFileRefusal(err error) bool {
 	return errors.Is(err, ghapp.ErrFileNotFound) || errors.Is(err, ghapp.ErrNotAFile) ||
 		errors.Is(err, policybundle.ErrRoleUnreadable) || errors.Is(err, policybundle.ErrEntitlementAbsent)
+}
+
+// lpErrCode is the short reason of a failed attempt: the role file's own code when the file is the problem (ghapp.ErrCode
+// would say "unreachable", which blames GitHub), else ghapp's.
+func lpErrCode(err error) string {
+	if lpFileRefusal(err) {
+		var re *readiness.Error
+		if errors.As(githubFailure(err, "", nil), &re) {
+			return re.Code
+		}
+	}
+	return ghapp.ErrCode(err)
 }
 
 // githubFailure maps a GitHub client error to the API's answer.

@@ -163,7 +163,8 @@ func isBidi(r rune) bool {
 // zero-width joiner (U+200D) is kept in a code span, where it joins emoji; a title or commit message drops it too (plain).
 func unsafeRune(r rune) bool {
 	return r < 0x20 || r == 0x7f || r == 0x85 || r == 0x2028 || r == 0x2029 || isBidi(r) ||
-		(r >= 0x200b && r <= 0x200f && r != 0x200d) || (r >= 0x2060 && r <= 0x2069) || r == 0xfeff
+		(r >= 0x200b && r <= 0x200f && r != 0x200d) || (r >= 0x2060 && r <= 0x2069) || r == 0xfeff ||
+		r == 0x00ad || r == 0x180e || (r >= 0xfe00 && r <= 0xfe0f) || (r >= 0xe0100 && r <= 0xe01ef) || (r >= 0xe0000 && r <= 0xe007f)
 }
 
 // Title is the check run's title.
@@ -255,4 +256,46 @@ func writeBlastTable(b *strings.Builder, r *blast.Report) {
 	if s.UnlinkedPrincipals > 0 {
 		fmt.Fprintf(b, "| AWS principals not linked to an identity | %d |\n", s.UnlinkedPrincipals)
 	}
+}
+
+// Finding is one validation finding of a policy bundle (path, line, code, message), as the preview reports it.
+type Finding struct {
+	Path    string
+	Line    int
+	Code    string
+	Message string
+}
+
+// FindingsTitle is the title of the check run for a bundle that does not validate.
+func FindingsTitle(n int) string {
+	return fmt.Sprintf("Policy bundle invalid: %d finding(s)", n)
+}
+
+// FindingsSummary renders the check run and comment text for a bundle with validation findings: nothing was previewed, so
+// the check fails and lists them. Tenant-supplied text goes through code, like every other check text, and the list is cut.
+func FindingsSummary(fs []Finding, headSHA string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### Tessera policy check: FAILURE\n\n- The policy bundle at this commit has %d validation finding(s), so it was not previewed.\n\n**Findings**\n\n", len(fs))
+	for i, f := range fs {
+		if i == maxListed {
+			fmt.Fprintf(&b, "- ... and %d more\n", len(fs)-maxListed)
+			break
+		}
+		at := f.Path
+		if f.Line > 0 {
+			at = fmt.Sprintf("%s:%d", f.Path, f.Line)
+		}
+		fmt.Fprintf(&b, "- %s %s: %s\n", code(at, maxTextLen), code(f.Code, 60), code(f.Message, maxTextLen))
+	}
+	short := headSHA
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	fmt.Fprintf(&b, "\n<sub>Commit %s.</sub>\n", code(short, 12))
+	return b.String()
+}
+
+// FindingsComment is the pull request comment for a bundle with findings.
+func FindingsComment(fs []Finding, headSHA string) string {
+	return CommentMarker + "\n" + FindingsSummary(fs, headSHA)
 }

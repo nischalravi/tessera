@@ -20,6 +20,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/policybundle"
 	"github.com/nischalravi/tessera/mvp/server/internal/ratelimit"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/rolesascode"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -105,8 +106,11 @@ func githubSignatureOK(secret, body []byte, header string) bool {
 	want := mac.Sum(nil)
 	var got []byte
 	if hx, ok := strings.CutPrefix(header, "sha256="); ok {
-		if b, err := hex.DecodeString(hx); err == nil {
-			got = b
+		// GitHub sends lower-case hex; an upper-case digest is not what it signs, so it is refused (issue #809)
+		if hx == strings.ToLower(hx) {
+			if b, err := hex.DecodeString(hx); err == nil {
+				got = b
+			}
 		}
 	}
 	return hmac.Equal(got, want)
@@ -132,13 +136,18 @@ func (s *Server) hookEvent(ctx context.Context, tenant tenancy.ID, action string
 // githubHookActor is the system actor of the receiver's tenant events.
 const githubHookActor = "github-webhook"
 
-func (s *Server) githubWebhook(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	ctx := r.Context()
 	if r.ContentLength > githubHookBody {
 		return nil, &readiness.Error{Status: http.StatusRequestEntityTooLarge, Code: "payload_too_large", Msg: "the body is larger than 1 MiB"}
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, githubHookBody+1))
 	if err != nil {
+		// a chunked body has no Content-Length to check; the server's own cap says it is too large
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			return nil, &readiness.Error{Status: http.StatusRequestEntityTooLarge, Code: "payload_too_large", Msg: "the body is larger than 1 MiB"}
+		}
 		return nil, badRequest("invalid_body", "the body could not be read")
 	}
 	if len(raw) > githubHookBody {
@@ -193,6 +202,7 @@ func (s *Server) githubWebhook(_ http.ResponseWriter, r *http.Request, p *params
 	actx := audit.AsSystem(ctx, githubHookActor)
 	if !s.ghHookLimit.Allow(ratelimit.TenantKey(tid.String())) {
 		audit.Mark(ctx, "github_webhook_outcome", "rate_limited")
+		w.Header().Set("Retry-After", "2")
 		return statusBody{http.StatusTooManyRequests, ojson.Object{{Key: "error", Value: "rate_limited"}, {Key: "retry_after", Value: 2}}}, nil
 	}
 	delivery := r.Header.Get("X-GitHub-Delivery")
@@ -341,6 +351,20 @@ func (s *Server) githubWebhookCheck(ctx context.Context, tid tenancy.ID, st *sto
 		view, extras, err = s.computePolicyDiff(ctx, tx, &policyDiffIn{Files: text})
 		return err
 	}); err != nil {
+		// a bundle with findings is the most useful thing a gate can report: post it as a failing check (issue #808)
+		var re *readiness.Error
+		if !errors.As(err, &re) || re.Code != "invalid_bundle" {
+			return nil, err
+		}
+		if diags, _ := re.Extra["diagnostics"].([]rolesascode.Diag); len(diags) > 0 {
+			var fs []ghapp.Finding
+			for _, d := range diags {
+				fs = append(fs, ghapp.Finding{Path: d.Path, Line: d.Line, Code: d.Code, Message: d.Msg})
+			}
+			return s.publishGitHubCheck(ctx, scope, client, st, pull, head, nil, nil, ghPublishOpts{Actor: githubHookActor, ClaimWait: githubHookClaimWait,
+				Findings: fs, Extra: ojson.Object{{Key: "trigger", Value: "webhook"}, {Key: "delivery_id", Value: delivery}, {Key: "bundle_files", Value: strconv.Itoa(len(files))},
+					{Key: "findings", Value: len(fs)}}})
+		}
 		return nil, err
 	}
 	out, err := s.publishGitHubCheck(ctx, scope, client, st, pull, head, view, extras, ghPublishOpts{Actor: githubHookActor, ClaimWait: githubHookClaimWait,
