@@ -2,6 +2,8 @@ package sftpdrop_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -124,5 +126,83 @@ func TestGovernedParamsNeverPrintTheKey(t *testing.T) {
 		if strings.Contains(s, "PRIVATE KEY") {
 			t.Errorf("params print the key: %s", s)
 		}
+	}
+}
+
+// filesObserved is the read_probe's per-file observation (size, modified time, stale).
+func filesObserved(t *testing.T, r checks.Result) map[string]map[string]any {
+	t.Helper()
+	files, ok := r.Observed["files"].([]map[string]any)
+	if !ok {
+		t.Fatalf("observed has no files: %v", r.Observed)
+	}
+	out := map[string]map[string]any{}
+	for _, f := range files {
+		out[f["role"].(string)] = f
+	}
+	return out
+}
+
+func TestProbeSurfacesFileSizeAndModifiedTime(t *testing.T) {
+	f := fake(t)
+	mt := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(filepath.Join(f.Dir, "accounts.csv"), mt, mt); err != nil {
+		t.Fatal(err)
+	}
+	p, err := wire.Prober(params(f, nil), governed.Net{RT: devRT})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := check(t, p, "read_probe")
+	if r.Status != checks.Pass { // no maximum age: the file is reported, never flagged
+		t.Fatalf("read_probe: %s %s %v", r.Status, r.Message, r.Observed)
+	}
+	files := filesObserved(t, r)
+	acc, ent := files["accounts"], files["entitlements"]
+	if acc == nil || ent == nil {
+		t.Fatalf("files = %v", files)
+	}
+	st, _ := os.Stat(filepath.Join(f.Dir, "accounts.csv"))
+	if acc["size"] != st.Size() || acc["modified"] != mt.UTC().Format(time.RFC3339) || acc["stale"] != false {
+		t.Errorf("accounts = %v, want size %d modified %s", acc, st.Size(), mt.UTC().Format(time.RFC3339))
+	}
+}
+
+func TestProbeFlagsAStaleFile(t *testing.T) {
+	f := fake(t)
+	old := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(filepath.Join(f.Dir, "ents.csv"), old, old); err != nil { // a stuck export left the entitlements file
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		age  string
+		want string
+	}{
+		{"older than the maximum", "24", checks.Fail},
+		{"within the maximum", "96", checks.Pass},
+		{"no maximum", "", checks.Pass},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := wire.Prober(params(f, func(p *governed.Params) {
+				if tc.age != "" {
+					p.Settings["max_age_hours"] = tc.age
+				}
+			}), governed.Net{RT: devRT})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := check(t, p, "read_probe")
+			if r.Status != tc.want {
+				t.Fatalf("read_probe = %s %q, want %s", r.Status, r.Message, tc.want)
+			}
+			files := filesObserved(t, r)
+			if files["accounts"]["stale"] != false || files["entitlements"]["stale"] != (tc.want == checks.Fail) {
+				t.Errorf("stale flags = %v", files)
+			}
+			if tc.want == checks.Fail && !strings.Contains(r.Message, "entitlements") {
+				t.Errorf("message does not name the stale file: %q", r.Message)
+			}
+		})
 	}
 }

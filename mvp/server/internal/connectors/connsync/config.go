@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // Runtime is what a connector needs from the process configuration: the
@@ -42,6 +43,31 @@ func ValidDomain(host string) bool {
 	return len(host) <= 253 && domainRE.MatchString(host)
 }
 
+// Bounds of a Google Workspace org unit list.
+const (
+	MaxOrgUnits    = 50  // org unit paths per connection
+	MaxOrgUnitPath = 256 // characters in one path
+)
+
+// ValidOrgUnitPath reports whether p is a well-formed Google Workspace org unit
+// path: "/" or "/" followed by names separated by single slashes, no trailing
+// slash, no control characters, and no quote or backslash (the path is placed
+// inside a quoted search query).
+func ValidOrgUnitPath(p string) bool {
+	if p == "/" {
+		return true
+	}
+	if len(p) < 2 || len(p) > MaxOrgUnitPath || p[0] != '/' || strings.HasSuffix(p, "/") || strings.Contains(p, "//") {
+		return false
+	}
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f || r == '\'' || r == '\\' {
+			return false
+		}
+	}
+	return true
+}
+
 // ParseBaseURL validates a customer-configured service URL: https only, a
 // well-formed domain host, no user info, query or fragment. Plain http to a
 // literal loopback address is accepted only in dev with the loopback exception.
@@ -59,6 +85,9 @@ func ParseBaseURL(raw string, rt Runtime) (*url.URL, error) {
 		return nil, errors.New("base URL must not contain user info, a query or a fragment")
 	}
 	host := u.Hostname()
+	if safehttp.IsMetadataHost(host) {
+		return nil, errors.New("base URL must not point at a cloud metadata service")
+	}
 	loop := false
 	if a, err := netip.ParseAddr(host); err == nil && rt.Env == config.Dev && rt.AllowLoopback && a.IsLoopback() {
 		loop = true

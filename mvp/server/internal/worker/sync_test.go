@@ -117,3 +117,46 @@ func TestSyncJobHoldsNoWriteLockWhileReadingTheSource(t *testing.T) {
 		t.Errorf("a failed sync left a checkpoint: %+v", k)
 	}
 }
+
+type mergeConn struct{ sys, from string }
+
+func (m mergeConn) System() string    { return m.sys }
+func (mergeConn) DisplayName() string { return "" }
+func (mergeConn) TypeName() string    { return "" }
+func (mergeConn) Discover(context.Context) (*connectors.DiscoveryResult, error) {
+	return &connectors.DiscoveryResult{}, nil
+}
+func (mergeConn) StreamEvents(context.Context, *time.Time, func(connectors.Event) error) error {
+	return nil
+}
+
+type storedConn struct{ mergeConn }
+
+func (storedConn) ConnectionBacked() {}
+
+// An env-configured connector of a system wins over a governed connection of the
+// same system, except one built from a connection's stored config: that connection's
+// scope applies, and the environment is the dev fallback.
+func TestMergeGovernedPrefersAConnectionBackedConnector(t *testing.T) {
+	env := []connectors.Connector{mergeConn{"google", "env"}, mergeConn{"okta", "env"}}
+	gov := []connectors.Connector{storedConn{mergeConn{"google", "stored"}}, mergeConn{"okta", "gov"}, mergeConn{"sap", "gov"}}
+	var got []string
+	for _, c := range worker.MergeGoverned(env, gov) {
+		got = append(got, c.System()+"/"+c.(interface{ tag() string }).tag())
+	}
+	want := []string{"okta/env", "google/stored", "sap/gov"}
+	if len(got) != len(want) {
+		t.Fatalf("merged = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("merged = %v, want %v", got, want)
+			break
+		}
+	}
+	if out := worker.MergeGoverned(env, nil); len(out) != 2 {
+		t.Errorf("no connections: %d connectors, want the 2 configured", len(out))
+	}
+}
+
+func (m mergeConn) tag() string { return m.from }

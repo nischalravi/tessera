@@ -234,7 +234,8 @@ func SettingSpecs(typ string) []Setting {
 			{"entitlements_account_id", "Entitlements: account id column", "Required with an entitlements file.", false},
 			{"entitlements_entitlement", "Entitlements: entitlement column", "Required with an entitlements file.", false},
 			{"entitlements_name", "Entitlements: name column", "Optional: a display name for the entitlement.", false},
-			{"entitlements_privileged", "Entitlements: privileged column", "Optional: yes or no.", false}}
+			{"entitlements_privileged", "Entitlements: privileged column", "Optional: yes or no.", false},
+			{"max_age_hours", "Maximum file age (hours)", "Optional, 1 to 8760. The connection check flags a file whose modified time is older than this, so a stuck export is noticed.", false}}
 	case AWSOrg:
 		return []Setting{
 			{"role_name", "Reader role name", "The role assumed in each account. Default TesseraReader.", false},
@@ -484,6 +485,10 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 			if _, err := netip.ParseAddr(v); err != nil && !sshHostRE.MatchString(v) {
 				bad(s.Key, "must be a host name or an IP address (no scheme, port or path)")
 			}
+		case "max_age_hours":
+			if n, err := strconv.Atoi(v); err != nil || n < 1 || n > 24*365 {
+				bad(s.Key, "must be a whole number of hours between 1 and 8760")
+			}
 		case "port":
 			if n, err := strconv.Atoi(v); err != nil || n < 1 || n > 65535 {
 				bad(s.Key, "must be between 1 and 65535")
@@ -599,7 +604,17 @@ type Params struct {
 	DataDir string
 	// Prod is true in a production deployment.
 	Prod bool
+	// Customer, Domain and OrgUnits are the scope fields of a connection of a type that is not
+	// in Types but is built from its stored config (GoogleWorkspace): its config's customer,
+	// domain and base_dns.
+	Customer, Domain string
+	OrgUnits         []string
 }
+
+// GoogleWorkspace is the connector type of a Google Workspace connection. It is not a governed
+// type (Lookup does not know it, its checks keep their own prober) but its connector is built from
+// the connection's stored config, through Params.
+const GoogleWorkspace = "google"
 
 // String omits the secret.
 func (p Params) String() string { return "governed.Params{" + p.Type + "}" }

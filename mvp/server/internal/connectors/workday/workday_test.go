@@ -1066,3 +1066,52 @@ func testClient(t testing.TB, srv *connsynctest.Server, maxBody int64) *http.Cli
 	}
 	return hc
 }
+
+func TestAPIVersionIsUsedInRequestPaths(t *testing.T) {
+	for _, tc := range []struct{ name, version, want string }{
+		{"default when unset", "", "v1"},
+		{"configured", "v44.0", "v44.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake(t)
+			cfg := baseCfg()
+			cfg.APIVersion = tc.version
+			// serve whatever version the connector asks for as the fixture's v1 paths
+			f.override = func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasPrefix(r.URL.Path, "/ccx/api/"+tc.want+"/"+tenant+"/") && !strings.HasPrefix(r.URL.Path, "/ccx/oauth2/") {
+					t.Errorf("request %s does not carry the version %s", r.URL.Path, tc.want)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if strings.HasSuffix(r.URL.Path, "/token") {
+					fmt.Fprint(w, `{"access_token":"t","token_type":"Bearer","expires_in":3600}`)
+					return
+				}
+				fmt.Fprint(w, `{"total":0,"data":[]}`)
+			}
+			c := f.connector(cfg)
+			if _, err := c.Discover(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			seen := false
+			for _, r := range f.srv.Requests() {
+				if r.Path == "/ccx/api/"+tc.want+"/"+tenant+"/workers" {
+					seen = true
+				}
+			}
+			if !seen {
+				t.Fatalf("no workers request under version %s: %v", tc.want, f.srv.Requests())
+			}
+		})
+	}
+}
+
+func TestAPIVersionMustBeAPlainVersion(t *testing.T) {
+	f := newFake(t)
+	for _, v := range []string{"44", "v44.0/../x", "v1?x=1", "V1", "v1.234", " v1"} {
+		cfg := baseCfg()
+		cfg.APIVersion, cfg.BaseURL = v, f.srv.URL
+		if _, err := New(cfg, connsynctest.Runtime, testClient(t, f.srv, 0), nil); err == nil {
+			t.Errorf("api version %q was accepted", v)
+		}
+	}
+}

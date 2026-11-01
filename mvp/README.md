@@ -3483,7 +3483,8 @@ connection and is read-only: nothing is written, moved or deleted on the server.
 *Settings.* `host`, `port`, `username`, `host_key` (as for the Unix connector), `directory`, `accounts_file`,
 `entitlements_file` (optional) and the column mapping: `accounts_account_id` and `accounts_username` (required),
 `accounts_email`, `accounts_identity_id`, `accounts_status`, and with an entitlements file
-`entitlements_account_id` and `entitlements_entitlement` (required), `entitlements_name`, `entitlements_privileged`.
+`entitlements_account_id` and `entitlements_entitlement` (required), `entitlements_name`, `entitlements_privileged`,
+and the optional `max_age_hours` (1 to 8760; env `TESSERA_SFTPDROP_MAX_AGE_HOURS`, see *Stale files*).
 The credential is the SSH private key, sealed like every connection secret (or a vault reference) and never printed.
 
 *Same pipeline as the flat-file apps.* Files are parsed, validated and normalised by `internal/flatfile`
@@ -3494,7 +3495,9 @@ as a whole and nothing is ingested. What the connector does not do is call `flat
 no per-upload history, delta or manual tasks, and removals are held by the connection's deletion guard.
 One drop per tenant (the system is `sftp`).
 
-*Network and host key.* The connection is opened by the Unix/SSH connector's code (`unixssh.Connector.Client`):
+*Network and host key.* The connection is opened by the Unix/SSH connector's code (`unixssh.Connector.SFTP`, which
+returns an SFTP session and never a raw SSH client, so no caller can open a session and run a command; an archtest
+bans `NewSession`, `RequestSubsystem` and the SSH library outside `internal/connectors/unixssh`):
 the socket goes through `safehttp.NewDialer` (private, loopback, link-local and metadata addresses refused; the
 dev runtime may allow loopback), the host key is pinned (a fingerprint or the key line; no trust on first use, no
 callback that skips the check) and sign-in is by key. Only the `sftp` subsystem is requested; no command runs.
@@ -3506,8 +3509,14 @@ server (a link, or a path through one, is refused) and each file must be a regul
 the limit whatever the server says), 5000 rows and 64 columns. Errors have fixed text: no path, cell value or server
 message is echoed. Give the SFTP login read access to the drop directory only (chroot with `internal-sftp`).
 
+*Stale files.* A stuck export leaves the same file in place and each sync reads it as fresh. The connection's
+`read_probe` check now reports each file's role, size, modified time and age (`files` in the check's observed
+values), and with `max_age_hours` set it fails, naming the file, when a file's modified time is older than that.
+The check judges it with the server's clock against the SFTP server's modified time, so keep the two clocks in
+step. It is a signal for the person who runs the connection: a sync still reads the file.
+
 *Tests* run against an in-process SSH server with an SFTP subsystem over a temporary directory
-(`fake_test.go`): `go test -race ./internal/connectors/sftpdrop ./internal/connectors/governed/...`. The connector can also
+(`fake_test.go`; a second, request-handler server lies about a file's size and streams without end to test the read cap): `go test -race ./internal/connectors/sftpdrop ./internal/connectors/governed/...`. The connector can also
 run without a connection: `TESSERA_CONNECTORS=sftp`. New dependency: `github.com/pkg/sftp` v1.13.12 (and its
 `github.com/kr/fs`).
 
@@ -3645,7 +3654,11 @@ writes:                                        # request templates; see below
   All calls go through `internal/safehttp`.
 - **Validation on save** names every bad field (`rest.users.fields.id`, `writes.lookup`, ...). A connection's
   `PATCH /api/connections/{id}/config` takes `"rest"` as an object or as a string of YAML/JSON text, and the server
-  applies the environment's URL policy (https only in prod). `PUT /api/provisioning/targets/{id}` with
+  applies the environment's URL policy (https only in prod). `POST /api/connections` runs the same checks on the
+  settings it is sent (a blank draft is still fine; a `rest_generic` create that carries a config must carry its
+  `rest` spec) and answers `422 invalid_config` with `fields`. Cloud metadata hosts (`metadata.google.internal`,
+  `169.254.169.254`, `fd00:ec2::254` and the like) are refused as a base URL in every environment, on create and
+  on patch. `PUT /api/provisioning/targets/{id}` with
   `"kind": "rest"` takes `"rest"` (without `base_url`, which is the target's own) and a `token`; it answers
   `422 invalid_rest` with `fields`.
 - **Readiness checklist** (`rest_generic` template): the endpoint is reachable over verified TLS, the credential is
@@ -6468,6 +6481,7 @@ vault references of the connection credential store plug into the same resolver 
 | `TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY` | reference to the service account's JSON key file (`file:/abs/path` or `env:NAME`); only `client_email`, `private_key` and `private_key_id` are used |
 | `TESSERA_GOOGLE_ADMIN_EMAIL` | the administrator the service account impersonates (domain-wide delegation) |
 | `TESSERA_GOOGLE_CUSTOMER`, `TESSERA_GOOGLE_DOMAIN` | default `my_customer`; optionally limit users to one domain |
+| `TESSERA_GOOGLE_ORG_UNITS` | optional, comma-separated org unit paths (`/Engineering,/Sales/EMEA`, at most 50): users are listed once per org unit (`query=orgUnitPath='...'`), so users elsewhere are never read. In the connection wizard the same list is the Org units field on the Google Workspace Scope step (`base_dns`, validated by readiness); see "Google Workspace connections" below |
 | `TESSERA_GOOGLE_API_URL`, `TESSERA_GOOGLE_TOKEN_URL` | default `https://admin.googleapis.com` and `https://oauth2.googleapis.com/token` |
 | `TESSERA_GOOGLE_EMIT_IDENTITIES`, `TESSERA_GOOGLE_GROUPS`, `TESSERA_GOOGLE_ROLES` | all default `true`; turn groups or roles off when the delegation does not grant their scope (Google refuses the whole token request if one scope is missing) |
 | `TESSERA_GOOGLE_MAX_INCREMENTAL_AGE` | default `24h` (`0` never): a full read repairs group members this often |
@@ -6475,9 +6489,22 @@ vault references of the connection credential store plug into the same resolver 
 | `TESSERA_WORKDAY_CLIENT_ID`, `TESSERA_WORKDAY_CLIENT_SECRET` | the Workday API client (secret is a reference) |
 | `TESSERA_WORKDAY_REFRESH_TOKEN` | optional reference: use the refresh-token grant. Without it the client-credentials grant is used |
 | `TESSERA_WORKDAY_TOKEN_URL` | default `<base>/ccx/oauth2/<tenant>/token` |
-| `TESSERA_WORKDAY_WORKERS_PATH`, `TESSERA_WORKDAY_EVENTS_PATH` | default `/ccx/api/v1/{tenant}/workers` and `/ccx/api/v1/{tenant}/workerEvents`; point them at a custom report (RaaS) that returns the JSON below |
+| `TESSERA_WORKDAY_WORKERS_PATH`, `TESSERA_WORKDAY_EVENTS_PATH` | default `/ccx/api/{version}/{tenant}/workers` and `/ccx/api/{version}/{tenant}/workerEvents` (`{version}` is `TESSERA_WORKDAY_API_VERSION`, default `v1`, shape `v44.0`); point them at a custom report (RaaS) that returns the JSON below |
 | `TESSERA_WORKDAY_EMIT_IDENTITIES` | `true` (default): Workday is HR-authoritative, its workers are the identities. Set the other connectors' `..._EMIT_IDENTITIES` to `false` |
 | `TESSERA_WORKDAY_EVENT_WINDOW`, `TESSERA_WORKDAY_MAX_INCREMENTAL_AGE` | defaults `720h` (an event older than this is historical) and `24h` (`0` never) |
+
+**Google Workspace connections (issue #814).** A live Google Workspace connection (Settings, Connections) is read
+from its own stored config, not from the variables above: its customer, domain and org units (`base_dns`) scope
+the sync, the sealed credential is the service account's JSON key file, and the administrator to impersonate is the
+`admin_email` field of that JSON (next to `type`, `client_email` and `private_key`; the connection's config has no
+field for it). Groups, roles and identities are read, as the variable defaults do. When a tenant has a live Google
+connection it replaces an env-configured `google` connector, so the connection's org units always apply; the
+`TESSERA_GOOGLE_*` variables remain the fallback for a tenant without one (dev and the single-node default). A
+connection that cannot be opened (no credential, no `admin_email`, a refused setting) is reported in the sync's
+failed list by name and the other connectors are still read. A connection never carries an endpoint override
+(`TESSERA_GOOGLE_API_URL` and `_TOKEN_URL` apply to a dev runtime's fake only). Okta, Entra, Workday, Salesforce,
+SCIM, generic REST, SQL and directory connections are still read from the environment or by their own feature;
+see issue #814 for the list.
 
 Minimum read-only permissions:
 

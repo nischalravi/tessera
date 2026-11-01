@@ -182,32 +182,43 @@ func (c *Connector) listQuery(max int, fields string) url.Values {
 }
 
 func (c *Connector) readUsers(ctx context.Context) ([]*gUser, error) {
-	q := c.listQuery(500, userFields)
-	q.Set("orderBy", "email")
-	if c.cfg.Domain != "" {
-		q.Set("domain", c.cfg.Domain)
-	} else {
-		q.Set("customer", c.cfg.Customer)
-	}
 	type resp struct {
 		Users []gUser `json:"users"`
 		Next  string  `json:"nextPageToken"`
 	}
 	var out []*gUser
 	seen := map[string]bool{}
-	err := paged(ctx, c, c.dir("/users", q), func(r *resp) string { return r.Next }, func(r *resp) error {
-		for i := range r.Users {
-			u := &r.Users[i]
-			if u.ID == "" || len(u.ID) > 64 || seen[u.ID] {
-				continue
-			}
-			seen[u.ID] = true
-			out = append(out, u)
+	// One list per org unit (the search query takes a single orgUnitPath term);
+	// with none configured, one list of the whole customer or domain.
+	scopes := c.cfg.OrgUnits
+	if len(scopes) == 0 {
+		scopes = []string{""}
+	}
+	for _, ou := range scopes {
+		q := c.listQuery(500, userFields)
+		q.Set("orderBy", "email")
+		if c.cfg.Domain != "" {
+			q.Set("domain", c.cfg.Domain)
+		} else {
+			q.Set("customer", c.cfg.Customer)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("google: users: %w", err)
+		if ou != "" {
+			q.Set("query", "orgUnitPath='"+ou+"'")
+		}
+		err := paged(ctx, c, c.dir("/users", q), func(r *resp) string { return r.Next }, func(r *resp) error {
+			for i := range r.Users {
+				u := &r.Users[i]
+				if u.ID == "" || len(u.ID) > 64 || seen[u.ID] {
+					continue
+				}
+				seen[u.ID] = true
+				out = append(out, u)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("google: users: %w", err)
+		}
 	}
 	return out, nil
 }

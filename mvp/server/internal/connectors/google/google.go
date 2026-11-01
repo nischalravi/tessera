@@ -37,11 +37,13 @@ package google
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -84,7 +86,11 @@ type Config struct {
 	Customer string
 	// Domain, when set, lists the users of that domain only (a customer can
 	// own several domains).
-	Domain   string
+	Domain string
+	// OrgUnits, when set, restricts the user read to these org unit paths
+	// (for example /Engineering); users elsewhere are never read. Empty reads
+	// the whole customer or domain.
+	OrgUnits []string
 	APIURL   string // default DefaultAPIURL
 	TokenURL string // default DefaultTokenURL
 	// EmitIdentities also emits an identity per user. Turn it off when an HR
@@ -141,6 +147,14 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 	if cfg.Domain != "" && !connsync.ValidDomain(cfg.Domain) {
 		return nil, errors.New("google: domain is not a well-formed domain name")
 	}
+	if len(cfg.OrgUnits) > connsync.MaxOrgUnits {
+		return nil, fmt.Errorf("google: at most %d org units", connsync.MaxOrgUnits)
+	}
+	for _, ou := range cfg.OrgUnits {
+		if !connsync.ValidOrgUnitPath(ou) {
+			return nil, errors.New("google: an org unit is not a well-formed path (it starts with / and has no quote or backslash)")
+		}
+	}
 	if cfg.APIURL == "" {
 		cfg.APIURL = DefaultAPIURL
 	}
@@ -179,6 +193,7 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 //	TESSERA_GOOGLE_ADMIN_EMAIL          administrator to impersonate
 //	TESSERA_GOOGLE_CUSTOMER             default my_customer
 //	TESSERA_GOOGLE_DOMAIN               optional: only this domain's users
+//	TESSERA_GOOGLE_ORG_UNITS            optional: comma-separated org unit paths; only their users are read
 //	TESSERA_GOOGLE_API_URL              default https://admin.googleapis.com
 //	TESSERA_GOOGLE_TOKEN_URL            default https://oauth2.googleapis.com/token
 //	TESSERA_GOOGLE_EMIT_IDENTITIES      true (default) or false
@@ -189,6 +204,11 @@ func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc 
 	cfg := Config{AdminEmail: getenv("TESSERA_GOOGLE_ADMIN_EMAIL"), Customer: getenv("TESSERA_GOOGLE_CUSTOMER"),
 		Domain: getenv("TESSERA_GOOGLE_DOMAIN"), APIURL: getenv("TESSERA_GOOGLE_API_URL"), TokenURL: getenv("TESSERA_GOOGLE_TOKEN_URL"),
 		EmitIdentities: true, Groups: true, Roles: true, MaxIncrementalAge: 24 * time.Hour}
+	for _, ou := range strings.Split(getenv("TESSERA_GOOGLE_ORG_UNITS"), ",") {
+		if ou = strings.TrimSpace(ou); ou != "" {
+			cfg.OrgUnits = append(cfg.OrgUnits, ou)
+		}
+	}
 	for name, dst := range map[string]*bool{"TESSERA_GOOGLE_EMIT_IDENTITIES": &cfg.EmitIdentities,
 		"TESSERA_GOOGLE_GROUPS": &cfg.Groups, "TESSERA_GOOGLE_ROLES": &cfg.Roles} {
 		if v := getenv(name); v != "" {
@@ -218,6 +238,47 @@ func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc 
 		return nil, fmt.Errorf("TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY: %w", err)
 	}
 	return New(cfg, rt, hc, func() time.Time { return time.Now().UTC() })
+}
+
+// Stored is a Google Workspace connection as the readiness service holds it:
+// the scope fields of its stored config and its opened credential.
+type Stored struct {
+	// Customer, Domain and OrgUnits are the connection's customer, domain and
+	// base_dns (org unit paths). Empty values read as they do for FromEnv.
+	Customer, Domain string
+	OrgUnits         []string
+	// Credential is the sealed credential, opened: the service account's JSON key
+	// file. It may carry "admin_email", the administrator to impersonate (the
+	// connection's config has no field for it).
+	Credential string
+}
+
+// FromStored builds the connector of a connection from its stored config
+// instead of TESSERA_GOOGLE_* variables, so the connection's org units, customer
+// and domain scope the sync. Nothing is read from the environment: getenv only
+// supplies the dev endpoint overrides TESSERA_GOOGLE_API_URL and
+// TESSERA_GOOGLE_TOKEN_URL (the caller passes the layer that refuses them outside
+// dev). Groups, roles and identities are read, as FromEnv does by default.
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	cfg := Config{Customer: s.Customer, Domain: s.Domain, OrgUnits: slices.Clone(s.OrgUnits),
+		APIURL: getenv("TESSERA_GOOGLE_API_URL"), TokenURL: getenv("TESSERA_GOOGLE_TOKEN_URL"),
+		EmitIdentities: true, Groups: true, Roles: true, MaxIncrementalAge: 24 * time.Hour}
+	var extra struct {
+		AdminEmail string `json:"admin_email"`
+	}
+	if s.Credential == "" {
+		return nil, errors.New("google: the connection has no stored credential")
+	}
+	_ = json.Unmarshal([]byte(s.Credential), &extra) // a malformed file is reported by parseServiceAccountKey
+	cfg.AdminEmail = strings.TrimSpace(extra.AdminEmail)
+	var err error
+	if cfg.ServiceAccountEmail, cfg.PrivateKey, cfg.KeyID, err = parseServiceAccountKey(s.Credential); err != nil {
+		return nil, fmt.Errorf("google: credential: %w", err)
+	}
+	if cfg.AdminEmail == "" {
+		return nil, errors.New(`google: the credential must name the administrator to impersonate ("admin_email" next to the service account key fields)`)
+	}
+	return New(cfg, rt, hc, now)
 }
 
 func (*Connector) System() string      { return System }

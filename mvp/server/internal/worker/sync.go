@@ -34,12 +34,25 @@ func RunSync(ctx context.Context, tx *store.TenantTx, now time.Time, conns []con
 // configured ones, except those of a system a configured connector already reads:
 // the env-configured connector of a system keeps working as it did, and is not
 // read twice because a governed connection of the same system was also activated.
+// A connector built from a connection's stored config (connectors.ConnectionBacked)
+// is the exception: the connection's scope is the one that applies, so it replaces
+// the env-configured connector of its system, which is the dev fallback.
 func MergeGoverned(conns, governed []connectors.Connector) []connectors.Connector {
-	have := map[string]bool{}
-	for _, c := range conns {
-		have[c.System()] = true
+	stored := map[string]bool{}
+	for _, g := range governed {
+		if _, ok := g.(connectors.ConnectionBacked); ok {
+			stored[g.System()] = true
+		}
 	}
-	out := append([]connectors.Connector(nil), conns...)
+	have := map[string]bool{}
+	out := make([]connectors.Connector, 0, len(conns)+len(governed))
+	for _, c := range conns {
+		if stored[c.System()] {
+			continue
+		}
+		have[c.System()] = true
+		out = append(out, c)
+	}
 	for _, g := range governed {
 		if !have[g.System()] {
 			have[g.System()] = true

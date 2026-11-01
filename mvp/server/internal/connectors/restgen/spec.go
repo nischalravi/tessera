@@ -35,6 +35,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // DefaultSystem is the graph system name when the Spec names none.
@@ -345,6 +346,8 @@ func checkURL(raw string, rt connsync.Runtime, shapeOnly bool) error {
 	switch {
 	case err != nil || u.Host == "" || len(raw) > 512:
 		return errors.New("base URL is not a valid URL")
+	case safehttp.IsMetadataHost(u.Hostname()):
+		return errors.New("base URL must not point at a cloud metadata service")
 	case u.Scheme != "https" && u.Scheme != "http":
 		return errors.New("base URL must be https")
 	case u.User != nil || u.RawQuery != "" || u.Fragment != "":

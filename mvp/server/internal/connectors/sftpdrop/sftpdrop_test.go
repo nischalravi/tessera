@@ -3,18 +3,25 @@ package sftpdrop
 import (
 	"context"
 	"errors"
+	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/pkg/sftp"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
 	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 var devRT = connsync.Runtime{Env: config.Dev, AllowLoopback: true}
@@ -204,6 +211,152 @@ func TestSizeAndRowCaps(t *testing.T) {
 	}
 }
 
+// lyingDrop is an SFTP server whose one file reports a small size (lstat and fstat agree, so the
+// size and swap checks pass) and then streams without end: only the read cap stops it.
+type lyingDrop struct {
+	dir    string
+	served atomic.Int64 // bytes handed to the client
+}
+
+type lyingInfo struct {
+	name string
+	dir  bool
+}
+
+func (i lyingInfo) Name() string { return i.name }
+func (i lyingInfo) Size() int64 {
+	if i.dir {
+		return 0
+	}
+	return 100 // the lie
+}
+func (i lyingInfo) Mode() fs.FileMode {
+	if i.dir {
+		return fs.ModeDir | 0o755
+	}
+	return 0o644
+}
+func (lyingInfo) ModTime() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC) }
+func (i lyingInfo) IsDir() bool      { return i.dir }
+func (lyingInfo) Sys() any           { return nil }
+
+type oneInfo struct{ fi os.FileInfo }
+
+func (o oneInfo) ListAt(ls []os.FileInfo, off int64) (int, error) {
+	if off > 0 {
+		return 0, io.EOF
+	}
+	ls[0] = o.fi
+	return 1, io.EOF
+}
+
+func (l *lyingDrop) Fileread(*sftp.Request) (io.ReaderAt, error) { return l, nil }
+
+// ReadAt serves 'a' bytes without end, up to a 64 MiB backstop so a missing cap fails the test
+// instead of hanging it.
+func (l *lyingDrop) ReadAt(p []byte, off int64) (int, error) {
+	if off >= 64<<20 {
+		return 0, io.EOF
+	}
+	for i := range p {
+		p[i] = 'a'
+	}
+	l.served.Add(int64(len(p)))
+	return len(p), nil
+}
+
+func (l *lyingDrop) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
+	switch r.Method {
+	case "Stat", "Lstat":
+		return oneInfo{lyingInfo{name: path.Base(r.Filepath), dir: r.Filepath == l.dir}}, nil
+	}
+	return nil, os.ErrPermission
+}
+
+func (*lyingDrop) Filewrite(*sftp.Request) (io.WriterAt, error) { return nil, os.ErrPermission }
+func (*lyingDrop) Filecmd(*sftp.Request) error                  { return os.ErrPermission }
+
+// A server that reports a small size and streams more than the limit: the read stops one byte over
+// the limit (the LimitReader), whatever the server claims, and the file is refused as too large.
+func TestLyingSizeIsCappedAtTheLimit(t *testing.T) {
+	f := newFixture(t)
+	drop := &lyingDrop{dir: "/drop"}
+	f.srv.handlers = &sftp.Handlers{FileGet: drop, FilePut: drop, FileCmd: drop, FileList: drop}
+	f.conf.Directory = drop.dir
+	f.conf.EntitlementsFile = ""
+	f.conf.Mapping.Entitlements = nil
+	if _, err := f.discover(t); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+	// the client reads in 32 KiB requests: a little past the limit is served, never the backstop
+	if n := drop.served.Load(); n < flatfile.MaxBytes+1 || n > flatfile.MaxBytes+256<<10 {
+		t.Errorf("served %d bytes, want the limit (%d) plus at most a few requests", n, flatfile.MaxBytes)
+	}
+}
+
+func TestReadReportsFileSizeAndModifiedTime(t *testing.T) {
+	f := newFixture(t)
+	mt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	if err := os.Chtimes(filepath.Join(f.srv.dir, "accounts.csv"), mt, mt); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(f.conf, devRT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := c.Read(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Files) != 2 {
+		t.Fatalf("files = %+v", snap.Files)
+	}
+	acc, ent := snap.Files[0], snap.Files[1]
+	if acc.Role != "accounts" || acc.Size != int64(len(accountsCSV)) || !acc.ModTime.Equal(mt) {
+		t.Errorf("accounts = %+v, want size %d modified %s", acc, len(accountsCSV), mt)
+	}
+	if ent.Role != "entitlements" || ent.Size != int64(len(entitlementsCSV)) || ent.ModTime.IsZero() {
+		t.Errorf("entitlements = %+v", ent)
+	}
+}
+
+func TestMaxAgeFromEnv(t *testing.T) {
+	env := map[string]string{"TESSERA_SFTPDROP_HOST": "h", "TESSERA_SFTPDROP_USER": "u", "TESSERA_SFTPDROP_KEY": "env:K", "K": "key"}
+	for name, tc := range map[string]struct {
+		v    string
+		want time.Duration
+		bad  bool
+	}{
+		"unset":    {"", 0, false},
+		"a day":    {"24", 24 * time.Hour, false},
+		"zero":     {"0", 0, true},
+		"text":     {"soon", 0, true},
+		"negative": {"-1", 0, true},
+		"huge":     {"99999", 0, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := ConfigFromEnv(func(k string) string {
+				if k == "TESSERA_SFTPDROP_MAX_AGE_HOURS" {
+					return tc.v
+				}
+				return env[k]
+			})
+			if tc.bad {
+				if err == nil || !strings.Contains(err.Error(), "MAX_AGE_HOURS") {
+					t.Fatalf("err = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.MaxAge != tc.want {
+				t.Errorf("MaxAge = %v, want %v", cfg.MaxAge, tc.want)
+			}
+		})
+	}
+}
+
 func TestInvalidFileFailsWholeWithFixedText(t *testing.T) {
 	f := newFixture(t)
 	secret := "=cmd|' /C calc'!A0-INJECTED"
@@ -260,8 +413,9 @@ func TestSocketIsGuarded(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		_, err = cn.Discover(ctx)
 		cancel()
-		if err == nil {
-			t.Errorf("%s: connected", tc.name)
+		// the address policy refused it, not a timeout, a host-key or a sign-in failure
+		if !errors.Is(err, safehttp.ErrBlockedAddress) {
+			t.Errorf("%s: err = %v, want safehttp.ErrBlockedAddress", tc.name, err)
 		}
 	}
 }

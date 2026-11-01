@@ -670,7 +670,7 @@ func TestIsolation_CrossTenantForeignKeys(t *testing.T) {
 func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 	covered := map[string]bool{
 		// metadata, not data access
-		"Tenant": true, "Context": true, "ReadOnly": true,
+		"Tenant": true, "Context": true, "ReadOnly": true, "Statements": true,
 		// Audit appends a domain event stamped by the executor; AuditLog is in listCases.
 		"Audit": true,
 		// RevokedGrants has its own test: the shared fixture holds no tombstones.

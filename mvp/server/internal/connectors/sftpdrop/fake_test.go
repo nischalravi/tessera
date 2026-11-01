@@ -21,6 +21,8 @@ type fakeServer struct {
 	ln      net.Listener
 	hostKey ssh.Signer
 	dir     string // the real path of the served directory
+	// handlers, when set, replace the real-directory SFTP server (a server that lies about sizes).
+	handlers *sftp.Handlers
 }
 
 func newKey(t testing.TB) (ssh.Signer, string) {
@@ -100,6 +102,10 @@ func (s *fakeServer) serve(c net.Conn, conf *ssh.ServerConfig) {
 					continue
 				}
 				_ = r.Reply(true, nil)
+				if s.handlers != nil {
+					_ = sftp.NewRequestServer(ch, *s.handlers).Serve()
+					return
+				}
 				srv, err := sftp.NewServer(ch, sftp.ReadOnly())
 				if err != nil {
 					return
