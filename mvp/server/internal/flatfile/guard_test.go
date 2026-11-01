@@ -104,36 +104,53 @@ func TestApply_TruncatedFileHoldsEveryRemoval(t *testing.T) {
 	}
 }
 
+const feedSize = 5000
+
 // A truncated feed from a large app is held in one batch: 5000 drops do not rewrite the hold's reason
-// once each (#486), and the hold names the run once.
+// once each (#486), and the hold names the run once. The bound is on the statements the upload runs, not
+// on the time it takes: a clock budget fails on a loaded machine and passes a slow regression.
 func TestApply_LargeTruncatedFeedIsHeldInOneBatch(t *testing.T) {
+	const feed = feedSize
 	e := newEnv(t)
 	var v1, v2 strings.Builder
 	v1.WriteString(accountsHead)
 	v2.WriteString(accountsHead)
-	for i := 0; i < 5000; i++ {
+	for i := 0; i < feed; i++ {
 		fmt.Fprintf(&v1, "g%04d,login%04d,,,active\n", i, i)
 	}
 	v2.WriteString("g0000,login0000,,,active\n")
 	e.mustApplied(e.accounts(v1.String()))
-	start := time.Now()
-	e.mustApplied(e.accounts(v2.String()))
-	limit := 10 * time.Second
-	if raceEnabled {
-		limit = 90 * time.Second // the quadratic version took minutes under -race
-	}
-	if d := time.Since(start); d > limit {
-		t.Errorf("holding 4999 drops took %s", d)
+	var stmts int
+	e.tx(func(c *store.TenantTx) error {
+		e.now = e.now.Add(time.Minute)
+		before := c.Statements()
+		res, err := flatfile.Apply(c, e.now, flatfile.Input{System: sys, Kind: "accounts", Filename: "accounts.csv", Raw: []byte(v2.String()), By: "Pat"})
+		if err != nil {
+			return err
+		}
+		if res.Upload.Status != store.FlatUploadApplied {
+			t.Fatalf("upload %s: %v", res.Upload.Status, res.Errors)
+		}
+		stmts = c.Statements() - before
+		return nil
+	})
+	t.Logf("statements: %d", stmts)
+	if stmts > maxHoldStatements {
+		t.Errorf("holding %d drops ran %d statements, want at most %d (a few per drop, not one hold rewrite per drop)", feed-1, stmts, maxHoldStatements)
 	}
 	e.tx(func(c *store.TenantTx) error {
 		hs, err := c.DeletionHolds("held", deleteguard.CatAccounts, 10, 0)
-		if err != nil || len(hs) != 1 || hs[0].ItemCount != 4999 {
+		if err != nil || len(hs) != 1 || hs[0].ItemCount != feed-1 {
 			t.Fatalf("holds %+v %v", hs, err)
 		}
 		cs := deleteguard.Contributors(hs[0])
-		if len(cs) != 1 || cs[0].Added != 4999 {
+		if len(cs) != 1 || cs[0].Added != feed-1 {
 			t.Errorf("contributors = %+v, want one entry for the run", cs)
 		}
 		return nil
 	})
 }
+
+// maxHoldStatements: the held run costs about four statements per drop today (20056 for 4999 drops);
+// one more per drop, the shape of the #486 regression, goes over. Statement counts do not depend on load.
+const maxHoldStatements = feedSize * 9 / 2

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
@@ -492,13 +493,32 @@ func init() {
 	// returns nothing is a failure: an empty vault, ERP, organization or feed is nearly
 	// always a scope or rights mistake, and a clean-looking empty result hides it.
 	live("read_probe", template.OpSample, sample(connectors.SampleQuery{Op: "probe", Limit: connectors.MaxSample},
-		func(_ Env, _ Params, s connectors.SampleStats) Result {
+		func(env Env, _ Params, s connectors.SampleStats) Result {
 			obs := map[string]any{"objects": s.Objects, "classes": s.PerClass}
+			// a file drop reports each file's size and modified time; with a maximum age a file
+			// older than it is a stuck export, whose unchanged content every sync would take as fresh
+			var stale []string
+			if len(s.Files) > 0 {
+				files := make([]map[string]any, 0, len(s.Files))
+				for _, f := range s.Files {
+					old := s.MaxFileAge > 0 && env.Now.Sub(f.ModTime) > s.MaxFileAge
+					if old {
+						stale = append(stale, f.Role)
+					}
+					files = append(files, map[string]any{"role": f.Role, "size": f.Size,
+						"modified": f.ModTime.UTC().Format(time.RFC3339), "age_hours": int(env.Now.Sub(f.ModTime).Hours()), "stale": old})
+				}
+				obs["files"] = files
+			}
 			if !s.Available {
 				return fail("The source could not be read.", obs)
 			}
 			if s.Objects == 0 {
 				return fail("The read returned no objects: check the scope and the account's read rights.", obs)
+			}
+			if len(stale) > 0 {
+				return fail(fmt.Sprintf("The %s file is older than the maximum age of %d hours: the export may be stuck.",
+					strings.Join(stale, " and "), int(s.MaxFileAge.Hours())), obs)
 			}
 			return pass(fmt.Sprintf("Read %d objects (counts only).", s.Objects), obs)
 		}))

@@ -42,6 +42,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
@@ -221,15 +222,42 @@ func (p pin) matches(k ssh.PublicKey) bool {
 	return ssh.FingerprintSHA256(k) == p.fingerprint
 }
 
-// Client opens an authenticated SSH connection exactly as Read does (guarded dialer, pinned host
-// key, key sign-in, handshake deadline) and returns it for the caller to use and Close. The SFTP file
-// drop connector (issue #563) reuses it for its subsystem; no command is run here.
-func (c *Connector) Client(ctx context.Context) (*ssh.Client, error) {
+// ErrSFTP: the SFTP subsystem could not be started on the host.
+var ErrSFTP = errors.New("unixssh: the SFTP session failed")
+
+// SFTPConn is an SFTP session over one authenticated connection. It embeds the SFTP client and
+// nothing else is reachable from it: the underlying *ssh.Client is not exported, so no caller can
+// open a session of its own and run a command (the "fixed commands only" rule). Close ends the SFTP
+// session and the SSH connection.
+type SFTPConn struct {
+	*sftp.Client
+	cl   *ssh.Client
+	stop func() bool
+}
+
+// Close ends the SFTP session and closes the SSH connection.
+func (s *SFTPConn) Close() error {
+	s.stop()
+	err := s.Client.Close()
+	_ = s.cl.Close()
+	return err
+}
+
+// SFTP opens an authenticated SSH connection exactly as Read does (guarded dialer, pinned host
+// key, key sign-in, handshake deadline) and starts the "sftp" subsystem on it, for the caller to use
+// and Close. The SFTP file drop connector (issue #563) uses it; no command is run. The connection
+// is closed when ctx ends, which also ends any call in progress on it.
+func (c *Connector) SFTP(ctx context.Context) (*SFTPConn, error) {
 	s, err := c.open(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return s.cl, nil
+	sc, err := sftp.NewClient(s.cl)
+	if err != nil {
+		s.close()
+		return nil, ErrSFTP
+	}
+	return &SFTPConn{Client: sc, cl: s.cl, stop: context.AfterFunc(ctx, func() { _ = s.cl.Close() })}, nil
 }
 
 // session is one authenticated connection.

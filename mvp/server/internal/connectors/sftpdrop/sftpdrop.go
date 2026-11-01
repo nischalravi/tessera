@@ -6,7 +6,7 @@
 //
 // Safety rules, each tested:
 //
-//   - The connection is opened by the Unix/SSH connector's code (unixssh.Connector.Client): the
+//   - The connection is opened by the Unix/SSH connector's code (unixssh.Connector.SFTP): the
 //     socket goes through safehttp's address policy, the host key is pinned (never trusted on first
 //     use) and sign-in is by key. Only the "sftp" subsystem is used: no command is run.
 //   - Only the two configured file names are read, from the configured absolute directory. A name
@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -74,7 +75,14 @@ type Config struct {
 	AccountsFile     string         // the accounts file name in Directory
 	EntitlementsFile string         // optional
 	Mapping          flatfile.Mapping
+	// MaxAge, when above zero, is how old a drop file may be before the probe flags it as stale
+	// (a stuck export leaves the same file in place and every sync would treat it as fresh).
+	// It does not stop a sync: the probe reports it.
+	MaxAge time.Duration
 }
+
+// MaxAgeHours is the largest maximum age that may be set (a year).
+const MaxAgeHours = 24 * 365
 
 // ValidateDirectory checks the directory setting: absolute, no "." or ".." element, no double slash.
 func ValidateDirectory(d string) error {
@@ -149,24 +157,29 @@ func (*Connector) StreamEvents(context.Context, *time.Time, func(connectors.Even
 type Snapshot struct {
 	Accounts     []flatfile.Record
 	Entitlements []flatfile.Record
+	Files        []FileInfo // the files read, accounts first
+}
+
+// FileInfo is what the server reported for one file read: its role (accounts or entitlements), its
+// size in bytes and its modified time. The probe judges staleness from the modified time.
+type FileInfo struct {
+	Role    string
+	Size    int64
+	ModTime time.Time
 }
 
 // Read connects, reads the configured files and validates them with the mapping.
 func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 	ctx, cancel := context.WithTimeout(ctx, ReadTimeout)
 	defer cancel()
-	cl, err := c.ssh.Client(ctx)
+	sc, err := c.ssh.SFTP(ctx)
+	if errors.Is(err, unixssh.ErrSFTP) {
+		return nil, ErrProtocol
+	}
 	if err != nil {
 		return nil, err // unixssh's errors are fixed text and say what failed (host key, key, dial)
 	}
-	defer cl.Close()
-	stop := context.AfterFunc(ctx, func() { _ = cl.Close() })
-	defer stop()
-	sc, err := sftp.NewClient(cl)
-	if err != nil {
-		return nil, ErrProtocol
-	}
-	defer sc.Close()
+	defer sc.Close() // ends the SFTP session and the SSH connection; ctx ending closes it too
 
 	dir, err := sc.RealPath(c.cfg.Directory)
 	if err != nil || dir != c.cfg.Directory {
@@ -176,10 +189,11 @@ func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 		return nil, ErrDirectory
 	}
 	snap := &Snapshot{}
-	raw, err := readFile(sc, dir, c.cfg.AccountsFile)
+	raw, fi, err := readFile(sc.Client, dir, c.cfg.AccountsFile)
 	if err != nil {
 		return nil, ctxOr(ctx, err)
 	}
+	snap.Files = append(snap.Files, FileInfo{Role: "accounts", Size: fi.Size(), ModTime: fi.ModTime()})
 	tbl, errs := flatfile.Parse(raw)
 	if len(errs) > 0 {
 		return nil, ErrInvalid
@@ -191,9 +205,10 @@ func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
 		return nil, ErrEmpty
 	}
 	if c.cfg.EntitlementsFile != "" {
-		if raw, err = readFile(sc, dir, c.cfg.EntitlementsFile); err != nil {
+		if raw, fi, err = readFile(sc.Client, dir, c.cfg.EntitlementsFile); err != nil {
 			return nil, ctxOr(ctx, err)
 		}
+		snap.Files = append(snap.Files, FileInfo{Role: "entitlements", Size: fi.Size(), ModTime: fi.ModTime()})
 		if tbl, errs = flatfile.Parse(raw); len(errs) > 0 {
 			return nil, ErrInvalid
 		}
@@ -219,38 +234,39 @@ func ctxOr(ctx context.Context, err error) error {
 // readFile reads one file of the (already verified, real) directory. name is a validated plain
 // name, so the joined path cannot leave dir; the file is refused unless it is a regular file that
 // is not a link, by lstat before and by fstat on the open handle, and at most flatfile.MaxBytes.
-func readFile(sc *sftp.Client, dir, name string) ([]byte, error) {
+// It returns the lstat (size and modified time), which the fstat was checked to match.
+func readFile(sc *sftp.Client, dir, name string) ([]byte, os.FileInfo, error) {
 	full := path.Join(dir, name)
 	st, err := sc.Lstat(full)
 	if err != nil || !st.Mode().IsRegular() {
-		return nil, ErrFile
+		return nil, nil, ErrFile
 	}
 	if st.Size() > flatfile.MaxBytes {
-		return nil, ErrTooLarge
+		return nil, nil, ErrTooLarge
 	}
 	f, err := sc.Open(full)
 	if err != nil {
-		return nil, ErrFile
+		return nil, nil, ErrFile
 	}
 	defer f.Close()
 	if real, err := sc.RealPath(full); err != nil || real != full { // swapped for a link after the lstat
-		return nil, ErrFile
+		return nil, nil, ErrFile
 	}
 	// fstat follows nothing, so it cannot see a link; a file that differs from the one lstat
 	// saw (a swap and swap back) is refused
 	if fst, err := f.Stat(); err != nil || !fst.Mode().IsRegular() || fst.Mode() != st.Mode() ||
 		fst.Size() != st.Size() || !fst.ModTime().Equal(st.ModTime()) {
-		return nil, ErrFile
+		return nil, nil, ErrFile
 	}
 	// the server's size is not trusted: stop one byte over the limit
 	raw, err := io.ReadAll(io.LimitReader(f, flatfile.MaxBytes+1))
 	if err != nil {
-		return nil, ErrProtocol
+		return nil, nil, ErrProtocol
 	}
 	if len(raw) > flatfile.MaxBytes {
-		return nil, ErrTooLarge
+		return nil, nil, ErrTooLarge
 	}
-	return raw, nil
+	return raw, st, nil
 }
 
 // Discover reads the drop and maps it as the flat-file pipeline does.

@@ -158,6 +158,7 @@ func (p Params) Env() (func(string) string, error) {
 		m[pre+"COL_IDENTITY_ID"], m[pre+"COL_STATUS"] = set("accounts_identity_id"), set("accounts_status")
 		m[pre+"COL_ENT_ACCOUNT_ID"], m[pre+"COL_ENT_ENTITLEMENT"] = set("entitlements_account_id"), set("entitlements_entitlement")
 		m[pre+"COL_ENT_NAME"], m[pre+"COL_ENT_PRIVILEGED"] = set("entitlements_name"), set("entitlements_privileged")
+		m[pre+"MAX_AGE_HOURS"] = set("max_age_hours")
 		m[pre+"KEY"] = "env:" + secretVar
 	default:
 		return nil, fmt.Errorf("governed: %s is read by its own feature, not by the connector sync", p.Type)

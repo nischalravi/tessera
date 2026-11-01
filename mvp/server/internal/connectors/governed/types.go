@@ -234,7 +234,8 @@ func SettingSpecs(typ string) []Setting {
 			{"entitlements_account_id", "Entitlements: account id column", "Required with an entitlements file.", false},
 			{"entitlements_entitlement", "Entitlements: entitlement column", "Required with an entitlements file.", false},
 			{"entitlements_name", "Entitlements: name column", "Optional: a display name for the entitlement.", false},
-			{"entitlements_privileged", "Entitlements: privileged column", "Optional: yes or no.", false}}
+			{"entitlements_privileged", "Entitlements: privileged column", "Optional: yes or no.", false},
+			{"max_age_hours", "Maximum file age (hours)", "Optional, 1 to 8760. The connection check flags a file whose modified time is older than this, so a stuck export is noticed.", false}}
 	case AWSOrg:
 		return []Setting{
 			{"role_name", "Reader role name", "The role assumed in each account. Default TesseraReader.", false},
@@ -483,6 +484,10 @@ func ValidateSettings(typ string, set map[string]string) []SettingError {
 		case "host":
 			if _, err := netip.ParseAddr(v); err != nil && !sshHostRE.MatchString(v) {
 				bad(s.Key, "must be a host name or an IP address (no scheme, port or path)")
+			}
+		case "max_age_hours":
+			if n, err := strconv.Atoi(v); err != nil || n < 1 || n > 24*365 {
+				bad(s.Key, "must be a whole number of hours between 1 and 8760")
 			}
 		case "port":
 			if n, err := strconv.Atoi(v); err != nil || n < 1 || n > 65535 {

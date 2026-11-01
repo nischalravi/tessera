@@ -2,7 +2,9 @@ package sftpdrop
 
 import (
 	"errors"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
@@ -20,6 +22,7 @@ import (
 //	TESSERA_SFTPDROP_COL_EMAIL, _COL_IDENTITY_ID, _COL_STATUS   optional
 //	TESSERA_SFTPDROP_COL_ENT_ACCOUNT_ID, _COL_ENT_ENTITLEMENT   required with an entitlements file
 //	TESSERA_SFTPDROP_COL_ENT_NAME, _COL_ENT_PRIVILEGED          optional
+//	TESSERA_SFTPDROP_MAX_AGE_HOURS        optional, 1 to 8760: a file older than this is flagged stale by the probe
 func FromEnv(getenv func(string) string, rt connsync.Runtime) (connectors.Connector, error) {
 	cfg, err := ConfigFromEnv(getenv)
 	if err != nil {
@@ -53,6 +56,13 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	if cfg.EntitlementsFile != "" {
 		cfg.Mapping.Entitlements = &flatfile.EntitlementCols{AccountID: v("COL_ENT_ACCOUNT_ID"), Entitlement: v("COL_ENT_ENTITLEMENT"),
 			Name: v("COL_ENT_NAME"), Privileged: v("COL_ENT_PRIVILEGED")}
+	}
+	if h := v("MAX_AGE_HOURS"); h != "" {
+		n, err := strconv.Atoi(h)
+		if err != nil || n < 1 || n > MaxAgeHours {
+			return Config{}, errors.New(p + "MAX_AGE_HOURS: must be a whole number of hours between 1 and " + strconv.Itoa(MaxAgeHours))
+		}
+		cfg.MaxAge = time.Duration(n) * time.Hour
 	}
 	return cfg, nil
 }

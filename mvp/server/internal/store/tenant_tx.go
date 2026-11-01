@@ -25,7 +25,13 @@ type TenantTx struct {
 	tenant   tenancy.ID
 	readOnly bool
 	appended int64 // audit events appended (counted into AuditContext.Committed on commit)
+	stmts    int   // statements bound in this transaction (see Statements)
 }
+
+// Statements is how many statements this transaction has run so far. Tests use it to assert that
+// an operation does a bounded amount of database work (a linear, not a quadratic, number of
+// statements) without a wall-clock budget, which fails under load.
+func (tx *TenantTx) Statements() int { return tx.stmts }
 
 // Tenant returns the tenant this transaction is scoped to.
 func (tx *TenantTx) Tenant() tenancy.ID { return tx.tenant }
@@ -45,6 +51,7 @@ func (tx *TenantTx) own(t tenancy.ID) error {
 
 // bind appends @tenant to args, refusing a caller-supplied "tenant".
 func (tx *TenantTx) bind(args []sql.NamedArg) ([]any, error) {
+	tx.stmts++
 	out := make([]any, 0, len(args)) // append grows it by one for @tenant
 	for _, a := range args {
 		if strings.EqualFold(a.Name, "tenant") {

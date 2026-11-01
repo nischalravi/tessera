@@ -3483,7 +3483,8 @@ connection and is read-only: nothing is written, moved or deleted on the server.
 *Settings.* `host`, `port`, `username`, `host_key` (as for the Unix connector), `directory`, `accounts_file`,
 `entitlements_file` (optional) and the column mapping: `accounts_account_id` and `accounts_username` (required),
 `accounts_email`, `accounts_identity_id`, `accounts_status`, and with an entitlements file
-`entitlements_account_id` and `entitlements_entitlement` (required), `entitlements_name`, `entitlements_privileged`.
+`entitlements_account_id` and `entitlements_entitlement` (required), `entitlements_name`, `entitlements_privileged`,
+and the optional `max_age_hours` (1 to 8760; env `TESSERA_SFTPDROP_MAX_AGE_HOURS`, see *Stale files*).
 The credential is the SSH private key, sealed like every connection secret (or a vault reference) and never printed.
 
 *Same pipeline as the flat-file apps.* Files are parsed, validated and normalised by `internal/flatfile`
@@ -3494,7 +3495,9 @@ as a whole and nothing is ingested. What the connector does not do is call `flat
 no per-upload history, delta or manual tasks, and removals are held by the connection's deletion guard.
 One drop per tenant (the system is `sftp`).
 
-*Network and host key.* The connection is opened by the Unix/SSH connector's code (`unixssh.Connector.Client`):
+*Network and host key.* The connection is opened by the Unix/SSH connector's code (`unixssh.Connector.SFTP`, which
+returns an SFTP session and never a raw SSH client, so no caller can open a session and run a command; an archtest
+bans `NewSession`, `RequestSubsystem` and the SSH library outside `internal/connectors/unixssh`):
 the socket goes through `safehttp.NewDialer` (private, loopback, link-local and metadata addresses refused; the
 dev runtime may allow loopback), the host key is pinned (a fingerprint or the key line; no trust on first use, no
 callback that skips the check) and sign-in is by key. Only the `sftp` subsystem is requested; no command runs.
@@ -3506,8 +3509,14 @@ server (a link, or a path through one, is refused) and each file must be a regul
 the limit whatever the server says), 5000 rows and 64 columns. Errors have fixed text: no path, cell value or server
 message is echoed. Give the SFTP login read access to the drop directory only (chroot with `internal-sftp`).
 
+*Stale files.* A stuck export leaves the same file in place and each sync reads it as fresh. The connection's
+`read_probe` check now reports each file's role, size, modified time and age (`files` in the check's observed
+values), and with `max_age_hours` set it fails, naming the file, when a file's modified time is older than that.
+The check judges it with the server's clock against the SFTP server's modified time, so keep the two clocks in
+step. It is a signal for the person who runs the connection: a sync still reads the file.
+
 *Tests* run against an in-process SSH server with an SFTP subsystem over a temporary directory
-(`fake_test.go`): `go test -race ./internal/connectors/sftpdrop ./internal/connectors/governed/...`. The connector can also
+(`fake_test.go`; a second, request-handler server lies about a file's size and streams without end to test the read cap): `go test -race ./internal/connectors/sftpdrop ./internal/connectors/governed/...`. The connector can also
 run without a connection: `TESSERA_CONNECTORS=sftp`. New dependency: `github.com/pkg/sftp` v1.13.12 (and its
 `github.com/kr/fs`).
 
