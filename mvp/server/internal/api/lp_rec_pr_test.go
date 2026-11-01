@@ -450,7 +450,7 @@ func TestLPRecPR_OpenThenUpdateInPlace(t *testing.T) {
 	// the body names the recommendation, the identity, the entitlement and the simulation, and is never auto-merged
 	body := pulls[0].Body
 	for _, want := range []string{"<!-- tessera:lp-rightsize:v1 grant-" + w.rec + " -->", "`Esme Thornbury`", "`workday:Payroll Administrator`",
-		"`payroll-ops`", "Identities losing access | 1 |", "Role members who lose it | 1 |", "never merges it", "60 days"} {
+		"`payroll-ops`", "Identities losing access | 1 |", "Role members who lose it | 1 (0 used it in the window) |", "never merges it", "60 days"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body lacks %q:\n%s", want, body)
 		}
@@ -1065,7 +1065,8 @@ func TestLPRecPR_PicksTheAppsOwnAmongSeveral(t *testing.T) {
 	}
 }
 
-// An open pull request whose head is not the commit Tessera made is not updated at all.
+// An open pull request of Tessera's whose head is not the commit Tessera recorded is not updated: it is closed with the
+// notice (issue #789).
 func TestLPRecPR_ExistingPullHeadChangesBeforeUpdate(t *testing.T) {
 	w := lpPRSetup(t)
 	v := w.open(200)
@@ -1078,7 +1079,197 @@ func TestLPRecPR_ExistingPullHeadChangesBeforeUpdate(t *testing.T) {
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "pull_request_conflict") {
 		t.Fatalf("%d %.300s", rec.Code, rec.Body)
 	}
-	if w.repo.pulls[n].Body != "untouched" || w.repo.pulls[n].State != "open" {
-		t.Errorf("the pull request was updated or closed: %+v", w.repo.pulls[n])
+	if p := w.repo.pulls[n]; p.State != "closed" || p.Body != lpSupersededNotice {
+		t.Errorf("the pull request was not closed with the notice: %+v", p)
+	}
+}
+
+// ---------------------------------------------------------------- issues #785, #786, #789
+
+// addRoleMember adds the named identity to the world's role.
+func (w *lpPRWorld) addRoleMember(name string) {
+	w.t.Helper()
+	var iid int64
+	var roleID string
+	w.c.read(func(tx *store.TenantTx) error {
+		ids, err := tx.Identities()
+		for _, i := range ids {
+			if i.Name == name {
+				iid = i.ID
+			}
+		}
+		if err != nil {
+			return err
+		}
+		rs, err := tx.BusinessRoles()
+		for _, r := range rs {
+			if r.Key == "payroll-ops" {
+				roleID = r.ID
+			}
+		}
+		return err
+	})
+	if iid == 0 || roleID == "" {
+		w.t.Fatalf("identity %q = %d, role = %q", name, iid, roleID)
+	}
+	w.c.json("POST", "/api/roles/"+roleID+"/members", fmt.Sprintf(`{"identity_id":%d}`, iid), 200)
+}
+
+// The body counts every member of the role, and says so when another member used what the change removes (issue #785).
+func TestLPRecPR_BodyCountsAllRoleMembers(t *testing.T) {
+	w := lpPRSetup(t)
+	w.addRoleMember("Teodor Delacroix")
+	w.open(200)
+	body := w.repo.openPulls()[0].Body
+	if strings.Contains(body, "nobody is using") {
+		t.Errorf("the body claims nobody uses it:\n%s", body)
+	}
+	if !strings.Contains(body, "Role members who lose it | 2 (1 used it in the window) |") || !strings.Contains(body, "**1 role member(s) used what this removes.**") {
+		t.Errorf("body does not count the other member's use:\n%s", body)
+	}
+}
+
+// A role file that cannot be read does not spend an attempt, and the cap still holds under concurrency (issue #786).
+func TestLPRecPR_UnreadableFileKeepsTheAttempt(t *testing.T) {
+	w := lpPRSetup(t)
+	w.reserve(lpRecPRHourlyCap - 2)
+	attempts := func() int {
+		n := -1
+		w.c.read(func(tx *store.TenantTx) error {
+			var err error
+			n, err = tx.LPRecPRAttemptsSince(testkit.Now.Add(-time.Hour))
+			return err
+		})
+		return n
+	}
+	w.repo.mu.Lock()
+	main := w.repo.commits[w.repo.branches["main"]]
+	good := main[w.role]
+	main[w.role] = good + "extra_field: 1\n"
+	w.repo.mu.Unlock()
+	for i := 0; i < 5; i++ {
+		if rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", ""); rec.Code != 422 || !strings.Contains(rec.Body.String(), "role_file_unreadable") {
+			t.Fatalf("request %d: %d %.200s, want 422 role_file_unreadable", i, rec.Code, rec.Body)
+		}
+	}
+	if n := attempts(); n != lpRecPRHourlyCap-2 {
+		t.Fatalf("attempts after unreadable refusals = %d, want %d", n, lpRecPRHourlyCap-2)
+	}
+	// concurrent unreadable requests: each is a 422 or (while another holds the last slots) a 429; none is kept
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", ""); rec.Code != 422 && rec.Code != 429 {
+				t.Errorf("concurrent unreadable = %d %.200s", rec.Code, rec.Body)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := attempts(); n != lpRecPRHourlyCap-2 {
+		t.Fatalf("attempts after concurrent refusals = %d, want %d", n, lpRecPRHourlyCap-2)
+	}
+	// with the file fixed, concurrent requests still cannot take more than the cap
+	w.repo.mu.Lock()
+	main[w.role] = good
+	w.repo.mu.Unlock()
+	var mu sync.Mutex
+	limited := 0
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", ""); rec.Code == 429 {
+				mu.Lock()
+				limited++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if n := attempts(); n != lpRecPRHourlyCap || limited != 4 {
+		t.Errorf("attempts = %d (want %d), limited = %d (want 4)", n, lpRecPRHourlyCap, limited)
+	}
+}
+
+// A repository file with comments or other formatting is rewritten in full, and the body says so (issue #786).
+func TestLPRecPR_RewrittenFileIsStated(t *testing.T) {
+	w := lpPRSetup(t)
+	w.repo.mu.Lock()
+	main := w.repo.commits[w.repo.branches["main"]]
+	main[w.role] = "# keep me: reviewed by SecOps\n" + main[w.role]
+	w.repo.mu.Unlock()
+	w.open(200)
+	if b := w.repo.openPulls()[0].Body; !strings.Contains(b, "Tessera rewrites the role file in full") {
+		t.Errorf("body does not say the file is rewritten:\n%s", b)
+	}
+	w2 := lpPRSetup(t)
+	w2.open(200)
+	if b := w2.repo.openPulls()[0].Body; strings.Contains(b, "rewrites the role file") {
+		t.Errorf("an unchanged-format file is said to be rewritten:\n%s", b)
+	}
+}
+
+// A push to Tessera's branch after its pull request was opened: the next request refuses and closes the App's own pull
+// request with the notice, so the foreign commit is not merged under Tessera's description (issue #789).
+func TestLPRecPR_ForeignPushClosesOurPull(t *testing.T) {
+	for name, foreign := range map[string]func(w *lpPRWorld, branch string){
+		"branch": func(w *lpPRWorld, branch string) {
+			w.repo.mu.Lock()
+			defer w.repo.mu.Unlock()
+			tip := w.repo.branches[branch]
+			files := map[string]string{}
+			for k, v := range w.repo.commits[tip] {
+				files[k] = v
+			}
+			files["roles/other.yaml"] = "schema: x\n"
+			c := w.repo.commit(files)
+			w.repo.parents[c] = tip
+			w.repo.branches[branch] = c
+		},
+		"pull head": func(w *lpPRWorld, branch string) {
+			w.repo.mu.Lock()
+			w.repo.pullHead = strings.Repeat("b", 40)
+			w.repo.mu.Unlock()
+		},
+	} {
+		w := lpPRSetup(t)
+		branch := "tessera/rightsize-grant-" + w.rec
+		w.open(200)
+		foreign(w, branch)
+		rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", "")
+		if rec.Code != 409 {
+			t.Fatalf("%s: %d %.300s, want 409", name, rec.Code, rec.Body)
+		}
+		w.repo.mu.Lock()
+		var p *fakePull
+		for _, x := range w.repo.pulls {
+			p = x
+		}
+		w.repo.mu.Unlock()
+		if p == nil || p.State != "closed" || !strings.Contains(p.Body, "do not merge") || strings.Contains(p.Body, "right-sizing recommendation") {
+			t.Errorf("%s: pull request = %+v, want closed with the notice", name, p)
+		}
+	}
+}
+
+// Someone else's pull request on the branch is never closed.
+func TestLPRecPR_ForeignPushDoesNotCloseOthersPull(t *testing.T) {
+	w := lpPRSetup(t)
+	branch := "tessera/rightsize-grant-" + w.rec
+	w.repo.mu.Lock()
+	main := w.repo.branches["main"]
+	w.repo.branches[branch] = main
+	w.repo.next++
+	w.repo.pulls[w.repo.next] = &fakePull{Author: "someone", Number: w.repo.next, Branch: branch, Title: "mine", Body: "mine", State: "open"}
+	w.repo.mu.Unlock()
+	if rec := w.c.do("POST", "/api/lp/recommendations/"+w.rec+"/pull-request", ""); rec.Code != 409 {
+		t.Fatalf("%d %.300s, want 409", rec.Code, rec.Body)
+	}
+	for _, p := range w.repo.pulls {
+		if p.State != "open" || p.Body != "mine" {
+			t.Errorf("someone else's pull request was touched: %+v", p)
+		}
 	}
 }

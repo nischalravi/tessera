@@ -578,9 +578,24 @@ func TestPolicySync_PermissionsStepUpAndApp(t *testing.T) {
 	// a sign-in older than the step-up window can file nothing
 	stale := signIn(t, w.e.f.DB, w.e.f.B.ID, authtest.User{Email: "stale@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}},
 		authtest.Ctx{AAL: 2, Phr: true, AuthTime: w.e.clock.Now().Add(-20 * time.Minute)}, w.e.clock.Now())
-	if code, m := w.do(stale, "POST", "/api/policy/github/sync", body); code != 401 || m["error"] != "step_up_required" {
-		t.Errorf("a stale sign-in = %d %v", code, m)
+	w.gh.mu.Lock()
+	calls := len(w.gh.got)
+	w.gh.mu.Unlock()
+	for _, path := range []string{"/api/policy/github/sync", "/api/policy/github/rollback"} {
+		in := body
+		if strings.HasSuffix(path, "rollback") {
+			in = fmt.Sprintf(`{"to_sha":%q}`, shaB)
+		}
+		if code, m := w.do(stale, "POST", path, in); code != 401 || m["error"] != "step_up_required" {
+			t.Errorf("%s with a stale sign-in = %d %v", path, code, m)
+		}
 	}
+	// refused before GitHub is read (issue #792)
+	w.gh.mu.Lock()
+	if n := len(w.gh.got) - calls; n != 0 {
+		t.Errorf("a stale sign-in made %d GitHub calls before it was refused: %v", n, w.gh.got[calls:])
+	}
+	w.gh.mu.Unlock()
 	if n := len(w.status()["syncs"].([]any)); n != 0 {
 		t.Errorf("%d syncs after refused requests", n)
 	}
@@ -854,6 +869,33 @@ func TestPolicySync_StaleBase(t *testing.T) {
 	// and the newer one still holds its commit
 	if again := w.sync(w.ta1, shaC, 200); again["status"] != "existing" {
 		t.Errorf("repeat of the newer = %v", again)
+	}
+}
+
+// After stale_base the refused request ends failed and syncing the same commit again files a new request that applies: the
+// route must not return the dead request as "existing" (issue #793).
+func TestPolicySync_StaleBaseCommitCanBeSyncedAgain(t *testing.T) {
+	w := syncSetup(t)
+	w.syncAndApply(w.shaA)
+	shaB := w.repo.push(w.merged())
+	shaC := w.repo.push(w.files) // a descendant of B
+	stale := w.sync(w.ta1, shaC, 201)
+	w.syncAndApply(shaB) // another sync is applied while C waits
+	w.approve(w.ta2, stale, 409)
+	sid, _ := w.change(stale)
+	if _, m := w.do(w.ta1, "GET", "/api/admin/change-requests/"+sid, ""); fmt.Sprint(m["status"]) != "failed" {
+		t.Errorf("the stale request is %v, want failed", m["status"])
+	}
+	fresh := w.sync(w.ta1, shaC, 201)
+	if fresh["status"] != "filed" {
+		t.Fatalf("sync of the commit after stale_base = %v, want a fresh filed request", fresh)
+	}
+	if nid, _ := w.change(fresh); nid == sid {
+		t.Fatal("the stale request was returned again")
+	}
+	w.approve(w.ta2, fresh, 200)
+	if l := w.last(); l["sha"] != shaC {
+		t.Errorf("last synced = %v, want the commit synced again", l)
 	}
 }
 

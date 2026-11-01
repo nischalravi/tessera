@@ -25,7 +25,9 @@ type RightSize struct {
 	Group        string // the entitlement removed, system:name
 	RoleKey      string
 	RoleFile     string
-	RoleMembers  int
+	RoleMembers  int // members of the role who lose a permission when the entitlement goes (all members, not one identity)
+	// MembersUsing: how many of those used a permission the entitlement gives within the window
+	MembersUsing int
 	// Permissions are examples of what the identity loses, all unused; PermissionsLost counts all of them.
 	Permissions     []string
 	PermissionsLost int
@@ -36,7 +38,10 @@ type RightSize struct {
 	Fidelity        string // exact: the evaluator found the grant unconditional
 	// RepoDiffers: the role file in the repository is not the one Tessera exports, so the simulation below is of Tessera's
 	// export with the same edit, and the check run is neutral.
-	RepoDiffers   bool
+	RepoDiffers bool
+	// FileRewritten: the role file in the repository is not what Tessera's renderer writes (comments or formatting), so
+	// the commit rewrites it in full
+	FileRewritten bool
 	ExplanationID string
 	Preview       Preview
 }
@@ -75,14 +80,14 @@ func RightSizeBody(rs RightSize) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s%s -->\n", LPMarker, plain(rs.RecID, 64))
 	b.WriteString("## Tessera right-sizing recommendation\n\n")
-	b.WriteString("Removes an entitlement nobody is using from a business role. Tessera opened this pull request and never merges it: a person reviews it, and the policy check run on this pull request shows what the change does.\n\n")
+	b.WriteString("Removes an entitlement from a business role, which takes it from every member of the role. Tessera opened this pull request and never merges it: a person reviews it, and the policy check run on this pull request shows what the change does.\n\n")
 	b.WriteString("| | |\n|---|---|\n")
 	fmt.Fprintf(&b, "| Recommendation | %s (%s) |\n", cell(rs.RecID, 64), cell(rs.Kind, 20))
 	fmt.Fprintf(&b, "| Identity | %s (%s) |\n", cell(rs.IdentityName, maxTextLen), cell(rs.IdentityType, 20))
 	fmt.Fprintf(&b, "| Grant | %s |\n", cell(rs.Grant, maxTextLen))
 	fmt.Fprintf(&b, "| Entitlement removed | %s from role %s in %s |\n", cell(rs.Group, maxTextLen), cell(rs.RoleKey, 64), cell(rs.RoleFile, maxTextLen))
-	fmt.Fprintf(&b, "| Role members who lose it | %d |\n", rs.RoleMembers)
-	fmt.Fprintf(&b, "| Permissions lost | %d (%d unused, %d used) |\n", rs.PermissionsLost, rs.UnusedLost, rs.UsedLost)
+	fmt.Fprintf(&b, "| Role members who lose it | %d (%d used it in the window) |\n", rs.RoleMembers, rs.MembersUsing)
+	fmt.Fprintf(&b, "| Permissions lost by this identity | %d (%d unused, %d used) |\n", rs.PermissionsLost, rs.UnusedLost, rs.UsedLost)
 	last := "never seen in the usage data"
 	if rs.LastUsed != "" {
 		last = "last used " + cell(rs.LastUsed, 40)
@@ -111,8 +116,15 @@ func RightSizeBody(rs RightSize) string {
 	if rs.RepoDiffers {
 		b.WriteString("\n**The role file in the repository differs from the one Tessera exports.** The simulation above is of Tessera's export with the same edit, not of this file: review the file's own diff.\n")
 	}
-	if rs.UsedLost > 0 {
-		b.WriteString("\n**Some of what this removes was used.** Check the usage before approving.\n")
+	if rs.UsedLost > 0 || rs.MembersUsing > 0 {
+		if rs.MembersUsing > 0 {
+			fmt.Fprintf(&b, "\n**%d role member(s) used what this removes.** The recommendation is about one identity that did not; the other members lose it too. Check the usage before approving.\n", rs.MembersUsing)
+		} else {
+			b.WriteString("\n**Some of what this removes was used.** Check the usage before approving.\n")
+		}
+	}
+	if rs.FileRewritten {
+		b.WriteString("\n**Tessera rewrites the role file in full.** Comments and formatting in the repository's file are not preserved in this change: review the file's own diff.\n")
 	}
 	short := func(s string) string {
 		if len(s) > 12 {

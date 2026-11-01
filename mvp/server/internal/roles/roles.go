@@ -26,6 +26,8 @@
 package roles
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -769,24 +771,58 @@ func snapshotMembers(w *world) map[int64]map[string]*store.RoleMember {
 	return out
 }
 
-func planDetail(p *Plan) ojson.Object {
-	steps := make([]ojson.Object, 0, len(p.Steps))
-	for _, s := range p.Steps {
-		o := ojson.Object{{Key: "action", Value: s.Action}, {Key: "identity_id", Value: s.IdentityID}}
-		if s.RoleID != "" {
-			o = append(o, ojson.KV{Key: "role_id", Value: s.RoleID})
-		}
-		if s.GroupID != 0 {
-			o = append(o, ojson.KV{Key: "group_id", Value: s.GroupID})
-		}
-		if s.EdgeID != nil {
-			o = append(o, ojson.KV{Key: "edge_id", Value: *s.EdgeID})
-		}
-		steps = append(steps, o)
+// MaxAuditSteps bounds how many steps an audit detail lists in full. A larger
+// plan lists the first MaxAuditSteps as a sample, plus steps_total and
+// steps_sha256, so the 64 KiB detail cap holds while the event still commits
+// to every step.
+const MaxAuditSteps = 200
+
+func stepDetail(s Step) ojson.Object {
+	o := ojson.Object{{Key: "action", Value: s.Action}, {Key: "identity_id", Value: s.IdentityID}}
+	if s.RoleID != "" {
+		o = append(o, ojson.KV{Key: "role_id", Value: s.RoleID})
 	}
-	return ojson.Object{{Key: "grants_added", Value: p.Adds}, {Key: "grants_removed", Value: p.Removes},
+	if s.GroupID != 0 {
+		o = append(o, ojson.KV{Key: "group_id", Value: s.GroupID})
+	}
+	if s.EdgeID != nil {
+		o = append(o, ojson.KV{Key: "edge_id", Value: *s.EdgeID})
+	}
+	return o
+}
+
+// StepsDigest is the hex SHA-256 of the canonical JSON of every step, in plan
+// order, as stepDetail encodes them.
+func StepsDigest(steps []Step) (string, error) {
+	all := make([]ojson.Object, 0, len(steps))
+	for _, s := range steps {
+		all = append(all, stepDetail(s))
+	}
+	b, err := ojson.Marshal(all)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func planDetail(p *Plan) (ojson.Object, error) {
+	n := min(len(p.Steps), MaxAuditSteps)
+	steps := make([]ojson.Object, 0, n)
+	for _, s := range p.Steps[:n] {
+		steps = append(steps, stepDetail(s))
+	}
+	d := ojson.Object{{Key: "grants_added", Value: p.Adds}, {Key: "grants_removed", Value: p.Removes},
 		{Key: "members_added", Value: p.Members}, {Key: "members_removed", Value: p.Leaves},
 		{Key: "no_account", Value: p.Missing}, {Key: "steps", Value: steps}}
+	if len(p.Steps) > n {
+		sum, err := StepsDigest(p.Steps)
+		if err != nil {
+			return nil, err
+		}
+		d = append(d, ojson.KV{Key: "steps_total", Value: len(p.Steps)}, ojson.KV{Key: "steps_sha256", Value: sum})
+	}
+	return d, nil
 }
 
 // ---------------------------------------------------------------- changes
@@ -839,9 +875,13 @@ func (w *world) version(r *store.BusinessRole, note, policyRef string, by Actor)
 		ChangedBy: uidp(by), Actor: by.Display, ChangedAt: w.now, PolicyRef: ref})
 }
 
-func roleDetail(r *store.BusinessRole, p *Plan) ojson.Object {
+func roleDetail(r *store.BusinessRole, p *Plan) (ojson.Object, error) {
 	d := ojson.Object{{Key: "role_id", Value: r.ID}, {Key: "name", Value: r.Name}, {Key: "version", Value: r.Version}}
-	return append(d, planDetail(p)...)
+	pd, err := planDetail(p)
+	if err != nil {
+		return nil, err
+	}
+	return append(d, pd...), nil
 }
 
 // Create saves a new role, assigns its rule members and grants their
@@ -896,7 +936,11 @@ func Create(tx *store.TenantTx, s Spec, by Actor, dryRun bool, now time.Time) (*
 	if err := w.version(r, s.Note, s.PolicyRef, by); err != nil {
 		return nil, err
 	}
-	return w.result(r, p), tx.Audit(now, by.Display, "role.create", roleDetail(r, p))
+	d, err := roleDetail(r, p)
+	if err != nil {
+		return nil, err
+	}
+	return w.result(r, p), tx.Audit(now, by.Display, "role.create", d)
 }
 
 func (w *world) finish(before map[int64]map[string]*store.RoleMember, p *Plan) error {
@@ -979,7 +1023,11 @@ func Update(tx *store.TenantTx, id string, version int, s Spec, by Actor, dryRun
 	if err := w.version(&r, s.Note, s.PolicyRef, by); err != nil {
 		return nil, err
 	}
-	return w.result(&r, p), tx.Audit(now, by.Display, "role.update", roleDetail(&r, p))
+	d, err := roleDetail(&r, p)
+	if err != nil {
+		return nil, err
+	}
+	return w.result(&r, p), tx.Audit(now, by.Display, "role.update", d)
 }
 
 func without(a, b []int64) []int64 {
@@ -1045,7 +1093,11 @@ func Retire(tx *store.TenantTx, id, reason string, by Actor, dryRun bool, now ti
 	if err := w.version(&r, *rp, "", by); err != nil {
 		return nil, err
 	}
-	d := append(roleDetail(&r, p), ojson.KV{Key: "reason", Value: *rp}, ojson.KV{Key: "requests_denied", Value: len(pend)})
+	rd, err := roleDetail(&r, p)
+	if err != nil {
+		return nil, err
+	}
+	d := append(rd, ojson.KV{Key: "reason", Value: *rp}, ojson.KV{Key: "requests_denied", Value: len(pend)})
 	return w.result(&r, p), tx.Audit(now, by.Display, "role.retire", d)
 }
 
@@ -1105,7 +1157,11 @@ func assign(tx *store.TenantTx, id string, identityID int64, source string, reqI
 	if err := w.finish(before, p); err != nil {
 		return nil, err
 	}
-	d := append(roleDetail(r, p), ojson.KV{Key: "identity_id", Value: identityID}, ojson.KV{Key: "source", Value: source})
+	rd, err := roleDetail(r, p)
+	if err != nil {
+		return nil, err
+	}
+	d := append(rd, ojson.KV{Key: "identity_id", Value: identityID}, ojson.KV{Key: "source", Value: source})
 	if reqID != nil {
 		d = append(d, ojson.KV{Key: "request_id", Value: *reqID})
 	}
@@ -1150,7 +1206,11 @@ func Unassign(tx *store.TenantTx, id string, identityID int64, reason string, by
 	if err := w.finish(before, p); err != nil {
 		return nil, err
 	}
-	d := append(roleDetail(r, p), ojson.KV{Key: "identity_id", Value: identityID}, ojson.KV{Key: "reason", Value: *rp})
+	rd, err := roleDetail(r, p)
+	if err != nil {
+		return nil, err
+	}
+	d := append(rd, ojson.KV{Key: "identity_id", Value: identityID}, ojson.KV{Key: "reason", Value: *rp})
 	return w.result(r, p), tx.Audit(now, by.Display, "role.unassign", d)
 }
 
@@ -1186,7 +1246,11 @@ func Reconcile(tx *store.TenantTx, id string, by Actor, dryRun bool, now time.Ti
 	if err := w.finish(before, p); err != nil {
 		return nil, err
 	}
-	return w.result(r, p), tx.Audit(now, by.Display, "role.reconcile", roleDetail(r, p))
+	d, err := roleDetail(r, p)
+	if err != nil {
+		return nil, err
+	}
+	return w.result(r, p), tx.Audit(now, by.Display, "role.reconcile", d)
 }
 
 // ---------------------------------------------------------------- drift

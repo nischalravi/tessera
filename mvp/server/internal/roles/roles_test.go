@@ -2,11 +2,14 @@ package roles_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/abac"
+	"github.com/nischalravi/tessera/mvp/server/internal/audit/canon"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/roles"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -611,5 +614,74 @@ func TestRuleMatch(t *testing.T) {
 	i.Status = "terminated"
 	if (&roles.Rule{Policy: "p"}).Match(i, always, attrs) {
 		t.Error("an inactive identity matched")
+	}
+}
+
+// A change with thousands of steps must still audit: the detail lists a bounded
+// sample and commits to every step with steps_total and steps_sha256 (#797).
+func TestAudit_LargePlanStaysUnderCap(t *testing.T) {
+	w := newWorld(t)
+	const people = 2500 // each yields an add_member and a no_account step: 5,000 steps
+	dept := "Bulk"
+	w.tx(func(c *store.TenantTx) error {
+		for i := 0; i < people; i++ {
+			if _, err := c.InsertIdentity(&store.Identity{TenantID: c.Tenant(), ExternalID: fmt.Sprintf("bulk-%d", i),
+				Name: fmt.Sprintf("Bulk %d", i), Type: "human", Status: "active", Department: &dept, CreatedAt: w.now}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	check := func(action string, res *roles.Result, min int) {
+		t.Helper()
+		if len(res.Plan.Steps) < min {
+			t.Fatalf("%s: only %d steps", action, len(res.Plan.Steps))
+		}
+		w.tx(func(c *store.TenantTx) error {
+			evs, err := c.AuditEvents(store.AuditFilter{Action: action, Limit: 1})
+			if err != nil || len(evs) != 1 {
+				t.Fatalf("%s events = %d, %v", action, len(evs), err)
+			}
+			if n := len(evs[0].Detail); n > canon.MaxDetailBytes {
+				t.Errorf("%s detail is %d bytes", action, n)
+			}
+			var d struct {
+				Steps      []json.RawMessage `json:"steps"`
+				StepsTotal int               `json:"steps_total"`
+				SHA        string            `json:"steps_sha256"`
+			}
+			if err := json.Unmarshal(evs[0].Detail, &d); err != nil {
+				t.Fatal(err)
+			}
+			want, err := roles.StepsDigest(res.Plan.Steps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.StepsTotal != len(res.Plan.Steps) || d.SHA != want || len(d.Steps) != roles.MaxAuditSteps {
+				t.Errorf("%s: total=%d sample=%d sha=%s want %d / %s", action, d.StepsTotal, len(d.Steps), d.SHA, len(res.Plan.Steps), want)
+			}
+			return nil
+		})
+	}
+	s := roles.Spec{Name: "Bulk", Description: "d", Risk: "low", Birthright: &roles.Rule{Department: []string{"Bulk"}}, Entitlements: []int64{w.g("okta:eng")}}
+	res, err := w.create(s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("role.create", res, 5000)
+	s.Description = "changed"
+	s.Entitlements = []int64{w.g("okta:platform")}
+	var up *roles.Result
+	w.tx(func(c *store.TenantTx) error {
+		up, err = roles.Update(c, res.Role.ID, 1, s, w.pat, false, w.now)
+		return err
+	})
+	check("role.update", up, 2500)
+
+	// a small plan is unchanged: every step, no digest
+	if d, err := roles.PlanDetailForTest(&roles.Plan{Steps: []roles.Step{{Action: roles.AddMember, IdentityID: 1}}}); err != nil {
+		t.Fatal(err)
+	} else if _, ok := d.Get("steps_sha256"); ok {
+		t.Error("small plan carries a digest")
 	}
 }

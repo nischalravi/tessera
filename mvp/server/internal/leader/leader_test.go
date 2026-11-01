@@ -32,7 +32,11 @@ func (l *fakeLease) Release() {
 	}
 	l.c.mu.Unlock()
 }
-func (l *fakeLease) lose() { l.once.Do(func() { close(l.lost) }); l.Release() }
+
+// lose models a failed session: the holder is told, but the lock itself stays
+// held until the holder releases it or it expires (expire).
+func (l *fakeLease) lose()   { l.once.Do(func() { close(l.lost) }) }
+func (l *fakeLease) expire() { l.lose(); l.Release() }
 
 type fakeLocker struct{ c *fakeCluster }
 
@@ -169,4 +173,43 @@ func TestElector_LoopThatEndsDoesNotSpin(t *testing.T) {
 	if len(c.holders) != 0 {
 		t.Fatal("lease not released")
 	}
+}
+
+// A loop that ignores cancellation must not make the lease be released early,
+// nor hold Run forever: Run reports it is no longer leader and leaves the lease
+// to expire; the standby takes over only after it did, and the stuck loop is
+// never run twice by its own replica.
+func TestElector_StuckLoopLeavesLeaseToExpire(t *testing.T) {
+	c := &fakeCluster{holders: map[string]*fakeLease{}}
+	a := newElector(c)
+	a.StopGrace = 30 * time.Millisecond
+	release := make(chan struct{})
+	var aRuns atomic.Int32
+	ctx, stop := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.Run(ctx, "siem", nil, func(context.Context) { aRuns.Add(1); <-release })
+	}()
+	eventually(t, "A leads", func() bool { return aRuns.Load() == 1 })
+	c.mu.Lock()
+	cur := c.holders["siem"]
+	c.mu.Unlock()
+	cur.lose()
+	eventually(t, "A stops claiming leadership", func() bool { s := a.Status(); return len(s) == 1 && !s[0].Leader })
+	time.Sleep(50 * time.Millisecond)
+	c.mu.Lock()
+	still := c.holders["siem"] == cur
+	c.mu.Unlock()
+	if !still {
+		t.Fatal("lease released while the old loop was still running")
+	}
+	if aRuns.Load() != 1 {
+		t.Fatalf("stuck loop restarted on its own replica: %d runs", aRuns.Load())
+	}
+	cur.expire()
+	close(release)
+	stop()
+	wg.Wait()
 }

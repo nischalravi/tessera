@@ -491,6 +491,11 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, id uuid.UUID, 
 			return errApplierFailed
 		}
 		if _, err := typ.plan(s.env(tx, now, ch.RequestedBy), v); err != nil {
+			if ch.Type == TypePolicySyncApply && staleSyncErr(err) {
+				// the reviewed plan can never apply: end the request (and free its commit) instead of leaving it pending
+				failure = err
+				return errApplierFailed
+			}
 			return err // the tenant changed since the request: approve nothing stale
 		}
 		eff := now.Add(time.Duration(ch.CoolingOffSeconds) * time.Second)
@@ -642,12 +647,22 @@ func (s *Service) apply(ctx context.Context, tenant tenancy.ID, id uuid.UUID, by
 	return ch, nil
 }
 
+// staleSyncErr reports a policy-sync refusal that makes the reviewed plan permanently unappliable (another sync moved the
+// base, or the plan changed): the commit must be synced again, so the request ends failed.
+func staleSyncErr(err error) bool {
+	var ae *Error
+	return errors.As(err, &ae) && (ae.Code == "stale_base" || ae.Code == "stale_plan")
+}
+
 // fail records that the applier of request id raised err.
 func (s *Service) fail(ctx context.Context, tenant tenancy.ID, id uuid.UUID, cause error, by string) (*store.AdminChange, error) {
 	msg, code := "the change could not be applied", "apply_failed"
 	var ae *Error
 	if errors.As(cause, &ae) {
 		msg = ae.Msg
+		if staleSyncErr(cause) {
+			code = ae.Code // the caller sees stale_base / stale_plan, as before
+		}
 		if ae.Code == ReasonProposerRevoked || ae.Code == ReasonPayloadTampered {
 			// the reason is the failure text; the caller gets the 409 with that code
 			msg, code = ae.Code, ae.Code
@@ -664,6 +679,12 @@ func (s *Service) fail(ctx context.Context, tenant tenancy.ID, id uuid.UUID, cau
 		var err error
 		if ch, err = tx.AdminChange(id); err != nil {
 			return err
+		}
+		if ch.Type == TypePolicySyncApply {
+			// a failed apply has no other end hook: free the commit so it can be filed again
+			if err := s.env(tx, now, ch.RequestedBy).ended(ch); err != nil {
+				return err
+			}
 		}
 		return s.env(tx, now, ch.RequestedBy).transition(ch, TransFailed, by)
 	})

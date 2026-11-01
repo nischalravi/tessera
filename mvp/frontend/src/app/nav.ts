@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LifeBuoy, LockKeyhole, type LucideIcon, Network, Plug, Plus, Radio, RotateCw, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
+  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, GitPullRequest, House, Inbox, KeyRound, Layers, LifeBuoy, LockKeyhole, type LucideIcon, Network, Plug, Plus, Radio, RotateCw, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -127,10 +127,11 @@ export const RAIL: RailGroup[] = [
     items: [
       { id: "connections", label: "Connections", icon: Plug, path: "/admin/connections", keywords: "connectors sync okta aws github snowflake workday active directory ldap entra readiness wizard" },
       { id: "conditional-access", label: "Conditional access", icon: ShieldAlert, path: "/admin/conditional-access", keywords: "network location ip range device posture compliant managed step-up deny report-only policy sign-in trusted proxy" },
+      { id: "github-app", label: "GitHub App", icon: GitPullRequest, path: "/admin/github-app", keywords: "github app check run pull request webhook secret private key installation policy repository access as code contents" },
       { id: "flat-files", label: "Flat-file apps", icon: FileUp, path: "/admin/flat-files", keywords: "csv import upload disconnected applications no connector manual tasks column mapping sftp" },
       { id: "signals", label: "Shared Signals", icon: Radio, path: "/admin/shared-signals", keywords: "ssf caep risc transmitter okta revoke session propagate push poll set events" },
       {
-        id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/shared-signals", "/admin/flat-files", "/admin/conditional-access"], keywords: "settings configuration audit jobs",
+        id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/shared-signals", "/admin/flat-files", "/admin/conditional-access", "/admin/github-app"], keywords: "settings configuration audit jobs",
         pages: [{ path: "/admin/guests", label: "Guests and external identities", keywords: "guest settings matching lifecycle terms sponsor codes populations recovery cases sponsor policy" },
           { path: "/admin/retention", label: "Retention", keywords: "log retention audit events campaigns requests job runs outbox keep online days minimum floor archive two admins" },
           { path: "/admin/deletion-guard", label: "Deletion guard", keywords: "deletion threshold window safety net mass delete hold excess limit count percent groups folders members accounts identities loader connector mistake two admins" },

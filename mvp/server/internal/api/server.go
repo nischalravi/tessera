@@ -64,6 +64,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/queue"
+	"github.com/nischalravi/tessera/mvp/server/internal/ratelimit"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
@@ -341,6 +342,8 @@ type Server struct {
 	guestLife *guestlife.Service
 	// ghCache holds GitHub App installation tokens in memory until shortly before they expire (policy_github.go)
 	ghCache *ghapp.TokenCache
+	// ghHookLimit is the per-tenant limit on authentic GitHub webhook deliveries (policy_github_webhook.go)
+	ghHookLimit *ratelimit.Limiter
 
 	claimSvc *claim.Service
 	claimLim *claimLimits
@@ -486,7 +489,7 @@ func New(cfg Config) *Server {
 	cfg.Readiness.AWSAllowStaticKeys = cfg.AWSAllowStaticKeys
 	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), clientLimits: newClientLimiter(cfg.ClientRate), provSeal: provSeal, archive: cfg.Archive,
-		ghCache: ghapp.NewTokenCache(), rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
+		ghCache: ghapp.NewTokenCache(), ghHookLimit: ratelimit.New(ratelimit.ClassTenant, 2*time.Second, 30, ratelimit.ClassTenant.DefaultMaxKeys()), rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.oauthapps = &oauthapps.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
 	s.ghtokens = &ghtokens.Service{Containment: cfg.Containment, Clock: func() time.Time { return s.clock() }}
 	s.breach = &breach.Service{Rotation: s.rotation}
@@ -616,6 +619,7 @@ func New(cfg Config) *Server {
 	s.registerPolicyAgentRoutes()
 	s.registerPolicyDiffRoutes()
 	s.registerPolicyGitHubRoutes()
+	s.registerPolicyGitHubWebhookRoutes()
 	s.registerPolicySyncRoutes()
 	s.registerLPAutoRoutes()
 	s.registerAbacRoutes()

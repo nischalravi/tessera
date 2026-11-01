@@ -220,6 +220,13 @@ func (s *Server) policySync(r *http.Request, p *params, sha string, rollback boo
 	if rollback {
 		kind = admin.SyncKindRollback
 	}
+	// a person files the request with admin.change.request and a fresh step-up (admin.Service.Submit checks it again): check
+	// it before anything is read from GitHub, so a stale sign-in spends none of the App's rate limit and runs no preview
+	if pr == nil || pr.Kind != auth.KindAPIClient {
+		if d := auth.Check(pr, auth.PermAdminChangeReq, &auth.StepUpAdmin, now); d != nil {
+			return nil, denial{d}
+		}
+	}
 	client, err := s.githubClient(s.clock)
 	if err != nil {
 		return nil, err

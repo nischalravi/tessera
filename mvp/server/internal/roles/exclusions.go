@@ -88,7 +88,11 @@ func Exclude(tx *store.TenantTx, id string, identityID int64, reason string, rev
 	if err := w.finish(before, p); err != nil {
 		return nil, err
 	}
-	d := append(roleDetail(r, p), ojson.KV{Key: "identity_id", Value: identityID},
+	rd, err := roleDetail(r, p)
+	if err != nil {
+		return nil, err
+	}
+	d := append(rd, ojson.KV{Key: "identity_id", Value: identityID},
 		ojson.KV{Key: "exclusion_version", Value: ver}, ojson.KV{Key: "reason", Value: *rp})
 	if reviewItemID != nil {
 		d = append(d, ojson.KV{Key: "review_item_id", Value: *reviewItemID})

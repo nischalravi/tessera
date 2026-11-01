@@ -11,7 +11,8 @@ import (
 
 // lpRecPRsCovered lists the repository methods the test below exercises (TestIsolation_EveryTenantTxMethodCovered).
 func lpRecPRsCovered() map[string]bool {
-	return map[string]bool{"LPRecPR": true, "PutLPRecPR": true, "LPRecPRAttemptsSince": true, "ReserveLPRecPRAttempt": true}
+	return map[string]bool{"LPRecPR": true, "PutLPRecPR": true, "LPRecPRAttemptsSince": true, "ReserveLPRecPRAttempt": true,
+		"ReserveLPRecPRAttemptID": true, "ReleaseLPRecPRAttempt": true}
 }
 
 // The pull request of a recommendation (schema/0958, issue #665) is a tenant's own: the same recommendation id and
@@ -52,6 +53,31 @@ func TestIsolation_LPRecPRs(t *testing.T) {
 		}
 		return nil
 	})
+	// a release gives the attempt back, only for the tenant that holds it
+	var idA string
+	inA(func(c *store.TenantTx) error {
+		var ok bool
+		var err error
+		if idA, ok, err = c.ReserveLPRecPRAttemptID("grant-7", "o/policy", "a", at, at.Add(-time.Hour), 3); !ok || err != nil {
+			t.Errorf("A reserve id = %v, %v", ok, err)
+		}
+		return err
+	})
+	inB(t, f, func(c *store.TenantTx) error { return c.ReleaseLPRecPRAttempt(idA) }) // B cannot release A's attempt
+	count := func(tn storetest.Tenant) (n int) {
+		_ = f.DB.ReadTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			n, _ = c.LPRecPRAttemptsSince(at.Add(-time.Hour))
+			return nil
+		})
+		return n
+	}
+	if n := count(f.A); n != 2 {
+		t.Errorf("A attempts after B's release = %d, want 2", n)
+	}
+	inA(func(c *store.TenantTx) error { return c.ReleaseLPRecPRAttempt(idA) })
+	if n := count(f.A); n != 1 {
+		t.Errorf("A attempts after its release = %d, want 1", n)
+	}
 	// B updates its row; a second row for B only counts for B
 	inB(t, f, func(c *store.TenantTx) error {
 		if err := c.PutLPRecPR(&store.LPRecPR{RecID: "grant-7", Repo: "o/policy", Branch: "tessera/b2", PullNumber: 99, HeadSHA: "b",
