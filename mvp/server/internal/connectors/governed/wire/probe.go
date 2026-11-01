@@ -286,7 +286,11 @@ func Prober(p governed.Params, n governed.Net) (connectors.Prober, error) {
 			if len(snap.Entitlements) > 0 {
 				counts["entitlement"] = len(snap.Entitlements)
 			}
-			return cloudProbe{mode: "ssh_key", counts: counts}, nil
+			files := make([]connectors.SampleFile, 0, len(snap.Files))
+			for _, f := range snap.Files {
+				files = append(files, connectors.SampleFile{Role: f.Role, Size: f.Size, ModTime: f.ModTime})
+			}
+			return cloudProbe{mode: "ssh_key", counts: counts, files: files, maxAge: cfg.MaxAge}, nil
 		}, refused: unixssh.ErrRefused}, nil
 	case governed.MCP:
 		getenv, err := p.Env()
@@ -680,6 +684,8 @@ func (p *saasProber) Sample(ctx context.Context, _ connectors.SampleQuery) (conn
 type cloudProbe struct {
 	mode   string
 	counts map[string]int
+	files  []connectors.SampleFile // file drops: what each file looked like
+	maxAge time.Duration           // file drops: the connection's maximum file age (0: none)
 }
 
 // cloudProber probes a cloud entitlement connector with one bounded read (the first few scopes or
@@ -721,7 +727,8 @@ func (p *cloudProber) Sample(ctx context.Context, _ connectors.SampleQuery) (con
 	for _, c := range p.res.counts {
 		n += c
 	}
-	return connectors.SampleStats{Objects: min(n, connectors.MaxSample), Available: true, PerClass: p.res.counts}, nil
+	return connectors.SampleStats{Objects: min(n, connectors.MaxSample), Available: true, PerClass: p.res.counts,
+		Files: p.res.files, MaxFileAge: p.res.maxAge}, nil
 }
 
 // ---------------------------------------------------------------- GitHub

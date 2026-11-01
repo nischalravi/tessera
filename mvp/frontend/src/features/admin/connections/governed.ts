@@ -40,7 +40,7 @@ export const SETTING_KEYS: Record<string, string[]> = {
   agentforce: ["api_version"],
   kubernetes: ["namespaces", "openshift"],
   vault: ["namespace"],
-  sftpdrop: ["host", "port", "username", "host_key", "directory", "accounts_file", "entitlements_file", "accounts_account_id", "accounts_username", "accounts_email", "accounts_identity_id", "accounts_status", "entitlements_account_id", "entitlements_entitlement", "entitlements_name", "entitlements_privileged"],
+  sftpdrop: ["host", "port", "username", "host_key", "directory", "accounts_file", "entitlements_file", "accounts_account_id", "accounts_username", "accounts_email", "accounts_identity_id", "accounts_status", "entitlements_account_id", "entitlements_entitlement", "entitlements_name", "entitlements_privileged", "max_age_hours"],
 };
 
 const VAULT_URL = { label: "Vault URL", hint: "The vault's HTTPS host name, no path.", required: true };
@@ -234,6 +234,7 @@ export const GOVERNED: Record<string, GovType> = {
       { key: "entitlements_entitlement", label: "Entitlements: entitlement column", hint: "Required with an entitlements file." },
       { key: "entitlements_name", label: "Entitlements: name column", hint: "Optional: a display name for the entitlement." },
       { key: "entitlements_privileged", label: "Entitlements: privileged column", hint: "Optional: yes or no." },
+      { key: "max_age_hours", label: "Maximum file age (hours)", hint: "Optional, 1 to 8760. The connection check flags a file whose modified time is older than this, so a stuck export is noticed." },
     ],
     credential: { label: "SSH private key", hint: "The private key (PEM or OpenSSH format, no passphrase) whose public key is in the login's authorized_keys.", area: true },
   },

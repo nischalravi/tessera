@@ -130,6 +130,18 @@ type SampleStats struct {
 	TotalResults   int
 	ReverseChecked bool
 	ReverseCount   int
+	// File drops (SFTP): the files the probe read, and the connection's maximum age for them
+	// (zero: none set). The read_probe check flags a file older than MaxFileAge.
+	Files      []SampleFile
+	MaxFileAge time.Duration
+}
+
+// SampleFile is what the server reported for one drop file: its role (accounts, entitlements),
+// size in bytes and modified time.
+type SampleFile struct {
+	Role    string
+	Size    int64
+	ModTime time.Time
 }
 
 // Rights are the bound identity's effective rights, read rather than tried.
