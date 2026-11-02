@@ -86,6 +86,14 @@ func TestValidateConn_GoogleAdminEmail(t *testing.T) {
 		"too long":             {"", strings.Repeat("a", 250) + "@example.com", false},
 		"ip literal":           {"", "admin@[10.0.0.1]", false},
 		"domain mismatch only": {"example.com", "admin@example.co", false},
+		"two at signs":         {"example.com", "admin@@example.com", false},
+		"foreign then own":     {"example.com", "a@evil.example.org@example.com", false},
+		"zero-width space":     {"example.com", "adm\u200bin@example.com", false},
+		"word joiner":          {"", "admin\u2060@example.com", false},
+		"bidi override":        {"", "admin\u202e@example.com", false},
+		"no-break space":       {"", "admin\u00a0@example.com", false},
+		"C1 control":           {"", "adm\u0085in@example.com", false},
+		"plus tag":             {"example.com", "admin+uat@example.com", true},
 	} {
 		cfg := ConnConfig{Customer: "my_customer", Domain: tc.domain, AdminEmail: tc.email}
 		var bad []FieldError
