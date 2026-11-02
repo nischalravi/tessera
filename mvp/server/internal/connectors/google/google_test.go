@@ -1104,11 +1104,17 @@ func TestFromStoredAdminEmail(t *testing.T) {
 		cfgAdmin, credAdmin string
 		want                string // "" means FromStored refuses
 	}{
-		"config only":         {"cfg@example.com", "", "cfg@example.com"},
-		"credential only":     {"", "cred@example.com", "cred@example.com"},
-		"config wins":         {" cfg@example.com ", "cred@example.com", "cfg@example.com"},
-		"neither":             {"", "", ""},
-		"config not an email": {"root", "cred@example.com", ""},
+		"config only":                           {"cfg@example.com", "", "cfg@example.com"},
+		"credential only":                       {"", "cred@example.com", "cred@example.com"},
+		"config wins":                           {" cfg@example.com ", "cred@example.com", "cfg@example.com"},
+		"neither":                               {"", "", ""},
+		"config not an email":                   {"root", "cred@example.com", ""},
+		"credential with a Hangul filler":       {"", "adm\u3164in@example.com", ""},
+		"credential with a variation selector":  {"", "admin\ufe0f@example.com", ""},
+		"credential with a combining mark":      {"", "admin\u0301@example.com", ""},
+		"credential with a Cyrillic look-alike": {"", "\u0430dmin@example.com", ""},
+		"credential with a zero-width space":    {"", "ad\u200bmin@example.com", ""},
+		"credential with two at signs":          {"", "a@b@example.com", ""},
 	} {
 		f := newFake(t)
 		env := func(k string) string {
