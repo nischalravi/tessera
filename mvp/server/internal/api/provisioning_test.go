@@ -239,6 +239,27 @@ func TestProvisioning_TargetConfigIsValidatedAndCredentialWriteOnly(t *testing.T
 	}
 }
 
+// A target whose base URL names a cloud metadata service is refused at save time, in every written form
+// (the connect-time guard refuses the address as well), so no token is sealed for one.
+func TestProvisioning_TargetRefusesMetadataBaseURL(t *testing.T) {
+	h := newProvHarness(t, fake.Options{})
+	for _, base := range []string{
+		"https://169.254.169.254/scim/v2", "http://169.254.169.254:80/scim/v2", "https://169.254.169.254./scim/v2",
+		"https://169.254.169.254../scim/v2", "http://[fd00:ec2::254]/scim/v2", "https://[::ffff:169.254.169.254]/scim/v2",
+		"https://metadata.google.internal/scim/v2", "https://METADATA.GOOGLE.INTERNAL./scim/v2", "https://100.100.100.200/scim/v2",
+		"https://168.63.129.16/scim/v2",
+	} {
+		for _, kind := range []string{"scim", "okta"} {
+			body := fmt.Sprintf(`{"kind":%q,"base_url":%q,"token":"tok"}`, kind, base)
+			if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, body); rec.Code != http.StatusUnprocessableEntity ||
+				!strings.Contains(rec.Body.String(), "metadata") {
+				t.Errorf("%s %s: status %d: %s", kind, base, rec.Code, rec.Body)
+			}
+		}
+	}
+	h.target(`{"kind":"scim","base_url":"https://scim.example/scim/v2","token":"tok"}`, 200)
+}
+
 func (h *provHarness) auditDetail() string {
 	var b strings.Builder
 	for _, e := range ledger(h.t, h.st.DB, h.st.Tenant) {

@@ -339,7 +339,7 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 		if cfg.AdminEmail != "" {
 			at := strings.LastIndexByte(cfg.AdminEmail, '@')
 			switch {
-			case len(cfg.AdminEmail) > 254 || at < 1 || strings.Count(cfg.AdminEmail, "@") != 1 || hasInvisible(cfg.AdminEmail) || !connsync.ValidDomain(cfg.AdminEmail[at+1:]) || strings.ContainsAny(cfg.AdminEmail, " \t\r\n,;<>\"[]\\") || !printable.MatchString(cfg.AdminEmail):
+			case len(cfg.AdminEmail) > 254 || at < 1 || strings.Count(cfg.AdminEmail, "@") != 1 || hasInvisible(cfg.AdminEmail) || !isASCII(cfg.AdminEmail) || !connsync.ValidDomain(cfg.AdminEmail[at+1:]) || strings.ContainsAny(cfg.AdminEmail, " \t\r\n,;<>\"[]\\") || !printable.MatchString(cfg.AdminEmail):
 				bad("admin_email", "must be an email address")
 			case cfg.Domain != "" && !strings.EqualFold(cfg.AdminEmail[at+1:], cfg.Domain):
 				bad("admin_email", "must be an address in the connection's domain")
@@ -562,4 +562,16 @@ func hasInvisible(s string) bool {
 		}
 	}
 	return false
+}
+
+// isASCII reports whether s holds only ASCII characters. A Google Workspace address is ASCII; outside ASCII there are
+// characters that do not show but are not controls or format characters (Hangul and Braille fillers, variation
+// selectors, combining marks) and letters that look like Latin ones, so hasInvisible alone cannot name them all.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }

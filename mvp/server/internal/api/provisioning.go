@@ -32,6 +32,7 @@ import (
 	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
@@ -324,6 +325,9 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		case err != nil, u.Host == "", u.User != nil, u.RawQuery != "", u.Fragment != "", len(in.BaseURL) > 300,
 			u.Scheme != "https" && u.Scheme != "http":
 			return st, badRequest("invalid_base_url", "base_url must be an http(s) URL without credentials, query or fragment")
+		case safehttp.IsMetadataHost(strings.TrimRight(u.Hostname(), ".")):
+			// the connect-time guard refuses these addresses too; refusing at save time keeps a token from being sealed for one
+			return st, badRequest("invalid_base_url", "base_url must not point at a cloud metadata service")
 		}
 		if in.Fault != "" {
 			return st, badRequest("invalid_fault", "fault applies to the dev fake target only")
