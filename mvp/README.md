@@ -3670,6 +3670,12 @@ writes:                                        # request templates; see below
   activation of DR-10, which gates a connection revision's activation, not a provisioning target's write-back.
   Changing where a credential is sent (a REST target's base URL, token URL origin, auth type or key field) needs
   the secret entered again; on a connection config the stored credential is cleared by such an edit.
+- **Moving a connection's endpoint clears its credential (#830).** `PATCH /api/connections/{id}/config` that changes
+  any endpoint field (`host`, `port`, `org_url`, `domain`, `base_url`, `tenant_host`, `tenant_id`, `cloud`, and the
+  `settings` keys `host`, `port`, `host_key`, `tenant_id`; plus the REST, SQL and directory rules above) drops the
+  sealed credential in the same transaction. The connection returns to draft needing a credential, which is entered
+  again with `PUT .../credential`; the `connection.config_changed` audit event names the fields moved, never values.
+  The wizard warns before saving. Defined once, in `endpointFields` (`internal/readiness/service.go`).
 - **As a connector.** `TESSERA_CONNECTORS=rest` with `TESSERA_REST_SPEC=/abs/path/spec.yaml` and
   `TESSERA_REST_CREDENTIAL=env:NAME|file:/path` (a literal secret is refused) discovers users, groups and
   entitlements like the other production connectors. Tests run against `restgen/fakerest` (every pagination style
