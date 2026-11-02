@@ -7,7 +7,7 @@ import { Fragment, FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useR
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowRightLeft, Bot, Briefcase, CircleCheck, Database, FlaskConical, HardHat, Search, Users, Play, Power, ShieldCheck, Trash2, Wand2 } from "lucide-react";
 import {
-  Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, SQLConfig, ScimPreset, readiness, useApi,
+  Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, ENDPOINT_CLEARS_CREDENTIAL, endpointFieldsMoved, RunView, SQLConfig, ScimPreset, readiness, useApi,
 } from "../../../api";
 import { SourceDeletionGuard } from "../SourceDeletionGuard";
 import { VendorLogo, vendorForType } from "../../../components/VendorLogo"; // not in the barrel: keeps the brand marks out of the main chunk
@@ -269,6 +269,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
   const area = (k: string, label: string, hint?: ReactNode) => (
     <Field label={label} hint={hint} error={errs[k]} errorId={errId(k)}><textarea className="input" value={v[k] ?? ""} onChange={set(k)} rows={3} {...marked(k)} /></Field>
   );
+  const confirm = useConfirm();
   const save = async (e: FormEvent) => {
     e.preventDefault();
     const next: ConnConfig = {};
@@ -332,6 +333,10 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
     if (Object.keys(next).length === 0) {
       toast("Nothing changed", { kind: "info" });
       return;
+    }
+    if (rev.credential.present) {
+      const moved = endpointFieldsMoved(cfg, next as Record<string, unknown>);
+      if (moved.length && await confirm({ title: "Clear the stored credential?", body: `${ENDPOINT_CLEARS_CREDENTIAL} Changed: ${moved.join(", ")}.`, confirmLabel: "Save and clear credential", danger: true }) === null) return;
     }
     const r = await run("save", () => readiness.patchConfig(conn.id, next));
     if (r) {
@@ -412,6 +417,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             {input("technical_owner", "Technical owner", "Accountable for the connection and its findings (base.owner).")}
             {input("business_owner", "Business owner")}
           </div>
+          {rev.credential.present && <Callout tone="warn">{ENDPOINT_CLEARS_CREDENTIAL}</Callout>}
           {gov && gov.credential === null && (
             <Callout tone="info">This connection holds no credential: it reads a recorded snapshot from this tenant&apos;s directory.</Callout>
           )}
