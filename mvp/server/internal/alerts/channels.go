@@ -73,6 +73,9 @@ func (s *ChannelSpec) check(dev bool) error {
 		if u.Scheme != "https" && !(dev && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "::1")) {
 			return refuse(422, "invalid_target", "the webhook URL must use https")
 		}
+		if safehttp.IsMetadataHost(u.Hostname()) {
+			return refuse(422, "invalid_target", "the webhook URL must not point at a cloud metadata service")
+		}
 	default:
 		return refuse(422, "invalid_kind", "kind is email or webhook")
 	}

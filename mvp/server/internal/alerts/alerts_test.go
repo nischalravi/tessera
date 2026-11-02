@@ -462,7 +462,7 @@ func TestWebhookSSRFGuard(t *testing.T) {
 	var ch *store.AlertChannel
 	w.write(t, func(tx *store.TenantTx) error {
 		var err error
-		ch, _, err = alerts.CreateChannel(tx, w.sealer, alerts.ChannelSpec{Name: "Meta", Kind: "webhook", Target: "https://169.254.169.254/latest",
+		ch, _, err = alerts.CreateChannel(tx, w.sealer, alerts.ChannelSpec{Name: "Meta", Kind: "webhook", Target: "https://169.254.1.1/latest", // link-local: not saved-time refused, the send-time guard stops it
 			MinSeverity: "low", Enabled: true}, false, alerts.Actor{Display: "test"}, w.now)
 		return err
 	})
@@ -471,7 +471,8 @@ func TestWebhookSSRFGuard(t *testing.T) {
 		t.Fatalf("metadata address: %v", err)
 	}
 	w.write(t, func(tx *store.TenantTx) error {
-		for _, target := range []string{"http://hooks.example.com/x", "https://user:pw@hooks.example.com/x", "ftp://x", "not a url"} {
+		for _, target := range []string{"http://hooks.example.com/x", "https://user:pw@hooks.example.com/x", "ftp://x", "not a url",
+			"https://169.254.169.254/latest", "https://metadata.google.internal./x", "https://[fd00:ec2::254]/"} {
 			var e *alerts.Error
 			_, _, err := alerts.CreateChannel(tx, w.sealer, alerts.ChannelSpec{Name: "x", Kind: "webhook", Target: target,
 				MinSeverity: "low", Enabled: true}, false, alerts.Actor{Display: "test"}, w.now)

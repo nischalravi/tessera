@@ -32,7 +32,7 @@ var metadataHostAddrs = []netip.Addr{
 // service. Configuration that would point a connector there is refused at save time in every
 // environment; the dial guard refuses the addresses at connect time as well.
 func IsMetadataHost(host string) bool {
-	h := strings.ToLower(strings.TrimSuffix(strings.Trim(strings.TrimSpace(host), "[]"), "."))
+	h := strings.ToLower(strings.TrimRight(strings.Trim(strings.TrimSpace(host), "[]"), "."))
 	if metadataHostNames[h] {
 		return true
 	}

@@ -365,6 +365,9 @@ func (s *SinkSpec) check(dev bool) error {
 		if u.Scheme != "https" && !(dev && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "::1")) {
 			return refuse(422, "invalid_target", "the webhook URL must use https")
 		}
+		if safehttp.IsMetadataHost(u.Hostname()) {
+			return refuse(422, "invalid_target", "the webhook URL must not point at a cloud metadata service")
+		}
 		if s.Flavor != FlavorHEC && s.Flavor != FlavorJSON {
 			return refuse(422, "invalid_flavor", "flavor is hec (Splunk HTTP Event Collector) or json")
 		}
@@ -376,6 +379,9 @@ func (s *SinkSpec) check(dev bool) error {
 		}
 		if u.Scheme != "https" && !(dev && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "::1")) {
 			return refuse(422, "invalid_target", "the bucket URL must use https")
+		}
+		if safehttp.IsMetadataHost(u.Hostname()) {
+			return refuse(422, "invalid_target", "the bucket URL must not point at a cloud metadata service")
 		}
 		if !regionRe.MatchString(s.Region) {
 			return refuse(422, "invalid_region", "the region is the signing region of the bucket, for example eu-west-1 (us-east-1 for most S3-compatible stores)")

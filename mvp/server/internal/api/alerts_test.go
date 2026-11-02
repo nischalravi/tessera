@@ -201,3 +201,34 @@ func TestAlertsAPI_CrossTenant(t *testing.T) {
 		t.Error("tenant A changed")
 	}
 }
+
+// TestAlertsAPI_RefusesMetadataWebhook: a channel webhook that names a cloud metadata service is refused at save
+// time (422) in every spelling, on create and on a target change, so no signing secret is issued for it.
+func TestAlertsAPI_RefusesMetadataWebhook(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := alertsServer(t, f)
+	admin := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ta@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	hosts := []string{"169.254.169.254", "169.254.169.254.", "169.254.169.254..:443", "[fd00:ec2::254]", "[::ffff:169.254.169.254]:443",
+		"metadata.google.internal.", "METADATA.GOOGLE.INTERNAL", "100.100.100.200", "168.63.129.16"}
+	for _, host := range hosts {
+		body := `{"name":"M","kind":"webhook","target":"https://` + host + `/x","min_severity":"low"}`
+		if rec := alertsDo(h, admin, "POST", "/api/alerts/channels", body); rec.Code != 422 || !strings.Contains(rec.Body.String(), "metadata") {
+			t.Errorf("create at %s: %d %s", host, rec.Code, rec.Body)
+		}
+	}
+	rec := alertsDo(h, admin, "POST", "/api/alerts/channels", `{"name":"Ok","kind":"webhook","target":"https://hooks.example.com/x","min_severity":"low"}`)
+	if rec.Code != 201 {
+		t.Fatalf("an ordinary webhook: %d %s", rec.Code, rec.Body)
+	}
+	var ch struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &ch); err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range hosts {
+		if rec := alertsDo(h, admin, "PUT", "/api/alerts/channels/"+ch.ID, `{"name":"Ok","target":"https://`+host+`/x"}`); rec.Code != 422 || !strings.Contains(rec.Body.String(), "metadata") {
+			t.Errorf("update to %s: %d %s", host, rec.Code, rec.Body)
+		}
+	}
+}
