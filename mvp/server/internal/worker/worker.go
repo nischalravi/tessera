@@ -216,7 +216,7 @@ func (d *Deps) connectorSync(ctx context.Context, j queue.Job) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		conns, failed = MergeGoverned(conns, gov), f
+		conns, failed = MergeGoverned(conns, gov, f), f
 	}
 	out, err := d.syncTenant(ctx, j.Tenant, now, conns, p.Mode == "full", "connector.worker", j.ID)
 	if err != nil {

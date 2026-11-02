@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
@@ -338,7 +339,7 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 		if cfg.AdminEmail != "" {
 			at := strings.LastIndexByte(cfg.AdminEmail, '@')
 			switch {
-			case len(cfg.AdminEmail) > 254 || at < 1 || !connsync.ValidDomain(cfg.AdminEmail[at+1:]) || strings.ContainsAny(cfg.AdminEmail, " \t\r\n,;<>\"[]\\") || !printable.MatchString(cfg.AdminEmail):
+			case len(cfg.AdminEmail) > 254 || at < 1 || strings.Count(cfg.AdminEmail, "@") != 1 || hasInvisible(cfg.AdminEmail) || !connsync.ValidDomain(cfg.AdminEmail[at+1:]) || strings.ContainsAny(cfg.AdminEmail, " \t\r\n,;<>\"[]\\") || !printable.MatchString(cfg.AdminEmail):
 				bad("admin_email", "must be an email address")
 			case cfg.Domain != "" && !strings.EqualFold(cfg.AdminEmail[at+1:], cfg.Domain):
 				bad("admin_email", "must be an address in the connection's domain")
@@ -549,4 +550,16 @@ func DefaultConfig(connectorType string, t *template.Resolved) ConnConfig {
 		cfg.TimeZone = "America/New_York"
 	}
 	return cfg
+}
+
+// hasInvisible reports whether s holds a character that does not show: a control, format (zero-width,
+// bidi) or separator character other than an ASCII letter, digit or punctuation mark. An address that holds one
+// reads as a different address from the one that is stored.
+func hasInvisible(s string) bool {
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.IsSpace(r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
+			return true
+		}
+	}
+	return false
 }

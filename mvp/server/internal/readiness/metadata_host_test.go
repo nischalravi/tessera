@@ -13,7 +13,9 @@ func TestMetadataHostError(t *testing.T) {
 	t.Parallel()
 	forms := []string{"169.254.169.254", "169.254.169.254:80", "x@169.254.169.254", "x:y@169.254.169.254:80", "169.254.169.254/latest",
 		"[fd00:ec2::254]:80", "fd00:ec2::254", "[fd00:ec2::254]", "metadata.google.internal", "METADATA.GOOGLE.INTERNAL.",
-		"metadata.google.internal:80", "https://metadata.google.internal/x", "::ffff:169.254.169.254", "168.63.129.16:443", " 169.254.169.254 "}
+		"metadata.google.internal:80", "https://metadata.google.internal/x", "::ffff:169.254.169.254", "168.63.129.16:443", " 169.254.169.254 ",
+		"[169.254.169.254]:80", "[metadata.google.internal]:22", "[METADATA.GOOGLE.INTERNAL.]:80", "METADATA.GOOGLE.INTERNAL..", "x@[169.254.169.254]:80",
+		"http://[169.254.169.254]:80/latest", "169.254.169.254..:80", "[100.100.100.200]:80/x"}
 	fields := map[string]func(h string) ConnConfig{
 		"host":          func(h string) ConnConfig { return ConnConfig{Host: h} },
 		"org_url":       func(h string) ConnConfig { return ConnConfig{OrgURL: h} },
@@ -33,7 +35,7 @@ func TestMetadataHostError(t *testing.T) {
 	}
 	// ordinary hosts are fine, in the same forms
 	for field, mk := range fields {
-		for _, h := range []string{"ldap.example.com", "ldap.example.com:636", "10.0.0.5", "sftp.example.com", "https://acme.okta.com", "2001:db8::1", "[2001:db8::1]:22", "user@example.com"} {
+		for _, h := range []string{"ldap.example.com", "ldap.example.com:636", "10.0.0.5", "sftp.example.com", "https://acme.okta.com", "2001:db8::1", "[2001:db8::1]:22", "user@example.com", "ldap.example.com.", "[example.com]:22"} {
 			if err := metadataHostError(mk(h)); err != nil {
 				t.Errorf("%s=%q was refused: %v", field, h, err)
 			}
