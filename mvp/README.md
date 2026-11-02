@@ -6501,8 +6501,11 @@ set; the credential JSON's own `admin_email`, next to `type`, `client_email` and
 the config wins). Groups, roles and identities are read, as the variable defaults do. When a tenant has a live Google
 connection it replaces an env-configured `google` connector, so the connection's org units always apply; the
 `TESSERA_GOOGLE_*` variables remain the fallback for a tenant without one (dev and the single-node default). A
-connection that cannot be opened (no credential, no `admin_email`, a refused setting) is reported in the sync's
-failed list by name and the other connectors are still read. A connection never carries an endpoint override
+connection that cannot be opened (no credential, no `admin_email`, a refused setting) fails closed: it is reported
+in the sync's failed list (`governed_not_opened`) by name, the env-configured `google` connector is not read in its
+place for that tenant (it would read the whole customer), and the other connectors are still read. `POST
+/api/connectors/sync` likewise does not read the env `google` connector for a tenant with a live Google connection;
+it queues the worker sync that reads the connection (issue #823). A connection never carries an endpoint override
 (`TESSERA_GOOGLE_API_URL` and `_TOKEN_URL` apply to a dev runtime's fake only). Okta, Entra, Workday, Salesforce,
 SCIM, generic REST, SQL and directory connections are still read from the environment or by their own feature;
 see issue #814 for the list.

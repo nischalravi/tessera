@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -36,9 +37,18 @@ func RunSync(ctx context.Context, tx *store.TenantTx, now time.Time, conns []con
 // read twice because a governed connection of the same system was also activated.
 // A connector built from a connection's stored config (connectors.ConnectionBacked)
 // is the exception: the connection's scope is the one that applies, so it replaces
-// the env-configured connector of its system, which is the dev fallback.
-func MergeGoverned(conns, governed []connectors.Connector) []connectors.Connector {
+// the env-configured connector of its system, which is the dev fallback. It fails
+// closed: a connection-backed connection that could not be opened (failed, holding a
+// *connectors.NotOpenedError) also removes the env-configured connector of its system,
+// which would otherwise read a wider scope; the failure is reported by name by the caller.
+func MergeGoverned(conns, governed []connectors.Connector, failed map[string]error) []connectors.Connector {
 	stored := map[string]bool{}
+	for _, err := range failed {
+		var no *connectors.NotOpenedError
+		if errors.As(err, &no) {
+			stored[no.System] = true
+		}
+	}
 	for _, g := range governed {
 		if _, ok := g.(connectors.ConnectionBacked); ok {
 			stored[g.System()] = true
@@ -57,6 +67,17 @@ func MergeGoverned(conns, governed []connectors.Connector) []connectors.Connecto
 		if !have[g.System()] {
 			have[g.System()] = true
 			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// DropSystems returns conns without the connectors of the given systems.
+func DropSystems(conns []connectors.Connector, systems []string) []connectors.Connector {
+	out := make([]connectors.Connector, 0, len(conns))
+	for _, c := range conns {
+		if !slices.Contains(systems, c.System()) {
+			out = append(out, c)
 		}
 	}
 	return out
