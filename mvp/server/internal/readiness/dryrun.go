@@ -125,12 +125,33 @@ func (s *Service) GovernedConnectorsTx(c *store.TenantTx, now time.Time) (cns []
 		}
 		cn, _, err := s.OpenConnector(c, ac, now)
 		if err != nil {
+			if ac.connectorType == governed.GoogleWorkspace {
+				// fail closed: the env-configured connector of the system must not read in its place
+				err = &connectors.NotOpenedError{System: governed.GoogleWorkspace, Err: err}
+			}
 			failed[ac.name] = err
 			continue
 		}
 		cns = append(cns, cn)
 	}
 	return cns, failed, nil
+}
+
+// StoredSystems lists the connector systems of a tenant's live connections that are read from their
+// stored config (Google Workspace): the env-configured connector of each is not read for
+// the tenant, whether or not the connection opens.
+func (s *Service) StoredSystems(c *store.TenantTx) ([]string, error) {
+	live, err := s.ActiveConnections(c)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, ac := range live {
+		if ac.connectorType == governed.GoogleWorkspace {
+			out = append(out, governed.GoogleWorkspace)
+		}
+	}
+	return out, nil
 }
 
 // GovernedParams returns a live governed connection as the governed package

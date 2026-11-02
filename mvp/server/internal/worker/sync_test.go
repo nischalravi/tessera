@@ -141,7 +141,7 @@ func TestMergeGovernedPrefersAConnectionBackedConnector(t *testing.T) {
 	env := []connectors.Connector{mergeConn{"google", "env"}, mergeConn{"okta", "env"}}
 	gov := []connectors.Connector{storedConn{mergeConn{"google", "stored"}}, mergeConn{"okta", "gov"}, mergeConn{"sap", "gov"}}
 	var got []string
-	for _, c := range worker.MergeGoverned(env, gov) {
+	for _, c := range worker.MergeGoverned(env, gov, nil) {
 		got = append(got, c.System()+"/"+c.(interface{ tag() string }).tag())
 	}
 	want := []string{"okta/env", "google/stored", "sap/gov"}
@@ -154,7 +154,7 @@ func TestMergeGovernedPrefersAConnectionBackedConnector(t *testing.T) {
 			break
 		}
 	}
-	if out := worker.MergeGoverned(env, nil); len(out) != 2 {
+	if out := worker.MergeGoverned(env, nil, nil); len(out) != 2 {
 		t.Errorf("no connections: %d connectors, want the 2 configured", len(out))
 	}
 }

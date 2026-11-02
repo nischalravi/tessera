@@ -335,6 +335,18 @@ func (*HrisEventRecord) isEvent() {}
 // environment is the dev fallback).
 type ConnectionBacked interface{ ConnectionBacked() }
 
+// NotOpenedError is the failure to open the connector of a connection whose
+// connector would be ConnectionBacked. The env-configured connector of System must
+// not stand in for it (that would read a wider scope than the connection's): a sync
+// drops it and reports the connection as not opened (issue #823).
+type NotOpenedError struct {
+	System string
+	Err    error
+}
+
+func (e *NotOpenedError) Error() string { return e.Err.Error() }
+func (e *NotOpenedError) Unwrap() error { return e.Err }
+
 // Connector is implemented by every source-system connector.
 type Connector interface {
 	// System is the short system name, e.g. "okta".

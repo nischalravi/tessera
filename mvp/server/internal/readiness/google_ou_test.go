@@ -2,6 +2,7 @@ package readiness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -139,6 +140,40 @@ func TestGoogleConnectorIsOpenedFromTheStoredConfig(t *testing.T) {
 		}
 		if cn, ok, err := s.OpenConnector(c, live[0], t0); err != nil || !ok || cn == nil {
 			t.Errorf("OpenConnector: ok %v, err %v", ok, err)
+		}
+		return nil
+	})
+}
+
+// A live Google connection that cannot be opened is returned as a NotOpenedError for
+// its system, so a sync drops the env-configured google connector instead of letting
+// it read a wider scope (issue #823); StoredSystems names the system either way.
+func TestGoogleConnectionThatDoesNotOpenFailsClosed(t *testing.T) {
+	govConfig["google"] = `{"customer":"my_customer","domain":"example.com","admin_email":"admin@example.com","correlation_key":"id","base_dns":["/Eng"]}`
+	t.Cleanup(func() { delete(govConfig, "google") })
+	var opened []governed.Params
+	s := govSvc(t, &opened, stubProber{})
+	passingEvidence(s, t0.Add(48*time.Hour))
+	s.Runner.Gov.Connector = func(governed.Params, governed.Net) (connectors.Connector, error) {
+		return nil, errors.New("google: no admin_email")
+	}
+	st := newStore(t)
+	activateGov(t, s, st, "google")
+
+	cns, failed, err := s.GovernedConnectors(context.Background(), st.DB, st.Tenant, t0)
+	if err != nil || len(cns) != 0 || len(failed) != 1 {
+		t.Fatalf("governed connectors: %v, failed %v, %v", cns, failed, err)
+	}
+	for name, e := range failed {
+		var no *connectors.NotOpenedError
+		if !errors.As(e, &no) || no.System != "google" {
+			t.Errorf("%s: failure %v does not name the google system", name, e)
+		}
+	}
+	read(t, st, func(c *store.TenantTx) error {
+		got, err := s.StoredSystems(c)
+		if err != nil || !slices.Equal(got, []string{"google"}) {
+			t.Errorf("stored systems = %v, %v", got, err)
 		}
 		return nil
 	})

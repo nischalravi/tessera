@@ -384,6 +384,13 @@ func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, p *param
 	if err != nil {
 		return nil, err
 	}
+	// A system read from a live connection's stored config is read by the worker, never
+	// by its env-configured connector here (fail closed, issue #823).
+	stored, err := s.readiness.StoredSystems(c)
+	if err != nil {
+		return nil, err
+	}
+	conns = worker.DropSystems(conns, stored)
 	out, err := worker.RunSync(r.Context(), c, now, conns, mode != nil && *mode == "full", "system")
 	if err != nil {
 		return nil, err
@@ -395,7 +402,7 @@ func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, p *param
 		return nil, err
 	}
 	for _, ac := range live {
-		if gt, ok := governed.Lookup(ac.ConnectorType()); ok && !gt.Feature {
+		if gt, ok := governed.Lookup(ac.ConnectorType()); (ok && !gt.Feature) || ac.ConnectorType() == governed.GoogleWorkspace {
 			payload := worker.SyncPayload{}
 			if mode != nil {
 				payload.Mode = *mode
