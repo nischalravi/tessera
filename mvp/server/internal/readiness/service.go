@@ -556,7 +556,11 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 	// Every other type: the endpoint fields (endpointFields) say where its credential is sent.
 	moved := endpointChanged(b.Config, cfg)
 	credCleared = credCleared || (rev.SecretRef != nil && len(moved) > 0)
+	var droppedRef string
 	if credCleared {
+		if rev.SecretRef != nil {
+			droppedRef = *rev.SecretRef
+		}
 		rev.SecretRef, rev.SecretVersion = nil, nil
 	}
 	if err := setRevisionConfig(&rev, b.Conn, cfg); err != nil {
@@ -567,6 +571,10 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 	}
 	if credCleared {
 		if err := c.ClearRevisionSecret(rev.ID, rev.ConfigHash, now); err != nil {
+			return nil, err
+		}
+		// The sealed row goes with the reference unless the live revision still uses it.
+		if err := c.DeleteOrphanBindCredential(b.Conn.ID, droppedRef); err != nil {
 			return nil, err
 		}
 		switch b.Template.ID {
@@ -700,8 +708,9 @@ var refRE = regexp.MustCompile(`^(vault|agent):[A-Za-z0-9._/:@-]{1,200}$`)
 // reference. Without a Sealer the value is discarded, as before: demo
 // connectors need no secret and a real connector then has no credential to
 // run with.
-// A replaced credential's row is kept: a new revision copies its predecessor's
-// reference, so the live revision may still use it.
+// A replaced credential's row is deleted in the same transaction unless another
+// revision still references it (a new revision copies its predecessor's
+// reference, so the live revision may still use it).
 func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialInput, actor string, now time.Time) (*Bundle, error) {
 	var ref string
 	switch {
@@ -767,6 +776,11 @@ func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialI
 		}
 		if err := c.PutCredential(&store.Credential{ConnectionID: b.Conn.ID, Purpose: store.PurposeBind, Ref: ref,
 			Sealed: blob, UpdatedBy: actor, UpdatedAt: now}); err != nil {
+			return nil, err
+		}
+	}
+	if b.Rev.SecretRef != nil && *b.Rev.SecretRef != ref {
+		if err := c.DeleteOrphanBindCredential(b.Conn.ID, *b.Rev.SecretRef); err != nil {
 			return nil, err
 		}
 	}

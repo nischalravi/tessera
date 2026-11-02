@@ -110,3 +110,72 @@ func TestIsolation_ConnectionCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// DeleteOrphanBindCredential and DeleteBindCredentials (#838): they act on the caller's tenant only, and the
+// orphan delete keeps a row a revision of the connection still references.
+func TestIsolation_DeleteBindCredentials(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	conn := func(tn storetest.Tenant) string { return tn.Refs["connection:ad"] }
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			return c.PutCredential(&store.Credential{ConnectionID: conn(tn), Purpose: store.PurposeBind, Ref: "sealed:shared",
+				Sealed: []byte("bind-" + tn.Slug), UpdatedBy: "admin", UpdatedAt: storetest.Now})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	has := func(tn storetest.Tenant) bool {
+		found := false
+		if err := f.DB.ReadTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			_, err := c.Credential(conn(tn), store.PurposeBind, "sealed:shared")
+			found = err == nil
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+	// B naming A's connection removes nothing of A's.
+	inB(t, f, func(c *store.TenantTx) error {
+		if err := c.DeleteOrphanBindCredential(conn(f.A), "sealed:shared"); err != nil {
+			t.Error(err)
+		}
+		return c.DeleteBindCredentials(conn(f.A))
+	})
+	if !has(f.A) || !has(f.B) {
+		t.Fatal("a cross-tenant delete removed a row")
+	}
+	// A revision still referencing the ref keeps the row.
+	rev := f.A.Refs["revision:ad"]
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		r, err := c.Revision(rev)
+		if err != nil {
+			return err
+		}
+		if err := c.UpdateRevisionSecret(rev, "sealed:shared", "v1", r.ConfigHash, storetest.Now); err != nil {
+			return err
+		}
+		return c.DeleteOrphanBindCredential(conn(f.A), "sealed:shared")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !has(f.A) {
+		t.Fatal("a referenced row was deleted")
+	}
+	// Once the reference is cleared the row goes; B's stays.
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		r, err := c.Revision(rev)
+		if err != nil {
+			return err
+		}
+		if err := c.ClearRevisionSecret(rev, r.ConfigHash, storetest.Now); err != nil {
+			return err
+		}
+		return c.DeleteOrphanBindCredential(conn(f.A), "sealed:shared")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if has(f.A) || !has(f.B) {
+		t.Fatalf("after the orphan delete: A has = %v, B has = %v", has(f.A), has(f.B))
+	}
+}
