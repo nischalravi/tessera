@@ -3555,6 +3555,18 @@ export interface ReadinessSummary { score: number | null; band: Band | ""; needs
 export const isGateReport = (e: unknown): e is ApiError & { body: GateReport } =>
   e instanceof ApiError && !!e.body && Array.isArray(e.body.blocking);
 
+/** Config fields that say where a connection sends its credential. The server drops the stored credential when an edit moves one (#830). */
+const ENDPOINT_KEYS = ["host", "port", "org_url", "domain", "base_url", "tenant_host", "tenant_id", "cloud", "tls_mode", "bind_dn", "ca_bundle", "sql", "rest"] as const;
+const ENDPOINT_SETTINGS = ["host", "port", "host_key", "tenant_id"] as const;
+/** Names the endpoint fields a config patch moves (names only), so the UI can warn before the credential is cleared. */
+export const endpointFieldsMoved = (cur: ConnConfig, patch: Record<string, unknown>): string[] => {
+  const out: string[] = ENDPOINT_KEYS.filter((k) => k in patch && JSON.stringify(patch[k] ?? null) !== JSON.stringify((cur as Record<string, unknown>)[k] ?? null));
+  const set = patch.settings as Record<string, string> | undefined;
+  if (set) for (const k of ENDPOINT_SETTINGS) if ((set[k] ?? "") !== (cur.settings?.[k] ?? "")) out.push(`settings.${k}`);
+  return out;
+};
+export const ENDPOINT_CLEARS_CREDENTIAL = "Changing the endpoint clears the stored credential. Enter the credential again after saving; the connection must be validated again.";
+
 export const readiness = {
   create: (body: { name: string; connector_type: string; system?: string; config?: ConnConfig }) => api<Connection>("/connections", body),
   patchConfig: (id: string, patch: Partial<ConnConfig> | Record<string, unknown>) =>

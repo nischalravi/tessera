@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -552,6 +553,9 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 	credCleared := rev.SecretRef != nil && ((b.Template.ID == "rest_generic" && restDestination(b.Config.Rest) != restDestination(cfg.Rest)) ||
 		(b.Template.ID == "sql" && sqlConfigChanged(b.Config, cfg)) ||
 		((b.Template.ID == "ldap" || b.Template.ID == "ad" || b.Template.ID == "racf" || b.Template.ID == "ibmi") && ldapDestinationChanged(b.Config, cfg)))
+	// Every other type: the endpoint fields (endpointFields) say where its credential is sent.
+	moved := endpointChanged(b.Config, cfg)
+	credCleared = credCleared || (rev.SecretRef != nil && len(moved) > 0)
 	if credCleared {
 		rev.SecretRef, rev.SecretVersion = nil, nil
 	}
@@ -571,7 +575,12 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 		case "ldap", "ad", "racf", "ibmi":
 			changed = append(changed, "credential (cleared: the directory destination changed)")
 		default:
-			changed = append(changed, "credential (cleared: the REST destination changed)")
+			if b.Template.ID != "rest_generic" && len(moved) > 0 {
+				// field names only, never values
+				changed = append(changed, "credential (cleared: the endpoint changed: "+strings.Join(moved, ", ")+")")
+			} else {
+				changed = append(changed, "credential (cleared: the REST destination changed)")
+			}
 		}
 	}
 	if err := c.UpdateConnectionOwners(b.Conn.ID, optText(cfg.TechnicalOwner), optText(cfg.BusinessOwner), now); err != nil {
@@ -602,6 +611,39 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 // The stored password was entered for the old destination, so it is dropped.
 func ldapDestinationChanged(a, b ConnConfig) bool {
 	return a.Host != b.Host || a.Port != b.Port || TLSModeOf(a) != TLSModeOf(b) || a.BindDN != b.BindDN || a.CABundle != b.CABundle
+}
+
+// endpointFields are the config fields that say where a connection sends its credential: a host or URL,
+// the port and pinned host key of an SSH or SFTP target, and the tenant or cloud a token is requested from.
+// Moving any of them drops the stored credential (PatchConfig). Types with a richer destination keep their
+// own rule (rest_generic, sql and the LDAP family above). A field a type does not use never changes.
+var endpointFields = []struct {
+	name string
+	get  func(ConnConfig) string
+}{
+	{"host", func(c ConnConfig) string { return c.Host }},
+	{"port", func(c ConnConfig) string { return strconv.Itoa(c.Port) }},
+	{"org_url", func(c ConnConfig) string { return c.OrgURL }},
+	{"domain", func(c ConnConfig) string { return c.Domain }},
+	{"base_url", func(c ConnConfig) string { return c.BaseURL }},
+	{"tenant_host", func(c ConnConfig) string { return c.TenantHost }},
+	{"tenant_id", func(c ConnConfig) string { return c.TenantID }},
+	{"cloud", func(c ConnConfig) string { return c.Cloud }},
+	{"settings.host", func(c ConnConfig) string { return c.Settings["host"] }},
+	{"settings.port", func(c ConnConfig) string { return c.Settings["port"] }},
+	{"settings.host_key", func(c ConnConfig) string { return c.Settings["host_key"] }},
+	{"settings.tenant_id", func(c ConnConfig) string { return c.Settings["tenant_id"] }},
+}
+
+// endpointChanged names the endpoint fields an edit changes (names only, for the audit event).
+func endpointChanged(a, b ConnConfig) []string {
+	var out []string
+	for _, f := range endpointFields {
+		if f.get(a) != f.get(b) {
+			out = append(out, f.name)
+		}
+	}
+	return out
 }
 
 func sqlConfigChanged(a, b ConnConfig) bool {
