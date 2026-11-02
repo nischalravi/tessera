@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -478,7 +479,23 @@ func namesMetadataHost(v string) bool {
 			return true
 		}
 	}
-	return false
+	// net/url refuses some shapes a connector may still split itself: "[169.254.169.254]:80" (net.SplitHostPort
+	// gives the host), repeated trailing dots, or a scheme-less value with a path. Reduce the value by hand.
+	h := v
+	if i := strings.Index(h, "://"); i >= 0 {
+		h = h[i+3:]
+	}
+	h = strings.TrimPrefix(h, "//")
+	if i := strings.IndexAny(h, "/?#\\"); i >= 0 {
+		h = h[:i]
+	}
+	if i := strings.LastIndexByte(h, '@'); i >= 0 {
+		h = h[i+1:]
+	}
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host
+	}
+	return safehttp.IsMetadataHost(strings.TrimRight(h, "."))
 }
 
 // metadataHostError refuses a config whose host or URL settings name a cloud metadata service, in
