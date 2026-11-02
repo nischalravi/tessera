@@ -467,6 +467,40 @@ func (s *Service) validateCreateConfig(in CreateInput, t *template.Resolved, cfg
 	return metadataHostError(cfg)
 }
 
+// ImportConfigProblem runs, for a config an import is about to create or change, the checks Create and
+// PatchConfig refuse on, plus the admin_email check that validation would flag later. It returns the
+// first problem as text, or "" when the config would be accepted. Nothing is written.
+func (s *Service) ImportConfigProblem(connectorType string, config json.RawMessage) string {
+	t, ok := s.Templates.ForConnectorType(connectorType)
+	if !ok {
+		return fmt.Sprintf("no readiness template for connector type %q", connectorType)
+	}
+	cfg := DefaultConfig(connectorType, t)
+	if len(config) > 0 && string(config) != "null" {
+		var err error
+		if cfg, err = MergeConfig(cfg, config); err != nil {
+			return err.Error()
+		}
+	}
+	err := s.validateCreateConfig(CreateInput{ConnectorType: connectorType, Config: config}, t, cfg)
+	var re *Error
+	if errors.As(err, &re) {
+		msg := re.Msg
+		for _, f := range re.Fields {
+			msg += "; " + f.Field + " " + f.Msg
+		}
+		return msg
+	} else if err != nil {
+		return err.Error()
+	}
+	for _, f := range ValidateConn(cfg, t, connectorType) {
+		if f.Field == "admin_email" {
+			return f.Field + " " + f.Msg
+		}
+	}
+	return ""
+}
+
 // namesMetadataHost reports whether a host or URL setting names a cloud metadata service in any form it
 // may be written: a bare host or IP literal, a URL, or a host with a port, user info or path
 // ("169.254.169.254:80", "x@169.254.169.254", "169.254.169.254/latest").

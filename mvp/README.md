@@ -796,7 +796,10 @@ lists add / change / remove / manual per item; apply is bound to the previewed p
 mode), so a change here or a different prune choice since the preview is refused with
 `409 stale_plan` before anything is written; apply needs step-up, and never activates anything: new connections are drafts, config changes make a new
 draft revision, sign-in connections arrive as **pending**, and a changed existing sign-in
-connection is shown as manual (change it through an admin change request). Removals retire
+connection is shown as manual (change it through an admin change request). The plan runs the checks apply
+runs: a connection whose config is refused on save (a metadata-service host, a non-ASCII `admin_email`,
+an unknown connector type) and a sign-in connection with an unknown protocol, profile or default role are
+*manual* with the reason, and apply skips manual items and imports the rest. Removals retire
 connections only with prune. A bundle never holds a secret: sealed credentials and client
 secrets stay behind (the plan says where to set them), retired connections and the dev IdP are
 left out, and a bundle whose config looks like it carries a secret is refused. On a prod server
