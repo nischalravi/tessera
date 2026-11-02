@@ -51,7 +51,10 @@ type ConnConfig struct {
 	Cloud             string   `json:"cloud,omitempty"`
 	Customer          string   `json:"customer,omitempty"`
 	Domain            string   `json:"domain,omitempty"`
-	BaseURL           string   `json:"base_url,omitempty"`
+	// AdminEmail is the administrator a Google Workspace service account impersonates
+	// (domain-wide delegation). It is an address, not a secret.
+	AdminEmail string `json:"admin_email,omitempty"`
+	BaseURL    string `json:"base_url,omitempty"`
 	// Rest is a generic REST connection's spec (internal/connectors/restgen). It holds no secret.
 	Rest *restgen.Spec `json:"rest,omitempty"`
 	// Preset is the id of the SCIM vendor preset (provision/scim) a scim_app
@@ -329,6 +332,17 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 		text("customer", cfg.Customer, 64)
 		if cfg.Domain != "" {
 			host("domain", cfg.Domain)
+		}
+		// admin_email is optional here (the credential may still carry it); when set it is an
+		// address in the connection's domain. Messages never echo the address.
+		if cfg.AdminEmail != "" {
+			at := strings.LastIndexByte(cfg.AdminEmail, '@')
+			switch {
+			case len(cfg.AdminEmail) > 254 || at < 1 || !connsync.ValidDomain(cfg.AdminEmail[at+1:]) || strings.ContainsAny(cfg.AdminEmail, " \t\r\n,;<>\"[]\\") || !printable.MatchString(cfg.AdminEmail):
+				bad("admin_email", "must be an email address")
+			case cfg.Domain != "" && !strings.EqualFold(cfg.AdminEmail[at+1:], cfg.Domain):
+				bad("admin_email", "must be an address in the connection's domain")
+			}
 		}
 		// base_dns holds the org unit paths whose users are read (empty: all)
 		if len(cfg.BaseDNs) > connsync.MaxOrgUnits {

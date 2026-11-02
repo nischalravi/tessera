@@ -3401,7 +3401,7 @@ export interface TemplateRef { id: string; version: string; pin: string; display
 export interface ConnConfig {
   host?: string; port?: number; tls_mode?: "ldaps" | "starttls" | "none"; page_size?: number;
   attr_map?: { ldap: string; target: string; scope: "account" | "identity" }[]; bind_dn?: string; ca_bundle?: string; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
-  org_url?: string; tenant_id?: string; cloud?: string; customer?: string; domain?: string; base_url?: string; preset?: string;
+  org_url?: string; tenant_id?: string; cloud?: string; customer?: string; domain?: string; admin_email?: string; base_url?: string; preset?: string;
   tenant_host?: string; api_version?: string; interface?: string; time_zone?: string;
   correlation_key?: string; hr_id_attribute?: string; technical_owner?: string; business_owner?: string;
   expected_counts?: { users: number; groups: number }; stale_days?: number; sync_schedule?: string;

@@ -233,7 +233,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
     setV({
       host: cfg.host ?? "", port: String(cfg.port ?? ""), tls_mode: cfg.tls_mode ?? "", page_size: String(cfg.page_size ?? ""),
       attr_map: (cfg.attr_map ?? []).map((m) => `${m.ldap}=${m.scope}.${m.target}`).join("\n"), bind_dn: cfg.bind_dn ?? "", ca_bundle: cfg.ca_bundle ?? "", org_url: cfg.org_url ?? "", tenant_id: cfg.tenant_id ?? "", cloud: cfg.cloud ?? "",
-      customer: cfg.customer ?? "", domain: cfg.domain ?? "", base_url: cfg.base_url ?? "", tenant_host: cfg.tenant_host ?? "",
+      customer: cfg.customer ?? "", domain: cfg.domain ?? "", admin_email: cfg.admin_email ?? "", base_url: cfg.base_url ?? "", tenant_host: cfg.tenant_host ?? "",
       interface: cfg.interface ?? "", api_version: cfg.api_version ?? "", hybrid: cfg.hybrid ? "true" : "false", use_dirsync: cfg.use_dirsync ? "true" : "false", time_zone: cfg.time_zone ?? "", technical_owner: cfg.technical_owner ?? "", business_owner: cfg.business_owner ?? "",
       base_dns: (cfg.base_dns ?? []).join("\n"), service_account_ous: (cfg.service_account_ous ?? []).join("\n"), user_filter: cfg.user_filter ?? "",
       group_filter: cfg.group_filter ?? "", exp_users: cfg.expected_counts ? String(cfg.expected_counts.users) : "",
@@ -290,7 +290,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       if (JSON.stringify(sql) !== JSON.stringify(prev)) next.sql = sql;
     }
     if (step === "connect") {
-      (["host", "bind_dn", "ca_bundle", "org_url", "tenant_id", "cloud", "customer", "domain", "base_url", "tenant_host", "api_version", "interface", "time_zone", "technical_owner", "business_owner"] as const).forEach(str);
+      (["host", "bind_dn", "ca_bundle", "org_url", "tenant_id", "cloud", "customer", "domain", "admin_email", "base_url", "tenant_host", "api_version", "interface", "time_zone", "technical_owner", "business_owner"] as const).forEach(str);
       if (v.port && Number(v.port) !== cfg.port) next.port = Number(v.port);
       if (ldapLike || tid === "ibmi") {
         str("tls_mode");
@@ -388,7 +388,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
             </>}
             {tid === "okta" && input("org_url", "Org URL", "An Okta domain (*.okta.com) or a verified custom domain.")}
             {tid === "entra" && <>{input("tenant_id", "Tenant id", "The directory GUID from the Overview page, not a domain.")}{input("cloud", "Cloud", "global, usgov or china")}{flag("hybrid", "Hybrid tenant", "Yes when users are synced from an on-premises AD (enables the cross-link check to AD).")}</>}
-            {tid === "google" && <>{input("customer", "Customer", "my_customer or the customer id")}{input("domain", "Primary domain")}</>}
+            {tid === "google" && <>{input("customer", "Customer", "my_customer or the customer id")}{input("domain", "Primary domain")}{input("admin_email", "Impersonated admin email", "The administrator the service account acts as (domain-wide delegation), in the primary domain. Empty reads it from the credential JSON (admin_email).", { type: "email", autoComplete: "off" })}</>}
             {tid === "workday" && <>{input("tenant_host", "Tenant host", "*.workday.com or *.myworkday.com")}{input("api_version", "Web Services version", "Recorded for the tenant check, for example v44.0. The connector does not yet pin calls to it (#597).")}{input("interface", "Interface", "get_workers or raas")}{input("time_zone", "Tenant time zone")}</>}
             {tid === "scim_app" && input("base_url", BASE_URL_FIELDS.scim_app.label, scimUrlHint(cfg.preset, presets))}
             {!gov && tid !== "scim_app" && BASE_URL_FIELDS[tid] && input("base_url", BASE_URL_FIELDS[tid].label, BASE_URL_FIELDS[tid].hint, { "aria-required": true })}

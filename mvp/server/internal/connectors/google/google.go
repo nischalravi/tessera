@@ -248,9 +248,12 @@ type Stored struct {
 	Customer, Domain string
 	OrgUnits         []string
 	// Credential is the sealed credential, opened: the service account's JSON key
-	// file. It may carry "admin_email", the administrator to impersonate (the
-	// connection's config has no field for it).
+	// file. It may carry "admin_email", the administrator to impersonate, which
+	// is the fallback for AdminEmail.
 	Credential string
+	// AdminEmail is the config's admin_email, the administrator to impersonate.
+	// It wins over the credential's.
+	AdminEmail string
 }
 
 // FromStored builds the connector of a connection from its stored config
@@ -270,13 +273,16 @@ func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *h
 		return nil, errors.New("google: the connection has no stored credential")
 	}
 	_ = json.Unmarshal([]byte(s.Credential), &extra) // a malformed file is reported by parseServiceAccountKey
-	cfg.AdminEmail = strings.TrimSpace(extra.AdminEmail)
+	cfg.AdminEmail = strings.TrimSpace(s.AdminEmail)
+	if cfg.AdminEmail == "" {
+		cfg.AdminEmail = strings.TrimSpace(extra.AdminEmail)
+	}
 	var err error
 	if cfg.ServiceAccountEmail, cfg.PrivateKey, cfg.KeyID, err = parseServiceAccountKey(s.Credential); err != nil {
 		return nil, fmt.Errorf("google: credential: %w", err)
 	}
 	if cfg.AdminEmail == "" {
-		return nil, errors.New(`google: the credential must name the administrator to impersonate ("admin_email" next to the service account key fields)`)
+		return nil, errors.New(`google: the connection must name the administrator to impersonate (its admin_email, or "admin_email" next to the service account key fields)`)
 	}
 	return New(cfg, rt, hc, now)
 }

@@ -76,7 +76,8 @@ func (o GovOptions) storedConnector(b *Bundle, now time.Time) (connectors.Connec
 func (o GovOptions) params(b *Bundle) governed.Params {
 	return governed.Params{Type: b.Conn.ConnectorType, BaseURL: b.Config.BaseURL, Settings: b.Config.Settings,
 		Secret: string(b.cred), Tenant: b.Conn.TenantID.String(), DataDir: o.DataDir, Prod: o.Prod,
-		Customer: b.Config.Customer, Domain: b.Config.Domain, OrgUnits: b.Config.BaseDNs}
+		Customer: b.Config.Customer, Domain: b.Config.Domain, OrgUnits: b.Config.BaseDNs,
+		AdminEmail: b.Config.AdminEmail}
 }
 
 func (o GovOptions) net(b *Bundle, now time.Time) (governed.Net, error) {
