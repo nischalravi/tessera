@@ -677,6 +677,7 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"RevokedGrants": true,
 		// Sealed connection credentials: TestIsolation_ConnectionCredentials.
 		"PutCredential": true, "Credential": true, "Credentials": true, "DeleteCredential": true,
+		"DeleteOrphanBindCredential": true, "DeleteBindCredentials": true, // TestIsolation_DeleteBindCredentials
 		// Directory agents and enrolment codes: TestIsolation_DirectoryAgents
 		// and TestIsolation_AgentEnrolmentSingleUse.
 		"InsertDirectoryAgent": true, "DirectoryAgent": true, "DirectoryAgents": true, "ActivateDirectoryAgent": true,

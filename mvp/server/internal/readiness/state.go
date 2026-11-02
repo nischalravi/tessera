@@ -367,6 +367,10 @@ func (s *Service) Retire(c *store.TenantTx, connID, actor string, now time.Time)
 	if err := c.SetConnectionLive(conn.ID, nil, "none", now); err != nil {
 		return err
 	}
+	// A retired connection has no revision that can run, so nothing sealed for it stays at rest.
+	if err := c.DeleteBindCredentials(conn.ID); err != nil {
+		return err
+	}
 	if err := c.MarkConnectionRetired(conn.ID, now); err != nil {
 		return err
 	}

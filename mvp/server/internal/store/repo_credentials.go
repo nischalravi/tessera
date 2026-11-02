@@ -65,6 +65,15 @@ var (
 	credentialDelete = tq("connection_credentials.delete", `
 		DELETE FROM connection_credentials
 		WHERE tenant_id = @tenant AND connection_id = @connection_id AND purpose = @purpose AND ref = @ref`)
+	// credentialDeleteOrphan removes a bind row no revision of the connection (live, pending or retired) references.
+	credentialDeleteOrphan = tq("connection_credentials.delete_orphan", `
+		DELETE FROM connection_credentials
+		WHERE tenant_id = @tenant AND connection_id = @connection_id AND purpose = 'bind' AND ref = @ref
+		  AND NOT EXISTS (SELECT 1 FROM connection_revisions r
+		    WHERE r.tenant_id = @tenant AND r.connection_id = @connection_id AND r.secret_ref = @ref)`)
+	credentialDeleteBind = tq("connection_credentials.delete_bind", `
+		DELETE FROM connection_credentials
+		WHERE tenant_id = @tenant AND connection_id = @connection_id AND purpose = 'bind'`)
 )
 
 func scanCredential(s scanner) (*Credential, error) {
@@ -101,4 +110,23 @@ func (tx *TenantTx) Credentials(purpose string) ([]*Credential, error) {
 func (tx *TenantTx) DeleteCredential(connectionID, purpose, ref string) error {
 	return tx.execOne(credentialDelete, sql.Named("connection_id", connectionID), sql.Named("purpose", purpose),
 		sql.Named("ref", ref))
+}
+
+// DeleteOrphanBindCredential removes the sealed bind credential ref of a connection once no revision of it
+// references that ref any more (a dropped or replaced credential). It is a no-op when a revision still holds
+// the ref (a new revision copies its predecessor's reference) or when there is no row (vault: and agent:
+// references are never stored). Call it in the transaction that clears or replaces the reference.
+func (tx *TenantTx) DeleteOrphanBindCredential(connectionID, ref string) error {
+	if ref == "" {
+		return nil
+	}
+	_, err := tx.exec(credentialDeleteOrphan, sql.Named("connection_id", connectionID), sql.Named("ref", ref))
+	return err
+}
+
+// DeleteBindCredentials removes every sealed bind credential of a connection (it was retired). The
+// containment credential is kept: it belongs to the kill switch, not to a revision.
+func (tx *TenantTx) DeleteBindCredentials(connectionID string) error {
+	_, err := tx.exec(credentialDeleteBind, sql.Named("connection_id", connectionID))
+	return err
 }
