@@ -3781,7 +3781,8 @@ the run failed. Provider calls go through `internal/safehttp`.
 - **Credentials.** `PUT /api/connections/{id}/containment-credential` `{token, base_url, org}`
   (connections.manage, step-up) seals the provider token with the KEK (`internal/seal`, AAD bound to
   tenant, table, column, connection and purpose) in `connection_credentials` (purpose
-  `containment`; the same sealed store holds the LDAP bind secret as purpose `bind`); it
+  `containment`; the same sealed store holds the LDAP bind secret as purpose `bind`, deleted with its
+  reference when an endpoint change or a new credential drops it and no revision still uses it, and on retire); it
   is never returned or logged. On start, `serve` re-seals any rows left in the retired
   `connection_secrets` and `containment_credentials` tables into it and drops them, in one
   transaction, and refuses to start if a blob will not open under the KEK. Okta needs `base_url` (the org URL), GitHub `org`; Entra and Google default to

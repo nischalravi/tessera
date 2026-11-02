@@ -262,3 +262,32 @@ func TestSiemAPI_NarrowingTheFilterNeedsTwoAdmins(t *testing.T) {
 		t.Errorf("clearing the filter = %v", wide)
 	}
 }
+
+// TestSiemAPI_RefusesMetadataTargets: a webhook or bucket URL that names a cloud metadata service is refused when
+// it is saved (422), in every spelling, so no token or access key is sealed for an address that can never be called
+// (the connect-time guard refuses it anyway). Ordinary hosts, private addresses and other link-local ones are not
+// this check's business.
+func TestSiemAPI_RefusesMetadataTargets(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := siemServer(t, f, &okSender{})
+	admin := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ta@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	hosts := []string{"169.254.169.254", "169.254.169.254.", "169.254.169.254..:443", "[fd00:ec2::254]", "[::ffff:169.254.169.254]:443",
+		"metadata.google.internal.", "METADATA.GOOGLE.INTERNAL", "100.100.100.200", "168.63.129.16"}
+	for _, kind := range []string{"webhook", "s3"} {
+		for i, host := range hosts {
+			body := `{"name":"M` + kind + string(rune('a'+i)) + `","kind":"` + kind + `","format":"json","target":"https://` + host + `/x","token":"tok-secret-1","flavor":"json",` +
+				`"region":"eu-west-1","access_key_id":"AKIAIOSFODNN7EXAMPLE"}`
+			rec := siemDo(h, admin, "POST", "/api/siem/sinks", body)
+			if rec.Code != 422 || !strings.Contains(rec.Body.String(), "metadata") {
+				t.Errorf("%s sink at %s: %d %s", kind, host, rec.Code, rec.Body)
+			}
+		}
+	}
+	if rec := siemDo(h, admin, "GET", "/api/siem/sinks", ""); rec.Code != 200 || strings.Contains(rec.Body.String(), "169.254") {
+		t.Errorf("a refused sink was saved: %d %s", rec.Code, rec.Body)
+	}
+	ok := `{"name":"Ok","kind":"webhook","format":"json","target":"https://siem.example.com/hook","token":"tok-secret-1","flavor":"json"}`
+	if rec := siemDo(h, admin, "POST", "/api/siem/sinks", ok); rec.Code != 201 {
+		t.Errorf("an ordinary webhook: %d %s", rec.Code, rec.Body)
+	}
+}
