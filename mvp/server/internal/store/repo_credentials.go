@@ -68,7 +68,8 @@ var (
 	// credentialDeleteOrphan removes a bind row no revision of the connection (live, pending or retired) references.
 	credentialDeleteOrphan = tq("connection_credentials.delete_orphan", `
 		DELETE FROM connection_credentials
-		WHERE tenant_id = @tenant AND connection_id = @connection_id AND purpose = 'bind' AND ref = @ref
+		WHERE connection_credentials.tenant_id = @tenant AND connection_credentials.connection_id = @connection_id
+		  AND connection_credentials.purpose = 'bind' AND connection_credentials.ref = @ref
 		  AND NOT EXISTS (SELECT 1 FROM connection_revisions r
 		    WHERE r.tenant_id = @tenant AND r.connection_id = @connection_id AND r.secret_ref = @ref)`)
 	credentialDeleteBind = tq("connection_credentials.delete_bind", `
