@@ -300,8 +300,15 @@ func (c *Connector) StreamEvents(ctx context.Context, _ *time.Time, _ func(conne
 // ---------------------------------------------------------------- helpers
 
 func validEmail(s string) bool {
+	// ASCII printable only: outside it are invisible fillers, variation selectors, combining marks and look-alike
+	// letters that name a different account than the one an administrator reads (see readiness isASCII, #835).
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e {
+			return false
+		}
+	}
 	at := strings.LastIndexByte(s, '@')
-	return len(s) <= 254 && at > 0 && connsync.ValidDomain(s[at+1:]) && !strings.ContainsAny(s, " \t\r\n,;<>\"")
+	return len(s) <= 254 && strings.Count(s, "@") == 1 && at > 0 && connsync.ValidDomain(s[at+1:]) && !strings.ContainsAny(s, " \t\r\n,;<>\"")
 }
 
 func parseTime(s string) *time.Time {
