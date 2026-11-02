@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -91,6 +92,9 @@ func validateEndpoint(field, raw, env string) error {
 	}
 	if u.Scheme != "https" && !(u.Scheme == "http" && env != config.Prod) {
 		return fmt.Errorf("%s must be an https URL", field)
+	}
+	if safehttp.IsMetadataHost(u.Hostname()) {
+		return fmt.Errorf("%s must not point at a cloud metadata service", field)
 	}
 	return nil
 }

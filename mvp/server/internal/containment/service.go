@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -131,6 +132,9 @@ func (s *Service) PutCredential(c *store.TenantTx, connectionID string, in Crede
 		u, err := url.Parse(in.BaseURL)
 		if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") || len(in.BaseURL) > 512 {
 			return &Error{"base_url must be an https URL"}
+		}
+		if safehttp.IsMetadataHost(u.Hostname()) {
+			return &Error{"base_url must not point at a cloud metadata service"}
 		}
 	}
 	if len(in.Org) > 100 {
