@@ -94,6 +94,14 @@ func TestValidateConn_GoogleAdminEmail(t *testing.T) {
 		"bidi override":        {"", "admin\u202e@example.com", false},
 		"no-break space":       {"", "admin\u00a0@example.com", false},
 		"C1 control":           {"", "adm\u0085in@example.com", false},
+		"hangul filler":        {"", "adm\u3164in@example.com", false},
+		"hangul choseong fill": {"", "adm\u115fin@example.com", false},
+		"braille blank":        {"", "adm\u2800in@example.com", false},
+		"variation selector":   {"", "adm\ufe0fin@example.com", false},
+		"grapheme joiner":      {"", "adm\u034fin@example.com", false},
+		"khmer inherent vowel": {"", "adm\u17b4in@example.com", false},
+		"fullwidth letter":     {"", "\uff41dmin@example.com", false},
+		"accented local part":  {"", "j\u00f6rg@example.com", false},
 		"plus tag":             {"example.com", "admin+uat@example.com", true},
 	} {
 		cfg := ConnConfig{Customer: "my_customer", Domain: tc.domain, AdminEmail: tc.email}
