@@ -14,6 +14,7 @@ import (
 	authnorm "github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/samlsp"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -252,6 +253,8 @@ func checkEndpoint(prod bool, name, v string, bad func(string, ...any)) {
 		bad("%s must be an absolute URL", name)
 	case prod && u.Scheme != "https":
 		bad("%s must be https with TESSERA_ENV=prod", name)
+	case safehttp.IsMetadataHost(u.Hostname()):
+		bad("%s must not point at a cloud metadata service", name)
 	}
 }
 
