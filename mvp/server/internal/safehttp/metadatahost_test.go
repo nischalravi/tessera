@@ -18,6 +18,8 @@ func TestIsMetadataHost(t *testing.T) {
 		{"[FD00:EC2:0::254]", true},
 		{"100.100.100.200", true},
 		{"168.63.129.16", true},
+		{"169.254.169.254..", true}, // repeated trailing dots name the same host (#825)
+		{"metadata.google.internal...", true},
 		{"api.example.com", false},
 		{"metadata.example.com", false},
 		{"169.254.1.1", false}, // link-local, but not a metadata address: the dial guard refuses it

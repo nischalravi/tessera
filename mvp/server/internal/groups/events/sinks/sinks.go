@@ -276,6 +276,9 @@ func Validate(kind string, c Config, cr Credentials, allowInsecure bool) error {
 		if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return bad("url", "must not carry credentials, a query or a fragment (credentials are set apart)")
 		}
+		if safehttp.IsMetadataHost(u.Hostname()) {
+			return bad("url", "must not point at a cloud metadata service")
+		}
 		if p := u.Port(); p != "" {
 			if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
 				return bad("url", "has an invalid port")
@@ -298,6 +301,9 @@ func Validate(kind string, c Config, cr Credentials, allowInsecure bool) error {
 			h, p, err := net.SplitHostPort(b)
 			if n, perr := strconv.Atoi(p); err != nil || perr != nil || n < 1 || n > 65535 || (!hostRE.MatchString(h) && net.ParseIP(h) == nil) {
 				return bad("brokers", "%q is not host:port", b)
+			}
+			if safehttp.IsMetadataHost(h) {
+				return bad("brokers", "%q is a cloud metadata service", b)
 			}
 		}
 		if !kafkaTopic.MatchString(c.Topic) || c.Topic == "." || c.Topic == ".." {
@@ -331,6 +337,9 @@ func httpsURL(field, raw string, allowInsecure bool) error {
 	}
 	if u.Scheme != "https" && !(u.Scheme == "http" && allowInsecure) {
 		return bad(field, "must be an https URL")
+	}
+	if safehttp.IsMetadataHost(u.Hostname()) {
+		return bad(field, "must not point at a cloud metadata service")
 	}
 	return nil
 }
