@@ -595,3 +595,29 @@ func TestPlan_ItemsApplyWouldRefuseAreManual(t *testing.T) {
 		})
 	}
 }
+
+// An imported sign-in connection whose issuer or endpoint names a cloud metadata service is not applied (#854).
+func TestIdPProblem_MetadataHosts(t *testing.T) {
+	s := func(v string) *string { return &v }
+	base := IdP{Name: "x", Protocol: "oidc", Profile: "generic_oidc", DefaultRole: "viewer"}
+	if msg := idpProblem(base); msg != "" {
+		t.Fatalf("a valid IdP: %q", msg)
+	}
+	for _, h := range []string{"https://169.254.169.254", "https://169.254.169.254./x", "https://[fd00:ec2::254]/x", "https://metadata.google.internal./"} {
+		for field, set := range map[string]func(*IdP){
+			"issuer": func(i *IdP) { i.Issuer = s(h) }, "discovery_url": func(i *IdP) { i.DiscoveryURL = s(h) },
+			"idp_sso_url": func(i *IdP) { i.IdPSSOURL = s(h) }, "metadata_url": func(i *IdP) { i.MetadataURL = s(h) },
+		} {
+			i := base
+			set(&i)
+			if msg := idpProblem(i); !strings.Contains(msg, field) || !strings.Contains(msg, "metadata") {
+				t.Errorf("%s=%s: %q", field, h, msg)
+			}
+		}
+	}
+	i := base
+	i.Issuer = s("https://idp.example.com")
+	if msg := idpProblem(i); msg != "" {
+		t.Errorf("an ordinary issuer: %q", msg)
+	}
+}
