@@ -5050,6 +5050,9 @@ taken is a failed run (`loader_name_taken`).
 `sftp_csv` and `hris_sis_feed` are designed but not built (`422 loader_type_unavailable`). MySQL and SQL Server
 are not supported: they need drivers this work did not add (follow-up).
 
+A SQLite loader query runs on its own connection with tight SQLite limits (20,000 bytes of SQL, expression depth 64,
+32 selects in a compound): a query over them fails the run with `source_query_failed`.
+
 **Credential.** A loader's `secret` (write-only, sealed with `internal/seal` bound to the tenant and the loader,
 never returned, in no audit event, run or error) is: a CSV URL's bearer token (optional), a SCIM bearer token
 or client secret, an LDAP bind password, or a Postgres connection string. Those last three are required. For a
