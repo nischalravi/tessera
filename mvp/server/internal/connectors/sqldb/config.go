@@ -46,6 +46,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // Engines.
@@ -192,6 +193,8 @@ func (c Config) Validate(rt connsync.Runtime) error {
 	}
 	if _, err := netip.ParseAddr(c.Host); err != nil && !hostRE.MatchString(c.Host) {
 		bad("host must be a host name or IP address without scheme, port or path")
+	} else if safehttp.IsMetadataHost(c.Host) {
+		bad("host must not be a cloud metadata service")
 	}
 	if c.Port < 0 || c.Port > 65535 {
 		bad("port must be between 1 and 65535")

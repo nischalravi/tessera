@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	goldap "github.com/go-ldap/ldap/v3"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // Flavors of directory.
@@ -104,6 +106,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Host == "" || len(c.Host) > 253 || strings.ContainsAny(c.Host, "/@ \t\r\n:") {
 		return bad("host must be a host name")
+	}
+	if safehttp.IsMetadataHost(c.Host) {
+		return bad("host must not be a cloud metadata service")
 	}
 	if !validDN(c.BindDN) {
 		return bad("bind_dn is not a distinguished name")

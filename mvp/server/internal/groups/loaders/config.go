@@ -14,6 +14,7 @@ import (
 	ldapdir "github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/naming"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -351,6 +352,9 @@ func checkHTTPURL(name, raw string) error {
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(raw) > 2048 {
 		return fmt.Errorf("%s is an https URL without credentials, query or fragment", name)
 	}
+	if safehttp.IsMetadataHost(u.Hostname()) {
+		return fmt.Errorf("%s must not point at a cloud metadata service", name)
+	}
 	return nil
 }
 
@@ -411,6 +415,9 @@ func ParseLDAPURL(raw string) (LDAPEndpoint, error) {
 	if err != nil || len(raw) > 512 || u.Hostname() == "" || (u.Scheme != "ldaps" && u.Scheme != "ldap") ||
 		u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
 		return LDAPEndpoint{}, errors.New("url is ldaps://host[:636] or ldap://host[:389] (StartTLS), with nothing after the port")
+	}
+	if safehttp.IsMetadataHost(u.Hostname()) {
+		return LDAPEndpoint{}, errors.New("url must not point at a cloud metadata service")
 	}
 	port := 636
 	if u.Scheme == "ldap" {
@@ -569,6 +576,9 @@ func (c *CSVConfig) validate() error {
 		u, err := url.Parse(c.URL)
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || len(c.URL) > 2048 {
 			return errors.New("url is an https URL without credentials")
+		}
+		if safehttp.IsMetadataHost(u.Hostname()) {
+			return errors.New("url must not point at a cloud metadata service")
 		}
 	}
 	return nil

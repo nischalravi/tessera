@@ -36,6 +36,11 @@ func TestConfig_Validate(t *testing.T) {
 		{"port in host", func(c *Config) { c.Host = "db:5432" }, prodRT, "host must be"},
 		{"path in host", func(c *Config) { c.Host = "db/x" }, prodRT, "host must be"},
 		{"empty host", func(c *Config) { c.Host = "" }, prodRT, "host must be"},
+		{"metadata address", func(c *Config) { c.Host = "169.254.169.254" }, prodRT, "metadata"},
+		{"metadata address in dev", func(c *Config) { c.Host = "169.254.169.254" }, devRT, "metadata"},
+		{"metadata address with a trailing dot", func(c *Config) { c.Host = "169.254.169.254." }, prodRT, "host must be"},
+		{"metadata name", func(c *Config) { c.Host = "metadata.google.internal" }, prodRT, "metadata"},
+		{"metadata ipv6", func(c *Config) { c.Host = "fd00:ec2::254" }, prodRT, "metadata"},
 		{"port range", func(c *Config) { c.Port = 70000 }, prodRT, "port must be"},
 		{"no username", func(c *Config) { c.Username = "" }, prodRT, "username is required"},
 		{"control in username", func(c *Config) { c.Username = "a\nb" }, prodRT, "username is required"},
@@ -118,8 +123,16 @@ func TestTLSConfig(t *testing.T) {
 // Production dials through the SSRF policy: loopback, private, link-local and
 // metadata addresses are refused for every engine, before any byte is sent.
 func TestOpen_RefusesBlockedAddresses(t *testing.T) {
-	hosts := []string{"127.0.0.1", "10.1.2.3", "192.168.0.5", "169.254.169.254", "100.100.100.200", "::1", "fd00:ec2::254"}
+	// the named metadata addresses are refused when the config is saved (Validate, which Open runs); the rest at dial time
+	hosts := []string{"127.0.0.1", "10.1.2.3", "192.168.0.5", "169.254.0.1", "::1"}
 	for _, engine := range Engines {
+		for _, host := range []string{"169.254.169.254", "100.100.100.200", "fd00:ec2::254"} {
+			c := goodConfig(engine)
+			c.Host = host
+			if _, err := Open(c, connsync.NewSecret("pw"), prodRT, false); err == nil || !strings.Contains(err.Error(), "metadata") {
+				t.Errorf("%s %s: err = %v, want the metadata host refused on save", engine, host, err)
+			}
+		}
 		for _, host := range hosts {
 			c := goodConfig(engine)
 			c.Host = host
@@ -144,7 +157,7 @@ func blocked(err error) bool {
 // The metadata address stays refused in dev, even with the loopback exception.
 func TestOpen_DevStillRefusesMetadata(t *testing.T) {
 	c := goodConfig(Postgres)
-	c.Host, c.TLS = "169.254.169.254", TLSDisable
+	c.Host, c.TLS = "169.254.0.1", TLSDisable
 	db, err := Open(c, connsync.NewSecret("pw"), devRT, false)
 	if err != nil {
 		t.Fatal(err)
