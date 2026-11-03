@@ -11,7 +11,25 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	sqlite "modernc.org/sqlite"
 )
+
+// SQLite run-time limits (sqlite3_limit ids) set on the loader connection only.
+// A tenant supplies the query text, so parser and planner depth is bounded far
+// below SQLite's defaults (1000, 500, 1_000_000_000): a pathological query is
+// an ordinary error, not stack exhaustion in the shared API process.
+const (
+	sqliteLimitSQLLength      = 1
+	sqliteLimitExprDepth      = 3
+	sqliteLimitCompoundSelect = 4
+)
+
+var extSQLiteLimits = []struct{ id, val int }{
+	{sqliteLimitSQLLength, MaxExtQueryBytes},
+	{sqliteLimitExprDepth, 64},
+	{sqliteLimitCompoundSelect, 32},
+}
 
 // The read-only query of a SQL loader (issue #53, GR-10; design
 // docs/design/groups-grouper-parity.md §9.1). It runs against a SQLite file
@@ -88,7 +106,17 @@ func RunExtQuery(ctx context.Context, q ExtQuery) (*ExtResult, error) {
 	for k, val := range q.Args {
 		args = append(args, sql.Named(k, val))
 	}
-	rows, err := db.QueryContext(ctx, q.SQL, args...)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	for _, l := range extSQLiteLimits {
+		if _, err := sqlite.Limit(conn, l.id, l.val); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := conn.QueryContext(ctx, q.SQL, args...)
 	if err != nil {
 		return nil, err
 	}
