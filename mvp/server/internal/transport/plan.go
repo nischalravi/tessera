@@ -20,6 +20,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -453,6 +454,17 @@ func planIdPs(tx *store.TenantTx, b *Bundle, p *Plan) error {
 // idpProblem names a value the sign-in connections table would refuse (its CHECK
 // constraints), so the plan shows it instead of apply failing on insert.
 func idpProblem(i IdP) string {
+	for _, e := range []struct {
+		name string
+		v    *string
+	}{{"issuer", i.Issuer}, {"discovery_url", i.DiscoveryURL}, {"idp_sso_url", i.IdPSSOURL}, {"metadata_url", i.MetadataURL}} {
+		if e.v == nil {
+			continue
+		}
+		if u, err := url.Parse(*e.v); err == nil && safehttp.IsMetadataHost(u.Hostname()) {
+			return e.name + " must not point at a cloud metadata service"
+		}
+	}
 	switch {
 	case !slices.Contains([]string{"oidc", "saml", "oauth2", "cas", "wsfed"}, i.Protocol):
 		return fmt.Sprintf("unknown protocol %q", i.Protocol)
