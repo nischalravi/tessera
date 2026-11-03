@@ -96,6 +96,19 @@ for (const width of WIDTHS) {
         });
       }
 
+      // the deletion guard step's per-category fieldsets overflowed at 360 px (no min-width: 0)
+      test("connection deletion guard step has no horizontal scroll", async ({ page }, info) => {
+        const res = await page.request.get("/api/connections");
+        test.skip(!res.ok(), "connections are not listed for this user");
+        const body = await res.json();
+        const list: { id: string }[] = Array.isArray(body) ? body : body.connections ?? body.items ?? [];
+        test.skip(list.length === 0, "no connection to open");
+        await page.goto(`/admin/connections/${list[0].id}?step=guard`);
+        await settle(page);
+        await shoot(page, info, `deletion-guard-${width}`);
+        expect(await page.evaluate(noHorizontalScroll), "deletion guard step: horizontal scroll").toBe(true);
+      });
+
       test("step-up notice is a sheet with full-size buttons", async ({ page }, info) => {
         await page.goto("/inbox");
         await settle(page);

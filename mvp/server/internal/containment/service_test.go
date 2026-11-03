@@ -129,6 +129,10 @@ func TestPutCredentialValidation(t *testing.T) {
 		{"okta needs the org url", okta, containment.CredentialInput{Token: "t"}, "base_url"},
 		{"bad scheme", okta, containment.CredentialInput{Token: "t", BaseURL: "ftp://x"}, "https URL"},
 		{"user info", okta, containment.CredentialInput{Token: "t", BaseURL: "https://u:p@x"}, "https URL"},
+		{"metadata address", okta, containment.CredentialInput{Token: "t", BaseURL: "https://169.254.169.254"}, "metadata service"},
+		{"metadata address with dots", okta, containment.CredentialInput{Token: "t", BaseURL: "https://169.254.169.254../x"}, "metadata service"},
+		{"metadata name", okta, containment.CredentialInput{Token: "t", BaseURL: "https://METADATA.GOOGLE.INTERNAL."}, "metadata service"},
+		{"metadata IPv6", okta, containment.CredentialInput{Token: "t", BaseURL: "https://[fd00:ec2::254]:443"}, "metadata service"},
 	}
 	for _, tc := range cases {
 		err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {

@@ -796,7 +796,10 @@ lists add / change / remove / manual per item; apply is bound to the previewed p
 mode), so a change here or a different prune choice since the preview is refused with
 `409 stale_plan` before anything is written; apply needs step-up, and never activates anything: new connections are drafts, config changes make a new
 draft revision, sign-in connections arrive as **pending**, and a changed existing sign-in
-connection is shown as manual (change it through an admin change request). Removals retire
+connection is shown as manual (change it through an admin change request). The plan runs the checks apply
+runs: a connection whose config is refused on save (a metadata-service host, a non-ASCII `admin_email`,
+an unknown connector type) and a sign-in connection with an unknown protocol, profile or default role are
+*manual* with the reason, and apply skips manual items and imports the rest. Removals retire
 connections only with prune. A bundle never holds a secret: sealed credentials and client
 secrets stay behind (the plan says where to set them), retired connections and the dev IdP are
 left out, and a bundle whose config looks like it carries a secret is refused. On a prod server
@@ -5049,6 +5052,9 @@ taken is a failed run (`loader_name_taken`).
 `sql_simple` and `sql_group_list` also run on a **Postgres server** (`"engine":"postgres"`). `ldap_attribute`,
 `sftp_csv` and `hris_sis_feed` are designed but not built (`422 loader_type_unavailable`). MySQL and SQL Server
 are not supported: they need drivers this work did not add (follow-up).
+
+A SQLite loader query runs on its own connection with tight SQLite limits (20,000 bytes of SQL, expression depth 64,
+32 selects in a compound): a query over them fails the run with `source_query_failed`.
 
 **Credential.** A loader's `secret` (write-only, sealed with `internal/seal` bound to the tenant and the loader,
 never returned, in no audit event, run or error) is: a CSV URL's bearer token (optional), a SCIM bearer token

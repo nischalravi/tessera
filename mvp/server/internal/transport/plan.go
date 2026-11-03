@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -330,6 +331,10 @@ func planConnections(tx *store.TenantTx, rd *readiness.Service, b *Bundle, p *Pl
 		case !ok:
 			it.Action = Add
 			it.Notes = append(it.Notes, "created as a draft: validate and dry-run it here before activating")
+			if msg := rd.ImportConfigProblem(c.ConnectorType, c.Config); msg != "" {
+				it.Action = Manual
+				it.Notes = []string{"invalid_config: " + msg}
+			}
 		case l.conn.ConnectorType != c.ConnectorType:
 			it.Action = Manual
 			it.Notes = append(it.Notes, fmt.Sprintf("a %s connection here has this name; the bundle has a %s one", l.conn.ConnectorType, c.ConnectorType))
@@ -342,6 +347,12 @@ func planConnections(tx *store.TenantTx, rd *readiness.Service, b *Bundle, p *Pl
 			if len(it.Fields) > 0 {
 				it.Action = Change
 				it.Notes = append(it.Notes, "a config change makes a new draft revision; the active one keeps running until it is re-validated")
+			}
+			if it.Action == Change {
+				if msg := rd.ImportConfigProblem(c.ConnectorType, c.Config); msg != "" {
+					it.Action = Manual
+					it.Notes = []string{"invalid_config: " + msg}
+				}
 			}
 		}
 		if c.Credential.Kind == "sealed" && (!ok || l.cred.Kind == "none") {
@@ -422,6 +433,10 @@ func planIdPs(tx *store.TenantTx, b *Bundle, p *Plan) error {
 			if i.NeedsSecret {
 				it.Notes = append(it.Notes, "set its client secret here")
 			}
+			if msg := idpProblem(i); msg != "" {
+				it.Action = Manual
+				it.Notes = []string{"invalid_bundle: " + msg}
+			}
 		} else {
 			it.Fields = idpDiff(idpOf(cur), i)
 			it.Action = Unchanged
@@ -433,6 +448,21 @@ func planIdPs(tx *store.TenantTx, b *Bundle, p *Plan) error {
 		p.Items = append(p.Items, it)
 	}
 	return nil
+}
+
+// idpProblem names a value the sign-in connections table would refuse (its CHECK
+// constraints), so the plan shows it instead of apply failing on insert.
+func idpProblem(i IdP) string {
+	switch {
+	case !slices.Contains([]string{"oidc", "saml", "oauth2", "cas", "wsfed"}, i.Protocol):
+		return fmt.Sprintf("unknown protocol %q", i.Protocol)
+	case !slices.Contains([]string{store.ProfileOkta, store.ProfileEntra, store.ProfileGoogle, store.ProfileGenericOIDC, store.ProfileGenericSAML,
+		store.ProfileGitHub, store.ProfileGenericOAuth2, store.ProfileGenericCAS, store.ProfileADFS, store.ProfileDevMock}, i.Profile):
+		return fmt.Sprintf("unknown profile %q", i.Profile)
+	case !slices.Contains([]string{"viewer", "operator", "auditor"}, i.DefaultRole):
+		return fmt.Sprintf("unknown default_role %q", i.DefaultRole)
+	}
+	return ""
 }
 
 func idpDiff(a, b IdP) []string {

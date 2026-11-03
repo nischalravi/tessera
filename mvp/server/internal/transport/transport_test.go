@@ -509,3 +509,89 @@ func TestPlan_NameAndSystemClashesAreManual(t *testing.T) {
 		t.Fatalf("apply with manual items: %v", err)
 	}
 }
+
+// An item the plan shows as add or change must not fail in apply: a value apply
+// would refuse is planned manual with the reason, and apply imports the rest.
+func TestPlan_ItemsApplyWouldRefuseAreManual(t *testing.T) {
+	good := func(name, system, cfg string) Connection {
+		return Connection{Name: name, ConnectorType: "demo-ad", System: system, Role: "authoritative",
+			Config: json.RawMessage(cfg), Credential: Credential{Kind: "none"}}
+	}
+	idp := func(name, protocol, profile, role string) IdP {
+		return IdP{Name: name, Protocol: protocol, Profile: profile, DefaultRole: role, VerifiedDomains: json.RawMessage(`[]`),
+			Scopes: json.RawMessage(`[]`), IDTokenAlgs: json.RawMessage(`[]`), StepUpRequest: json.RawMessage(`{}`),
+			IdPSigningCerts: json.RawMessage(`[]`), AttributeMap: json.RawMessage(`{}`), AuthnMapping: json.RawMessage(`{}`),
+			GroupRoleMapping: json.RawMessage(`{}`), SubjectSource: "nameid_persistent"}
+	}
+	cases := []struct {
+		name string
+		conn *Connection
+		idp  *IdP
+		want string
+		note string
+	}{
+		{"metadata host", &Connection{Name: "bad", ConnectorType: "okta", System: "okta-bad", Role: "authoritative",
+			Config: json.RawMessage(`{"org_url":"https://169.254.169.254"}`), Credential: Credential{Kind: "none"}}, nil, Manual, "metadata"},
+		{"non-ascii admin_email", &Connection{Name: "bad", ConnectorType: "google", System: "google-bad", Role: "authoritative",
+			Config: json.RawMessage(`{"customer":"my_customer","admin_email":"admïn@example.com"}`), Credential: Credential{Kind: "none"}}, nil, Manual, "admin_email"},
+		{"unknown connector type", &Connection{Name: "bad", ConnectorType: "nope", System: "nope", Role: "authoritative",
+			Config: json.RawMessage(`{}`), Credential: Credential{Kind: "none"}}, nil, Manual, "nope"},
+		{"valid connection", func() *Connection { c := good("ok", "ok-sys", `{"host":"dc01.corp.example"}`); return &c }(), nil, Add, ""},
+		{"unknown profile", nil, func() *IdP { i := idp("imp-idp", "oidc", "generic", "viewer"); return &i }(), Manual, "profile"},
+		{"unknown protocol", nil, func() *IdP { i := idp("imp-idp", "ldap", "okta", "viewer"); return &i }(), Manual, "protocol"},
+		{"unknown default role", nil, func() *IdP { i := idp("imp-idp", "oidc", "okta", "root"); return &i }(), Manual, "default_role"},
+		{"valid idp", nil, func() *IdP { i := idp("imp-idp", "oidc", "okta", "viewer"); return &i }(), Add, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			b := &Bundle{Connections: []Connection{good("rest", "rest-sys", `{"host":"dc02.corp.example"}`)},
+				Overlays: []Overlay{}, IdentityProviders: []IdP{}}
+			name := ""
+			if tc.conn != nil {
+				b.Connections = append(b.Connections, *tc.conn)
+				name = "connections/" + tc.conn.Name
+			} else {
+				b.IdentityProviders = append(b.IdentityProviders, *tc.idp)
+				name = "identity_providers/" + tc.idp.Name
+			}
+			p := planOf(t, e, b)
+			var it *Item
+			for i := range p.Items {
+				if p.Items[i].Section+"/"+p.Items[i].Name == name {
+					it = &p.Items[i]
+				}
+			}
+			if it == nil || it.Action != tc.want {
+				t.Fatalf("plan %+v, want %s", p.Items, tc.want)
+			}
+			if tc.note != "" && !strings.Contains(strings.Join(it.Notes, " "), tc.note) {
+				t.Fatalf("notes %v lack %q", it.Notes, tc.note)
+			}
+			// apply never fails on what the plan showed, and imports the rest
+			err := e.dst.Write(context.Background(), func(tx *store.TenantTx) error {
+				_, err := Apply(tx, e.rd, &Verified{Bundle: b, Hash: "h", Signer: &store.TrustedSigner{KID: "k", Label: "l"}}, Target{}, false, p.Digest, "admin", nil, t0)
+				return err
+			})
+			if err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			write(t, e.dst, func(tx *store.TenantTx) error {
+				cs, err := tx.Connections()
+				if err != nil {
+					return err
+				}
+				got := 0
+				for _, c := range cs {
+					if c.Name == "rest" {
+						got++
+					}
+				}
+				if got != 1 {
+					t.Errorf("the rest of the bundle was not imported")
+				}
+				return nil
+			})
+		})
+	}
+}

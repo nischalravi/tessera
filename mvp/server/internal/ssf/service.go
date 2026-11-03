@@ -14,6 +14,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -98,6 +99,9 @@ func checkURL(name, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") || len(raw) > 512 {
 		return bad("%s must be an https URL", name)
+	}
+	if safehttp.IsMetadataHost(u.Hostname()) {
+		return bad("%s must not point at a cloud metadata service", name)
 	}
 	return nil
 }

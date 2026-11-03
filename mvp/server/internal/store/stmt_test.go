@@ -29,6 +29,28 @@ func openCold(t *testing.T) *DB {
 	return d
 }
 
+// warmPool opens n connections and keeps them idle, so a prepare in the test
+// does not wait on opening a connection (about half a second under -race,
+// past prepareWait) and fall back uncached.
+func warmPool(t *testing.T, d *DB, n int) {
+	t.Helper()
+	d.sql.SetMaxIdleConns(n)
+	conns := make([]*sql.Conn, 0, n)
+	for range n {
+		c, err := d.sql.Conn(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.PingContext(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		conns = append(conns, c)
+	}
+	for _, c := range conns {
+		_ = c.Close()
+	}
+}
+
 func cachedCount(d *DB) int {
 	d.stmts.mu.Lock()
 	defer d.stmts.mu.Unlock()
@@ -56,6 +78,7 @@ func TestStmtCache_ConcurrentMissPreparesOnce(t *testing.T) {
 	ctx := context.Background()
 	const query = `SELECT count(*) FROM tenants WHERE id <> @x -- concurrent`
 	const workers = 6 // fewer than the pool, so every miss can prepare
+	warmPool(t, d, 8)
 
 	var ready, start, done sync.WaitGroup
 	ready.Add(workers)
