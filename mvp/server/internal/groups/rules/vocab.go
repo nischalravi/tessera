@@ -29,6 +29,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -467,6 +468,9 @@ func checkURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Fragment != "" {
 		return invalid("invalid_url", "url is an absolute http(s) URL without user info or a fragment")
+	}
+	if safehttp.IsMetadataHost(u.Hostname()) {
+		return invalid("invalid_url", "url must not point at a cloud metadata service")
 	}
 	return nil
 }
