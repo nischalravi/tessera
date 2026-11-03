@@ -631,6 +631,23 @@ func TestSQL_Simple(t *testing.T) {
 	wantMembers(t, h, "ref:eng", []string{"u0", "u1"})
 }
 
+// TestSQL_PathologicalQueryIsRefused: a query too deep for the loader connection's
+// SQLite limits ends the run as a
+// failure (source_query_failed) and never crashes the server.
+func TestSQL_PathologicalQueryIsRefused(t *testing.T) {
+	h := newHarness(t)
+	h.hrAdd("hr.db", hrRow{xid: "u0", dept: "eng"})
+	mk := func(name, q string) loaders.Spec {
+		cfg, _ := json.Marshal(map[string]string{"database": "hr.db", "group": "eng", "query": q})
+		return loaders.Spec{Name: name, Type: loaders.TypeSQLSimple, TargetFolder: string(h.ref), Config: cfg}
+	}
+	deep := "SELECT " + strings.Repeat("1+(", 200) + "1" + strings.Repeat(")", 200) + " AS subject_id"
+	l := h.create(mk("Deep", deep), "")
+	if r := h.run(l, store.RunFull); r.Status != store.RunFailed || !strings.Contains(*r.Error, "source_query_failed") {
+		t.Fatalf("deep query run = %+v, want source_query_failed", r)
+	}
+}
+
 // TestConnectorGroups_AndAttribute: a connection's groups become native groups
 // (members mapped through their accounts to identities; an account that
 // belongs to no identity is unresolved), and an attribute makes a group per value.
