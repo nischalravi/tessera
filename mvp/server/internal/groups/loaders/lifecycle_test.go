@@ -440,8 +440,18 @@ func TestCSV_URLUsesSealedSecretThroughSafehttp(t *testing.T) {
 		t.Errorf("run with a wrong token = %+v", wr)
 	}
 	// the guard refuses addresses that are not for a loader to reach
+	// (the named metadata address is refused on save, #855; a link-local address is only the dial guard's to refuse)
+	meta0 := string(h.folder("meta0")) // (its own transaction: not inside the one below)
+	err = h.db.InTenant(context.Background(), tid, func(tx *store.TenantTx) error {
+		_, err := loaders.Create(loaders.SaveEnv{Tx: tx, Now: h.now, Sealer: h.sealer}, loaders.Spec{Name: "meta0", Type: loaders.TypeCSV,
+			TargetFolder: meta0, Config: []byte(`{"url":"http://169.254.169.254/latest/meta-data","group":"g","subject_column":"id"}`)}, "")
+		return err
+	})
+	if errCode(err) != "invalid_config" {
+		t.Errorf("a loader on the metadata address = %v, want invalid_config", err)
+	}
 	meta := h.create(loaders.Spec{Name: "meta", Type: loaders.TypeCSV, TargetFolder: string(h.folder("meta")),
-		Config: []byte(`{"url":"http://169.254.169.254/latest/meta-data","group":"g","subject_column":"id"}`)}, "")
+		Config: []byte(`{"url":"http://169.254.0.1/latest/meta-data","group":"g","subject_column":"id"}`)}, "")
 	if mr := h.run(meta, store.RunFull); mr.Status != store.RunFailed {
 		t.Errorf("a run against the metadata address = %+v", mr)
 	}

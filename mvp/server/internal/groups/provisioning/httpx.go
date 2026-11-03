@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // doHTTP sends req through the safehttp client of the deps and returns the
@@ -47,6 +49,8 @@ func httpURL(field, raw string, allowQuery bool) (*url.URL, error) {
 		return nil, cfgErr("%s must be an https URL", field)
 	case u.User != nil:
 		return nil, cfgErr("%s must not contain user info", field)
+	case safehttp.IsMetadataHost(u.Hostname()):
+		return nil, cfgErr("%s must not point at a cloud metadata service", field)
 	case u.Fragment != "" || (!allowQuery && u.RawQuery != ""):
 		return nil, cfgErr("%s must not have a fragment or a query", field)
 	}

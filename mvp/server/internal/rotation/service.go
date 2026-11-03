@@ -172,6 +172,9 @@ func (s *Service) PutAdapter(tx *store.TenantTx, in AdapterInput, actor string, 
 	if sealed == nil {
 		sealed = existing.SecretEnc
 	}
+	if sealed == nil { // the simulated adapter holds no credential: it reads back as nil, and the column is NOT NULL
+		sealed = []byte{}
+	}
 	if err := tx.UpdateRotationAdapter(existing.ID, string(cfgJSON), sealed, now); err != nil {
 		return nil, false, err
 	}

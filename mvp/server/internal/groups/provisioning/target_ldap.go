@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // The LDAP and Active Directory targets (design §9.2). Groups are
@@ -82,6 +84,8 @@ func parseLDAPConfig(typ string, c *Compiled, deps Deps) (ldapCfg, error) {
 		return cfg, cfgErr("target.url must be an ldaps:// or ldap:// URL")
 	case u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "":
 		return cfg, cfgErr("target.url must be only a scheme, host and port")
+	case safehttp.IsMetadataHost(u.Hostname()):
+		return cfg, cfgErr("target.url must not point at a cloud metadata service")
 	}
 	if cfg.Security == "" {
 		cfg.Security = "starttls"

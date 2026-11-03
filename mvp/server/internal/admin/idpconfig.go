@@ -241,6 +241,8 @@ func checkIssuer(prod bool, profile, issuer string, bad func(string, ...any)) {
 		bad("issuer %q must be exact: no trailing slash, query or fragment", issuer)
 	case profile == store.ProfileEntra && strings.Contains(issuer, "{tenantid}"):
 		bad("issuer: Entra multi-tenant templates are not supported; configure the tenant-specific issuer")
+	case safehttp.IsMetadataHost(iss.Hostname()):
+		bad("issuer must not point at a cloud metadata service")
 	}
 }
 
@@ -330,6 +332,8 @@ func (f *IdPConfig) checkOAuth2(prod bool, bad func(string, ...any)) {
 			bad("%s must be an absolute URL", name)
 		case prod && u.Scheme != "https":
 			bad("%s must be https with TESSERA_ENV=prod", name)
+		case safehttp.IsMetadataHost(u.Hostname()):
+			bad("%s must not point at a cloud metadata service", name)
 		}
 	}
 	switch strings.ToLower(f.SubjectField) {
@@ -353,6 +357,8 @@ func (f *IdPConfig) checkCAS(prod bool, bad func(string, ...any)) {
 		bad("cas_server_url must be https with TESSERA_ENV=prod")
 	case u.RawQuery != "" || u.Fragment != "":
 		bad("cas_server_url has no query or fragment")
+	case safehttp.IsMetadataHost(u.Hostname()):
+		bad("cas_server_url must not point at a cloud metadata service")
 	}
 	switch s := f.SubjectSource; {
 	case s == "" || s == "cas_user":
@@ -381,6 +387,8 @@ func (f *IdPConfig) checkWSFed(prod bool, bad func(string, ...any)) {
 		bad("wsfed_endpoint must be an absolute URL (the passive endpoint)")
 	case prod && u.Scheme != "https":
 		bad("wsfed_endpoint must be https with TESSERA_ENV=prod")
+	case safehttp.IsMetadataHost(u.Hostname()):
+		bad("wsfed_endpoint must not point at a cloud metadata service")
 	}
 	if len(f.IdPSigningCerts) == 0 {
 		bad("idp_signing_certs: pin at least one token-signing certificate")
@@ -413,6 +421,8 @@ func (f *IdPConfig) checkSAML(prod bool, bad func(string, ...any)) {
 		bad("idp_sso_url must be an absolute URL")
 	case prod && sso.Scheme != "https":
 		bad("idp_sso_url must be https with TESSERA_ENV=prod")
+	case safehttp.IsMetadataHost(sso.Hostname()):
+		bad("idp_sso_url must not point at a cloud metadata service")
 	}
 	if len(f.IdPSigningCerts) == 0 {
 		bad("idp_signing_certs: pin at least one signing certificate")
