@@ -79,7 +79,7 @@ function SourceSettings({ kind, id, heading }: { kind: DeletionSourceKind; id: s
         const id0 = `dgs-${c.category}`;
         const own = e.mode !== "inherit";
         return (
-          <fieldset key={c.category} className="stack-sm" style={{ border: "1px solid var(--border, #d0d5dd)", borderRadius: 6, padding: 12 }}>
+          <fieldset key={c.category} className="stack-sm" style={{ border: "1px solid var(--border, #d0d5dd)", borderRadius: 6, padding: 12, minWidth: 0, boxSizing: "border-box", maxWidth: "100%" }}>
             <legend><b>{CATEGORY_LABEL[c.category]}</b> {c.override ? <Badge tone="info">Own settings</Badge> : <Badge>Category settings</Badge>}</legend>
             <p className="xs faint" style={{ margin: 0 }}>
               Applies now: {c.effective.mode === "off" ? "no limit" : thresholdText({ ...c.effective, limit: c.limit })}, {MODE_LABEL[c.effective.mode].toLowerCase()}.
