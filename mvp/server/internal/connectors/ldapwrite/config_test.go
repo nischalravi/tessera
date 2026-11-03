@@ -38,6 +38,10 @@ func TestConfigValidate(t *testing.T) {
 		{"disabled ou outside scope", func(c *Config) { c.DisabledOU = "ou=Out,dc=acme,dc=example" }, "disabled_ou"},
 		{"bad password policy", func(c *Config) { c.Password = PasswordPolicy{MinLength: 4} }, "password length"},
 		{"bad flavor", func(c *Config) { c.Flavor = "x" }, "flavor"},
+		{"metadata address", func(c *Config) { c.Host = "169.254.169.254" }, "metadata"},
+		{"metadata address with dots", func(c *Config) { c.Host = "169.254.169.254.." }, "metadata"},
+		{"metadata name", func(c *Config) { c.Host = "METADATA.GOOGLE.INTERNAL." }, "metadata"},
+		{"metadata ipv6", func(c *Config) { c.Host = "fd00:ec2::254" }, "host must"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := validConfig()
