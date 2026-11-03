@@ -20,12 +20,18 @@ import (
 // below SQLite's defaults (1000, 500, 1_000_000_000): a pathological query is
 // an ordinary error, not stack exhaustion in the shared API process.
 const (
+	sqliteLimitLength         = 0
 	sqliteLimitSQLLength      = 1
 	sqliteLimitExprDepth      = 3
 	sqliteLimitCompoundSelect = 4
 )
 
+// maxExtValueBytes bounds one string, blob or row on the loader connection (SQLITE_LIMIT_LENGTH, default 1e9): a
+// query such as hex(randomblob(1e9)) would otherwise allocate gigabytes in the API process.
+const maxExtValueBytes = 1 << 20
+
 var extSQLiteLimits = []struct{ id, val int }{
+	{sqliteLimitLength, maxExtValueBytes},
 	{sqliteLimitSQLLength, MaxExtQueryBytes},
 	{sqliteLimitExprDepth, 64},
 	{sqliteLimitCompoundSelect, 32},

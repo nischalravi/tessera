@@ -34,6 +34,9 @@ func TestRunExtQuery_RuntimeLimits(t *testing.T) {
 		{"small compound", union(10), true},
 		{"deep expression", nest(200), false},
 		{"wide compound", union(100), false},
+		{"small value", "SELECT hex(randomblob(1000))", true},
+		{"huge blob", "SELECT length(randomblob(2000000))", false},
+		{"huge string", "SELECT hex(randomblob(600000))", false},
 	} {
 		if err := CheckReadOnlySQL(tc.q); err != nil {
 			t.Fatalf("%s: refused by the static check: %v", tc.name, err)
