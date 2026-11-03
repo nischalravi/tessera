@@ -537,3 +537,19 @@ func TestSimulatedAdapterRefusedWhereNotAllowed(t *testing.T) {
 		return nil
 	})
 }
+
+// Updating the simulated adapter (no credential) keeps working: its empty credential reads back as nil and the
+// update must not write NULL into the NOT NULL column (a 500 before #857).
+func TestPutAdapter_UpdatesTheSimulatedAdapter(t *testing.T) {
+	h := newHarness(t)
+	h.svc.AllowFake = true
+	for i, cfg := range []map[string]string{{}, {"fail_at": "create"}, {}} {
+		err := h.db.InTenant(h.ctx(), h.tenant, func(tx *store.TenantTx) error {
+			_, _, err := h.svc.PutAdapter(tx, AdapterInput{Name: "sim-upd", Type: TypeFake, Config: cfg}, "tester", h.clock())
+			return err
+		})
+		if err != nil {
+			t.Fatalf("put %d: %v", i, err)
+		}
+	}
+}
