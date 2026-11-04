@@ -18,6 +18,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/bedrockagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/copilotstudio"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/entra"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/foundryagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/gcpiam"
@@ -26,6 +27,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/kubernetes"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/mcpserver"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sftpdrop"
@@ -116,8 +118,9 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 	return &counted{Connector: cn}, nil
 }
 
-// stored builds the connector of a Google Workspace or Workday connection from its stored config (a Google
-// connection's org units, customer and domain, a Workday connection's host and api_version scope the read). The
+// stored builds the connector of a Google Workspace, Workday, Okta or Entra connection from its stored config (a Google
+// connection's org units, customer and domain, a Workday connection's host and api_version, an Okta org URL, an Entra
+// tenant and cloud scope the read). The
 // connector replaces an env-configured one of the system (connectors.ConnectionBacked).
 func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 	getenv, err := n.Overrides(func(string) string { return "" })
@@ -133,6 +136,10 @@ func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 	case governed.Workday:
 		cn, err = workday.FromStored(workday.Stored{TenantHost: p.TenantHost, APIVersion: p.APIVersion, Credential: p.Secret},
 			getenv, n.RT, n.HC, now)
+	case governed.Okta:
+		cn, err = okta.FromStored(okta.Stored{OrgURL: p.OrgURL, Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.Entra:
+		cn, err = entra.FromStored(entra.Stored{TenantID: p.TenantID, Cloud: p.Cloud, Credential: p.Secret}, getenv, n.RT, n.HC, now)
 	default:
 		cn, err = google.FromStored(google.Stored{Customer: p.Customer, Domain: p.Domain, OrgUnits: p.OrgUnits, AdminEmail: p.AdminEmail, Credential: p.Secret},
 			getenv, n.RT, n.HC, now)

@@ -33,6 +33,7 @@ package entra
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -190,6 +191,56 @@ func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc 
 		return nil, fmt.Errorf("TESSERA_ENTRA_CLIENT_SECRET: %w", err)
 	}
 	return New(cfg, rt, hc, func() time.Time { return time.Now().UTC() })
+}
+
+// Stored is an Entra connection as the readiness service holds it: the tenant and cloud of its
+// stored config and its opened credential.
+type Stored struct {
+	// TenantID is the connection's tenant_id (the directory GUID); Cloud its cloud (global, usgov
+	// or china; empty reads global), which selects the Graph and sign-in endpoints.
+	TenantID, Cloud string
+	// Credential is the sealed credential, opened: JSON with "client_id" and "client_secret".
+	Credential string
+}
+
+// clouds are the Graph and authority URLs of each national cloud a connection may name.
+var clouds = map[string][2]string{
+	"":       {DefaultGraphURL, DefaultAuthorityURL},
+	"global": {DefaultGraphURL, DefaultAuthorityURL},
+	"usgov":  {"https://graph.microsoft.us", "https://login.microsoftonline.us"},
+	"china":  {"https://microsoftgraph.chinacloudapi.cn", "https://login.chinacloudapi.cn"},
+}
+
+// FromStored builds the connector of a connection from its stored config instead of
+// TESSERA_ENTRA_* variables, so the connection's tenant and cloud are the ones read. Nothing is
+// read from the environment: getenv only supplies the dev endpoint overrides TESSERA_ENTRA_GRAPH_URL
+// and TESSERA_ENTRA_AUTHORITY_URL (the caller passes the layer that refuses them outside dev).
+// Identities, sign-in activity and authentication methods are read, as FromEnv does by default.
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	if s.Credential == "" {
+		return nil, errors.New("entra: the connection has no stored credential")
+	}
+	var cred struct {
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+	}
+	if err := json.Unmarshal([]byte(s.Credential), &cred); err != nil {
+		return nil, errors.New("entra: the credential must be JSON with client_id and client_secret")
+	}
+	urls, ok := clouds[s.Cloud]
+	if !ok {
+		return nil, errors.New("entra: the connection's cloud must be global, usgov or china")
+	}
+	cfg := Config{TenantID: strings.TrimSpace(s.TenantID), ClientID: strings.TrimSpace(cred.ClientID),
+		ClientSecret: connsync.NewSecret(cred.ClientSecret), GraphURL: urls[0], AuthorityURL: urls[1],
+		EmitIdentities: true, SignInActivity: true}
+	if v := getenv("TESSERA_ENTRA_GRAPH_URL"); v != "" {
+		cfg.GraphURL = v
+	}
+	if v := getenv("TESSERA_ENTRA_AUTHORITY_URL"); v != "" {
+		cfg.AuthorityURL = v
+	}
+	return New(cfg, rt, hc, now)
 }
 
 func (*Connector) System() string      { return System }

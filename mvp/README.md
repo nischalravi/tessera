@@ -6528,8 +6528,20 @@ credential is JSON with `tenant` (the Workday tenant name), `client_id`, `client
 `refresh_token`. Workers and events are read from the default paths. A live Workday connection replaces an
 env-configured `workday` connector and fails closed like Google when it cannot be opened; the `TESSERA_WORKDAY_*`
 variables remain the dev fallback for a tenant without one. A non-demo `workday` connection created before this
-needs its credential re-saved in that JSON form. Okta, Entra, Salesforce, SCIM, generic REST, SQL and directory
-connections are still read from the environment or by their own feature; see issue #814 for the list.
+needs its credential re-saved in that JSON form.
+
+**Okta and Entra connections (issue #814).** A live (non-demo) Okta connection is read from its stored `org_url`
+(https, in the Okta host allowlist, refused on save when it names a cloud metadata host); its sealed credential is
+JSON with either `client_id`, `private_key` (PEM) and optionally `key_id` (an OAuth service app), or `api_token` (an
+SSWS token). A live Entra connection is read from its stored `tenant_id` and `cloud` (`global`, `usgov` or `china`,
+which select the Graph and sign-in endpoints; no URL is stored), and its sealed credential is JSON with `client_id`
+and `client_secret`. Identities, enrolled factors (Okta) and sign-in activity and authentication methods (Entra) are
+read as by default. Both replace the env-configured connector of the system for the tenant and fail closed like
+Google when they cannot be opened; the `TESSERA_OKTA_*` and `TESSERA_ENTRA_*` variables remain the dev fallback for a
+tenant without one. A connection never carries an endpoint override (`TESSERA_OKTA_ORG_URL`,
+`TESSERA_ENTRA_GRAPH_URL` and `_AUTHORITY_URL` apply to a dev runtime's fake only). A non-demo `okta` or `entra`
+connection created before this needs its credential re-saved in that JSON form. Salesforce, SCIM, generic REST, SQL
+and directory connections are still read from the environment or by their own feature; see issue #814 for the list.
 
 Minimum read-only permissions:
 
