@@ -18,6 +18,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
@@ -378,6 +379,17 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 			}
 		} else if cfg.Preset != "" {
 			bad("preset", "unknown SCIM preset %q", cfg.Preset)
+		}
+		if t.ID == "salesforce" {
+			// the connector reads the org's base_url: the same host rule it opens with, refused on save
+			if cfg.BaseURL != "" {
+				if _, err := salesforce.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL on a Salesforce domain (*.my.salesforce.com, *.salesforce.com or *.force.com), with no path")
+				}
+			}
+			if cfg.APIVersion != "" && !apiVersionRE.MatchString(cfg.APIVersion) {
+				bad("api_version", "must look like v61.0")
+			}
 		}
 	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "sftpdrop", "servicenow", "atlassian", "kubernetes", "vault", "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce":
 		typ := connectorType

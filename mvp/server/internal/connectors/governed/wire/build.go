@@ -29,6 +29,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/mcpserver"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sftpdrop"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
@@ -136,6 +137,8 @@ func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 	case governed.Workday:
 		cn, err = workday.FromStored(workday.Stored{TenantHost: p.TenantHost, APIVersion: p.APIVersion, Credential: p.Secret},
 			getenv, n.RT, n.HC, now)
+	case governed.Salesforce:
+		cn, err = salesforce.FromStored(salesforce.Stored{BaseURL: p.BaseURL, APIVersion: p.APIVersion, Credential: p.Secret}, getenv, n.RT, n.HC, now)
 	case governed.Okta:
 		cn, err = okta.FromStored(okta.Stored{OrgURL: p.OrgURL, Credential: p.Secret}, getenv, n.RT, n.HC, now)
 	case governed.Entra:

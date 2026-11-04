@@ -6540,8 +6540,18 @@ read as by default. Both replace the env-configured connector of the system for 
 Google when they cannot be opened; the `TESSERA_OKTA_*` and `TESSERA_ENTRA_*` variables remain the dev fallback for a
 tenant without one. A connection never carries an endpoint override (`TESSERA_OKTA_ORG_URL`,
 `TESSERA_ENTRA_GRAPH_URL` and `_AUTHORITY_URL` apply to a dev runtime's fake only). A non-demo `okta` or `entra`
-connection created before this needs its credential re-saved in that JSON form. Salesforce, SCIM, generic REST, SQL
-and directory connections are still read from the environment or by their own feature; see issue #814 for the list.
+connection created before this needs its credential re-saved in that JSON form.
+
+**Salesforce connections (issue #814).** A live (non-demo) Salesforce connection is read from its stored `base_url`
+(an https Salesforce domain, `*.my.salesforce.com`, `*.salesforce.com` or `*.force.com`, no path; refused on save
+otherwise, and when it names a cloud metadata host) and optional `api_version` (`v61.0`). Its sealed credential is the
+JSON of the JWT bearer flow: `client_id`, `username`, `private_key` (PEM) and optionally `login_url` (a sandbox, also
+a Salesforce domain). It replaces the env-configured `salesforce` connector for the tenant and fails closed like
+Google when it cannot be opened; the `TESSERA_SALESFORCE_*` variables remain the dev fallback for a tenant without
+one, and `TESSERA_SALESFORCE_BASE_URL` overrides the stored URL in a dev runtime only (refused elsewhere). The outbound
+SCIM connection (`scim_app`) has no env-configured read connector: it is configured only from its stored `base_url` and
+sealed token. Generic REST, SQL and directory connections are still read from the environment or by their own
+feature; see issue #814 for the list.
 
 Minimum read-only permissions:
 
