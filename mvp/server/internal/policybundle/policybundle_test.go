@@ -122,6 +122,10 @@ func TestLoadFindings(t *testing.T) {
 		{"test bad action", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\ncases:\n  - {name: a, principal: 'Tessera::Identity::\"a\"', action: delete, resource: 'Tessera::Role::\"r\"', expect: allow}\n"}, "tests/b.yaml|invalid_case"},
 		{"test entity type error", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\nentities:\n  - {uid: {type: Tessera::Identity, id: a}, parents: [], attrs: {type: 1}}\ncases:\n  - {name: a, principal: 'Tessera::Identity::\"a\"', action: birthright, resource: 'Tessera::Role::\"r\"', expect: allow}\n"}, "tests/b.yaml|validation"},
 		{"test entity without parents", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\nentities:\n  - {uid: {type: Tessera::Identity, id: a}, attrs: {}}\ncases:\n  - {name: a, principal: 'Tessera::Identity::\"a\"', action: birthright, resource: 'Tessera::Role::\"r\"', expect: allow}\n"}, "tests/b.yaml|syntax"},
+		{"unrelated finding and entity parse error", map[string]string{
+			"roles/payments-analyst.yaml": "schema: tessera.role/v1\nkey: payments-analyst\nname: P\nrisk: extreme\n",
+			"tests/b.yaml":                "schema: tessera.test/v1\nentities:\n  - {uid: {type: Tessera::Identity, id: a}, attrs: {}}\ncases:\n  - {name: a, principal: 'Tessera::Identity::\"a\"', action: birthright, resource: 'Tessera::Role::\"r\"', expect: allow}\n"},
+			"roles/payments-analyst.yaml|invalid_risk,tests/b.yaml|syntax"},
 		{"empty test", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\n"}, "tests/b.yaml|empty_test"},
 	}
 	for _, c := range cases {

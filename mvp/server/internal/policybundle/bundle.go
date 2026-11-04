@@ -98,6 +98,9 @@ type loader struct {
 	files Files
 	b     Bundle
 	diags []Diag
+	// dupEntity is set when a duplicate role or eligibility key was reported; Cedar 1.9 then also refuses the
+	// duplicate uid while parsing the bundle's entities, which that finding already explains.
+	dupEntity bool
 }
 
 func (l *loader) add(p string, line int, code, format string, args ...any) {

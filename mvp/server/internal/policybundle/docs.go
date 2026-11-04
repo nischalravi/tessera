@@ -221,6 +221,7 @@ func (l *loader) loadRoles() {
 		if !keyRE.MatchString(r.Key) {
 			l.add(p, 0, "invalid_key", "key is 1 to 64 letters, digits, '.', '_', ':' or '-'")
 		} else if q := keys[r.Key]; q != "" {
+			l.dupEntity = true
 			l.add(p, 0, "duplicate_key", "role %q is also defined in %s", r.Key, q)
 		} else {
 			keys[r.Key] = p
@@ -251,6 +252,7 @@ func (l *loader) loadJit() {
 		if !keyRE.MatchString(j.Key) {
 			l.add(p, 0, "invalid_key", "key is 1 to 64 letters, digits, '.', '_', ':' or '-'")
 		} else if q := keys[j.Key]; q != "" {
+			l.dupEntity = true
 			l.add(p, 0, "duplicate_key", "eligibility %q is also defined in %s", j.Key, q)
 		} else {
 			keys[j.Key] = p
@@ -454,7 +456,7 @@ func (l *loader) buildEntities() {
 		return
 	}
 	set, err := cedarx.ParseEntities(raw)
-	if err != nil && len(l.diags) > 0 {
+	if err != nil && l.dupEntity {
 		// Cedar 1.9 refuses a duplicate uid while reading; the duplicate_key finding already says so
 		return
 	}

@@ -7623,7 +7623,7 @@ names), `roles/` (`tessera.role/v1`), `jit/` (`tessera.jit/v1`), `sod/` (`tesser
 folders `birthright/` (permit, `@role`), `agents/` (permit, `@agent` or `@blueprint`) and `invariants/` (forbid, `@severity`); every
 policy needs a unique `@id`. Cedar is type-checked against the schema under the `cedarx` limits; the other folders (`groups/`, `.git`)
 are not read. The limits are 256 KiB per file, 4 MiB and 2,000 files per bundle.
-A test file (`tessera.test/v1`) has `entities` (Cedar entity JSON; the bundle's roles and eligibilities are in scope), `cases`
+A test file (`tessera.test/v1`) has `entities` (Cedar entity JSON; each entity needs `parents`, `[]` for none, since cedar-go 1.9; the bundle's roles and eligibilities are in scope), `cases`
 (`principal`, `action`, `resource`, `context`, `expect: allow|deny`, optional `by: [@id]`, `against: birthright|agents|invariants`) and a
 `snapshot` of facts with the exact `violations` and `findings` expected: a `reach` fact whose `fidelity` is not `EXACT` is a finding,
 never a violation. The loader is pure (`internal/archtest` `TestPolicyBundleIsOffline`); an example repository is
