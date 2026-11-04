@@ -19,6 +19,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 )
 
 // Connector types a connection may have, with the readiness template that
@@ -616,6 +619,10 @@ type Params struct {
 	// OrgURL, TenantID and Cloud are the org_url of an Okta connection and the tenant_id and cloud of
 	// an Entra one.
 	OrgURL, TenantID, Cloud string
+	// Rest is the spec of a generic REST connection and SQL the settings of a database one, both
+	// from the connection's stored config (no secret in either).
+	Rest *restgen.Spec
+	SQL  *sqldb.Config
 }
 
 // GoogleWorkspace is the connector type of a Google Workspace connection. It is not a governed
@@ -638,10 +645,18 @@ const (
 // sets; like Workday it is built from the connection's stored config (base_url, api_version).
 const Salesforce = "salesforce"
 
+// RestGeneric and SQL are the connector types of a generic REST system and of a database; they are
+// built from the connection's stored spec and settings (the secret is the sealed credential).
+const (
+	RestGeneric = "rest_generic"
+	SQL         = "sql"
+)
+
 // IsStored reports whether a connection of the type is read through a connector built from its
 // stored config (not governed: Lookup does not know it, and its checks keep their own prober).
 func IsStored(typ string) bool {
-	return typ == GoogleWorkspace || typ == Workday || typ == Okta || typ == Entra || typ == Salesforce
+	return typ == GoogleWorkspace || typ == Workday || typ == Okta || typ == Entra || typ == Salesforce ||
+		typ == RestGeneric || typ == SQL
 }
 
 // String omits the secret.
