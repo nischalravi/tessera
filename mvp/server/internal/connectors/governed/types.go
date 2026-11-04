@@ -634,10 +634,14 @@ const (
 	Entra = "entra"
 )
 
+// Salesforce is the connector type of a Salesforce org read for its users, profiles and permission
+// sets; like Workday it is built from the connection's stored config (base_url, api_version).
+const Salesforce = "salesforce"
+
 // IsStored reports whether a connection of the type is read through a connector built from its
 // stored config (not governed: Lookup does not know it, and its checks keep their own prober).
 func IsStored(typ string) bool {
-	return typ == GoogleWorkspace || typ == Workday || typ == Okta || typ == Entra
+	return typ == GoogleWorkspace || typ == Workday || typ == Okta || typ == Entra || typ == Salesforce
 }
 
 // String omits the secret.

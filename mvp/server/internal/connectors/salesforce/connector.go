@@ -94,6 +94,45 @@ func FromEnv(getenv func(string) string, rt connsync.Runtime, hc *http.Client, n
 	return NewConnector(c, now), nil
 }
 
+// Stored is a Salesforce connection as the readiness service holds it: the base URL and API
+// version of its stored config and its opened credential.
+type Stored struct {
+	// BaseURL is the connection's base_url (https://acme.my.salesforce.com).
+	BaseURL string
+	// APIVersion is the connection's api_version (v61.0; empty reads DefaultAPIVersion).
+	APIVersion string
+	// Credential is the sealed credential, opened: the JSON of Credential (client_id, username,
+	// private_key and optionally login_url).
+	Credential string
+}
+
+// FromStored builds the read connector from a connection's stored config instead of
+// TESSERA_SALESFORCE_* variables. Nothing is read from the environment: getenv only supplies the
+// dev override TESSERA_SALESFORCE_BASE_URL (the caller passes the layer that refuses it outside
+// dev). The base and login URLs are checked as Open does (a Salesforce domain, https, no path).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	if s.Credential == "" {
+		return nil, errors.New("salesforce: the connection has no stored credential")
+	}
+	cred, err := ParseCredential(s.Credential)
+	if err != nil {
+		return nil, err
+	}
+	base := strings.TrimSpace(getenv("TESSERA_SALESFORCE_BASE_URL"))
+	if base == "" {
+		base = strings.TrimSpace(s.BaseURL)
+	}
+	if base == "" {
+		return nil, errors.New("salesforce: the connection's base_url is required")
+	}
+	c, err := Open(Config{BaseURL: base, LoginURL: cred.LoginURL, ClientID: cred.ClientID, Username: cred.Username,
+		PrivateKey: connsync.NewSecret(cred.PrivateKey), APIVersion: strings.TrimSpace(s.APIVersion)}, rt, hc, now)
+	if err != nil {
+		return nil, err
+	}
+	return NewConnector(c, now), nil
+}
+
 // Discover reads every user, profile, role, permission set and group, and their assignments.
 func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, error) {
 	read := func(what, soql string) ([]record, error) {

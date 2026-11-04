@@ -52,7 +52,7 @@ func govLive(b *Bundle) bool {
 
 // storedLive reports whether a revision's connector is built from its stored
 // config although its type is not governed (a Google Workspace connection: its
-// org units, customer and domain scope the sync; a Workday one: its host and api_version; Okta: its org URL; Entra: its tenant and cloud). Its checks keep their own prober.
+// org units, customer and domain scope the sync; a Workday one: its host and api_version; Okta: its org URL; Entra: its tenant and cloud; Salesforce: its base URL and api_version). Its checks keep their own prober.
 func storedLive(b *Bundle) bool {
 	return !b.Simulated() && governed.IsStored(b.Conn.ConnectorType)
 }
