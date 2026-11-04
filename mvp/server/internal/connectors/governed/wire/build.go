@@ -11,12 +11,14 @@ import (
 	"context"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/azurerbac"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/bedrockagents"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/copilotstudio"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/entra"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/erp"
@@ -29,9 +31,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/mcpserver"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/pam"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sftpdrop"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/successfactors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vault"
@@ -143,6 +147,10 @@ func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 		cn, err = okta.FromStored(okta.Stored{OrgURL: p.OrgURL, Credential: p.Secret}, getenv, n.RT, n.HC, now)
 	case governed.Entra:
 		cn, err = entra.FromStored(entra.Stored{TenantID: p.TenantID, Cloud: p.Cloud, Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.RestGeneric:
+		cn, err = restgen.FromStored(p.Rest, p.Secret, storedRuntime(n.RT), n.HC)
+	case governed.SQL:
+		cn, err = sqldb.FromStored(p.SQL, p.Secret, storedRuntime(n.RT))
 	default:
 		cn, err = google.FromStored(google.Stored{Customer: p.Customer, Domain: p.Domain, OrgUnits: p.OrgUnits, AdminEmail: p.AdminEmail, Credential: p.Secret},
 			getenv, n.RT, n.HC, now)
@@ -151,6 +159,16 @@ func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 		return nil, err
 	}
 	return &connectionBacked{counted{Connector: cn}}, nil
+}
+
+// storedRuntime is the policy a stored REST or SQL connection is opened under: only a dev runtime is
+// dev; any other environment name gets the production rules (as a save does), and the dialer refuses
+// an environment it does not know.
+func storedRuntime(rt connsync.Runtime) connsync.Runtime {
+	if rt.Env == config.Dev {
+		return rt
+	}
+	return connsync.Runtime{Env: config.Prod}
 }
 
 // connectionBacked marks a connector built from a connection's stored config.

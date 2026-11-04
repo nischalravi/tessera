@@ -12,6 +12,8 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/checks"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
@@ -127,7 +129,7 @@ func (s *Service) GovernedConnectorsTx(c *store.TenantTx, now time.Time) (cns []
 		if err != nil {
 			if governed.IsStored(ac.connectorType) {
 				// fail closed: the env-configured connector of the system must not read in its place
-				err = &connectors.NotOpenedError{System: ac.connectorType, Err: err}
+				err = &connectors.NotOpenedError{System: s.storedSystem(c, ac), Err: err}
 			}
 			failed[ac.name] = err
 			continue
@@ -135,6 +137,47 @@ func (s *Service) GovernedConnectorsTx(c *store.TenantTx, now time.Time) (cns []
 		cns = append(cns, cn)
 	}
 	return cns, failed, nil
+}
+
+// storedSystem is the system name the env-configured connector of a stored connection's type reports:
+// the type itself, except a REST or SQL connection, whose connector reports the system of its spec or
+// settings (default "rest", "sql"). It is read from the live revision; a revision that cannot be read
+// gives the default.
+func (s *Service) storedSystem(c *store.TenantTx, ac ActiveConnection) string {
+	def := ac.connectorType
+	var pick func(ConnConfig) string
+	switch ac.connectorType {
+	case governed.RestGeneric:
+		def = restgen.DefaultSystem
+		pick = func(cfg ConnConfig) string {
+			if cfg.Rest != nil {
+				return cfg.Rest.System
+			}
+			return ""
+		}
+	case governed.SQL:
+		pick = func(cfg ConnConfig) string {
+			if cfg.SQL != nil {
+				return cfg.SQL.SystemName()
+			}
+			return ""
+		}
+		def = (sqldb.Config{}).SystemName()
+	default:
+		return def
+	}
+	rev, err := c.Revision(ac.revisionID)
+	if err != nil {
+		return def
+	}
+	cfg, err := DecodeConfig([]byte(rev.Config))
+	if err != nil {
+		return def
+	}
+	if sys := pick(cfg); sys != "" {
+		return sys
+	}
+	return def
 }
 
 // StoredSystems lists the connector systems of a tenant's live connections that are read from their
@@ -148,7 +191,7 @@ func (s *Service) StoredSystems(c *store.TenantTx) ([]string, error) {
 	var out []string
 	for _, ac := range live {
 		if governed.IsStored(ac.connectorType) {
-			out = append(out, ac.connectorType)
+			out = append(out, s.storedSystem(c, ac))
 		}
 	}
 	return out, nil

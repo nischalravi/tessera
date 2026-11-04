@@ -6550,8 +6550,16 @@ a Salesforce domain). It replaces the env-configured `salesforce` connector for 
 Google when it cannot be opened; the `TESSERA_SALESFORCE_*` variables remain the dev fallback for a tenant without
 one, and `TESSERA_SALESFORCE_BASE_URL` overrides the stored URL in a dev runtime only (refused elsewhere). The outbound
 SCIM connection (`scim_app`) has no env-configured read connector: it is configured only from its stored `base_url` and
-sealed token. Generic REST, SQL and directory connections are still read from the environment or by their own
-feature; see issue #814 for the list.
+sealed token. A generic REST (`rest_generic`) connection is read from its stored spec (base URL, auth, resources and
+mapping) and a SQL (`sql`) connection from its stored engine, host, database, user, CA bundle and app
+statements, each with the sealed credential (the REST secret, the database password), instead of
+`TESSERA_REST_SPEC`/`TESSERA_REST_CREDENTIAL` and `TESSERA_SQL_*`. Both follow the production URL and host rules
+unless the runtime is dev (no `http`, no `tls: disable`, no metadata host, refused on save and again when opened), and
+the connector replaces an env-configured one of the same system (the spec's or settings' `system`, default `rest`
+and `sql`), also when the connection does not open. The env variables remain the dev fallback for a tenant without
+a connection. The directory types (AD/LDAP, IBM i, RACF) have no env-configured read connector: their host, base
+DNs and bind secret already come only from the connection's stored config and sealed credential (or a Directory
+Agent), so nothing there moves (issue #814).
 
 Minimum read-only permissions:
 
