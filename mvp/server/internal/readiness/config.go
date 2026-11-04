@@ -27,6 +27,7 @@ import (
 	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // ConnConfig is the typed, secret-free configuration of a connection
@@ -444,6 +445,11 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 				if _, err := vault.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
 					bad("base_url", "must be an https URL of the Vault server on 443, 8200 or 8443, with no path")
 				}
+			case governed.GitHubScan, governed.CyberArk, governed.Delinea, governed.BeyondTrust, governed.SAP, governed.Oracle:
+				// ParseBaseURL refuses a cloud metadata host and a malformed domain, as the connector's Open does
+				if _, err := connsync.ParseBaseURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL of a public host name, not a cloud metadata service")
+				}
 			case governed.Atlassian:
 				if _, err := atlassian.CheckSiteURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
 					bad("base_url", "must be an https URL on an Atlassian Cloud site (*.atlassian.net)")
@@ -452,6 +458,9 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 		}
 		for _, se := range governed.ValidateSettings(typ, cfg.Settings) {
 			bad("settings."+se.Key, "%s", se.Msg)
+		}
+		if h := strings.TrimSpace(cfg.Settings["host"]); h != "" && (typ == governed.UnixSSH || typ == governed.SFTPDrop) && safehttp.IsMetadataHost(h) {
+			bad("settings.host", "must not be a cloud metadata service")
 		}
 		if typ == governed.SuccessFactors && cfg.WriteMode != "" && cfg.WriteMode != "off" {
 			bad("write_mode", "SuccessFactors is a read-only HR source: write-back is not available")

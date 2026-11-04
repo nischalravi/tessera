@@ -140,7 +140,7 @@ func (s *Service) GovernedConnectorsTx(c *store.TenantTx, now time.Time) (cns []
 }
 
 // storedSystem is the system name the env-configured connector of a stored connection's type reports:
-// the type itself, except a REST or SQL connection, whose connector reports the system of its spec or
+// the type itself, except a code scan, vault, ERP, SSH or SFTP connection (the graph system of its type) and a REST or SQL connection, whose connector reports the system of its spec or
 // settings (default "rest", "sql"). It is read from the live revision; a revision that cannot be read
 // gives the default.
 func (s *Service) storedSystem(c *store.TenantTx, ac ActiveConnection) string {
@@ -163,6 +163,12 @@ func (s *Service) storedSystem(c *store.TenantTx, ac ActiveConnection) string {
 			return ""
 		}
 		def = (sqldb.Config{}).SystemName()
+	case governed.GitHubScan, governed.CyberArk, governed.Delinea, governed.BeyondTrust, governed.SAP, governed.Oracle, governed.UnixSSH, governed.SFTPDrop:
+		// the connector reports the graph system of its type (github-scan, unix, sftp), not the type id
+		if gt, ok := governed.Lookup(ac.connectorType); ok {
+			return gt.System
+		}
+		return def
 	default:
 		return def
 	}

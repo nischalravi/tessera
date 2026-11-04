@@ -66,3 +66,43 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	}
 	return cfg, nil
 }
+
+// Stored is an SFTP drop connection as the readiness service holds it: its settings (the keys of
+// governed.SettingSpecs: host, port, username, host_key, directory, the file names, the column names and
+// max_age_hours) and its opened credential, the unencrypted SSH private key.
+type Stored struct {
+	Settings   map[string]string
+	Credential string
+}
+
+// settingNames maps each setting key to the suffix of the TESSERA_SFTPDROP_* variable that holds the
+// same value, so the stored and the environment mappings parse one way.
+var settingNames = map[string]string{"host": "HOST", "port": "PORT", "username": "USER", "host_key": "HOST_KEY",
+	"directory": "DIR", "accounts_file": "ACCOUNTS_FILE", "entitlements_file": "ENTITLEMENTS_FILE",
+	"accounts_account_id": "COL_ACCOUNT_ID", "accounts_username": "COL_USERNAME", "accounts_email": "COL_EMAIL",
+	"accounts_identity_id": "COL_IDENTITY_ID", "accounts_status": "COL_STATUS",
+	"entitlements_account_id": "COL_ENT_ACCOUNT_ID", "entitlements_entitlement": "COL_ENT_ENTITLEMENT",
+	"entitlements_name": "COL_ENT_NAME", "entitlements_privileged": "COL_ENT_PRIVILEGED", "max_age_hours": "MAX_AGE_HOURS"}
+
+// FromStored builds the connector from a connection's stored config instead of TESSERA_SFTPDROP_*
+// variables. Nothing is read from the environment and there is no override. The host is never a cloud
+// metadata host, and the host key is mandatory (a connection without one does not open).
+func FromStored(s Stored, rt connsync.Runtime) (connectors.Connector, error) {
+	key := strings.TrimSpace(s.Credential)
+	if key == "" {
+		return nil, errors.New("sftpdrop: the connection has no stored credential")
+	}
+	const keyVar = "TESSERA_SFTPDROP_KEY"
+	m := map[string]string{keyVar: "env:TESSERA_GOVERNED_SECRET", "TESSERA_GOVERNED_SECRET": key}
+	for k, name := range settingNames {
+		m["TESSERA_SFTPDROP_"+name] = s.Settings[k]
+	}
+	cfg, err := ConfigFromEnv(func(k string) string { return m[k] })
+	if err != nil {
+		return nil, err
+	}
+	if err := unixssh.CheckHost(cfg.SSH.Host); err != nil {
+		return nil, err
+	}
+	return New(cfg, rt, nil)
+}

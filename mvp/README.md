@@ -6587,6 +6587,22 @@ env-configured connector of the same system for the tenant and fails closed like
 variables remain the dev fallback for a tenant without one. `TESSERA_KUBERNETES_BASE_URL`, `TESSERA_VAULT_BASE_URL` and
 the Azure and GCP endpoint overrides apply to a dev runtime only (refused elsewhere).
 
+**GitHub scan, PAM vault, ERP, Unix SSH and SFTP drop connections (issue #814).** These are governed connectors
+(settings and sealed credential as in their sections; no schema change); their read connector is now built from the
+connection's stored config too, not through the `TESSERA_GITHUB_SCAN_*`, `TESSERA_CYBERARK_*`, `TESSERA_DELINEA_*`,
+`TESSERA_BEYONDTRUST_*`, `TESSERA_SAP_*`, `TESSERA_ORACLE_*`, `TESSERA_UNIXSSH_*` and `TESSERA_SFTPDROP_*` variables.
+The server comes from the revision (`base_url`; for SSH and SFTP the `host`, `port`, `username` and pinned `host_key`
+settings), the secret from the sealed credential (token, vault password or API key, ERP client secret, or the
+unencrypted SSH private key), in the formats they already had: no re-save is needed. The pinned host key stays a
+required setting (it is a public key, not a secret) and is mandatory in every environment: a connection without one
+does not open. `base_url` is refused on save unless it is https on a public host name and never a cloud metadata
+host; an SSH or SFTP `host` is refused on save and when opened if it is a cloud metadata host (private, loopback and
+link-local addresses are refused by the dialer). A live connection replaces the env-configured connector of the same
+system (`github-scan`, `cyberark`, `delinea`, `beyondtrust`, `sap`, `oracle`, `unix`, `sftp`) for the tenant and fails
+closed like Google when it cannot be opened; the variables remain the dev fallback for a tenant without one. The
+`TESSERA_GITHUB_SCAN_API_URL` and `TESSERA_<VENDOR>_BASE_URL` overrides apply to a dev runtime only (refused
+elsewhere); SSH and SFTP have no override (a dev host is a loopback address).
+
 Minimum read-only permissions:
 
 * **Okta.** OAuth scopes `okta.users.read`, `okta.groups.read`, `okta.apps.read`, `okta.roles.read`
