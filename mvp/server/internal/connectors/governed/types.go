@@ -613,6 +613,9 @@ type Params struct {
 	AdminEmail string
 	// TenantHost and APIVersion are the tenant_host and api_version of a Workday connection.
 	TenantHost, APIVersion string
+	// OrgURL, TenantID and Cloud are the org_url of an Okta connection and the tenant_id and cloud of
+	// an Entra one.
+	OrgURL, TenantID, Cloud string
 }
 
 // GoogleWorkspace is the connector type of a Google Workspace connection. It is not a governed
@@ -624,9 +627,18 @@ const GoogleWorkspace = "google"
 // connection's stored config (its tenant_host and api_version, the client in the sealed credential).
 const Workday = "workday"
 
+// Okta and Entra are the connector types of an Okta org and a Microsoft Entra ID tenant; like
+// Workday they are built from the connection's stored config.
+const (
+	Okta  = "okta"
+	Entra = "entra"
+)
+
 // IsStored reports whether a connection of the type is read through a connector built from its
 // stored config (not governed: Lookup does not know it, and its checks keep their own prober).
-func IsStored(typ string) bool { return typ == GoogleWorkspace || typ == Workday }
+func IsStored(typ string) bool {
+	return typ == GoogleWorkspace || typ == Workday || typ == Okta || typ == Entra
+}
 
 // String omits the secret.
 func (p Params) String() string { return "governed.Params{" + p.Type + "}" }
