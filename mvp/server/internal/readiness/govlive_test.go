@@ -69,6 +69,7 @@ func TestGoverned_CreateEveryType(t *testing.T) {
 	reg := template.MustDefault()
 	for _, gt := range governed.Types {
 		t.Run(gt.ID, func(t *testing.T) {
+			t.Parallel() // each type has its own database
 			st, s := newStore(t), newSvc(t)
 			tmpl, ok := reg.ForConnectorType(gt.ID)
 			if !ok || tmpl.ID != gt.Template {
