@@ -6561,6 +6561,18 @@ a connection. The directory types (AD/LDAP, IBM i, RACF) have no env-configured 
 DNs and bind secret already come only from the connection's stored config and sealed credential (or a Directory
 Agent), so nothing there moves (issue #814).
 
+**ServiceNow, Atlassian and SuccessFactors connections (issue #814).** These three are governed connectors (their
+settings and sealed credential are as in their sections above); their read connector is now built from the
+connection's stored config too, not through the `TESSERA_*` variables: the instance `base_url` and settings come
+from the revision, the password, OAuth secret, API token (or `{"api_token","admin_api_key"}` JSON) or key bundle from
+the sealed credential. `base_url` is refused on save unless it is https on the vendor's domain (`*.service-now.com`
+or `*.servicenowservices.com`; `*.atlassian.net`; a SuccessFactors data-center host), with no path, and never a cloud
+metadata host. A live connection replaces the env-configured connector of the same system for the tenant and fails
+closed like Google when it cannot be opened; `TESSERA_SERVICENOW_*`, `TESSERA_ATLASSIAN_*` and
+`TESSERA_SUCCESSFACTORS_*` remain the dev fallback for a tenant without one. `TESSERA_SERVICENOW_BASE_URL`,
+`TESSERA_ATLASSIAN_BASE_URL` and `_ADMIN_URL` and `TESSERA_SUCCESSFACTORS_BASE_URL` override the stored URLs in a dev
+runtime only (refused elsewhere). Stored credentials keep their current format: no re-save is needed.
+
 Minimum read-only permissions:
 
 * **Okta.** OAuth scopes `okta.users.read`, `okta.groups.read`, `okta.apps.read`, `okta.roles.read`

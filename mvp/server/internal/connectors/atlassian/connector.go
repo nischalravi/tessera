@@ -119,6 +119,52 @@ func FromEnv(getenv func(string) string, rt connsync.Runtime, hc *http.Client, n
 	return NewConnector(c), nil
 }
 
+// Stored is an Atlassian Cloud connection as the readiness service holds it: the site, account and scope
+// of its stored config and its opened credential.
+type Stored struct {
+	// BaseURL is the connection's base_url (https://acme.atlassian.net).
+	BaseURL string
+	// Email is the dedicated account's e-mail.
+	Email string
+	// OrgID is the optional organization id of the admin API (needs the admin_api_key in the credential).
+	OrgID string
+	// ProjectKeys is the optional comma separated list of project keys whose roles are read.
+	ProjectKeys string
+	// Credential is the sealed credential, opened: an API token, or JSON {"api_token","admin_api_key"}.
+	Credential string
+}
+
+// FromStored builds the read connector from a connection's stored config instead of TESSERA_ATLASSIAN_*
+// variables. Nothing is read from the environment: getenv only supplies the dev overrides
+// TESSERA_ATLASSIAN_BASE_URL and TESSERA_ATLASSIAN_ADMIN_URL (the caller passes the layer that refuses
+// them outside dev). The site URL is checked as Open does (*.atlassian.net, https, no path).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	if strings.TrimSpace(s.Credential) == "" {
+		return nil, errors.New("atlassian: the connection has no stored credential")
+	}
+	token, admin, err := ParseCredential(s.Credential)
+	if err != nil {
+		return nil, err
+	}
+	base := strings.TrimSpace(getenv("TESSERA_ATLASSIAN_BASE_URL"))
+	if base == "" {
+		base = strings.TrimSpace(s.BaseURL)
+	}
+	if base == "" {
+		return nil, errors.New("atlassian: the connection's base_url is required")
+	}
+	cfg := Config{BaseURL: base, Email: strings.TrimSpace(s.Email), Token: connsync.NewSecret(token),
+		OrgID: strings.TrimSpace(s.OrgID), AdminURL: strings.TrimSpace(getenv("TESSERA_ATLASSIAN_ADMIN_URL")), ProjectKeys: list(s.ProjectKeys)}
+	if admin != "" {
+		cfg.AdminKey = connsync.NewSecret(admin)
+	}
+	c, err := Open(cfg, rt, hc, now)
+	if err != nil {
+		return nil, err
+	}
+	return NewConnector(c), nil
+}
+
 // ProbeResult is what one bounded read found.
 type ProbeResult struct {
 	Users, Groups, AdminUsers int

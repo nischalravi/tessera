@@ -14,11 +14,13 @@ import (
 	"unicode"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
@@ -424,6 +426,19 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 			}
 		case !takes && cfg.BaseURL != "":
 			bad("base_url", "this connector type takes no base URL")
+		}
+		if cfg.BaseURL != "" {
+			// the connector reads the instance at base_url: the same host rule it opens with, refused on save
+			switch typ {
+			case governed.ServiceNow:
+				if _, err := servicenow.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL on a ServiceNow domain (*.service-now.com or *.servicenowservices.com)")
+				}
+			case governed.Atlassian:
+				if _, err := atlassian.CheckSiteURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL on an Atlassian Cloud site (*.atlassian.net)")
+				}
+			}
 		}
 		for _, se := range governed.ValidateSettings(typ, cfg.Settings) {
 			bad("settings."+se.Key, "%s", se.Msg)

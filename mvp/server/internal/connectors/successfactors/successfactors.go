@@ -243,6 +243,45 @@ func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc 
 	return New(cfg, rt, hc, func() time.Time { return time.Now().UTC() })
 }
 
+// Stored is a SuccessFactors connection as the readiness service holds it: the data center, company and
+// sign-in of its stored config and its opened credential.
+type Stored struct {
+	// BaseURL is the connection's base_url (https://api4.successfactors.com).
+	BaseURL string
+	// CompanyID, Auth ("basic", the default, or "saml_bearer"), Username, UserID, ClientID and LegalEntity
+	// are the connection's settings of the same name (user_id and legal_entity optional).
+	CompanyID, Auth, Username, UserID, ClientID, LegalEntity string
+	// Credential is the sealed credential, opened: the API user's password (basic) or the PEM key and
+	// certificate bundle (saml_bearer).
+	Credential string
+}
+
+// FromStored builds the connector from a connection's stored config instead of TESSERA_SUCCESSFACTORS_*
+// variables. Nothing is read from the environment: getenv only supplies the dev override
+// TESSERA_SUCCESSFACTORS_BASE_URL (the caller passes the layer that refuses it outside dev). The base URL
+// is checked as New does (a data-center host, https, no path, never a metadata host).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client) (connectors.Connector, error) {
+	secret := strings.TrimSpace(s.Credential)
+	if secret == "" {
+		return nil, errors.New("successfactors: the connection has no stored credential")
+	}
+	base := strings.TrimSpace(getenv("TESSERA_SUCCESSFACTORS_BASE_URL"))
+	if base == "" {
+		base = strings.TrimSpace(s.BaseURL)
+	}
+	if base == "" {
+		return nil, errors.New("successfactors: the connection's base_url is required")
+	}
+	cfg := Config{BaseURL: base, CompanyID: strings.TrimSpace(s.CompanyID), Auth: strings.TrimSpace(s.Auth), Username: strings.TrimSpace(s.Username),
+		UserID: strings.TrimSpace(s.UserID), ClientID: strings.TrimSpace(s.ClientID), LegalEntity: strings.TrimSpace(s.LegalEntity), EmitIdentities: true}
+	if cfg.Auth == AuthSAML {
+		cfg.PrivateKey = connsync.NewSecret(secret)
+	} else {
+		cfg.Password = connsync.NewSecret(secret)
+	}
+	return New(cfg, rt, hc, func() time.Time { return time.Now().UTC() })
+}
+
 // ConfigFromEnv reads the configuration (see FromEnv).
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	const p = "TESSERA_SUCCESSFACTORS_"
