@@ -165,3 +165,26 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 	}
 	return res, nil
 }
+
+// Stored is a Bedrock Agents connection as the readiness service holds it: the region of its stored config
+// and its opened credential.
+type Stored struct {
+	Region string // the region whose agents are read
+	// Credential is the sealed credential, opened: the JSON with access_key_id, secret_access_key and optionally session_token.
+	Credential string
+}
+
+// FromStored builds the read connector from a connection's stored config instead of TESSERA_BEDROCK_*
+// variables. Nothing is read from the environment: getenv only supplies the dev override
+// TESSERA_BEDROCK_AGENT_URL (the caller passes the layer that refuses it outside dev).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	cred := strings.TrimSpace(s.Credential)
+	if cred == "" {
+		return nil, errors.New("bedrockagents: the connection has no stored credential")
+	}
+	c, err := Open(Config{Region: strings.TrimSpace(s.Region), Secret: connsync.NewSecret(cred), AgentURL: getenv("TESSERA_BEDROCK_AGENT_URL")}, rt, hc, now)
+	if err != nil {
+		return nil, err
+	}
+	return NewConnector(c, now), nil
+}

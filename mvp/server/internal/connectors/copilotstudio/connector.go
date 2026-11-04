@@ -70,3 +70,32 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 	}
 	return agentmap.Build(System, "copilot:", "Microsoft Copilot Studio agent", agents), nil
 }
+
+// Stored is a Copilot Studio connection as the readiness service holds it: the environment URL and app
+// registration of its stored config and its opened credential.
+type Stored struct {
+	BaseURL            string // the environment's Dataverse URL, https://<org>.crm.dynamics.com
+	TenantID, ClientID string
+	// Credential is the sealed credential, opened: the client secret, or a PEM with the certificate and its RSA key.
+	Credential string
+}
+
+// FromStored builds the read connector from a connection's stored config instead of TESSERA_COPILOT_*
+// variables. Nothing is read from the environment: getenv only supplies the dev overrides TESSERA_COPILOT_URL
+// and TESSERA_COPILOT_AUTHORITY_URL (the caller passes the layer that refuses them outside dev).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	cred := strings.TrimSpace(s.Credential)
+	if cred == "" {
+		return nil, errors.New("copilotstudio: the connection has no stored credential")
+	}
+	base := strings.TrimSpace(getenv("TESSERA_COPILOT_URL"))
+	if base == "" {
+		base = strings.TrimSpace(s.BaseURL)
+	}
+	c, err := Open(Config{BaseURL: base, TenantID: strings.TrimSpace(s.TenantID), ClientID: strings.TrimSpace(s.ClientID),
+		Credential: connsync.NewSecret(cred), AuthorityURL: getenv("TESSERA_COPILOT_AUTHORITY_URL")}, rt, hc, now)
+	if err != nil {
+		return nil, err
+	}
+	return NewConnector(c), nil
+}

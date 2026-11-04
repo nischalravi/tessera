@@ -264,3 +264,22 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 	}
 	return res, nil
 }
+
+// Stored is an AgentCore connection as the readiness service holds it: the snapshot file of its stored
+// config, already confined to the tenant's directory.
+type Stored struct {
+	Snapshot string // absolute path of a recorded snapshot (JSON)
+	Prod     bool   // the server runs in production
+}
+
+// FromStored builds the connector from a connection's stored config instead of TESSERA_AGENTCORE_SNAPSHOT.
+// Nothing is read from the environment. Like FromEnv it refuses production: there is no live AgentCore client.
+func FromStored(s Stored) (connectors.Connector, error) {
+	if s.Prod {
+		return nil, errors.New("agentcore: only a recorded snapshot is available (no live AgentCore client is built); refused in prod")
+	}
+	if s.Snapshot == "" || !strings.HasPrefix(s.Snapshot, "/") {
+		return nil, errors.New("agentcore: the connection's snapshot (an absolute path to a recorded snapshot) is required; there is no live client")
+	}
+	return New(FileAPI{Path: s.Snapshot}, func() time.Time { return time.Now().UTC() })
+}

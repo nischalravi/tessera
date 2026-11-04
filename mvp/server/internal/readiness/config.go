@@ -16,6 +16,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/copilotstudio"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/foundryagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/kubernetes"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
@@ -449,6 +451,22 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 				// ParseBaseURL refuses a cloud metadata host and a malformed domain, as the connector's Open does
 				if _, err := connsync.ParseBaseURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
 					bad("base_url", "must be an https URL of a public host name, not a cloud metadata service")
+				}
+			case governed.MCP:
+				if _, err := connsync.ParseBaseURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL of a public host name, not a cloud metadata service")
+				}
+			case governed.Foundry:
+				if _, err := foundryagents.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https Azure AI Foundry project endpoint (https://<account>.services.ai.azure.com/api/projects/<project>)")
+				}
+			case governed.Copilot:
+				if _, err := copilotstudio.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https Dataverse environment URL (https://<org>.crm.dynamics.com), with no path")
+				}
+			case governed.Agentforce:
+				if _, err := salesforce.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL of the Salesforce org (My Domain)")
 				}
 			case governed.Atlassian:
 				if _, err := atlassian.CheckSiteURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
