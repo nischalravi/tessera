@@ -2,6 +2,8 @@ package kubernetes
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // System is the connector's system name.
@@ -69,6 +72,91 @@ func FromEnv(getenv func(string) string, rt connsync.Runtime, hc *http.Client, n
 		return nil, err
 	}
 	c, err := Open(cfg, rt, hc, now)
+	if err != nil {
+		return nil, err
+	}
+	return NewConnector(c), nil
+}
+
+// Stored is a Kubernetes or OpenShift connection as the readiness service holds it: the API server and
+// scope of its stored config and its opened credential.
+type Stored struct {
+	// BaseURL is the connection's base_url (https://api.cluster.example.com:6443).
+	BaseURL string
+	// Namespaces is the optional comma separated list of namespaces to read roles, bindings and service accounts of.
+	Namespaces string
+	// OpenShift is the connection's openshift setting ("true" also reads the groups of user.openshift.io).
+	OpenShift string
+	// Credential is the sealed credential, opened: the ServiceAccount token, or JSON {"token","ca_bundle"}
+	// where ca_bundle is the PEM of the CA that signed the API server's certificate (a private cluster CA).
+	Credential string
+}
+
+// maxCABundle bounds the CA bundle of a credential.
+const maxCABundle = 64 << 10
+
+// ParseCredential splits a stored credential into the bearer token and the optional PEM CA bundle. A
+// credential that is not a JSON object is the token alone (the format of a connection saved before the
+// bundle existed). Errors never echo the credential.
+func ParseCredential(cred string) (token, caBundle string, err error) {
+	cred = strings.TrimSpace(cred)
+	if !strings.HasPrefix(cred, "{") {
+		return cred, "", nil
+	}
+	var doc struct {
+		Token    string `json:"token"`
+		CABundle string `json:"ca_bundle"`
+	}
+	if json.Unmarshal([]byte(cred), &doc) != nil {
+		return "", "", errors.New("kubernetes: the credential is a ServiceAccount token, or JSON with token and ca_bundle")
+	}
+	if len(doc.CABundle) > maxCABundle {
+		return "", "", errors.New("kubernetes: the CA bundle is too large")
+	}
+	return strings.TrimSpace(doc.Token), strings.TrimSpace(doc.CABundle), nil
+}
+
+// FromStored builds the read connector from a connection's stored config instead of TESSERA_KUBERNETES_*
+// variables. Nothing is read from the environment: getenv only supplies the dev override
+// TESSERA_KUBERNETES_BASE_URL (the caller passes the layer that refuses it outside dev). The token, and the
+// API server's CA bundle when the cluster has a private CA, come from the credential; with a bundle the
+// server's certificate is verified against it instead of the system roots.
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	if strings.TrimSpace(s.Credential) == "" {
+		return nil, errors.New("kubernetes: the connection has no stored credential")
+	}
+	token, bundle, err := ParseCredential(s.Credential)
+	if err != nil {
+		return nil, err
+	}
+	base := strings.TrimSpace(getenv("TESSERA_KUBERNETES_BASE_URL"))
+	if base == "" {
+		base = strings.TrimSpace(s.BaseURL)
+	}
+	if base == "" {
+		return nil, errors.New("kubernetes: the connection's base_url is required")
+	}
+	if bundle != "" {
+		if hc == nil {
+			return nil, errors.New("kubernetes: an internal/safehttp client is required")
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM([]byte(bundle)) {
+			return nil, errors.New("kubernetes: the CA bundle holds no PEM certificate")
+		}
+		var ok bool
+		if hc, ok = safehttp.WithClientTLS(hc, nil, pool); !ok {
+			return nil, errors.New("kubernetes: the CA bundle needs an internal/safehttp client")
+		}
+	}
+	var ns []string
+	for _, n := range strings.Split(s.Namespaces, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			ns = append(ns, n)
+		}
+	}
+	c, err := Open(Config{BaseURL: base, Token: connsync.NewSecret(token), Namespaces: ns,
+		OpenShift: strings.EqualFold(strings.TrimSpace(s.OpenShift), "true")}, rt, hc, now)
 	if err != nil {
 		return nil, err
 	}

@@ -38,6 +38,28 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 		TokenURL: getenv(p + "TOKEN_URL")}, nil
 }
 
+// Stored is a GCP IAM connection as the readiness service holds it: the scope of its stored config and its
+// opened credential.
+type Stored struct {
+	// OrganizationID is the numeric organization id; FolderIDs and ProjectIDs are comma separated.
+	OrganizationID, FolderIDs, ProjectIDs string
+	// Credential is the sealed credential, opened: the service account key (JSON).
+	Credential string
+}
+
+// FromStored builds the connector from a connection's stored config instead of TESSERA_GCP_* variables.
+// Nothing is read from the environment: getenv only supplies the dev overrides TESSERA_GCP_CRM_URL,
+// TESSERA_GCP_IAM_URL and TESSERA_GCP_TOKEN_URL (the caller passes the layer that refuses them outside dev).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	key := strings.TrimSpace(s.Credential)
+	if key == "" {
+		return nil, errors.New("gcpiam: the connection has no stored credential")
+	}
+	return New(Config{Key: connsync.NewSecret(key), OrganizationID: strings.TrimSpace(s.OrganizationID), FolderIDs: split(s.FolderIDs),
+		ProjectIDs: split(s.ProjectIDs), CRMURL: getenv("TESSERA_GCP_CRM_URL"), IAMURL: getenv("TESSERA_GCP_IAM_URL"),
+		TokenURL: getenv("TESSERA_GCP_TOKEN_URL")}, rt, hc, now)
+}
+
 func split(v string) []string {
 	var out []string
 	for _, s := range strings.Split(v, ",") {
