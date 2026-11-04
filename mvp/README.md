@@ -6519,9 +6519,17 @@ in the sync's failed list (`governed_not_opened`) by name, the env-configured `g
 place for that tenant (it would read the whole customer), and the other connectors are still read. `POST
 /api/connectors/sync` likewise does not read the env `google` connector for a tenant with a live Google connection;
 it queues the worker sync that reads the connection (issue #823). A connection never carries an endpoint override
-(`TESSERA_GOOGLE_API_URL` and `_TOKEN_URL` apply to a dev runtime's fake only). Okta, Entra, Workday, Salesforce,
-SCIM, generic REST, SQL and directory connections are still read from the environment or by their own feature;
-see issue #814 for the list.
+(`TESSERA_GOOGLE_API_URL` and `_TOKEN_URL` apply to a dev runtime's fake only).
+
+**Workday connections (issue #814).** A live (non-demo) Workday connection is read the same way: its `tenant_host`
+(the services host, in the Workday host allowlist, refused on save when it names a cloud metadata host) and its
+`api_version` (`v1`, `v44.0`; empty reads `v1`) are the host and the `{version}` of the request paths, and the sealed
+credential is JSON with `tenant` (the Workday tenant name), `client_id`, `client_secret` and optionally
+`refresh_token`. Workers and events are read from the default paths. A live Workday connection replaces an
+env-configured `workday` connector and fails closed like Google when it cannot be opened; the `TESSERA_WORKDAY_*`
+variables remain the dev fallback for a tenant without one. A non-demo `workday` connection created before this
+needs its credential re-saved in that JSON form. Okta, Entra, Salesforce, SCIM, generic REST, SQL and directory
+connections are still read from the environment or by their own feature; see issue #814 for the list.
 
 Minimum read-only permissions:
 

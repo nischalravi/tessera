@@ -1115,3 +1115,72 @@ func TestAPIVersionMustBeAPlainVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestFromStored(t *testing.T) {
+	cred := func(m map[string]string) string {
+		out := `{`
+		first := true
+		for k, v := range m {
+			if !first {
+				out += ","
+			}
+			first = false
+			out += strconv.Quote(k) + ":" + strconv.Quote(v)
+		}
+		return out + "}"
+	}
+	good := map[string]string{"tenant": "acme_dpt1", "client_id": "cid", "client_secret": "s3cret"}
+	noEnv := func(string) string { return "" }
+	hc := prodClient(t)
+	for _, tc := range []struct {
+		name       string
+		s          Stored
+		version    string // expected version in the paths, when it builds
+		good       bool
+		wantNoLeak string
+	}{
+		{"default version", Stored{TenantHost: "wd2-impl-services1.workday.com", Credential: cred(good)}, "v1", true, ""},
+		{"stored version", Stored{TenantHost: "wd2-impl-services1.workday.com", APIVersion: "v44.0", Credential: cred(good)}, "v44.0", true, ""},
+		{"refresh token", Stored{TenantHost: "wd2-impl-services1.workday.com", Credential: cred(map[string]string{"tenant": "acme_dpt1", "client_id": "cid", "client_secret": "s3cret", "refresh_token": "r"})}, "v1", true, ""},
+		{"no credential", Stored{TenantHost: "wd2-impl-services1.workday.com"}, "", false, ""},
+		{"credential is not JSON", Stored{TenantHost: "wd2-impl-services1.workday.com", Credential: "s3cret-plain"}, "", false, "s3cret-plain"},
+		{"no tenant", Stored{TenantHost: "wd2-impl-services1.workday.com", Credential: cred(map[string]string{"client_id": "cid", "client_secret": "s3cret"})}, "", false, ""},
+		{"no secret", Stored{TenantHost: "wd2-impl-services1.workday.com", Credential: cred(map[string]string{"tenant": "acme_dpt1", "client_id": "cid"})}, "", false, ""},
+		{"bad version", Stored{TenantHost: "wd2-impl-services1.workday.com", APIVersion: "v44.0/../x", Credential: cred(good)}, "", false, ""},
+		{"no host", Stored{Credential: cred(good)}, "", false, ""},
+		{"host with a path", Stored{TenantHost: "wd2-impl-services1.workday.com/x", Credential: cred(good)}, "", false, ""},
+		{"host with user info", Stored{TenantHost: "evil@wd2-impl-services1.workday.com", Credential: cred(good)}, "", false, ""},
+		{"metadata host", Stored{TenantHost: "169.254.169.254", Credential: cred(good)}, "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := FromStored(tc.s, noEnv, prodRT, hc, nil)
+			if (err == nil) != tc.good {
+				t.Fatalf("FromStored = %v, want ok=%v", err, tc.good)
+			}
+			if err != nil {
+				if tc.wantNoLeak != "" && strings.Contains(err.Error(), tc.wantNoLeak) {
+					t.Errorf("error echoes the credential: %v", err)
+				}
+				return
+			}
+			w := c.(*Connector)
+			if want := "/ccx/api/" + tc.version + "/acme_dpt1/workers"; w.workers != want {
+				t.Errorf("workers path = %q, want %q", w.workers, want)
+			}
+			if w.base.Host != tc.s.TenantHost {
+				t.Errorf("base host = %q, want the stored tenant host %q", w.base.Host, tc.s.TenantHost)
+			}
+		})
+	}
+	// the dev override replaces the stored host (refused outside dev by the caller)
+	env := func(k string) string {
+		if k == "TESSERA_WORKDAY_BASE_URL" {
+			return "https://override.workday.com"
+		}
+		return ""
+	}
+	c, err := FromStored(Stored{TenantHost: "wd2-impl-services1.workday.com", Credential: cred(good)}, env, prodRT, hc, nil)
+	if err != nil || c.(*Connector).base.Host != "override.workday.com" {
+		t.Errorf("override: %v", err)
+	}
+}

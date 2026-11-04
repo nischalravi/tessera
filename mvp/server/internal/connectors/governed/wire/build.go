@@ -33,6 +33,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/unixssh"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vault"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vertexagents"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
 // Connector builds the connector of a connection by the connector's own
@@ -41,7 +42,7 @@ import (
 // client); the result reports Stats so the dry run's data checks have counts.
 func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) {
 	rt, hc, now := n.RT, n.HC, n.Now
-	if p.Type == governed.GoogleWorkspace {
+	if governed.IsStored(p.Type) {
 		return stored(p, n)
 	}
 	getenv, err := p.Env()
@@ -115,9 +116,9 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 	return &counted{Connector: cn}, nil
 }
 
-// stored builds the connector of a Google Workspace connection from its stored config (the
-// connection's org units, customer and domain scope the read). The connector replaces an
-// env-configured one of the system (connectors.ConnectionBacked).
+// stored builds the connector of a Google Workspace or Workday connection from its stored config (a Google
+// connection's org units, customer and domain, a Workday connection's host and api_version scope the read). The
+// connector replaces an env-configured one of the system (connectors.ConnectionBacked).
 func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 	getenv, err := n.Overrides(func(string) string { return "" })
 	if err != nil {
@@ -127,8 +128,15 @@ func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	cn, err := google.FromStored(google.Stored{Customer: p.Customer, Domain: p.Domain, OrgUnits: p.OrgUnits, AdminEmail: p.AdminEmail, Credential: p.Secret},
-		getenv, n.RT, n.HC, now)
+	var cn connectors.Connector
+	switch p.Type {
+	case governed.Workday:
+		cn, err = workday.FromStored(workday.Stored{TenantHost: p.TenantHost, APIVersion: p.APIVersion, Credential: p.Secret},
+			getenv, n.RT, n.HC, now)
+	default:
+		cn, err = google.FromStored(google.Stored{Customer: p.Customer, Domain: p.Domain, OrgUnits: p.OrgUnits, AdminEmail: p.AdminEmail, Credential: p.Secret},
+			getenv, n.RT, n.HC, now)
+	}
 	if err != nil {
 		return nil, err
 	}
