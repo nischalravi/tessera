@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -12,13 +14,72 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 var t0 = time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
 
-// newStore opens a fresh database with one tenant and returns that tenant's scope.
+// larkspur is the database newStore starts from, built once per test binary:
+// schema applied and one tenant created. Opening a store and applying the
+// schema is the slowest part of each test, especially under -race.
+var larkspur struct {
+	once   sync.Once
+	db     []byte // SQLite: the file
+	tenant tenancy.ID
+	err    error
+}
+
+func buildLarkspur() {
+	dir, err := os.MkdirTemp("", "tessera-readiness-")
+	if err != nil {
+		larkspur.err = err
+		return
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "tpl.db")
+	db, err := store.Open(context.Background(), path)
+	if err != nil {
+		larkspur.err = err
+		return
+	}
+	var tn store.Tenant
+	err = db.InSystem(context.Background(), "test", func(s *store.SystemTx) error {
+		var err error
+		tn, err = s.CreateTenant(store.Tenant{Slug: "larkspur", Name: "Larkspur Labs"})
+		return err
+	})
+	if cerr := db.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		larkspur.err = err
+		return
+	}
+	larkspur.tenant = tn.ID
+	larkspur.db, larkspur.err = os.ReadFile(path) // #nosec G304 -- path made above
+}
+
+// newStore opens a fresh database with one tenant and returns that tenant's
+// scope. On SQLite it is a private copy of a database built once; on Postgres
+// it creates the database and tenant per test.
 func newStore(t *testing.T) Scope {
 	t.Helper()
+	if store.PostgresTestURL() == "" {
+		larkspur.once.Do(buildLarkspur)
+		if larkspur.err != nil {
+			t.Fatal(larkspur.err)
+		}
+		path := filepath.Join(t.TempDir(), "test.db")
+		if err := os.WriteFile(path, larkspur.db, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		db, err := store.Open(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return Scope{DB: db, Tenant: larkspur.tenant}
+	}
 	db, err := store.Open(context.Background(), store.TestTarget(t))
 	if err != nil {
 		t.Fatal(err)
