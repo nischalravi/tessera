@@ -14,10 +14,12 @@ API_SPLIT=3
 
 declare -A SHARDS=(
   [store]="internal/store internal/store/storetest"
-  [cmd]="cmd/tessera internal/auth internal/backup"
-  [core]="internal/admin internal/audit internal/aws/query"
-  # The slowest single packages outside api (10-15 minutes each under -race).
-  [slow]="internal/oauth internal/reviews internal/readiness internal/rotation internal/seed"
+  # readiness and rotation moved here from slow: five heavy packages in parallel on one runner
+  # pushed readiness past the 45m -timeout under -race (it took 1569-2700s depending on load).
+  [cmd]="cmd/tessera internal/auth internal/backup internal/readiness"
+  [core]="internal/admin internal/audit internal/aws/query internal/rotation"
+  # The slowest single packages outside api (10-25 minutes each under -race).
+  [slow]="internal/oauth internal/reviews internal/seed"
 )
 
 shard=${1:?usage: ci-shard.sh api-1..api-$API_SPLIT|store|cmd|core|slow|groups|rest}
