@@ -19,12 +19,12 @@ import (
 // not read in its place.
 func TestK8sVaultCloudAreOpenedFromTheStoredConfig(t *testing.T) {
 	for _, tc := range []struct {
-		typ, base, setting, want string
+		typ, system, base, setting, want string // system: the one the connector reports
 	}{
-		{"kubernetes", "https://api.k8s.example.com:6443", "namespaces", "payments, web"},
-		{"vault", "https://vault.example.com:8200", "namespace", "team-a/prod"},
-		{"azurerbac", "", "tenant_id", "11111111-2222-3333-4444-555555555555"},
-		{"gcpiam", "", "organization_id", "123456789012"},
+		{"kubernetes", "kubernetes", "https://api.k8s.example.com:6443", "namespaces", "payments, web"},
+		{"vault", "vault", "https://vault.example.com:8200", "namespace", "team-a/prod"},
+		{"azurerbac", "azure", "", "tenant_id", "11111111-2222-3333-4444-555555555555"},
+		{"gcpiam", "gcp", "", "organization_id", "123456789012"},
 	} {
 		t.Run(tc.typ, func(t *testing.T) {
 			var opened []governed.Params
@@ -33,12 +33,12 @@ func TestK8sVaultCloudAreOpenedFromTheStoredConfig(t *testing.T) {
 			var built []governed.Params
 			s.Runner.Gov.Connector = func(p governed.Params, _ governed.Net) (connectors.Connector, error) {
 				built = append(built, p)
-				return fakeConnector{tc.typ}, nil
+				return fakeConnector{tc.system}, nil
 			}
 			st := newStore(t)
 			activateGov(t, s, st, tc.typ)
 			cns, failed, err := s.GovernedConnectors(context.Background(), st.DB, st.Tenant, t0)
-			if err != nil || len(failed) != 0 || len(cns) != 1 || cns[0].System() != tc.typ {
+			if err != nil || len(failed) != 0 || len(cns) != 1 || cns[0].System() != tc.system {
 				t.Fatalf("governed connectors: %v, failed %v, %v", cns, failed, err)
 			}
 			if len(built) != 1 {
@@ -49,7 +49,7 @@ func TestK8sVaultCloudAreOpenedFromTheStoredConfig(t *testing.T) {
 			}
 			read(t, st, func(c *store.TenantTx) error {
 				got, err := s.StoredSystems(c)
-				if err != nil || !slices.Equal(got, []string{tc.typ}) {
+				if err != nil || !slices.Equal(got, []string{tc.system}) {
 					t.Errorf("stored systems = %v, %v", got, err)
 				}
 				return nil
@@ -64,8 +64,8 @@ func TestK8sVaultCloudAreOpenedFromTheStoredConfig(t *testing.T) {
 			}
 			for name, e := range failed {
 				var no *connectors.NotOpenedError
-				if !errors.As(e, &no) || no.System != tc.typ {
-					t.Errorf("%s: failure %v does not name the %s system", name, e, tc.typ)
+				if !errors.As(e, &no) || no.System != tc.system {
+					t.Errorf("%s: failure %v does not name the %s system", name, e, tc.system)
 				}
 			}
 		})

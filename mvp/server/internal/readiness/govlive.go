@@ -59,7 +59,7 @@ func storedLive(b *Bundle) bool {
 
 // storedConnector builds the connector of a stored-config revision (storedLive).
 func (o GovOptions) storedConnector(b *Bundle, now time.Time) (connectors.Connector, error) {
-	if b.cred == "" {
+	if needsSecret(b.Conn.ConnectorType) && b.cred == "" {
 		return nil, conflict("credential_unavailable", "the connection has no stored credential Tessera can open")
 	}
 	n, err := o.net(b, now)

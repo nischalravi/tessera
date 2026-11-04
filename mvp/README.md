@@ -6603,6 +6603,27 @@ closed like Google when it cannot be opened; the variables remain the dev fallba
 `TESSERA_GITHUB_SCAN_API_URL` and `TESSERA_<VENDOR>_BASE_URL` overrides apply to a dev runtime only (refused
 elsewhere); SSH and SFTP have no override (a dev host is a loopback address).
 
+**MCP server and agent platform connections (issue #814, the last of the connector moves).** MCP, Amazon Bedrock Agents,
+Google Vertex AI Agent Engine, Azure AI Foundry, Microsoft Copilot Studio, Salesforce Agentforce and AWS Bedrock
+AgentCore are governed connectors (settings and sealed credential as in their sections; no schema change); their read
+connector is now built from the connection's stored config too, not through the `TESSERA_MCP_*`, `TESSERA_BEDROCK_*`,
+`TESSERA_VERTEX_*`, `TESSERA_FOUNDRY_*`, `TESSERA_COPILOT_*`, `TESSERA_AGENTFORCE_*` and `TESSERA_AGENTCORE_*`
+variables. The endpoint comes from the revision (`base_url`: the MCP endpoint, the Foundry project endpoint, the
+Dataverse environment URL, the org's My Domain URL; Bedrock `region`; Vertex `project_id`, `location`), the secret from
+the sealed credential (token or API key, access key JSON, service account key JSON, client secret or certificate PEM,
+Agentforce key JSON), in the formats they already had: no re-save is needed. `base_url` is refused on save unless it is
+https and the connector would open it (a public host and never a cloud metadata host for MCP; `*.services.ai.azure.com`
+with `/api/projects/<project>` for Foundry; `*.crm.dynamics.com` with no path for Copilot Studio; a Salesforce domain
+for Agentforce). AgentCore has no live client: it reads the recorded snapshot named in its settings, confined to the
+tenant's directory, and is refused in prod as before; it takes no credential. A live connection replaces the
+env-configured connector of the same system (`mcp`, `aws-bedrock`, `gcp-vertex`, `azure-foundry`, `copilot-studio`,
+`salesforce-agentforce`, `aws-agentcore`) for the tenant and fails closed like Google when it cannot be opened; the
+variables remain the dev fallback for a tenant without one. `TESSERA_MCP_URL`, `TESSERA_FOUNDRY_ENDPOINT`,
+`TESSERA_COPILOT_URL`, `TESSERA_AGENTFORCE_BASE_URL` and the Bedrock, Vertex, Foundry and Copilot endpoint and authority
+overrides apply to a dev runtime only (refused elsewhere).
+
+With this, every connector `all.FromEnv` registers has a stored-config build.
+
 Minimum read-only permissions:
 
 * **Okta.** OAuth scopes `okta.users.read`, `okta.groups.read`, `okta.apps.read`, `okta.roles.read`

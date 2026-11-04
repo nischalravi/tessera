@@ -102,7 +102,7 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 	return &counted{Connector: cn}, nil
 }
 
-// stored builds the connector of a Google Workspace, Workday, Okta, Entra, Salesforce, REST, SQL, ServiceNow, Atlassian, SuccessFactors, Kubernetes, Vault, Azure RBAC, GCP IAM, GitHub scan, PAM vault, ERP, Unix SSH or SFTP drop connection from its stored config (a Google
+// stored builds the connector of a Google Workspace, Workday, Okta, Entra, Salesforce, REST, SQL, ServiceNow, Atlassian, SuccessFactors, Kubernetes, Vault, Azure RBAC, GCP IAM, GitHub scan, PAM vault, ERP, Unix SSH, SFTP drop, MCP server or agent platform connection from its stored config (a Google
 // connection's org units, customer and domain, a Workday connection's host and api_version, an Okta org URL, an Entra
 // tenant and cloud scope the read). The
 // connector replaces an env-configured one of the system (connectors.ConnectionBacked).
@@ -169,6 +169,32 @@ func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 			UseSudo: set("use_sudo"), Credential: p.Secret}, n.RT)
 	case governed.SFTPDrop:
 		cn, err = sftpdrop.FromStored(sftpdrop.Stored{Settings: p.Settings, Credential: p.Secret}, n.RT)
+	case governed.MCP:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = mcpserver.FromStored(mcpserver.Stored{URL: p.BaseURL, Owner: set("owner"), Name: set("server_name"), AuthHeader: set("auth_header"),
+			Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.Bedrock:
+		cn, err = bedrockagents.FromStored(bedrockagents.Stored{Region: strings.TrimSpace(p.Settings["region"]), Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.Vertex:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = vertexagents.FromStored(vertexagents.Stored{ProjectID: set("project_id"), Location: set("location"), Owner: set("owner"),
+			Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.Foundry:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = foundryagents.FromStored(foundryagents.Stored{BaseURL: p.BaseURL, TenantID: set("tenant_id"), ClientID: set("client_id"), Owner: set("owner"),
+			Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.Copilot:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = copilotstudio.FromStored(copilotstudio.Stored{BaseURL: p.BaseURL, TenantID: set("tenant_id"), ClientID: set("client_id"),
+			Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.Agentforce:
+		cn, err = agentforce.FromStored(agentforce.Stored{BaseURL: p.BaseURL, APIVersion: strings.TrimSpace(p.Settings["api_version"]), Credential: p.Secret},
+			getenv, n.RT, n.HC, now)
+	case governed.AgentCore:
+		var path string
+		if path, err = p.SnapshotPath(); err == nil {
+			cn, err = agentcore.FromStored(agentcore.Stored{Snapshot: path, Prod: p.Prod || n.RT.Env == config.Prod})
+		}
 	case governed.Salesforce:
 		cn, err = salesforce.FromStored(salesforce.Stored{BaseURL: p.BaseURL, APIVersion: p.APIVersion, Credential: p.Secret}, getenv, n.RT, n.HC, now)
 	case governed.Okta:

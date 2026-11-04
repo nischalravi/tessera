@@ -70,3 +70,28 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 	}
 	return agentmap.Build(System, "vertex:", "Google Vertex AI Agent Engine agent", agents), nil
 }
+
+// Stored is a Vertex AI Agent Engine connection as the readiness service holds it: the project, location and
+// owner of its stored config and its opened credential.
+type Stored struct {
+	ProjectID, Location string
+	Owner               string // optional e-mail address of the person accountable for the agents
+	// Credential is the sealed credential, opened: the service account key (JSON).
+	Credential string
+}
+
+// FromStored builds the read connector from a connection's stored config instead of TESSERA_VERTEX_*
+// variables. Nothing is read from the environment: getenv only supplies the dev overrides
+// TESSERA_VERTEX_API_URL and TESSERA_VERTEX_TOKEN_URL (the caller passes the layer that refuses them outside dev).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	cred := strings.TrimSpace(s.Credential)
+	if cred == "" {
+		return nil, errors.New("vertexagents: the connection has no stored credential")
+	}
+	c, err := Open(Config{Key: connsync.NewSecret(cred), ProjectID: strings.TrimSpace(s.ProjectID), Location: strings.TrimSpace(s.Location),
+		Owner: strings.TrimSpace(s.Owner), APIURL: getenv("TESSERA_VERTEX_API_URL"), TokenURL: getenv("TESSERA_VERTEX_TOKEN_URL")}, rt, hc, now)
+	if err != nil {
+		return nil, err
+	}
+	return NewConnector(c), nil
+}

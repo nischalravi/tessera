@@ -67,3 +67,31 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 	}
 	return agentmap.Build(System, "agentforce:", "Salesforce Agentforce agent", agents), nil
 }
+
+// Stored is an Agentforce connection as the readiness service holds it: the org URL and API version of its
+// stored config and its opened credential.
+type Stored struct {
+	BaseURL    string // the org's My Domain URL, https://acme.my.salesforce.com
+	APIVersion string // optional, v61.0 and the like
+	// Credential is the sealed credential, opened: the JSON with client_id, username and private_key.
+	Credential string
+}
+
+// FromStored builds the read connector from a connection's stored config instead of TESSERA_AGENTFORCE_*
+// variables. Nothing is read from the environment: getenv only supplies the dev override
+// TESSERA_AGENTFORCE_BASE_URL (the caller passes the layer that refuses it outside dev).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	cred := strings.TrimSpace(s.Credential)
+	if cred == "" {
+		return nil, errors.New("agentforce: the connection has no stored credential")
+	}
+	base := strings.TrimSpace(getenv("TESSERA_AGENTFORCE_BASE_URL"))
+	if base == "" {
+		base = strings.TrimSpace(s.BaseURL)
+	}
+	c, err := Open(Config{BaseURL: base, Credential: connsync.NewSecret(cred), APIVersion: strings.TrimSpace(s.APIVersion)}, rt, hc, now)
+	if err != nil {
+		return nil, err
+	}
+	return NewConnector(c), nil
+}
