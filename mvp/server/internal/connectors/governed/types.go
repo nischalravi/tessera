@@ -611,12 +611,22 @@ type Params struct {
 	OrgUnits         []string
 	// AdminEmail is the config's admin_email: the administrator to impersonate (empty: the credential's).
 	AdminEmail string
+	// TenantHost and APIVersion are the tenant_host and api_version of a Workday connection.
+	TenantHost, APIVersion string
 }
 
 // GoogleWorkspace is the connector type of a Google Workspace connection. It is not a governed
 // type (Lookup does not know it, its checks keep their own prober) but its connector is built from
 // the connection's stored config, through Params.
 const GoogleWorkspace = "google"
+
+// Workday is the connector type of a Workday connection; like GoogleWorkspace it is built from the
+// connection's stored config (its tenant_host and api_version, the client in the sealed credential).
+const Workday = "workday"
+
+// IsStored reports whether a connection of the type is read through a connector built from its
+// stored config (not governed: Lookup does not know it, and its checks keep their own prober).
+func IsStored(typ string) bool { return typ == GoogleWorkspace || typ == Workday }
 
 // String omits the secret.
 func (p Params) String() string { return "governed.Params{" + p.Type + "}" }

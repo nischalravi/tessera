@@ -81,7 +81,7 @@ func (s *Service) OpenConnector(c *store.TenantTx, ac ActiveConnection, now time
 		return cn, true, nil
 	}
 	t, isGov := governed.Lookup(ac.connectorType)
-	stored := ac.connectorType == governed.GoogleWorkspace
+	stored := governed.IsStored(ac.connectorType)
 	if !stored && (!isGov || t.Feature) {
 		return nil, false, nil
 	}
@@ -120,14 +120,14 @@ func (s *Service) GovernedConnectorsTx(c *store.TenantTx, now time.Time) (cns []
 		return nil, nil, err
 	}
 	for _, ac := range live {
-		if gt, ok := governed.Lookup(ac.connectorType); (!ok || gt.Feature) && ac.connectorType != governed.GoogleWorkspace {
+		if gt, ok := governed.Lookup(ac.connectorType); (!ok || gt.Feature) && !governed.IsStored(ac.connectorType) {
 			continue
 		}
 		cn, _, err := s.OpenConnector(c, ac, now)
 		if err != nil {
-			if ac.connectorType == governed.GoogleWorkspace {
+			if governed.IsStored(ac.connectorType) {
 				// fail closed: the env-configured connector of the system must not read in its place
-				err = &connectors.NotOpenedError{System: governed.GoogleWorkspace, Err: err}
+				err = &connectors.NotOpenedError{System: ac.connectorType, Err: err}
 			}
 			failed[ac.name] = err
 			continue
@@ -138,7 +138,7 @@ func (s *Service) GovernedConnectorsTx(c *store.TenantTx, now time.Time) (cns []
 }
 
 // StoredSystems lists the connector systems of a tenant's live connections that are read from their
-// stored config (Google Workspace): the env-configured connector of each is not read for
+// stored config (Google Workspace, Workday): the env-configured connector of each is not read for
 // the tenant, whether or not the connection opens.
 func (s *Service) StoredSystems(c *store.TenantTx) ([]string, error) {
 	live, err := s.ActiveConnections(c)
@@ -147,8 +147,8 @@ func (s *Service) StoredSystems(c *store.TenantTx) ([]string, error) {
 	}
 	var out []string
 	for _, ac := range live {
-		if ac.connectorType == governed.GoogleWorkspace {
-			out = append(out, governed.GoogleWorkspace)
+		if governed.IsStored(ac.connectorType) {
+			out = append(out, ac.connectorType)
 		}
 	}
 	return out, nil

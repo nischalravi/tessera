@@ -402,7 +402,7 @@ func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, p *param
 		return nil, err
 	}
 	for _, ac := range live {
-		if gt, ok := governed.Lookup(ac.ConnectorType()); (ok && !gt.Feature) || ac.ConnectorType() == governed.GoogleWorkspace {
+		if gt, ok := governed.Lookup(ac.ConnectorType()); (ok && !gt.Feature) || governed.IsStored(ac.ConnectorType()) {
 			payload := worker.SyncPayload{}
 			if mode != nil {
 				payload.Mode = *mode
