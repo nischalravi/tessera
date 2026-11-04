@@ -454,6 +454,10 @@ func (l *loader) buildEntities() {
 		return
 	}
 	set, err := cedarx.ParseEntities(raw)
+	if err != nil && len(l.diags) > 0 {
+		// Cedar 1.9 refuses a duplicate uid while reading; the duplicate_key finding already says so
+		return
+	}
 	if err == nil && len(l.diags) == 0 { // type errors of a file already refused would only repeat
 		err = l.b.Schema.ValidateSet(set)
 	}
