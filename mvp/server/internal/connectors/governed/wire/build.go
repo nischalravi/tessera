@@ -102,7 +102,7 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 	return &counted{Connector: cn}, nil
 }
 
-// stored builds the connector of a Google Workspace, Workday, Okta, Entra, Salesforce, REST, SQL, ServiceNow, Atlassian, SuccessFactors, Kubernetes, Vault, Azure RBAC or GCP IAM connection from its stored config (a Google
+// stored builds the connector of a Google Workspace, Workday, Okta, Entra, Salesforce, REST, SQL, ServiceNow, Atlassian, SuccessFactors, Kubernetes, Vault, Azure RBAC, GCP IAM, GitHub scan, PAM vault, ERP, Unix SSH or SFTP drop connection from its stored config (a Google
 // connection's org units, customer and domain, a Workday connection's host and api_version, an Okta org URL, an Entra
 // tenant and cloud scope the read). The
 // connector replaces an env-configured one of the system (connectors.ConnectionBacked).
@@ -152,6 +152,23 @@ func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
 		cn, err = gcpiam.FromStored(gcpiam.Stored{OrganizationID: set("organization_id"), FolderIDs: set("folder_ids"), ProjectIDs: set("project_ids"),
 			Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.GitHubScan:
+		cn, err = githubscan.FromStored(githubscan.Stored{Org: strings.TrimSpace(p.Settings["org"]), BaseURL: p.BaseURL, Credential: p.Secret},
+			getenv, n.RT, n.HC)
+	case governed.CyberArk, governed.Delinea, governed.BeyondTrust:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = pam.FromStored(pam.Stored{Vendor: p.Type, BaseURL: p.BaseURL, Username: set("username"), APIRoot: set("api_root"), Credential: p.Secret},
+			getenv, n.RT, n.HC, now)
+	case governed.SAP, governed.Oracle:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = erp.FromStored(erp.Stored{System: p.Type, BaseURL: p.BaseURL, ClientID: set("client_id"), APIRoot: set("api_root"), TokenPath: set("token_path"),
+			Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.UnixSSH:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = unixssh.FromStored(unixssh.Stored{Host: set("host"), Port: set("port"), Username: set("username"), HostKey: set("host_key"),
+			UseSudo: set("use_sudo"), Credential: p.Secret}, n.RT)
+	case governed.SFTPDrop:
+		cn, err = sftpdrop.FromStored(sftpdrop.Stored{Settings: p.Settings, Credential: p.Secret}, n.RT)
 	case governed.Salesforce:
 		cn, err = salesforce.FromStored(salesforce.Stored{BaseURL: p.BaseURL, APIVersion: p.APIVersion, Credential: p.Secret}, getenv, n.RT, n.HC, now)
 	case governed.Okta:
