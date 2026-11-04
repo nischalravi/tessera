@@ -100,6 +100,43 @@ func FromEnv(getenv func(string) string, rt connsync.Runtime, hc *http.Client, n
 	return NewConnector(c, now), nil
 }
 
+// Stored is a ServiceNow connection as the readiness service holds it: the instance and sign-in of its
+// stored config and its opened credential.
+type Stored struct {
+	// BaseURL is the connection's base_url (https://acme.service-now.com).
+	BaseURL string
+	// AuthMode is the connection's auth_mode: basic (default, also when empty) or oauth.
+	AuthMode string
+	// Username is the integration user (basic) or the OAuth client id (oauth).
+	Username string
+	// Credential is the sealed credential, opened: the user's password or the OAuth client secret.
+	Credential string
+}
+
+// FromStored builds the read connector from a connection's stored config instead of TESSERA_SERVICENOW_*
+// variables. Nothing is read from the environment: getenv only supplies the dev override
+// TESSERA_SERVICENOW_BASE_URL (the caller passes the layer that refuses it outside dev). The instance
+// URL is checked as Open does (a ServiceNow domain, https, no path, never a metadata host).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	secret := strings.TrimSpace(s.Credential)
+	if secret == "" {
+		return nil, errors.New("servicenow: the connection has no stored credential")
+	}
+	base := strings.TrimSpace(getenv("TESSERA_SERVICENOW_BASE_URL"))
+	if base == "" {
+		base = strings.TrimSpace(s.BaseURL)
+	}
+	if base == "" {
+		return nil, errors.New("servicenow: the connection's base_url is required")
+	}
+	c, err := Open(Config{BaseURL: base, AuthMode: strings.TrimSpace(s.AuthMode), Username: strings.TrimSpace(s.Username),
+		Secret: connsync.NewSecret(secret)}, rt, hc, now)
+	if err != nil {
+		return nil, err
+	}
+	return NewConnector(c, now), nil
+}
+
 // ProbeResult is what one bounded read found.
 type ProbeResult struct {
 	Users, Groups, Roles, Assignments int

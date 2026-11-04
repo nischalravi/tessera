@@ -9,6 +9,7 @@ package wire
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
@@ -67,17 +68,8 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 		cn, err = erp.FromEnv(p.Type, getenv, rt, hc, now)
 	case governed.GitHubScan:
 		cn, err = githubscan.FromEnv(getenv, now(), rt, hc)
-	case governed.SuccessFactors:
-		cn, err = successfactors.FromEnv(getenv, now(), rt, hc)
 	case governed.AgentCore:
 		cn, err = agentcore.FromEnv(getenv, now())
-	case governed.ServiceNow:
-		cn, err = servicenow.FromEnv(getenv, rt, hc, now)
-	case governed.Atlassian:
-		if getenv, err = n.Overrides(getenv); err != nil {
-			return nil, err
-		}
-		cn, err = atlassian.FromEnv(getenv, rt, hc, now)
 	case governed.Kubernetes:
 		cn, err = kubernetes.FromEnv(getenv, rt, hc, now)
 	case governed.Vault:
@@ -123,7 +115,7 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 	return &counted{Connector: cn}, nil
 }
 
-// stored builds the connector of a Google Workspace, Workday, Okta or Entra connection from its stored config (a Google
+// stored builds the connector of a Google Workspace, Workday, Okta, Entra, Salesforce, REST, SQL, ServiceNow, Atlassian or SuccessFactors connection from its stored config (a Google
 // connection's org units, customer and domain, a Workday connection's host and api_version, an Okta org URL, an Entra
 // tenant and cloud scope the read). The
 // connector replaces an env-configured one of the system (connectors.ConnectionBacked).
@@ -141,6 +133,23 @@ func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 	case governed.Workday:
 		cn, err = workday.FromStored(workday.Stored{TenantHost: p.TenantHost, APIVersion: p.APIVersion, Credential: p.Secret},
 			getenv, n.RT, n.HC, now)
+	case governed.ServiceNow:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		user := set("username")
+		if set("auth_mode") == servicenow.AuthOAuth {
+			user = set("client_id")
+		}
+		cn, err = servicenow.FromStored(servicenow.Stored{BaseURL: p.BaseURL, AuthMode: set("auth_mode"), Username: user, Credential: p.Secret},
+			getenv, n.RT, n.HC, now)
+	case governed.Atlassian:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = atlassian.FromStored(atlassian.Stored{BaseURL: p.BaseURL, Email: set("email"), OrgID: set("org_id"), ProjectKeys: set("project_keys"),
+			Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.SuccessFactors:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = successfactors.FromStored(successfactors.Stored{BaseURL: p.BaseURL, CompanyID: set("company_id"), Auth: set("auth"),
+			Username: set("username"), UserID: set("user_id"), ClientID: set("client_id"), LegalEntity: set("legal_entity"), Credential: p.Secret},
+			getenv, n.RT, n.HC)
 	case governed.Salesforce:
 		cn, err = salesforce.FromStored(salesforce.Stored{BaseURL: p.BaseURL, APIVersion: p.APIVersion, Credential: p.Secret}, getenv, n.RT, n.HC, now)
 	case governed.Okta:
