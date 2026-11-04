@@ -33,6 +33,7 @@ package okta
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -208,6 +209,46 @@ func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc 
 		}
 	}
 	return New(cfg, rt, hc, func() time.Time { return time.Now().UTC() })
+}
+
+// Stored is an Okta connection as the readiness service holds it: the org URL of its stored
+// config and its opened credential.
+type Stored struct {
+	// OrgURL is the connection's org_url (https://example.okta.com).
+	OrgURL string
+	// Credential is the sealed credential, opened: JSON with either "client_id", "private_key" (PEM)
+	// and optionally "key_id" (an OAuth service app), or "api_token" (an SSWS token).
+	Credential string
+}
+
+// FromStored builds the connector of a connection from its stored config instead of
+// TESSERA_OKTA_* variables, so the connection's org URL is the one read. Nothing is read from the
+// environment: getenv only supplies the dev override TESSERA_OKTA_ORG_URL (the caller passes the
+// layer that refuses it outside dev). Identities and enrolled factors are read, as FromEnv does by
+// default.
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	if s.Credential == "" {
+		return nil, errors.New("okta: the connection has no stored credential")
+	}
+	var cred struct {
+		ClientID   string `json:"client_id"`
+		PrivateKey string `json:"private_key"`
+		KeyID      string `json:"key_id"`
+		APIToken   string `json:"api_token"`
+	}
+	if err := json.Unmarshal([]byte(s.Credential), &cred); err != nil {
+		return nil, errors.New("okta: the credential must be JSON with client_id and private_key, or api_token")
+	}
+	cfg := Config{OrgURL: strings.TrimSpace(getenv("TESSERA_OKTA_ORG_URL")), ClientID: strings.TrimSpace(cred.ClientID),
+		PrivateKey: connsync.NewSecret(cred.PrivateKey), KeyID: strings.TrimSpace(cred.KeyID),
+		APIToken: connsync.NewSecret(cred.APIToken), EmitIdentities: true, MaxIncrementalAge: 24 * time.Hour}
+	if cfg.OrgURL == "" {
+		cfg.OrgURL = strings.TrimSpace(s.OrgURL)
+	}
+	if cfg.OrgURL == "" {
+		return nil, errors.New("okta: the connection's org_url is required")
+	}
+	return New(cfg, rt, hc, now)
 }
 
 func (*Connector) System() string      { return System }

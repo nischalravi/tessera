@@ -49,6 +49,7 @@ package workday
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -248,6 +249,50 @@ func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc 
 		}
 	}
 	return New(cfg, rt, hc, func() time.Time { return time.Now().UTC() })
+}
+
+// Stored is a Workday connection as the readiness service holds it: the scope fields of its
+// stored config and its opened credential.
+type Stored struct {
+	// TenantHost is the connection's tenant_host, the tenant's services host
+	// (wd2-impl-services1.workday.com); APIVersion its api_version ("v1", "v44.0"; empty reads
+	// DefaultAPIVersion).
+	TenantHost, APIVersion string
+	// Credential is the sealed credential, opened: JSON with "tenant" (the Workday tenant name),
+	// "client_id", "client_secret" and optionally "refresh_token" (else client credentials).
+	Credential string
+}
+
+// FromStored builds the connector of a connection from its stored config instead of
+// TESSERA_WORKDAY_* variables, so the connection's host and api_version are the ones read. Nothing
+// is read from the environment: getenv only supplies the dev override TESSERA_WORKDAY_BASE_URL (the
+// caller passes the layer that refuses it outside dev). Workers and events are read from the
+// default paths, as FromEnv does by default.
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	if s.Credential == "" {
+		return nil, errors.New("workday: the connection has no stored credential")
+	}
+	var cred struct {
+		Tenant       string `json:"tenant"`
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal([]byte(s.Credential), &cred); err != nil {
+		return nil, errors.New("workday: the credential must be JSON with tenant, client_id and client_secret")
+	}
+	cfg := Config{Tenant: strings.TrimSpace(cred.Tenant), ClientID: strings.TrimSpace(cred.ClientID),
+		ClientSecret: connsync.NewSecret(cred.ClientSecret), RefreshToken: connsync.NewSecret(cred.RefreshToken),
+		APIVersion: strings.TrimSpace(s.APIVersion), BaseURL: getenv("TESSERA_WORKDAY_BASE_URL"),
+		EmitIdentities: true, MaxIncrementalAge: 24 * time.Hour}
+	if cfg.BaseURL == "" {
+		host := strings.TrimSpace(s.TenantHost)
+		if host == "" || strings.ContainsAny(host, "/?#@\\ ") {
+			return nil, errors.New("workday: the connection's tenant_host must be a host name")
+		}
+		cfg.BaseURL = "https://" + host
+	}
+	return New(cfg, rt, hc, now)
 }
 
 func (*Connector) System() string      { return System }

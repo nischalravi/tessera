@@ -104,15 +104,9 @@ func Open(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time
 	if tok == "" || len(tok) > 4<<10 || strings.ContainsAny(tok, " \t\r\n\x00") {
 		return nil, errors.New("vault: the credential is a Vault token")
 	}
-	base, err := connsync.ParseBaseURL(cfg.BaseURL, rt)
+	base, err := CheckURL(cfg.BaseURL, rt)
 	if err != nil {
-		return nil, fmt.Errorf("vault: base URL: %w", err)
-	}
-	if port := base.Port(); port != "" && !slices.Contains(allowedPorts, port) && !loopback(base, rt) {
-		return nil, errors.New("vault: the base URL port is not one of the supported ports")
-	}
-	if base.Path != "" {
-		return nil, errors.New("vault: the base URL is a host without a path")
+		return nil, err
 	}
 	if cfg.Namespace != "" && !IsNamespace(cfg.Namespace) {
 		return nil, errors.New("vault: the namespace is not valid")
@@ -227,3 +221,20 @@ func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
 func validName(s string) bool { return nameRE.MatchString(s) && s != "." && s != ".." }
 
 func validPolicy(s string) bool { return policyRE.MatchString(s) && s != "." && s != ".." }
+
+// CheckURL parses a connection's base URL as Open does: https (or a dev loopback fake), a well-formed
+// domain name, never a cloud metadata host, a supported port and no path. The readiness service calls it
+// on save, so a URL Open would refuse is refused before it is stored.
+func CheckURL(raw string, rt connsync.Runtime) (*url.URL, error) {
+	base, err := connsync.ParseBaseURL(raw, rt)
+	if err != nil {
+		return nil, fmt.Errorf("vault: base URL: %w", err)
+	}
+	if port := base.Port(); port != "" && !slices.Contains(allowedPorts, port) && !loopback(base, rt) {
+		return nil, errors.New("vault: the base URL port is not one of the supported ports")
+	}
+	if base.Path != "" {
+		return nil, errors.New("vault: the base URL is a host without a path")
+	}
+	return base, nil
+}

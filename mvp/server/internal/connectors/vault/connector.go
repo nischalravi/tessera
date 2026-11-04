@@ -44,6 +44,39 @@ type Connector struct{ c *Client }
 // NewConnector wraps a client.
 func NewConnector(c *Client) *Connector { return &Connector{c} }
 
+// Stored is a Vault connection as the readiness service holds it: the server and namespace of its stored
+// config and its opened credential.
+type Stored struct {
+	// BaseURL is the connection's base_url (https://vault.example.com:8200).
+	BaseURL string
+	// Namespace is the optional Vault Enterprise namespace.
+	Namespace string
+	// Credential is the sealed credential, opened: the token of a read-only policy.
+	Credential string
+}
+
+// FromStored builds the read connector from a connection's stored config instead of TESSERA_VAULT_*
+// variables. Nothing is read from the environment: getenv only supplies the dev override
+// TESSERA_VAULT_BASE_URL (the caller passes the layer that refuses it outside dev).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	token := strings.TrimSpace(s.Credential)
+	if token == "" {
+		return nil, errors.New("vault: the connection has no stored credential")
+	}
+	base := strings.TrimSpace(getenv("TESSERA_VAULT_BASE_URL"))
+	if base == "" {
+		base = strings.TrimSpace(s.BaseURL)
+	}
+	if base == "" {
+		return nil, errors.New("vault: the connection's base_url is required")
+	}
+	c, err := Open(Config{BaseURL: base, Token: connsync.NewSecret(token), Namespace: strings.TrimSpace(s.Namespace)}, rt, hc, now)
+	if err != nil {
+		return nil, err
+	}
+	return NewConnector(c), nil
+}
+
 func (*Connector) System() string      { return System }
 func (*Connector) DisplayName() string { return "HashiCorp Vault" }
 func (*Connector) TypeName() string    { return "VaultConnector" }

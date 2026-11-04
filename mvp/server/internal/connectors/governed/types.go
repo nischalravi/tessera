@@ -19,6 +19,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
 )
 
 // Connector types a connection may have, with the readiness template that
@@ -611,12 +614,56 @@ type Params struct {
 	OrgUnits         []string
 	// AdminEmail is the config's admin_email: the administrator to impersonate (empty: the credential's).
 	AdminEmail string
+	// TenantHost and APIVersion are the tenant_host and api_version of a Workday connection.
+	TenantHost, APIVersion string
+	// OrgURL, TenantID and Cloud are the org_url of an Okta connection and the tenant_id and cloud of
+	// an Entra one.
+	OrgURL, TenantID, Cloud string
+	// Rest is the spec of a generic REST connection and SQL the settings of a database one, both
+	// from the connection's stored config (no secret in either).
+	Rest *restgen.Spec
+	SQL  *sqldb.Config
 }
 
 // GoogleWorkspace is the connector type of a Google Workspace connection. It is not a governed
 // type (Lookup does not know it, its checks keep their own prober) but its connector is built from
 // the connection's stored config, through Params.
 const GoogleWorkspace = "google"
+
+// Workday is the connector type of a Workday connection; like GoogleWorkspace it is built from the
+// connection's stored config (its tenant_host and api_version, the client in the sealed credential).
+const Workday = "workday"
+
+// Okta and Entra are the connector types of an Okta org and a Microsoft Entra ID tenant; like
+// Workday they are built from the connection's stored config.
+const (
+	Okta  = "okta"
+	Entra = "entra"
+)
+
+// Salesforce is the connector type of a Salesforce org read for its users, profiles and permission
+// sets; like Workday it is built from the connection's stored config (base_url, api_version).
+const Salesforce = "salesforce"
+
+// RestGeneric and SQL are the connector types of a generic REST system and of a database; they are
+// built from the connection's stored spec and settings (the secret is the sealed credential).
+const (
+	RestGeneric = "rest_generic"
+	SQL         = "sql"
+)
+
+// IsStored reports whether a connection of the type is read through a connector built from its
+// stored config. Most are not governed (Lookup does not know them, and their checks keep their own
+// prober); ServiceNow, Atlassian, SuccessFactors, Kubernetes, Vault, Azure RBAC, GCP IAM, GitHub scan, the PAM vaults, the ERPs, Unix SSH, SFTP drop, the MCP server and the agent platforms (Bedrock, Vertex, Foundry, Copilot Studio, Agentforce, AgentCore) are governed and keep the governed prober, but
+// their connector is built from the stored config too.
+func IsStored(typ string) bool {
+	return typ == GoogleWorkspace || typ == Workday || typ == Okta || typ == Entra || typ == Salesforce ||
+		typ == RestGeneric || typ == SQL || typ == ServiceNow || typ == Atlassian || typ == SuccessFactors ||
+		typ == Kubernetes || typ == Vault || typ == AzureRBAC || typ == GCPIAM ||
+		typ == GitHubScan || typ == CyberArk || typ == Delinea || typ == BeyondTrust || typ == SAP || typ == Oracle ||
+		typ == UnixSSH || typ == SFTPDrop || typ == MCP || typ == Bedrock || typ == Vertex || typ == Foundry || typ == Copilot ||
+		typ == Agentforce || typ == AgentCore
+}
 
 // String omits the secret.
 func (p Params) String() string { return "governed.Params{" + p.Type + "}" }

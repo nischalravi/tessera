@@ -52,14 +52,14 @@ func govLive(b *Bundle) bool {
 
 // storedLive reports whether a revision's connector is built from its stored
 // config although its type is not governed (a Google Workspace connection: its
-// org units, customer and domain scope the sync). Its checks keep their own prober.
+// org units, customer and domain scope the sync; a Workday one: its host and api_version; Okta: its org URL; Entra: its tenant and cloud; Salesforce: its base URL and api_version; REST: its spec; SQL: its database settings). Its checks keep their own prober.
 func storedLive(b *Bundle) bool {
-	return !b.Simulated() && b.Conn.ConnectorType == governed.GoogleWorkspace
+	return !b.Simulated() && governed.IsStored(b.Conn.ConnectorType)
 }
 
 // storedConnector builds the connector of a stored-config revision (storedLive).
 func (o GovOptions) storedConnector(b *Bundle, now time.Time) (connectors.Connector, error) {
-	if b.cred == "" {
+	if needsSecret(b.Conn.ConnectorType) && b.cred == "" {
 		return nil, conflict("credential_unavailable", "the connection has no stored credential Tessera can open")
 	}
 	n, err := o.net(b, now)
@@ -77,7 +77,10 @@ func (o GovOptions) params(b *Bundle) governed.Params {
 	return governed.Params{Type: b.Conn.ConnectorType, BaseURL: b.Config.BaseURL, Settings: b.Config.Settings,
 		Secret: string(b.cred), Tenant: b.Conn.TenantID.String(), DataDir: o.DataDir, Prod: o.Prod,
 		Customer: b.Config.Customer, Domain: b.Config.Domain, OrgUnits: b.Config.BaseDNs,
-		AdminEmail: b.Config.AdminEmail}
+		AdminEmail: b.Config.AdminEmail,
+		TenantHost: b.Config.TenantHost, APIVersion: b.Config.APIVersion,
+		OrgURL: b.Config.OrgURL, TenantID: b.Config.TenantID, Cloud: b.Config.Cloud,
+		Rest: b.Config.Rest, SQL: b.Config.SQL}
 }
 
 func (o GovOptions) net(b *Bundle, now time.Time) (governed.Net, error) {

@@ -6519,9 +6519,110 @@ in the sync's failed list (`governed_not_opened`) by name, the env-configured `g
 place for that tenant (it would read the whole customer), and the other connectors are still read. `POST
 /api/connectors/sync` likewise does not read the env `google` connector for a tenant with a live Google connection;
 it queues the worker sync that reads the connection (issue #823). A connection never carries an endpoint override
-(`TESSERA_GOOGLE_API_URL` and `_TOKEN_URL` apply to a dev runtime's fake only). Okta, Entra, Workday, Salesforce,
-SCIM, generic REST, SQL and directory connections are still read from the environment or by their own feature;
-see issue #814 for the list.
+(`TESSERA_GOOGLE_API_URL` and `_TOKEN_URL` apply to a dev runtime's fake only).
+
+**Workday connections (issue #814).** A live (non-demo) Workday connection is read the same way: its `tenant_host`
+(the services host, in the Workday host allowlist, refused on save when it names a cloud metadata host) and its
+`api_version` (`v1`, `v44.0`; empty reads `v1`) are the host and the `{version}` of the request paths, and the sealed
+credential is JSON with `tenant` (the Workday tenant name), `client_id`, `client_secret` and optionally
+`refresh_token`. Workers and events are read from the default paths. A live Workday connection replaces an
+env-configured `workday` connector and fails closed like Google when it cannot be opened; the `TESSERA_WORKDAY_*`
+variables remain the dev fallback for a tenant without one. A non-demo `workday` connection created before this
+needs its credential re-saved in that JSON form.
+
+**Okta and Entra connections (issue #814).** A live (non-demo) Okta connection is read from its stored `org_url`
+(https, in the Okta host allowlist, refused on save when it names a cloud metadata host); its sealed credential is
+JSON with either `client_id`, `private_key` (PEM) and optionally `key_id` (an OAuth service app), or `api_token` (an
+SSWS token). A live Entra connection is read from its stored `tenant_id` and `cloud` (`global`, `usgov` or `china`,
+which select the Graph and sign-in endpoints; no URL is stored), and its sealed credential is JSON with `client_id`
+and `client_secret`. Identities, enrolled factors (Okta) and sign-in activity and authentication methods (Entra) are
+read as by default. Both replace the env-configured connector of the system for the tenant and fail closed like
+Google when they cannot be opened; the `TESSERA_OKTA_*` and `TESSERA_ENTRA_*` variables remain the dev fallback for a
+tenant without one. A connection never carries an endpoint override (`TESSERA_OKTA_ORG_URL`,
+`TESSERA_ENTRA_GRAPH_URL` and `_AUTHORITY_URL` apply to a dev runtime's fake only). A non-demo `okta` or `entra`
+connection created before this needs its credential re-saved in that JSON form.
+
+**Salesforce connections (issue #814).** A live (non-demo) Salesforce connection is read from its stored `base_url`
+(an https Salesforce domain, `*.my.salesforce.com`, `*.salesforce.com` or `*.force.com`, no path; refused on save
+otherwise, and when it names a cloud metadata host) and optional `api_version` (`v61.0`). Its sealed credential is the
+JSON of the JWT bearer flow: `client_id`, `username`, `private_key` (PEM) and optionally `login_url` (a sandbox, also
+a Salesforce domain). It replaces the env-configured `salesforce` connector for the tenant and fails closed like
+Google when it cannot be opened; the `TESSERA_SALESFORCE_*` variables remain the dev fallback for a tenant without
+one, and `TESSERA_SALESFORCE_BASE_URL` overrides the stored URL in a dev runtime only (refused elsewhere). The outbound
+SCIM connection (`scim_app`) has no env-configured read connector: it is configured only from its stored `base_url` and
+sealed token. A generic REST (`rest_generic`) connection is read from its stored spec (base URL, auth, resources and
+mapping) and a SQL (`sql`) connection from its stored engine, host, database, user, CA bundle and app
+statements, each with the sealed credential (the REST secret, the database password), instead of
+`TESSERA_REST_SPEC`/`TESSERA_REST_CREDENTIAL` and `TESSERA_SQL_*`. Both follow the production URL and host rules
+unless the runtime is dev (no `http`, no `tls: disable`, no metadata host, refused on save and again when opened), and
+the connector replaces an env-configured one of the same system (the spec's or settings' `system`, default `rest`
+and `sql`), also when the connection does not open. The env variables remain the dev fallback for a tenant without
+a connection. The directory types (AD/LDAP, IBM i, RACF) have no env-configured read connector: their host, base
+DNs and bind secret already come only from the connection's stored config and sealed credential (or a Directory
+Agent), so nothing there moves (issue #814).
+
+**ServiceNow, Atlassian and SuccessFactors connections (issue #814).** These three are governed connectors (their
+settings and sealed credential are as in their sections above); their read connector is now built from the
+connection's stored config too, not through the `TESSERA_*` variables: the instance `base_url` and settings come
+from the revision, the password, OAuth secret, API token (or `{"api_token","admin_api_key"}` JSON) or key bundle from
+the sealed credential. `base_url` is refused on save unless it is https on the vendor's domain (`*.service-now.com`
+or `*.servicenowservices.com`; `*.atlassian.net`; a SuccessFactors data-center host), with no path, and never a cloud
+metadata host. A live connection replaces the env-configured connector of the same system for the tenant and fails
+closed like Google when it cannot be opened; `TESSERA_SERVICENOW_*`, `TESSERA_ATLASSIAN_*` and
+`TESSERA_SUCCESSFACTORS_*` remain the dev fallback for a tenant without one. `TESSERA_SERVICENOW_BASE_URL`,
+`TESSERA_ATLASSIAN_BASE_URL` and `_ADMIN_URL` and `TESSERA_SUCCESSFACTORS_BASE_URL` override the stored URLs in a dev
+runtime only (refused elsewhere). Stored credentials keep their current format: no re-save is needed.
+
+**Kubernetes, Vault, Azure RBAC and GCP IAM connections (issue #814).** These four are governed connectors (their
+settings and sealed credential are as in their sections below; each already has a connection template, so there is no
+schema change); their read connector is now built from the connection's stored config too, not through the
+`TESSERA_KUBERNETES_*`, `TESSERA_VAULT_*`, `TESSERA_AZURE_*` and `TESSERA_GCP_*` variables. The Kubernetes and Vault
+`base_url` is refused on save unless it is https with no path on 443, 6443 or 8443 (Kubernetes) or 443, 8200 or 8443
+(Vault), and never a cloud metadata host; Azure and GCP store no URL and reach the public cloud only. The sealed
+credential is the ServiceAccount token (Kubernetes), the Vault token, the client secret or certificate PEM (Azure) and
+the service account key JSON (GCP), in the formats they already had: no re-save is needed. A Kubernetes cluster with a
+private CA may instead seal JSON `{"token": "...", "ca_bundle": "<PEM>"}`: the API server's certificate is then verified
+against the bundle (and only for that connection) instead of the system roots. A live connection replaces the
+env-configured connector of the same system for the tenant and fails closed like Google when it cannot be opened; the
+variables remain the dev fallback for a tenant without one. `TESSERA_KUBERNETES_BASE_URL`, `TESSERA_VAULT_BASE_URL` and
+the Azure and GCP endpoint overrides apply to a dev runtime only (refused elsewhere).
+
+**GitHub scan, PAM vault, ERP, Unix SSH and SFTP drop connections (issue #814).** These are governed connectors
+(settings and sealed credential as in their sections; no schema change); their read connector is now built from the
+connection's stored config too, not through the `TESSERA_GITHUB_SCAN_*`, `TESSERA_CYBERARK_*`, `TESSERA_DELINEA_*`,
+`TESSERA_BEYONDTRUST_*`, `TESSERA_SAP_*`, `TESSERA_ORACLE_*`, `TESSERA_UNIXSSH_*` and `TESSERA_SFTPDROP_*` variables.
+The server comes from the revision (`base_url`; for SSH and SFTP the `host`, `port`, `username` and pinned `host_key`
+settings), the secret from the sealed credential (token, vault password or API key, ERP client secret, or the
+unencrypted SSH private key), in the formats they already had: no re-save is needed. The pinned host key stays a
+required setting (it is a public key, not a secret) and is mandatory in every environment: a connection without one
+does not open. `base_url` is refused on save unless it is https on a public host name and never a cloud metadata
+host; an SSH or SFTP `host` is refused on save and when opened if it is a cloud metadata host (private, loopback and
+link-local addresses are refused by the dialer). A live connection replaces the env-configured connector of the same
+system (`github-scan`, `cyberark`, `delinea`, `beyondtrust`, `sap`, `oracle`, `unix`, `sftp`) for the tenant and fails
+closed like Google when it cannot be opened; the variables remain the dev fallback for a tenant without one. The
+`TESSERA_GITHUB_SCAN_API_URL` and `TESSERA_<VENDOR>_BASE_URL` overrides apply to a dev runtime only (refused
+elsewhere); SSH and SFTP have no override (a dev host is a loopback address).
+
+**MCP server and agent platform connections (issue #814, the last of the connector moves).** MCP, Amazon Bedrock Agents,
+Google Vertex AI Agent Engine, Azure AI Foundry, Microsoft Copilot Studio, Salesforce Agentforce and AWS Bedrock
+AgentCore are governed connectors (settings and sealed credential as in their sections; no schema change); their read
+connector is now built from the connection's stored config too, not through the `TESSERA_MCP_*`, `TESSERA_BEDROCK_*`,
+`TESSERA_VERTEX_*`, `TESSERA_FOUNDRY_*`, `TESSERA_COPILOT_*`, `TESSERA_AGENTFORCE_*` and `TESSERA_AGENTCORE_*`
+variables. The endpoint comes from the revision (`base_url`: the MCP endpoint, the Foundry project endpoint, the
+Dataverse environment URL, the org's My Domain URL; Bedrock `region`; Vertex `project_id`, `location`), the secret from
+the sealed credential (token or API key, access key JSON, service account key JSON, client secret or certificate PEM,
+Agentforce key JSON), in the formats they already had: no re-save is needed. `base_url` is refused on save unless it is
+https and the connector would open it (a public host and never a cloud metadata host for MCP; `*.services.ai.azure.com`
+with `/api/projects/<project>` for Foundry; `*.crm.dynamics.com` with no path for Copilot Studio; a Salesforce domain
+for Agentforce). AgentCore has no live client: it reads the recorded snapshot named in its settings, confined to the
+tenant's directory, and is refused in prod as before; it takes no credential. A live connection replaces the
+env-configured connector of the same system (`mcp`, `aws-bedrock`, `gcp-vertex`, `azure-foundry`, `copilot-studio`,
+`salesforce-agentforce`, `aws-agentcore`) for the tenant and fails closed like Google when it cannot be opened; the
+variables remain the dev fallback for a tenant without one. `TESSERA_MCP_URL`, `TESSERA_FOUNDRY_ENDPOINT`,
+`TESSERA_COPILOT_URL`, `TESSERA_AGENTFORCE_BASE_URL` and the Bedrock, Vertex, Foundry and Copilot endpoint and authority
+overrides apply to a dev runtime only (refused elsewhere).
+
+With this, every connector `all.FromEnv` registers has a stored-config build.
 
 Minimum read-only permissions:
 

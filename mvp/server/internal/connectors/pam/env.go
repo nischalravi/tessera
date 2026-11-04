@@ -43,3 +43,37 @@ func ConfigFromEnv(vendor string, getenv func(string) string) (Config, error) {
 	return Config{Vendor: vendor, BaseURL: getenv(p + "BASE_URL"), Username: getenv(p + "USER"), Secret: secret,
 		APIRoot: getenv(p + "API_ROOT")}, nil
 }
+
+// Stored is a vault connection as the readiness service holds it: the vendor, server, service user and
+// API root of its stored config and its opened credential.
+type Stored struct {
+	Vendor   string // cyberark, delinea or beyondtrust
+	BaseURL  string // https://pvwa.example.com
+	Username string // the service user (BeyondTrust: the run-as user)
+	APIRoot  string // optional API root path
+	// Credential is the sealed credential, opened: the user's password (BeyondTrust: the API key).
+	Credential string
+}
+
+// FromStored builds the read connector from a connection's stored config instead of TESSERA_<VENDOR>_*
+// variables. Nothing is read from the environment: getenv only supplies the dev override
+// TESSERA_<VENDOR>_BASE_URL (the caller passes the layer that refuses it outside dev).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	secret := strings.TrimSpace(s.Credential)
+	if secret == "" {
+		return nil, errors.New("pam: the connection has no stored credential")
+	}
+	base := strings.TrimSpace(getenv("TESSERA_" + strings.ToUpper(s.Vendor) + "_BASE_URL"))
+	if base == "" {
+		base = strings.TrimSpace(s.BaseURL)
+	}
+	if base == "" {
+		return nil, errors.New("pam: the connection's base_url is required")
+	}
+	v, err := Open(Config{Vendor: s.Vendor, BaseURL: base, Username: strings.TrimSpace(s.Username), Secret: connsync.NewSecret(secret),
+		APIRoot: strings.TrimSpace(s.APIRoot)}, rt, hc, now)
+	if err != nil {
+		return nil, err
+	}
+	return NewConnector(v), nil
+}

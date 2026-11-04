@@ -33,7 +33,9 @@ type Net struct {
 // endpointKeys are the overrides Net.Endpoints may hold.
 var endpointKeys = map[string]bool{"TESSERA_AZURE_MANAGEMENT_URL": true, "TESSERA_AZURE_AUTHORITY_URL": true,
 	"TESSERA_GCP_CRM_URL": true, "TESSERA_GCP_IAM_URL": true, "TESSERA_GCP_TOKEN_URL": true, "TESSERA_ATLASSIAN_ADMIN_URL": true, "TESSERA_BEDROCK_AGENT_URL": true,
-	"TESSERA_GOOGLE_API_URL": true, "TESSERA_GOOGLE_TOKEN_URL": true, "TESSERA_VERTEX_API_URL": true, "TESSERA_VERTEX_TOKEN_URL": true, "TESSERA_FOUNDRY_AUTHORITY_URL": true, "TESSERA_COPILOT_AUTHORITY_URL": true}
+	"TESSERA_GOOGLE_API_URL": true, "TESSERA_WORKDAY_BASE_URL": true, "TESSERA_SALESFORCE_BASE_URL": true, "TESSERA_KUBERNETES_BASE_URL": true, "TESSERA_VAULT_BASE_URL": true, "TESSERA_SERVICENOW_BASE_URL": true, "TESSERA_ATLASSIAN_BASE_URL": true, "TESSERA_SUCCESSFACTORS_BASE_URL": true, "TESSERA_OKTA_ORG_URL": true, "TESSERA_ENTRA_GRAPH_URL": true, "TESSERA_ENTRA_AUTHORITY_URL": true, "TESSERA_GOOGLE_TOKEN_URL": true, "TESSERA_VERTEX_API_URL": true, "TESSERA_VERTEX_TOKEN_URL": true, "TESSERA_FOUNDRY_AUTHORITY_URL": true, "TESSERA_COPILOT_AUTHORITY_URL": true,
+	"TESSERA_GITHUB_SCAN_API_URL": true, "TESSERA_CYBERARK_BASE_URL": true, "TESSERA_DELINEA_BASE_URL": true, "TESSERA_BEYONDTRUST_BASE_URL": true, "TESSERA_SAP_BASE_URL": true, "TESSERA_ORACLE_BASE_URL": true,
+	"TESSERA_MCP_URL": true, "TESSERA_FOUNDRY_ENDPOINT": true, "TESSERA_COPILOT_URL": true, "TESSERA_AGENTFORCE_BASE_URL": true}
 
 // Overrides layers n.Endpoints over getenv. It refuses them outside the dev runtime, and refuses an
 // unknown key, so a production connection can only reach the public cloud endpoints.
@@ -101,7 +103,7 @@ func (p Params) Env() (func(string) string, error) {
 		m["TESSERA_GITHUB_SCAN_ORG"], m["TESSERA_GITHUB_SCAN_API_URL"] = set("org"), p.BaseURL
 		m["TESSERA_GITHUB_SCAN_TOKEN"] = "env:" + secretVar
 	case AgentCore:
-		path, err := confine(p.DataDir, p.Tenant, set("snapshot"))
+		path, err := p.SnapshotPath()
 		if err != nil {
 			return nil, err
 		}
@@ -164,6 +166,12 @@ func (p Params) Env() (func(string) string, error) {
 		return nil, fmt.Errorf("governed: %s is read by its own feature, not by the connector sync", p.Type)
 	}
 	return func(k string) string { return m[k] }, nil
+}
+
+// SnapshotPath is the absolute path of an AgentCore connection's recorded snapshot, confined to the tenant's
+// directory (see confine).
+func (p Params) SnapshotPath() (string, error) {
+	return confine(p.DataDir, p.Tenant, strings.TrimSpace(p.Settings["snapshot"]))
 }
 
 // confine resolves a snapshot file name under <data dir>/<tenant id>/, the

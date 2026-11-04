@@ -182,3 +182,23 @@ func TestIngestRaisesTheExistingPolicies(t *testing.T) {
 		return nil
 	})
 }
+
+// FromStored builds the connector from the stored snapshot path and refuses production, as FromEnv does.
+func TestFromStored(t *testing.T) {
+	abs, err := filepath.Abs(filepath.Join("testdata", "runtimes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := FromStored(Stored{Snapshot: abs})
+	if err != nil || c.System() != System {
+		t.Fatalf("FromStored = %v, %v", c, err)
+	}
+	if res, err := c.Discover(context.Background()); err != nil || len(res.Agents) != 3 {
+		t.Errorf("Discover = %v, %v", res, err)
+	}
+	for name, s := range map[string]Stored{"prod": {Snapshot: abs, Prod: true}, "none": {}, "relative": {Snapshot: "runtimes.json"}} {
+		if _, err := FromStored(s); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

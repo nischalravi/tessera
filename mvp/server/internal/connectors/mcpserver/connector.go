@@ -169,3 +169,34 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 	}
 	return res, nil
 }
+
+// Stored is an MCP server connection as the readiness service holds it: the endpoint and settings of its
+// stored config and its opened credential.
+type Stored struct {
+	URL        string // the MCP endpoint, https
+	Owner      string // optional e-mail address of the accountable person
+	Name       string // optional display name
+	AuthHeader string // optional header name for an API key (default: Authorization: Bearer)
+	// Credential is the sealed credential, opened: the bearer token or API key.
+	Credential string
+}
+
+// FromStored builds the read connector from a connection's stored config instead of TESSERA_MCP_*
+// variables. Nothing is read from the environment: getenv only supplies the dev override TESSERA_MCP_URL
+// (the caller passes the layer that refuses it outside dev).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client, now func() time.Time) (connectors.Connector, error) {
+	cred := strings.TrimSpace(s.Credential)
+	if cred == "" {
+		return nil, errors.New("mcpserver: the connection has no stored credential")
+	}
+	u := strings.TrimSpace(getenv("TESSERA_MCP_URL"))
+	if u == "" {
+		u = strings.TrimSpace(s.URL)
+	}
+	c, err := Open(Config{URL: u, Name: strings.TrimSpace(s.Name), Owner: strings.TrimSpace(s.Owner), AuthHeader: strings.TrimSpace(s.AuthHeader),
+		Secret: connsync.NewSecret(cred)}, rt, hc)
+	if err != nil {
+		return nil, err
+	}
+	return NewConnector(c, now), nil
+}

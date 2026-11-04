@@ -14,14 +14,22 @@ import (
 	"unicode"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/copilotstudio"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/foundryagents"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/kubernetes"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vault"
 	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // ConnConfig is the typed, secret-free configuration of a connection
@@ -379,6 +387,17 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 		} else if cfg.Preset != "" {
 			bad("preset", "unknown SCIM preset %q", cfg.Preset)
 		}
+		if t.ID == "salesforce" {
+			// the connector reads the org's base_url: the same host rule it opens with, refused on save
+			if cfg.BaseURL != "" {
+				if _, err := salesforce.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL on a Salesforce domain (*.my.salesforce.com, *.salesforce.com or *.force.com), with no path")
+				}
+			}
+			if cfg.APIVersion != "" && !apiVersionRE.MatchString(cfg.APIVersion) {
+				bad("api_version", "must look like v61.0")
+			}
+		}
 	case "awsorg", "githubscan", "erp", "pam", "vms", "agentcore", "successfactors", "azurerbac", "gcpiam", "unixssh", "sftpdrop", "servicenow", "atlassian", "kubernetes", "vault", "mcp", "bedrock", "vertex", "foundry", "copilot", "agentforce":
 		typ := connectorType
 		if typ == "" && len(t.ConnectorTypes) > 0 {
@@ -413,8 +432,53 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 		case !takes && cfg.BaseURL != "":
 			bad("base_url", "this connector type takes no base URL")
 		}
+		if cfg.BaseURL != "" {
+			// the connector reads the instance at base_url: the same host rule it opens with, refused on save
+			switch typ {
+			case governed.ServiceNow:
+				if _, err := servicenow.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL on a ServiceNow domain (*.service-now.com or *.servicenowservices.com)")
+				}
+			case governed.Kubernetes:
+				if _, err := kubernetes.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL of the API server on 443, 6443 or 8443, with no path")
+				}
+			case governed.Vault:
+				if _, err := vault.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL of the Vault server on 443, 8200 or 8443, with no path")
+				}
+			case governed.GitHubScan, governed.CyberArk, governed.Delinea, governed.BeyondTrust, governed.SAP, governed.Oracle:
+				// ParseBaseURL refuses a cloud metadata host and a malformed domain, as the connector's Open does
+				if _, err := connsync.ParseBaseURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL of a public host name, not a cloud metadata service")
+				}
+			case governed.MCP:
+				if _, err := connsync.ParseBaseURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL of a public host name, not a cloud metadata service")
+				}
+			case governed.Foundry:
+				if _, err := foundryagents.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https Azure AI Foundry project endpoint (https://<account>.services.ai.azure.com/api/projects/<project>)")
+				}
+			case governed.Copilot:
+				if _, err := copilotstudio.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https Dataverse environment URL (https://<org>.crm.dynamics.com), with no path")
+				}
+			case governed.Agentforce:
+				if _, err := salesforce.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL of the Salesforce org (My Domain)")
+				}
+			case governed.Atlassian:
+				if _, err := atlassian.CheckSiteURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL on an Atlassian Cloud site (*.atlassian.net)")
+				}
+			}
+		}
 		for _, se := range governed.ValidateSettings(typ, cfg.Settings) {
 			bad("settings."+se.Key, "%s", se.Msg)
+		}
+		if h := strings.TrimSpace(cfg.Settings["host"]); h != "" && (typ == governed.UnixSSH || typ == governed.SFTPDrop) && safehttp.IsMetadataHost(h) {
+			bad("settings.host", "must not be a cloud metadata service")
 		}
 		if typ == governed.SuccessFactors && cfg.WriteMode != "" && cfg.WriteMode != "off" {
 			bad("write_mode", "SuccessFactors is a read-only HR source: write-back is not available")

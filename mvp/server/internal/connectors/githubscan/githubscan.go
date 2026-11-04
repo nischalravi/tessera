@@ -58,6 +58,37 @@ func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc 
 	return New(src, clock)
 }
 
+// Stored is a GitHub scan connection as the readiness service holds it: the organization and API URL of
+// its stored config and its opened credential.
+type Stored struct {
+	// Org is the organization to scan.
+	Org string
+	// BaseURL is the connection's base_url: empty for GitHub.com, https://host/api/v3 for GitHub Enterprise Server.
+	BaseURL string
+	// Credential is the sealed credential, opened: a read-only token (Contents and Metadata: read).
+	Credential string
+}
+
+// FromStored builds the connector from a connection's stored config instead of TESSERA_GITHUB_SCAN_*
+// variables. Nothing is read from the environment: getenv only supplies the dev override
+// TESSERA_GITHUB_SCAN_API_URL (the caller passes the layer that refuses it outside dev).
+func FromStored(s Stored, getenv func(string) string, rt connsync.Runtime, hc *http.Client) (connectors.Connector, error) {
+	tok := strings.TrimSpace(s.Credential)
+	if tok == "" {
+		return nil, errors.New("githubscan: the connection has no stored credential")
+	}
+	api := strings.TrimSpace(getenv("TESSERA_GITHUB_SCAN_API_URL"))
+	if api == "" {
+		api = strings.TrimSpace(s.BaseURL)
+	}
+	clock := func() time.Time { return time.Now().UTC() }
+	src, err := NewREST(RESTConfig{APIURL: api, Org: strings.TrimSpace(s.Org), Token: connsync.NewSecret(tok)}, rt, hc, clock)
+	if err != nil {
+		return nil, err
+	}
+	return New(src, clock)
+}
+
 // RESTConfigFromEnv is the environment mapping of FromEnv on its own, so a
 // governed connection (internal/connectors/governed) reads its settings the same way.
 func RESTConfigFromEnv(getenv func(string) string) (RESTConfig, error) {
