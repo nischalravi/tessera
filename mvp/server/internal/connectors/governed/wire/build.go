@@ -70,10 +70,6 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 		cn, err = githubscan.FromEnv(getenv, now(), rt, hc)
 	case governed.AgentCore:
 		cn, err = agentcore.FromEnv(getenv, now())
-	case governed.Kubernetes:
-		cn, err = kubernetes.FromEnv(getenv, rt, hc, now)
-	case governed.Vault:
-		cn, err = vault.FromEnv(getenv, rt, hc, now)
 	case governed.UnixSSH:
 		cn, err = unixssh.FromEnv(getenv, rt)
 	case governed.MCP:
@@ -99,15 +95,6 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 		}
 	case governed.SFTPDrop:
 		cn, err = sftpdrop.FromEnv(getenv, rt)
-	case governed.AzureRBAC, governed.GCPIAM:
-		if getenv, err = n.Overrides(getenv); err != nil {
-			return nil, err
-		}
-		if p.Type == governed.AzureRBAC {
-			cn, err = azurerbac.FromEnv(getenv, rt, hc, now)
-		} else {
-			cn, err = gcpiam.FromEnv(getenv, rt, hc, now)
-		}
 	}
 	if err != nil {
 		return nil, err
@@ -115,7 +102,7 @@ func Connector(p governed.Params, n governed.Net) (connectors.Connector, error) 
 	return &counted{Connector: cn}, nil
 }
 
-// stored builds the connector of a Google Workspace, Workday, Okta, Entra, Salesforce, REST, SQL, ServiceNow, Atlassian or SuccessFactors connection from its stored config (a Google
+// stored builds the connector of a Google Workspace, Workday, Okta, Entra, Salesforce, REST, SQL, ServiceNow, Atlassian, SuccessFactors, Kubernetes, Vault, Azure RBAC or GCP IAM connection from its stored config (a Google
 // connection's org units, customer and domain, a Workday connection's host and api_version, an Okta org URL, an Entra
 // tenant and cloud scope the read). The
 // connector replaces an env-configured one of the system (connectors.ConnectionBacked).
@@ -150,6 +137,21 @@ func stored(p governed.Params, n governed.Net) (connectors.Connector, error) {
 		cn, err = successfactors.FromStored(successfactors.Stored{BaseURL: p.BaseURL, CompanyID: set("company_id"), Auth: set("auth"),
 			Username: set("username"), UserID: set("user_id"), ClientID: set("client_id"), LegalEntity: set("legal_entity"), Credential: p.Secret},
 			getenv, n.RT, n.HC)
+	case governed.Kubernetes:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = kubernetes.FromStored(kubernetes.Stored{BaseURL: p.BaseURL, Namespaces: set("namespaces"), OpenShift: set("openshift"),
+			Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.Vault:
+		cn, err = vault.FromStored(vault.Stored{BaseURL: p.BaseURL, Namespace: strings.TrimSpace(p.Settings["namespace"]), Credential: p.Secret},
+			getenv, n.RT, n.HC, now)
+	case governed.AzureRBAC:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = azurerbac.FromStored(azurerbac.Stored{TenantID: set("tenant_id"), ClientID: set("client_id"), SubscriptionIDs: set("subscription_ids"),
+			ManagementGroupIDs: set("management_group_ids"), IncludeEligible: set("include_eligible"), Credential: p.Secret}, getenv, n.RT, n.HC, now)
+	case governed.GCPIAM:
+		set := func(k string) string { return strings.TrimSpace(p.Settings[k]) }
+		cn, err = gcpiam.FromStored(gcpiam.Stored{OrganizationID: set("organization_id"), FolderIDs: set("folder_ids"), ProjectIDs: set("project_ids"),
+			Credential: p.Secret}, getenv, n.RT, n.HC, now)
 	case governed.Salesforce:
 		cn, err = salesforce.FromStored(salesforce.Stored{BaseURL: p.BaseURL, APIVersion: p.APIVersion, Credential: p.Secret}, getenv, n.RT, n.HC, now)
 	case governed.Okta:

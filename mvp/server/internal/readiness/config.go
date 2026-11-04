@@ -17,11 +17,13 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/atlassian"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/kubernetes"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/salesforce"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/servicenow"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/vault"
 	scimpreset "github.com/nischalravi/tessera/mvp/server/internal/provision/scim"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
@@ -433,6 +435,14 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 			case governed.ServiceNow:
 				if _, err := servicenow.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
 					bad("base_url", "must be an https URL on a ServiceNow domain (*.service-now.com or *.servicenowservices.com)")
+				}
+			case governed.Kubernetes:
+				if _, err := kubernetes.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL of the API server on 443, 6443 or 8443, with no path")
+				}
+			case governed.Vault:
+				if _, err := vault.CheckURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {
+					bad("base_url", "must be an https URL of the Vault server on 443, 8200 or 8443, with no path")
 				}
 			case governed.Atlassian:
 				if _, err := atlassian.CheckSiteURL(cfg.BaseURL, connsync.Runtime{Env: env}); err != nil {

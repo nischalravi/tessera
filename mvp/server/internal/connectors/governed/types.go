@@ -654,11 +654,12 @@ const (
 
 // IsStored reports whether a connection of the type is read through a connector built from its
 // stored config. Most are not governed (Lookup does not know them, and their checks keep their own
-// prober); ServiceNow, Atlassian and SuccessFactors are governed and keep the governed prober, but
+// prober); ServiceNow, Atlassian, SuccessFactors, Kubernetes, Vault, Azure RBAC and GCP IAM are governed and keep the governed prober, but
 // their connector is built from the stored config too.
 func IsStored(typ string) bool {
 	return typ == GoogleWorkspace || typ == Workday || typ == Okta || typ == Entra || typ == Salesforce ||
-		typ == RestGeneric || typ == SQL || typ == ServiceNow || typ == Atlassian || typ == SuccessFactors
+		typ == RestGeneric || typ == SQL || typ == ServiceNow || typ == Atlassian || typ == SuccessFactors ||
+		typ == Kubernetes || typ == Vault || typ == AzureRBAC || typ == GCPIAM
 }
 
 // String omits the secret.

@@ -6573,6 +6573,20 @@ closed like Google when it cannot be opened; `TESSERA_SERVICENOW_*`, `TESSERA_AT
 `TESSERA_ATLASSIAN_BASE_URL` and `_ADMIN_URL` and `TESSERA_SUCCESSFACTORS_BASE_URL` override the stored URLs in a dev
 runtime only (refused elsewhere). Stored credentials keep their current format: no re-save is needed.
 
+**Kubernetes, Vault, Azure RBAC and GCP IAM connections (issue #814).** These four are governed connectors (their
+settings and sealed credential are as in their sections below; each already has a connection template, so there is no
+schema change); their read connector is now built from the connection's stored config too, not through the
+`TESSERA_KUBERNETES_*`, `TESSERA_VAULT_*`, `TESSERA_AZURE_*` and `TESSERA_GCP_*` variables. The Kubernetes and Vault
+`base_url` is refused on save unless it is https with no path on 443, 6443 or 8443 (Kubernetes) or 443, 8200 or 8443
+(Vault), and never a cloud metadata host; Azure and GCP store no URL and reach the public cloud only. The sealed
+credential is the ServiceAccount token (Kubernetes), the Vault token, the client secret or certificate PEM (Azure) and
+the service account key JSON (GCP), in the formats they already had: no re-save is needed. A Kubernetes cluster with a
+private CA may instead seal JSON `{"token": "...", "ca_bundle": "<PEM>"}`: the API server's certificate is then verified
+against the bundle (and only for that connection) instead of the system roots. A live connection replaces the
+env-configured connector of the same system for the tenant and fails closed like Google when it cannot be opened; the
+variables remain the dev fallback for a tenant without one. `TESSERA_KUBERNETES_BASE_URL`, `TESSERA_VAULT_BASE_URL` and
+the Azure and GCP endpoint overrides apply to a dev runtime only (refused elsewhere).
+
 Minimum read-only permissions:
 
 * **Okta.** OAuth scopes `okta.users.read`, `okta.groups.read`, `okta.apps.read`, `okta.roles.read`
