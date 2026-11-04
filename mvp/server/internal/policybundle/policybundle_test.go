@@ -120,7 +120,12 @@ func TestLoadFindings(t *testing.T) {
 		{"test bad expect", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\ncases:\n  - {name: a, principal: 'Tessera::Identity::\"a\"', action: birthright, resource: 'Tessera::Role::\"r\"', expect: maybe}\n"}, "tests/b.yaml|invalid_case"},
 		{"test bad uid", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\ncases:\n  - {name: a, principal: alice, action: birthright, resource: 'Tessera::Role::\"r\"', expect: allow}\n"}, "tests/b.yaml|invalid_case"},
 		{"test bad action", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\ncases:\n  - {name: a, principal: 'Tessera::Identity::\"a\"', action: delete, resource: 'Tessera::Role::\"r\"', expect: allow}\n"}, "tests/b.yaml|invalid_case"},
-		{"test entity type error", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\nentities:\n  - {uid: {type: Tessera::Identity, id: a}, attrs: {type: 1}}\ncases:\n  - {name: a, principal: 'Tessera::Identity::\"a\"', action: birthright, resource: 'Tessera::Role::\"r\"', expect: allow}\n"}, "tests/b.yaml|validation"},
+		{"test entity type error", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\nentities:\n  - {uid: {type: Tessera::Identity, id: a}, parents: [], attrs: {type: 1}}\ncases:\n  - {name: a, principal: 'Tessera::Identity::\"a\"', action: birthright, resource: 'Tessera::Role::\"r\"', expect: allow}\n"}, "tests/b.yaml|validation"},
+		{"test entity without parents", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\nentities:\n  - {uid: {type: Tessera::Identity, id: a}, attrs: {}}\ncases:\n  - {name: a, principal: 'Tessera::Identity::\"a\"', action: birthright, resource: 'Tessera::Role::\"r\"', expect: allow}\n"}, "tests/b.yaml|syntax"},
+		{"unrelated finding and entity parse error", map[string]string{
+			"roles/payments-analyst.yaml": "schema: tessera.role/v1\nkey: payments-analyst\nname: P\nrisk: extreme\n",
+			"tests/b.yaml":                "schema: tessera.test/v1\nentities:\n  - {uid: {type: Tessera::Identity, id: a}, attrs: {}}\ncases:\n  - {name: a, principal: 'Tessera::Identity::\"a\"', action: birthright, resource: 'Tessera::Role::\"r\"', expect: allow}\n"},
+			"roles/payments-analyst.yaml|invalid_risk,tests/b.yaml|syntax"},
 		{"empty test", map[string]string{"tests/b.yaml": "schema: tessera.test/v1\n"}, "tests/b.yaml|empty_test"},
 	}
 	for _, c := range cases {
@@ -208,10 +213,13 @@ func TestAgentScopeCases(t *testing.T) {
 	f := with(good(t), map[string]string{"tests/agents.yaml": `schema: tessera.test/v1
 entities:
   - uid: {type: Tessera::Agent, id: "entra:7f3c"}
+    parents: []
     attrs: {type: ai_agent, status: active, created_days: 3, attrs: {}, source: entra, kind: bot}
   - uid: {type: Tessera::Resource, id: "aws:support-bucket"}
+    parents: []
     attrs: {system: aws, tags: [support], privileged: false}
   - uid: {type: Tessera::Resource, id: "aws:pii-bucket"}
+    parents: []
     attrs: {system: aws, tags: [pii], privileged: false}
 cases:
   - name: in scope
