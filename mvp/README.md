@@ -637,14 +637,24 @@ agent (`agent:<agent id>/<name>`); a secret typed in Tessera or a vault referenc
   connect group authority (USE, CREATE, CONNECT, JOIN), CLAUTH, dataset and general resource profiles are not read. The attribute names follow the IBM SDBM schema and have only been run against the in-process
   fake (a live z/OS check is still to do).
 - **IBM i** (`internal/connectors/ibmi`, template `ibmi`, connector type `ibmi`). IBM i has no LDAP view of its
-  profiles; they are read from Db2 for i (`QSYS2.USER_INFO`) over the host servers (DRDA), which the Go standard
-  library cannot speak. So this release ships the plug-in contract (`ibmi.Source`: list profiles, bounded, read-only)
-  and the module that maps profiles to the typed result: each profile is an account (`*DISABLED` is disabled), each
+  profiles; they are read from Db2 for i (`QSYS2.USER_INFO`). The host servers (DRDA) cannot be spoken by the Go
+  standard library, so the live transport (`ibmi.OpenMapepire`, registered by the agent) uses IBM's open-source
+  **Mapepire** server for IBM i: JSON over a TLS WebSocket, default port 8076 (install Mapepire on the IBM i and give
+  it a certificate from your CA, then put that CA in the connection's CA bundle). The agent dials only through its
+  safedial Dialer (the host and port must be on `allowed_targets`; 8076 passes the port policy), verifies the
+  certificate chain and host name, signs in with HTTP Basic as the connection's user (the IBM i profile) and the
+  credential from the agent's store, and opens the job `access=read only`. It sends one fixed, parameter-free
+  `SELECT ... FROM QSYS2.USER_INFO` and nothing else, pages the result 200 rows at a time, and is bounded by the
+  sync's account limit (more is an error, never a cut-off list), 4 MiB per reply, 32 MiB in all and a 20 s
+  deadline per read or write. Errors have fixed text (`ibmi: the system refused the sign-in`, and so on); the
+  server's own error text and the credential are never read into an error or log. The module maps profiles to the typed result: each profile is an account (`*DISABLED` is disabled), each
   group profile and supplemental group a group (privileged when the group profile itself holds a privileged
   authority or class, since members hold the group's special authorities), each special authority a group (all
-  eight are privileged) and the `*SECOFR` and `*SECADM` classes privileged groups. **The live transport is
-  not built:** the agent build registers `ibmi.NoTransport`, which answers `unsupported`, and the template has no live
-  check (its items are attested); the gallery tile and wizard say it is a preview that cannot sync yet. The
+  eight are privileged) and the `*SECOFR` and `*SECADM` classes privileged groups. **Verified against an in-process
+  fake Mapepire server only**: a real IBM i with Mapepire must confirm the message format, the column names and the
+  `access=read only` property. **The template's items stay attested**: readiness live checks run as agent probe
+  jobs, which carry no module name and use the LDAP prober, so they cannot yet run against Mapepire (a module-aware
+  probe job is a follow-up). The gallery tile keeps its Preview badge. The
   connection's user field holds the profile name (1 to 10 of A-Z, 0-9, `#`, `$`, `@`, `_`, not starting with a digit
   or `_`); no base DN.
 

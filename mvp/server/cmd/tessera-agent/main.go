@@ -217,12 +217,11 @@ func runAgent(cfg *agent.Config, stderr io.Writer) error {
 
 // executor builds the agent's Executor: the built-in LDAP reader and the
 // plug-in modules this build carries (the plug-in host, issue #561). RACF reads
-// z/OS LDAP (SDBM); IBM i has no live transport in this build yet and answers
-// "unsupported".
+// z/OS LDAP (SDBM); IBM i reads Db2 for i through Mapepire (JSON over a TLS WebSocket).
 func executor(cfg *agent.Config, creds agent.CredentialStore, sealKey *ecdh.PrivateKey, pushRoots *x509.CertPool) (*agent.Executor, error) {
 	ex := &agent.Executor{Allow: cfg.Allow(), Creds: creds, New: ldapProber, NewSyncer: ldapSync,
 		AllowPush: cfg.AllowPush(), PushRoots: pushRoots, SealKey: sealKey}
-	for _, m := range []agent.Module{racf.Module(racf.OpenLDAP), ibmi.Module(ibmi.NoTransport)} {
+	for _, m := range []agent.Module{racf.Module(racf.OpenLDAP), ibmi.Module(ibmi.OpenMapepire)} {
 		if err := ex.Register(m); err != nil {
 			return nil, err
 		}
