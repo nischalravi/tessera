@@ -66,13 +66,14 @@ In:
 | resource | `tessera_review_schedule` (the issue's "review templates") | `/api/v1/reviews/schedules` (`reviews.manage`: operator with `tessera:write`) |
 | data source | `tessera_identities` | `/api/v1/identities` |
 | data source | `tessera_entitlements` | `/api/v1/groups` |
+| data source | `tessera_groups` | `/api/v1/groups` (read-only view of the same route as `tessera_entitlements`, plus `kind` and `privileged` filters) |
 | data source | `tessera_connectors` | `/api/v1/connections` (needs the auditor role too) |
 | resource | `tessera_alert_rule` | `/api/v1/proposals/alert-rules/{rule_id}` (needs `config.propose`; read with `tessera:audit` and the auditor role) |
 | resource | `tessera_catalog_item` | `/api/v1/proposals/catalog-items/{group_id}` (needs `config.propose`; no read) |
 | resource | `tessera_business_role` | `/api/v1/proposals/roles` (needs `config.propose`; read with `tessera:read`) |
 | resource | `tessera_sod_ruleset` | `/api/v1/proposals/sod-rulesets` (needs `config.propose`; read with `tessera:read`) |
 
-`tessera_roles` is not offered: the route is refused for tokens. `tessera_review_schedule` supports import (by UUID), plan-time
+`tessera_roles` is not offered: the route is refused for tokens (re-checked for #719 v1: no proposal or read route for connections, birthright rules, mitigating controls, approval policies, alert channels, SIEM sinks or transport has been added, so those resources stay out until the server offers a machine-client path). `tessera_review_schedule` supports import (by UUID), plan-time
 validation (ranges, enums, `reminder_days < duration_days`, `escalate` needs a reviewer, RFC 3339 times) and server validation errors
 surface unchanged. The API has no delete route and no read-one route: destroy disables the schedule, and read lists and filters.
 No resource here carries a secret, so there is no write-only attribute yet; the provider's own `private_key` is `Sensitive` and is

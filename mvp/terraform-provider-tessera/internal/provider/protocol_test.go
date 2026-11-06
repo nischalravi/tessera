@@ -285,3 +285,12 @@ func num(t *testing.T, v tftypes.Value) int64 {
 	i, _ := f.Int64()
 	return i
 }
+
+func boolv(t *testing.T, v tftypes.Value) bool {
+	t.Helper()
+	var b bool
+	if err := v.As(&b); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
