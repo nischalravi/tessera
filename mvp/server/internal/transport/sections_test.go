@@ -60,7 +60,7 @@ func (e *env) seedSections(t *testing.T) {
 			return err
 		}
 		return tx.InsertSiemSink(&store.SiemSink{ID: "k-1", Name: "Splunk", Kind: "webhook", Format: "json",
-			Target: "https://splunk.example:8088/services/collector", Flavor: "hec", SecretSealed: []byte("sealed"), IncludeHTTP: true,
+			Target: "https://splunk.example:8088/services/collector/tok-SECRET123?token=qs-SECRET456", Flavor: "hec", SecretSealed: []byte("sealed"), IncludeHTTP: true,
 			Enabled: true, CreatedAt: t0, UpdatedAt: t0})
 	})
 }
@@ -80,7 +80,7 @@ func TestSections_ExportCarriesNoSecretsOrPeople(t *testing.T) {
 	e := newEnv(t)
 	e.seedSections(t)
 	b := e.bundleOf(t)
-	if b.Version != 2 || len(b.CatalogItems) != 2 || len(b.ReviewSchedules) != 1 || len(b.AlertRules) != 2 || len(b.SiemSinks) != 1 {
+	if b.Version != 3 || len(b.CatalogItems) != 2 || len(b.ReviewSchedules) != 1 || len(b.AlertRules) != 2 || len(b.SiemSinks) != 1 {
 		t.Fatalf("bundle: v%d %d catalog, %d reviews, %d rules, %d sinks", b.Version, len(b.CatalogItems), len(b.ReviewSchedules), len(b.AlertRules), len(b.SiemSinks))
 	}
 	raw, _ := json.Marshal(b)
@@ -88,6 +88,14 @@ func TestSections_ExportCarriesNoSecretsOrPeople(t *testing.T) {
 		if strings.Contains(string(raw), leak) {
 			t.Errorf("the bundle mentions %q: %s", leak, raw)
 		}
+	}
+	for _, leak := range []string{"tok-SECRET123", "qs-SECRET456", "/services/collector", "token="} {
+		if strings.Contains(string(raw), leak) {
+			t.Errorf("the bundle carries part of a sink target (%q): %s", leak, raw)
+		}
+	}
+	if k := b.SiemSinks[0]; k.Target != "" || k.TargetOrigin != "https://splunk.example:8088" || !k.TargetRequiredOnImport {
+		t.Errorf("sink target: %+v", k)
 	}
 	if !b.SiemSinks[0].NeedsSecret {
 		t.Error("a sink with a token should say the target needs one")
@@ -295,5 +303,119 @@ func TestSections_ProdRefusesLocalhostSinks(t *testing.T) {
 	})
 	if len(p.Refusals) == 0 || !strings.Contains(p.Refusals[0], "localhost") {
 		t.Errorf("refusals %v", p.Refusals)
+	}
+}
+
+func TestSections_WithheldTargets(t *testing.T) {
+	e := newEnv(t)
+	e.seedSections(t)
+	e.trust(t)
+	signed := e.export(t)
+	// A new sink: added disabled with no target, and the plan says it needs one.
+	p := e.plan(t, signed.JWS, Target{})
+	var found bool
+	for _, it := range p.Items {
+		if it.Section == SecSiemSinks && it.Name == "Splunk" {
+			found = true
+			if it.Action != Add || !it.NeedsTarget || !strings.Contains(strings.Join(it.Notes, " "), "needs target") {
+				t.Errorf("plan item %+v", it)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no sink item: %+v", p.Items)
+	}
+	if _, err := e.apply(t, signed.JWS, false); err != nil {
+		t.Fatal(err)
+	}
+	write(t, e.dst, func(tx *store.TenantTx) error {
+		sinks, _ := tx.SiemSinks()
+		if len(sinks) != 1 || sinks[0].Enabled || sinks[0].Target != "" || len(sinks[0].SecretSealed) != 0 {
+			t.Errorf("new sink must be disabled with no target: %+v", sinks)
+		}
+		return nil
+	})
+	// Planning again: still needs a target, nothing to change.
+	for _, it := range e.plan(t, signed.JWS, Target{}).Items {
+		if it.Section == SecSiemSinks && (it.Action != Unchanged || !it.NeedsTarget) {
+			t.Errorf("second plan %+v", it)
+		}
+	}
+}
+
+func TestSections_WithheldTargetKeepsExistingTarget(t *testing.T) {
+	e := newEnv(t)
+	e.seedSections(t)
+	e.trust(t)
+	write(t, e.dst, func(tx *store.TenantTx) error {
+		return tx.InsertSiemSink(&store.SiemSink{ID: "k-d", Name: "Splunk", Kind: "webhook", Format: "json",
+			Target: "https://splunk.example:8088/other-path", Flavor: "hec", IncludeHTTP: true, Enabled: true, CreatedAt: t0, UpdatedAt: t0})
+	})
+	raw := e.export(t).JWS
+	for _, it := range e.plan(t, raw, Target{}).Items {
+		if it.Section == SecSiemSinks && (it.Action != Unchanged || it.NeedsTarget) {
+			t.Errorf("same origin should be unchanged: %+v", it)
+		}
+	}
+	if _, err := e.apply(t, raw, false); err != nil {
+		t.Fatal(err)
+	}
+	write(t, e.dst, func(tx *store.TenantTx) error {
+		sinks, _ := tx.SiemSinks()
+		if len(sinks) != 1 || sinks[0].Target != "https://splunk.example:8088/other-path" || !sinks[0].Enabled {
+			t.Errorf("existing sink changed: %+v", sinks)
+		}
+		return nil
+	})
+}
+
+func TestSections_Version2PlaintextTargetStillImports(t *testing.T) {
+	e := newEnv(t)
+	b := e.bundleOf(t)
+	b.Version = 2
+	b.SiemSinks = []SiemSink{{Name: "Old", Kind: "webhook", Format: "json", Flavor: "json", Target: "https://old.example/hook"}}
+	var p *Plan
+	write(t, e.dst, func(tx *store.TenantTx) error {
+		var err error
+		v := &Verified{Bundle: b, Hash: "h", Signer: &store.TrustedSigner{KID: "k", Label: "l"}}
+		if p, err = MakePlan(tx, e.rd, v, Target{}, t0); err != nil {
+			return err
+		}
+		return applySiemSink(tx, Item{Name: "Old"}, b, Target{}, "h", "admin", nil, t0)
+	})
+	for _, it := range p.Items {
+		if it.Section == SecSiemSinks && (it.Action != Add || it.NeedsTarget) {
+			t.Errorf("plan %+v", it)
+		}
+	}
+	write(t, e.dst, func(tx *store.TenantTx) error {
+		sinks, _ := tx.SiemSinks()
+		if len(sinks) != 1 || sinks[0].Target != "https://old.example/hook" || sinks[0].Enabled {
+			t.Errorf("sinks %+v", sinks)
+		}
+		return nil
+	})
+	// And an export never writes the plaintext target again.
+	if got := e.bundleOf(t); len(got.SiemSinks) > 0 && got.SiemSinks[0].Target != "" {
+		t.Errorf("re-export carried a target: %+v", got.SiemSinks[0])
+	}
+}
+
+func TestStripURLSecrets(t *testing.T) {
+	in := json.RawMessage(`{"host":"dc01","base_url":"https://u:pw@api.example:8443/v1?token=abc#f","list":["https://x.example/a?k=v","plain"],"ok":"https://ok.example/path"}`)
+	out, changed := stripURLSecrets(in)
+	if !changed {
+		t.Fatal("not changed")
+	}
+	for _, leak := range []string{"pw", "token", "k=v", "#f"} {
+		if strings.Contains(string(out), leak) {
+			t.Errorf("%q left in %s", leak, out)
+		}
+	}
+	if !strings.Contains(string(out), "https://api.example:8443/v1") || !strings.Contains(string(out), "https://ok.example/path") {
+		t.Errorf("paths lost: %s", out)
+	}
+	if _, changed := stripURLSecrets(json.RawMessage(`{"host":"dc01"}`)); changed {
+		t.Error("clean config reported changed")
 	}
 }

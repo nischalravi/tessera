@@ -838,6 +838,16 @@ settings is *manual*, because where audit events are sent never changes by impor
 removed by an import, with prune or without; each plan item carries its section. On a prod server a sink
 aimed at localhost is refused.
 
+**Bundle version 3** leaves where things send data out of the bundle. A SIEM sink travels with its
+origin only (`target_origin`, `scheme://host:port`, or `host:port` for syslog) and
+`target_required_on_import: true`; the full target (a webhook URL can carry a token in its path or
+query) is never exported. On import an existing sink keeps its target (a different origin is shown as
+*manual*); a new sink is added disabled with no target and its plan item has `needs_target: true` and a
+"needs target" note, so nothing is pointed anywhere until a person sets the target and token under Log
+streaming. Version 1 and 2 bundles are still read, plaintext targets included, and never written again.
+Connection configuration loses URL credentials, query and fragment on export (listed under `excluded`).
+Alert channels, provisioning targets and sealed credentials are not part of a bundle.
+
 **From a pipeline.** `tessera-cli config key|export|plan|apply` (`server/cmd/tessera-cli/config.go`)
 makes the same calls as the page, through the signed-in session of `tessera-cli login --scope
 "tessera:admin"`:

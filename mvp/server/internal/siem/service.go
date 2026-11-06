@@ -335,6 +335,9 @@ type SinkSpec struct {
 	Region      string
 	AccessKeyID string
 	Enabled     bool
+	// NoTarget: ImportSink checks Target (the origin a bundle carried) but stores no target, so the sink
+	// stays disabled until a person sets one. Not used by the API.
+	NoTarget bool
 	// Start, on creation: "now" (the current head, the default) or "beginning" (replay the whole ledger).
 	Start string
 }
@@ -533,6 +536,9 @@ func ImportSink(tx *store.TenantTx, s SinkSpec, dev bool, by Actor, bundleHash s
 	}
 	k := &store.SiemSink{ID: uuid.NewString(), Name: s.Name, Kind: s.Kind, Format: s.Format, Target: s.Target, Flavor: s.Flavor,
 		IncludeHTTP: s.IncludeHTTP, Enabled: false, CursorSeq: head.LastSeq, CreatedAt: now, UpdatedAt: now}
+	if s.NoTarget {
+		k.Target = ""
+	}
 	if by.UserID != "" {
 		k.CreatedBy = &by.UserID
 	}
