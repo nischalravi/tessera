@@ -98,7 +98,11 @@ func isKnownFold(k string, known ...string) bool {
 	return false
 }
 
-// skipValue consumes one JSON value of any shape without keeping it.
+// maxSkipDepth bounds the nesting skipValue accepts in an unknown value. The reply size is already capped, but a small
+// reply of nothing but '[' would otherwise be walked token by token to its end; a real reply nests a few levels.
+const maxSkipDepth = 32
+
+// skipValue consumes one JSON value of any shape without keeping it, and refuses one nested deeper than maxSkipDepth.
 func skipValue(d *json.Decoder) error {
 	depth := 0
 	for {
@@ -109,6 +113,9 @@ func skipValue(d *json.Decoder) error {
 		if dl, ok := t.(json.Delim); ok {
 			if dl == '{' || dl == '[' {
 				depth++
+				if depth > maxSkipDepth {
+					return errProtocol
+				}
 			} else {
 				depth--
 			}

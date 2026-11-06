@@ -3896,9 +3896,8 @@ export interface SiemSink {
   format: SiemFormat;
   /** host:port, the webhook URL without its query string, or the bucket URL with its key prefix. */
   target: string;
-  /** The origin and keyed, tenant-bound fingerprint of a URL target (never the URL); empty for syslog. */
+  /** The scheme, host and port of a URL target (never its path); empty for syslog. */
   target_origin?: string;
-  target_fingerprint?: string;
   flavor: SiemFlavor;
   has_ca: boolean;
   has_token: boolean;
@@ -4256,9 +4255,8 @@ export interface AlertChannel {
   enabled: boolean;
   created_at: string;
   updated_at: string;
-  /** The origin and keyed, tenant-bound fingerprint of a webhook URL (never the URL): compare a proposal's fingerprint with it. */
+  /** The scheme, host and port of a webhook URL (never its path). */
   target_origin?: string;
-  target_fingerprint?: string;
   /** Only in the response that created the channel or rotated its secret. */
   secret?: string;
 }
@@ -4524,6 +4522,8 @@ export interface AdminChange {
   approved_at: string | null; effective_at: string | null; decided_by: AdminPersonRef | null; decided_at: string | null;
   applied_at: string | null; failure: string | null; test_login_at: string | null; payload_hash: string;
   payload: Record<string, unknown> | null;
+  /** A config proposal that seals a URL: how it differs from the object's URL right now (recomputed on every view). */
+  target_change?: "new" | "unchanged" | "path_changed" | "origin_changed";
   notifications?: AdminNotification[];
 }
 
@@ -4680,7 +4680,7 @@ export const adminChanges = {
   cancel: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/cancel`, {}),
   apply: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/apply`, {}),
   /** Does the URL I expect equal the one this proposal seals? Only match / no-match comes back, and the tries are limited. */
-  checkTarget: (id: string, url: string) => api<TargetCheckResult>(`/admin/change-requests/${id}/check-target`, { url }),
+  checkTarget: (id: string, url: string) => apiNoResume<TargetCheckResult>(`/admin/change-requests/${id}/check-target`, { url }), // never kept for a step-up retry
   activateConnection: (id: string) => api<{ id: string; status: string }>(`/admin/idp-connections/${id}/activate`, {}),
   disableUser: (id: string, reason: string) => api<{ id: string; status: string }>(`/admin/users/${id}/disable`, { reason }),
   cancelRecovery: (id: string) => api<AdminRecovery>(`/admin/recovery/${id}/cancel`, {}),

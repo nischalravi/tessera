@@ -74,26 +74,34 @@ export function ChangeRequests() {
   );
 }
 
-/** The URL a config proposal seals, as the server derived it at submit: origin and keyed fingerprint (never the URL). */
-function sealedTarget(c: AdminChange): { origin: string; fp: string } | null {
+/** The origin a config proposal seals, as the server derived it at submit (never the URL). */
+function sealedOrigin(c: AdminChange): string | null {
   const body = (c.payload as { body?: { target_origin?: string; target_fp?: string } } | null)?.body;
-  return c.type === "config.proposal" && body?.target_fp ? { origin: body.target_origin ?? "", fp: body.target_fp } : null;
+  return c.type === "config.proposal" && body?.target_fp ? (body.target_origin ?? "") : null;
 }
 
+const CHANGE_TEXT: Record<string, string> = {
+  new: "a new target",
+  unchanged: "the same URL as the object has now",
+  path_changed: "PATH CHANGED on the same host: check it is still your receiver",
+  origin_changed: "MOVED to another origin",
+};
+
 /** "Check this URL": the approver types the URL they expect; the server answers match or no-match, never the sealed URL. */
-function CheckTarget({ id, origin, fp }: { id: string; origin: string; fp: string }) {
+function CheckTarget({ id, origin, change }: { id: string; origin: string; change?: string }) {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<{ match: boolean; left: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    const typed = url.trim();
+    setUrl(""); // nothing is kept after a try, whatever the outcome
     setBusy(true);
     setErr(null);
     try {
-      const r = await adminChanges.checkTarget(id, url.trim());
+      const r = await adminChanges.checkTarget(id, typed);
       setRes({ match: r.match, left: r.attempts_left });
-      setUrl("");
     } catch (x) {
       setRes(null);
       setErr(errText(x));
@@ -104,7 +112,7 @@ function CheckTarget({ id, origin, fp }: { id: string; origin: string; fp: strin
   return (
     <form className="card stack-sm" onSubmit={submit} aria-label="Check this URL">
       <div><b>Check this URL</b></div>
-      <div className="small">It sends to <code>{origin}</code>, URL fingerprint <code>{fp}</code>. Type the full URL you expect; Tessera says whether it is the one in this request, and never shows it. Needs a fresh step-up; a few tries per request.</div>
+      <div className="small">It sends to <code>{origin}</code>{change && <>, {CHANGE_TEXT[change] ?? change}</>}. Type the full URL you expect; Tessera says whether it is the one in this request, comparing it exactly as typed, and never shows it. Needs a fresh step-up; the tries are few and shared by everyone.</div>
       <label className="field">URL you expect
         <input className="input" type="url" autoComplete="off" spellCheck={false} required value={url} onChange={(e) => setUrl(e.target.value)} />
       </label>
@@ -181,7 +189,7 @@ function Detail({ id, me, now, onClose, onChanged }: { id: string; me: string; n
           <Fact label="Cooling-off">{c.cooling_off_seconds ? `${c.cooling_off_seconds / 3600} h` : "None"}</Fact>
           <Fact label={c.decided_by ? (c.status === "rejected" ? "Rejected by" : "Cancelled by") : "Expires"}>{c.decided_by ? `${c.decided_by.display_name} · ${when(c.decided_at)}` : when(c.expires_at)}</Fact>
         </div>
-        {canApprove(c, me) && sealedTarget(c) && <CheckTarget id={c.id} origin={sealedTarget(c)!.origin} fp={sealedTarget(c)!.fp} />}
+        {canApprove(c, me) && sealedOrigin(c) !== null && <CheckTarget id={c.id} origin={sealedOrigin(c)!} change={c.target_change} />}
         <div>
           <div className="xs faint">Payload (hash <code>{c.payload_hash.slice(0, 16)}…</code>)</div>
           <pre className="sys small card" style={{ margin: 0, overflow: "auto", maxHeight: 220 }}>{JSON.stringify(c.payload, null, 2)}</pre>

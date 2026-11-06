@@ -68,7 +68,7 @@ resource "tessera_siem_sink" "splunk" {
 
 ### Read-Only
 
-- `target_fingerprint` (String) A keyed fingerprint of the whole sealed URL (16 hex characters), shown to the approver too: compare it with the one on the change request to confirm the receiver, path included. It cannot be computed from a list of candidate URLs.
+- `target_fingerprint` (String, Deprecated) Always null. The approver confirms the URL with Check this URL in the admin center.
 - `target_origin` (String) The scheme, host and port of the sealed URL (never its path).
 - `change_id` (String) The id of the change request that applied the last create or update.
 - `change_url` (String) Where a person reviews that change request.

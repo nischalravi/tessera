@@ -66,9 +66,8 @@ never holds an admin role and never passes a step-up, so it cannot approve or ap
   `secret_version` / `signing_secret_version` / `token_version` argument signals it. The secret is sent on create, and on an update only when that
   version differs from the one in the state (otherwise the server keeps the secret it has); change the secret and its version together to
   rotate. A webhook's URL usually carries a token (Slack, Teams, Sumo Logic put it in the path), so it is write-only too: `target_url` with
-  `target_url_version`. The server seals it, shows the approver its origin and a keyed fingerprint of the whole URL (HMAC under a key derived from the
-  KEK, bound to the tenant, so it cannot be brute-forced from candidate URLs; a path-only change is flagged), and the state keeps only
-  `target_origin` and `target_fingerprint`, which the operator compares with what the approver sees. A proposal can replace a secret and can never read one. Activating a connection stays a separate step by a person.
+  `target_url_version`. The server seals it, shows the approver its origin and whether it is new, the same, a changed path or a moved origin, lets the approver confirm the whole
+  URL with Check this URL (a match / no-match answer with a few tries), and the state keeps only `target_origin` (`target_fingerprint` is deprecated and null). A proposal can replace a secret and can never read one. Activating a connection stays a separate step by a person.
 * The new resources are imported by their server id (`terraform import tessera_approval_policy.x <workflow id>`). JSON-valued attributes (`condition_json`,
   `steps_json`) keep your spelling when the server holds the same document.
 

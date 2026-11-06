@@ -57,7 +57,7 @@ export function SiemSinks() {
                     <tr key={k.id}>
                       <td>
                         <b>{k.name}</b> <Badge tone="outline">{k.format === "ocsf" ? "OCSF" : "JSON"}</Badge>{k.event_filter.length > 0 && <> <Badge tone="info">{k.event_filter.length} event filter{k.event_filter.length === 1 ? "" : "s"}</Badge></>}
-                        <div className="xs faint truncate">{KIND_LABEL[`${k.kind}/${k.flavor}`] ?? k.kind} · {k.target}{k.target_fingerprint && <> · URL fingerprint <code title="Keyed fingerprint of the full URL; an approver compares a proposal's fingerprint with it">{k.target_fingerprint}</code></>}</div>
+                        <div className="xs faint truncate">{KIND_LABEL[`${k.kind}/${k.flavor}`] ?? k.kind} · {k.target}</div>
                       </td>
                       <td>
                         <Badge tone={h.tone}>{h.label}</Badge>
