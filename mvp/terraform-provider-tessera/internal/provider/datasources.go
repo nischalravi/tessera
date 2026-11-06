@@ -314,3 +314,89 @@ func (d *connectorsDS) Read(ctx context.Context, req datasource.ReadRequest, res
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
+
+// ---------------------------------------------------------------- groups
+
+// NewGroupsDataSource is tessera_groups (GET /api/v1/groups), the same route as tessera_entitlements with filters by kind and privilege.
+func NewGroupsDataSource() datasource.DataSource { return &groupsDS{} }
+
+type groupsDS struct{ dsBase }
+
+type groupsModel struct {
+	System      types.String     `tfsdk:"system"`
+	Kind        types.String     `tfsdk:"kind"`
+	Privileged  types.Bool       `tfsdk:"privileged"`
+	Requestable types.Bool       `tfsdk:"requestable"`
+	Groups      []entitlementRow `tfsdk:"groups"`
+}
+
+func (d *groupsDS) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_groups"
+}
+
+func (d *groupsDS) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
+	d.configure(req, resp)
+}
+
+func (d *groupsDS) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Description: "The groups found in the connected systems (read-only; the group folders API is not open to machine clients). Needs the `tessera:read` scope.",
+		Attributes: map[string]schema.Attribute{
+			"system":      schema.StringAttribute{Optional: true, Description: "Only groups of this system.", Validators: nonEmptyString()},
+			"kind":        schema.StringAttribute{Optional: true, Description: "Only groups of this kind, for example `group`.", Validators: nonEmptyString()},
+			"privileged":  schema.BoolAttribute{Optional: true, Description: "Only groups that are (true) or are not (false) privileged."},
+			"requestable": schema.BoolAttribute{Optional: true, Description: "Only groups that are (true) or are not (false) in the request catalog."},
+			"groups": schema.ListNestedAttribute{Computed: true, Description: "The matching groups.",
+				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
+					"id": schema.Int64Attribute{Computed: true}, "key": schema.StringAttribute{Computed: true, Description: "`group:<id>`."},
+					"system": schema.StringAttribute{Computed: true}, "name": schema.StringAttribute{Computed: true},
+					"kind": schema.StringAttribute{Computed: true}, "privileged": schema.BoolAttribute{Computed: true},
+					"requestable": schema.BoolAttribute{Computed: true}, "description": schema.StringAttribute{Computed: true},
+				}}},
+		},
+	}
+}
+
+func (d *groupsDS) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var m groupsModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &m)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	q := url.Values{}
+	if known(m.Requestable) {
+		q.Set("requestable", fmt.Sprint(m.Requestable.ValueBool()))
+	}
+	items, err := d.c.List(ctx, "/groups", q)
+	if err != nil {
+		resp.Diagnostics.AddError("Cannot read groups", err.Error())
+		return
+	}
+	type wire struct {
+		ID          int64   `json:"id"`
+		Key         string  `json:"key"`
+		System      string  `json:"system"`
+		Name        string  `json:"name"`
+		Kind        string  `json:"kind"`
+		Privileged  bool    `json:"privileged"`
+		Requestable bool    `json:"requestable"`
+		Description *string `json:"description"`
+	}
+	rows, err := decodeAll[wire](items)
+	if err != nil {
+		resp.Diagnostics.AddError("Cannot read groups", err.Error())
+		return
+	}
+	m.Groups = make([]entitlementRow, 0, len(rows))
+	for _, w := range rows {
+		if (known(m.System) && !strings.EqualFold(w.System, m.System.ValueString())) ||
+			(known(m.Kind) && !strings.EqualFold(w.Kind, m.Kind.ValueString())) ||
+			(known(m.Privileged) && w.Privileged != m.Privileged.ValueBool()) {
+			continue
+		}
+		m.Groups = append(m.Groups, entitlementRow{ID: types.Int64Value(w.ID), Key: types.StringValue(w.Key), System: types.StringValue(w.System),
+			Name: types.StringValue(w.Name), Kind: types.StringValue(w.Kind), Privileged: types.BoolValue(w.Privileged),
+			Requestable: types.BoolValue(w.Requestable), Description: types.StringPointerValue(w.Description)})
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+}
