@@ -125,7 +125,7 @@ func (w *wsConn) writeFrame(op byte, payload []byte, deadline time.Time) error {
 	case n < 126:
 		hdr = append(hdr, 0x80|byte(n))
 	case n <= 0xFFFF:
-		hdr = append(hdr, 0x80|126, byte(n>>8), byte(n))
+		hdr = binary.BigEndian.AppendUint16(append(hdr, 0x80|126), uint16(n))
 	default:
 		hdr = append(hdr, 0x80|127)
 		hdr = binary.BigEndian.AppendUint64(hdr, uint64(n))
