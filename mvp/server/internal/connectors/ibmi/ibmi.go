@@ -16,9 +16,11 @@
 //     and *SECADM user classes is a synthetic group, privileged (every special
 //     authority is system-wide); a group profile that holds one is a
 //     privileged group, since its members hold its special authorities.
-//   - NoTransport is the transport of this build: it answers "unsupported". The
-//     live transport is a follow-up; it plugs in as an Opener and gets the
-//     agent's safedial Dialer in agent.ProberSpec, like every module.
+//   - OpenMapepire (transport.go) is the live transport: IBM's Mapepire server
+//     (JSON over a TLS WebSocket, port 8076). NoTransport, which answers
+//     "unsupported", is the Opener of a build without it. A transport plugs in
+//     as an Opener and gets the agent's safedial Dialer in agent.ProberSpec,
+//     like every module.
 package ibmi
 
 import (
@@ -109,13 +111,26 @@ var privilegedClass = map[string]bool{"*SECOFR": true, "*SECADM": true}
 func (y *syncer) Discover(ctx context.Context, lim agent.SyncLimits) (*agent.SyncResult, error) {
 	src, err := y.open(ctx, y.spec)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrNoTransport) || errors.Is(err, ErrNoDriver) {
+			return nil, err
+		}
+		for _, f := range transportErrors {
+			if errors.Is(err, f) {
+				return nil, f
+			}
+		}
+		return nil, errRead
 	}
 	defer src.Close()
 	profiles, err := src.Profiles(ctx, lim.Accounts)
 	if err != nil {
-		if errors.Is(err, ErrTooLarge) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
+		}
+		for _, f := range transportErrors { // fixed text, safe to report as is
+			if errors.Is(err, f) {
+				return nil, f
+			}
 		}
 		return nil, errRead
 	}
