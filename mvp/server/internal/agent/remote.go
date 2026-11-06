@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -27,6 +28,7 @@ type RemoteProber struct {
 	agentID string
 	target  Target
 	cfg     ProbeConfig
+	module  string
 }
 
 var _ connectors.Prober = (*RemoteProber)(nil)
@@ -34,14 +36,23 @@ var _ connectors.Prober = (*RemoteProber)(nil)
 // NewRemoteProber returns the Prober for one connection that reaches its
 // directory through the agent. cfg.CredName names the credential on the agent.
 func NewRemoteProber(d Dispatcher, t tenancy.ID, agentID string, target Target, cfg ProbeConfig) (*RemoteProber, error) {
+	return NewRemoteModuleProber(d, t, agentID, "", target, cfg)
+}
+
+// NewRemoteModuleProber is NewRemoteProber for a connection read by a module
+// of the agent (one of ModuleNames); empty module is the built-in LDAP prober.
+func NewRemoteModuleProber(d Dispatcher, t tenancy.ID, agentID, module string, target Target, cfg ProbeConfig) (*RemoteProber, error) {
 	if !ValidCredName(cfg.CredName) {
 		return nil, fmt.Errorf("agent: %q is not a valid credential name", cfg.CredName)
 	}
-	return &RemoteProber{d: d, tenant: t, agentID: agentID, target: target, cfg: cfg}, nil
+	if module != "" && !ValidModuleName(module) {
+		return nil, errors.New("agent: not a valid module")
+	}
+	return &RemoteProber{d: d, tenant: t, agentID: agentID, target: target, cfg: cfg, module: module}, nil
 }
 
 func (p *RemoteProber) do(ctx context.Context, j Job, out any) error {
-	j.Target, j.Config = p.target, p.cfg
+	j.Target, j.Config, j.Module = p.target, p.cfg, p.module
 	res, err := p.d.Do(ctx, p.tenant, p.agentID, j)
 	if err != nil {
 		return err

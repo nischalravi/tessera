@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +37,7 @@ import (
 type fakeMapepire struct {
 	addr  string
 	pool  *x509.CertPool
+	pem   string // the certificate, PEM, for a job's ca_bundle
 	rows  []map[string]any
 	reqs  []map[string]any // what the client sent after the upgrade
 	mu    sync.Mutex
@@ -91,7 +93,7 @@ func text(s string) []byte { return frame(1, true, []byte(s)) }
 func newFake(t *testing.T) *fakeMapepire {
 	t.Helper()
 	cert, pool := selfSigned(t)
-	f := &fakeMapepire{ready: make(chan struct{}), pool: pool, user: "TESSERA", pass: "s3cret", reply: map[string]func(map[string]any) []byte{}}
+	f := &fakeMapepire{ready: make(chan struct{}), pool: pool, pem: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})), user: "TESSERA", pass: "s3cret", reply: map[string]func(map[string]any) []byte{}}
 	for i := 0; i < 5; i++ {
 		f.rows = append(f.rows, map[string]any{"AUTHORIZATION_NAME": fmt.Sprintf("USER%d", i), "STATUS": "*ENABLED", "USER_CLASS_NAME": "*USER",
 			"SPECIAL_AUTHORITIES": "*JOBCTL *SAVSYS", "GROUP_PROFILE_NAME": "PAYGRP", "SUPPLEMENTAL_GROUP_LIST": "DEVGRP OPSGRP", "TEXT_DESCRIPTION": "User"})

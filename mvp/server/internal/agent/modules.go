@@ -52,6 +52,10 @@ func ModuleAttribute(module, target string) bool {
 type Module struct {
 	Name string
 	New  SyncerFactory
+	// NewProber builds the read-only Prober of a readiness probe job that names
+	// this module. Nil: the module takes sync jobs only, and a probe job that
+	// names it is answered "unsupported".
+	NewProber ProberFactory
 }
 
 var (
@@ -74,6 +78,12 @@ func (e *Executor) Register(m Module) error {
 		e.Modules = map[string]SyncerFactory{}
 	}
 	e.Modules[m.Name] = m.New
+	if m.NewProber != nil {
+		if e.Probers == nil {
+			e.Probers = map[string]ProberFactory{}
+		}
+		e.Probers[m.Name] = m.NewProber
+	}
 	return nil
 }
 
@@ -94,5 +104,15 @@ func (e *Executor) syncerFor(module string) (SyncerFactory, bool) {
 		return e.NewSyncer, e.NewSyncer != nil
 	}
 	f, ok := e.Modules[module]
+	return f, ok && f != nil
+}
+
+// proberFor returns the prober factory of a probe job's module (empty: the
+// built-in LDAP prober), or false if this agent build has none for it.
+func (e *Executor) proberFor(module string) (ProberFactory, bool) {
+	if module == "" {
+		return e.New, e.New != nil
+	}
+	f, ok := e.Probers[module]
 	return f, ok && f != nil
 }

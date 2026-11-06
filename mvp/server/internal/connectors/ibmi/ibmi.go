@@ -79,7 +79,7 @@ func NoTransport(context.Context, agent.ProberSpec) (Source, error) { return nil
 
 // Module is the plug-in to register with the agent.
 func Module(open Opener) agent.Module {
-	return agent.Module{Name: agent.ModuleIBMi, New: func(s agent.ProberSpec) (agent.Syncer, error) {
+	return agent.Module{Name: agent.ModuleIBMi, NewProber: NewProber(open), New: func(s agent.ProberSpec) (agent.Syncer, error) {
 		if open == nil {
 			return nil, ErrNoDriver
 		}
