@@ -163,7 +163,7 @@ func collectReviewSchedules(tx *store.TenantTx, b *Bundle) error {
 	seen := map[string]bool{}
 	for _, t := range ts {
 		if seen[t.Name] { // names are the key: a second schedule of the same name cannot travel
-			b.Excluded = append(b.Excluded, ExcludedRef{SecReviewSchedules, t.Name, "another schedule has the same name"})
+			b.Excluded = append(b.Excluded, ExcludedRef{Section: SecReviewSchedules, Name: t.Name, Reason: "another schedule has the same name"})
 			continue
 		}
 		seen[t.Name] = true

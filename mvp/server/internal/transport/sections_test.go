@@ -400,22 +400,3 @@ func TestSections_Version2PlaintextTargetStillImports(t *testing.T) {
 		t.Errorf("re-export carried a target: %+v", got.SiemSinks[0])
 	}
 }
-
-func TestStripURLSecrets(t *testing.T) {
-	in := json.RawMessage(`{"host":"dc01","base_url":"https://u:pw@api.example:8443/v1?token=abc#f","list":["https://x.example/a?k=v","plain"],"ok":"https://ok.example/path"}`)
-	out, changed := stripURLSecrets(in)
-	if !changed {
-		t.Fatal("not changed")
-	}
-	for _, leak := range []string{"pw", "token", "k=v", "#f"} {
-		if strings.Contains(string(out), leak) {
-			t.Errorf("%q left in %s", leak, out)
-		}
-	}
-	if !strings.Contains(string(out), "https://api.example:8443/v1") || !strings.Contains(string(out), "https://ok.example/path") {
-		t.Errorf("paths lost: %s", out)
-	}
-	if _, changed := stripURLSecrets(json.RawMessage(`{"host":"dc01"}`)); changed {
-		t.Error("clean config reported changed")
-	}
-}
