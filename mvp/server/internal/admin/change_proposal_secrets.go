@@ -2,15 +2,21 @@ package admin
 
 import (
 	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
@@ -56,10 +62,80 @@ var proposalSecretPaths = map[string][]secretPath{
 // maxProposalSecret bounds one secret (a connection secret is at most 8 KiB, a token 4 KiB).
 const maxProposalSecret = 8192
 
-// splitProposalSecrets takes the secret fields out of a proposal body. It returns the body with the marker in their
-// place (and, for a URL target, the server-derived target_origin the approver sees) and the plaintexts by path. A kind
-// without secret fields is returned as it is.
-func splitProposalSecrets(kind string, body json.RawMessage) (json.RawMessage, map[string]string, error) {
+// derivedKeys are the fields of a body that only the server sets, from the URL it sealed: its origin, a keyed fingerprint of
+// the whole URL and how it differs from the current one. A caller that sends one is refused.
+var derivedKeys = []string{"target_origin", "target_fp", "target_change"}
+
+func refuseDerivedKeys(body json.RawMessage) error {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(body, &obj) != nil {
+		return nil // not an object: the decoder reports it
+	}
+	for _, k := range derivedKeys {
+		if _, ok := obj[k]; ok {
+			return invalid("%s is set by the server", k)
+		}
+	}
+	return nil
+}
+
+// Values of target_change.
+const (
+	targetNew         = "new"
+	targetUnchanged   = "unchanged"
+	targetPathChanged = "path_changed" // same origin, a different URL: the receiver may be another tenant of the same host
+	targetMoved       = "origin_changed"
+)
+
+// TargetFingerprint is a keyed, tenant-bound fingerprint of a URL: 16 hex characters of HMAC-SHA256 under a key derived from
+// the KEK for this purpose. It identifies the exact URL to a person who knows it and cannot be brute-forced offline from a list
+// of candidate URLs, because the key never leaves the server.
+func TargetFingerprint(sealer *seal.Sealer, t tenancy.ID, target string) (string, error) {
+	if sealer == nil {
+		return "", newErr(503, "sealer_unavailable", "no key-encryption key is configured to fingerprint the proposal's URL")
+	}
+	key, err := sealer.DeriveKey("proposal-target-fingerprint", 32)
+	if err != nil {
+		return "", err
+	}
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(t.String() + "|" + target))
+	return hex.EncodeToString(m.Sum(nil))[:16], nil
+}
+
+// targetKnown reads the current URL of the channel or sink a proposal changes ("" for none).
+func (s *Service) currentTarget(ctx context.Context, p *auth.Principal, kind, id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	var cur string
+	err := s.DB.ReadTenant(ctx, p.TenantID, func(tx *store.TenantTx) error {
+		switch kind {
+		case KindAlertChannel:
+			c, err := tx.AlertChannel(id)
+			if err == nil {
+				cur = c.Target
+			}
+			return err
+		case KindSiemSink:
+			k, err := tx.SiemSink(id)
+			if err == nil {
+				cur = k.Target
+			}
+			return err
+		}
+		return nil
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return "", notFound("object")
+	}
+	return cur, err
+}
+
+// splitProposalSecrets takes the secret fields out of a proposal body. It returns the body with the marker in their place and,
+// for a URL target, the fields the server derives from it (target_origin, target_fp, target_change), and the plaintexts by path.
+// A kind without secret fields is returned as it is.
+func (s *Service) splitProposalSecrets(ctx context.Context, p *auth.Principal, kind, id string, body json.RawMessage) (json.RawMessage, map[string]string, error) {
 	paths := proposalSecretPaths[kind]
 	if len(paths) == 0 {
 		return body, nil, nil
@@ -74,7 +150,6 @@ func splitProposalSecrets(kind string, body json.RawMessage) (json.RawMessage, m
 		return nil, nil, invalid("body must be a JSON object")
 	}
 	secrets := map[string]string{}
-	delete(m, "target_origin") // derived here, never taken from the client
 	for _, sp := range paths {
 		parent, key := m, sp.path
 		if before, after, ok := strings.Cut(sp.path, "."); ok {
@@ -101,7 +176,11 @@ func splitProposalSecrets(kind string, body json.RawMessage) (json.RawMessage, m
 		secrets[sp.path] = str
 		parent[key] = secretMarker
 		if sp.path == "target" {
-			m["target_origin"] = safehttp.Origin(str)
+			origin, fp, change, err := s.deriveTarget(ctx, p, kind, id, str)
+			if err != nil {
+				return nil, nil, err
+			}
+			m["target_origin"], m["target_fp"], m["target_change"] = origin, fp, change
 		}
 	}
 	out, err := json.Marshal(m)
@@ -109,6 +188,72 @@ func splitProposalSecrets(kind string, body json.RawMessage) (json.RawMessage, m
 		return nil, nil, invalid("body: %v", err)
 	}
 	return out, secrets, nil
+}
+
+// deriveTarget computes what the approver is shown instead of the sealed URL: its origin, its keyed fingerprint and, for an
+// update, how it differs from the URL the object has now.
+func (s *Service) deriveTarget(ctx context.Context, p *auth.Principal, kind, id, target string) (origin, fp, change string, err error) {
+	origin = safehttp.Origin(target)
+	if origin == "" {
+		return "", "", "", invalid("target is not a valid URL")
+	}
+	if fp, err = TargetFingerprint(s.Sealer, p.TenantID, target); err != nil {
+		return "", "", "", err
+	}
+	cur, err := s.currentTarget(ctx, p, kind, id)
+	switch {
+	case err != nil:
+		return "", "", "", err
+	case id == "" || cur == "":
+		change = targetNew
+	case cur == target:
+		change = targetUnchanged
+	case safehttp.OriginKey(cur) == origin:
+		change = targetPathChanged
+	default:
+		change = targetMoved
+	}
+	return origin, fp, change, nil
+}
+
+// checkDerived is the plan-time check that a body's derived fields are the ones the server computes from the sealed URL it
+// holds: a payload that carries them without a sealed URL, or with other values, was altered.
+func (e *env) checkDerived(origin, fp, change string) error {
+	target, ok := e.secrets["target"]
+	if !ok {
+		if origin != "" || fp != "" || change != "" {
+			return conflict(ReasonPayloadTampered, "the request names a target it does not hold")
+		}
+		return nil
+	}
+	gotFP, err := TargetFingerprint(e.svc.Sealer, e.tx.Tenant(), target)
+	if err != nil {
+		return err
+	}
+	if origin != safehttp.Origin(target) || fp != gotFP || !slices.Contains([]string{targetNew, targetUnchanged, targetPathChanged, targetMoved}, change) {
+		return conflict(ReasonPayloadTampered, "the request's target details do not match the URL it holds")
+	}
+	return nil
+}
+
+// ProposalTarget is the origin and fingerprint the server derived for a proposal's sealed URL, for the client to compare ("" when
+// the proposal seals no URL).
+func ProposalTarget(ch *store.AdminChange) (origin, fp string) {
+	if ch.Type != TypeConfigProposal {
+		return "", ""
+	}
+	var p proposalPayload
+	if json.Unmarshal(ch.Payload, &p) != nil {
+		return "", ""
+	}
+	var b struct {
+		Origin string `json:"target_origin"`
+		FP     string `json:"target_fp"`
+	}
+	if json.Unmarshal(p.Body, &b) != nil {
+		return "", ""
+	}
+	return b.Origin, b.FP
 }
 
 // secretsAAD binds one sealed field to its tenant, request and path, so a blob cannot be moved to another tenant,
@@ -135,7 +280,7 @@ func (e *env) sealSecrets(id uuid.UUID, secrets map[string]string) ([]byte, erro
 
 // OpenProposalSecrets opens the sealed fields of a request under the tenant and request id they were sealed for. Any blob
 // that is not for this tenant, this request and the path it is stored under fails.
-func OpenProposalSecrets(sealer *seal.Sealer, t tenancy.ID, id uuid.UUID, enc []byte) (map[string]string, error) {
+func OpenProposalSecrets(sealer *seal.Sealer, t tenancy.ID, id uuid.UUID, enc []byte, kind string) (map[string]string, error) {
 	if len(enc) == 0 {
 		return nil, nil
 	}
@@ -146,8 +291,16 @@ func OpenProposalSecrets(sealer *seal.Sealer, t tenancy.ID, id uuid.UUID, enc []
 	if sealer == nil {
 		return nil, errors.New("admin: no sealer")
 	}
+	// only the fields this kind seals: a key that is not one is refused before anything is opened
+	allowed := map[string]bool{}
+	for _, sp := range proposalSecretPaths[kind] {
+		allowed[sp.path] = true
+	}
 	out := make(map[string]string, len(blobs))
 	for path, b64 := range blobs {
+		if !allowed[path] {
+			return nil, errors.New("admin: the sealed secrets name a field this request does not have")
+		}
 		sealed, err := base64.StdEncoding.DecodeString(b64)
 		if err != nil {
 			return nil, errors.New("admin: the sealed secrets are unreadable")
@@ -167,7 +320,11 @@ func (e *env) openSecrets(ch *store.AdminChange) error {
 	if ch.Type != TypeConfigProposal || len(ch.SecretEnc) == 0 {
 		return nil
 	}
-	s, err := OpenProposalSecrets(e.svc.Sealer, e.tx.Tenant(), ch.ID, ch.SecretEnc)
+	var p proposalPayload
+	if json.Unmarshal(ch.Payload, &p) != nil {
+		return conflict(ReasonPayloadTampered, "the sealed secrets of the request do not open")
+	}
+	s, err := OpenProposalSecrets(e.svc.Sealer, e.tx.Tenant(), ch.ID, ch.SecretEnc, p.Kind)
 	if err != nil {
 		return conflict(ReasonPayloadTampered, "the sealed secrets of the request do not open")
 	}
@@ -221,6 +378,8 @@ type AlertChannelBody struct {
 	Kind          string  `json:"kind"`
 	Target        *string `json:"target"`
 	TargetOrigin  string  `json:"target_origin,omitempty"`
+	TargetFP      string  `json:"target_fp,omitempty"`
+	TargetChange  string  `json:"target_change,omitempty"`
 	MinSeverity   string  `json:"min_severity"`
 	Enabled       *bool   `json:"enabled"`
 	SigningSecret *string `json:"signing_secret"`
@@ -235,6 +394,8 @@ type SiemSinkBody struct {
 	Format       string    `json:"format"`
 	Target       *string   `json:"target"`
 	TargetOrigin string    `json:"target_origin,omitempty"`
+	TargetFP     string    `json:"target_fp,omitempty"`
+	TargetChange string    `json:"target_change,omitempty"`
 	Flavor       string    `json:"flavor"`
 	CAPEM        *string   `json:"ca_pem"`
 	Token        *string   `json:"token"`
@@ -394,7 +555,19 @@ func (b *AlertChannelBody) spec(e *env, cur *store.AlertChannel) (alerts.Channel
 }
 
 func planAlertChannel(e *env, id string, b *AlertChannelBody) error {
+	if err := e.checkDerived(b.TargetOrigin, b.TargetFP, b.TargetChange); err != nil {
+		return err
+	}
 	if id == "" {
+		cs, err := e.tx.AlertChannels()
+		if err != nil {
+			return err
+		}
+		for _, c := range cs {
+			if c.Name == strings.TrimSpace(b.Name) {
+				return conflict("duplicate_channel", "an alert channel with that name already exists")
+			}
+		}
 		sp, err := b.spec(e, nil)
 		if err != nil {
 			return err
@@ -498,7 +671,19 @@ func (b *SiemSinkBody) spec(e *env, cur *store.SiemSink) (siem.SinkSpec, error) 
 }
 
 func planSiemSink(e *env, id string, b *SiemSinkBody) error {
+	if err := e.checkDerived(b.TargetOrigin, b.TargetFP, b.TargetChange); err != nil {
+		return err
+	}
 	if id == "" {
+		ks, err := e.tx.SiemSinks()
+		if err != nil {
+			return err
+		}
+		for _, k := range ks {
+			if k.Name == strings.TrimSpace(b.Name) {
+				return conflict("duplicate_sink", "a SIEM sink with that name already exists")
+			}
+		}
 		sp, err := b.spec(e, nil)
 		if err != nil {
 			return err
@@ -549,11 +734,42 @@ func secretNote(p *string) string {
 	return "set"
 }
 
-func originNote(b string) string {
-	if b == "" {
+// targetNote describes a sealed URL to the approver: its origin, a fingerprint of the whole URL to compare with the one
+// the proposer reports, and what changed. The path and any token in it are never shown.
+func targetNote(origin, fp, change string) string {
+	if origin == "" {
 		return ""
 	}
-	return " at " + b
+	n := " at " + origin + " (URL fingerprint " + fp
+	switch change {
+	case targetUnchanged:
+		n += ", same URL as now"
+	case targetPathChanged:
+		n += ", PATH CHANGED on the same host: check it is still your receiver"
+	case targetMoved:
+		n += ", MOVED to another origin"
+	}
+	return n + ")"
+}
+
+// endpointNote lists the endpoint settings a connection config sets (config holds no secret), so the approver sees where a
+// credential would be sent.
+func endpointNote(cfg json.RawMessage) string {
+	var m map[string]any
+	if json.Unmarshal(cfg, &m) != nil {
+		return ""
+	}
+	var parts []string
+	for _, k := range []string{"base_url", "org_url", "host", "domain", "tenant_host", "url", "endpoint"} {
+		if v, ok := m[k].(string); ok && v != "" {
+			parts = append(parts, k+"="+v)
+		}
+	}
+	slices.Sort(parts)
+	if len(parts) == 0 {
+		return ""
+	}
+	return "; endpoint " + strings.Join(parts, ", ")
 }
 
 func summarizeSecretKind(id string, body any) (string, bool) {
@@ -567,21 +783,21 @@ func summarizeSecretKind(id string, body any) (string, bool) {
 	case *ConnectionBody:
 		cred := "unchanged"
 		if b.Credential != nil {
-			cred = "reference"
+			cred = "reference " + b.Credential.Reference + " (a credential Tessera or its agent already holds, sent to the endpoint below)"
 			if b.Credential.Secret != "" {
 				cred = "secret set"
 			}
 		}
 		if id == "" {
 			return fmt.Sprintf("create connection %q (%s, as a draft: it still needs validation and a separate activation; credential %s)",
-				b.Name, b.ConnectorType, cred), true
+				b.Name, b.ConnectorType, cred+endpointNote(b.Config)), true
 		}
 		return fmt.Sprintf("change connection %s (config %t, credential %s; activation stays a separate step)", id,
-			len(b.Config) > 0 && string(b.Config) != "null", cred), true
+			len(b.Config) > 0 && string(b.Config) != "null", cred+endpointNote(b.Config)), true
 	case *AlertChannelBody:
-		return fmt.Sprintf("%s (%s%s, signing secret %s)", verb("alert channel", b.Name), b.Kind, originNote(b.TargetOrigin), secretNote(b.SigningSecret)), true
+		return fmt.Sprintf("%s (%s%s, signing secret %s)", verb("alert channel", b.Name), b.Kind, targetNote(b.TargetOrigin, b.TargetFP, b.TargetChange), secretNote(b.SigningSecret)), true
 	case *SiemSinkBody:
-		return fmt.Sprintf("%s (%s%s, token %s)", verb("SIEM sink", b.Name), b.Kind, originNote(b.TargetOrigin), secretNote(b.Token)), true
+		return fmt.Sprintf("%s (%s%s, token %s)", verb("SIEM sink", b.Name), b.Kind, targetNote(b.TargetOrigin, b.TargetFP, b.TargetChange), secretNote(b.Token)), true
 	}
 	return "", false
 }

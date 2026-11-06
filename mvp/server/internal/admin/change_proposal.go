@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -177,6 +178,11 @@ func init() {
 // strictBody decodes a proposal body into T, refusing unknown fields and trailing data.
 func strictBody[T any](raw json.RawMessage) (*T, error) {
 	var v T
+	// encoding/json matches keys case-insensitively, so "Target" would reach the field "target" without passing the
+	// checks that look for the exact key (the secret split, the derived fields): refuse any key that is not exact (#885)
+	if err := checkExactKeys(reflect.TypeOf(v), raw); err != nil {
+		return nil, invalid("body: %v", err)
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&v); err != nil {
@@ -186,6 +192,43 @@ func strictBody[T any](raw json.RawMessage) (*T, error) {
 		return nil, invalid("body: trailing data")
 	}
 	return &v, nil
+}
+
+// checkExactKeys refuses a key of a JSON object that is not exactly the json name of a field of t, recursively for the
+// fields that are structs. It names the key, never its value.
+func checkExactKeys(t reflect.Type, raw json.RawMessage) error {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil || obj == nil {
+		return nil // not an object: the decoder reports it
+	}
+	fields := map[string]reflect.Type{}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "-" || !f.IsExported() {
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		fields[name] = f.Type
+	}
+	for k, v := range obj {
+		ft, ok := fields[k]
+		if !ok {
+			return fmt.Errorf("unknown field %q (field names are case-sensitive)", k)
+		}
+		if err := checkExactKeys(ft, v); err != nil {
+			return fmt.Errorf("%s.%v", k, err)
+		}
+	}
+	return nil
 }
 
 // decodeProposalBody decodes the body of a proposal of this kind.
@@ -239,6 +282,15 @@ func checkProposalID(kind, id string) error {
 // form (the decoded body marshalled again), so the hash the approver echoes does not depend on how the client
 // spelled its JSON.
 func ProposalPayload(kind, id string, body json.RawMessage) (json.RawMessage, error) {
+	// the fields the server derives from a sealed URL are never taken from a caller
+	if err := refuseDerivedKeys(body); err != nil {
+		return nil, err
+	}
+	return buildProposalPayload(kind, id, body)
+}
+
+// buildProposalPayload is ProposalPayload for a body that splitProposalSecrets has already cleaned and completed.
+func buildProposalPayload(kind, id string, body json.RawMessage) (json.RawMessage, error) {
 	if len(body) == 0 || len(body) > maxProposalBody {
 		return nil, invalid("body is required and at most %d bytes", maxProposalBody)
 	}
@@ -405,11 +457,14 @@ func (s *Service) SubmitProposal(ctx context.Context, p *auth.Principal, kind, i
 		return nil, denied(d)
 	}
 	// the secret fields leave the body here: the payload and its hash carry the marker "set", the plaintext is sealed
-	clean, secrets, err := splitProposalSecrets(kind, body)
+	if err := refuseDerivedKeys(body); err != nil {
+		return nil, err
+	}
+	clean, secrets, err := s.splitProposalSecrets(ctx, p, kind, id, body)
 	if err != nil {
 		return nil, err
 	}
-	payload, err := ProposalPayload(kind, id, clean)
+	payload, err := buildProposalPayload(kind, id, clean)
 	if err != nil {
 		return nil, err
 	}
@@ -599,7 +654,11 @@ func proposalErr(err error) error {
 	}
 	var rd *readiness.Error
 	if errors.As(err, &rd) {
-		return newErr(rd.Status, rd.Code, "%s", rd.Msg)
+		msg := rd.Msg
+		for _, f := range rd.Fields {
+			msg += "; " + f.Field + ": " + f.Msg // the fields say which setting was refused; none carries a value
+		}
+		return newErr(rd.Status, rd.Code, "%s", msg)
 	}
 	var sm *siem.Error
 	if errors.As(err, &sm) {

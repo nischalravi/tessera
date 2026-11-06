@@ -9,7 +9,10 @@ resource "tessera_siem_sink" "splunk" {
   kind   = "webhook"
   flavor = "hec"
   format = "json"
-  target = "https://splunk.example.com:8088/services/collector"
+
+  # write-only; bump the version with it to move the sink (the sink then also needs a new token)
+  target_url         = "https://splunk.example.com:8088/services/collector"
+  target_url_version = "1"
 
   event_filter = ["auth.*", "admin.change.*"]
 

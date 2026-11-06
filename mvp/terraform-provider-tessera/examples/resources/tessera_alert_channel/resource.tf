@@ -1,3 +1,9 @@
+variable "soc_webhook_url" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+
 variable "soc_webhook_signing_secret" {
   type      = string
   sensitive = true
@@ -7,8 +13,12 @@ variable "soc_webhook_signing_secret" {
 resource "tessera_alert_channel" "soc" {
   name         = "SOC webhook"
   kind         = "webhook"
-  target       = "https://hooks.example.com/services/T000/B000/XXXX" # sensitive; sealed by the server
   min_severity = "high"
+
+  # the URL usually carries a token: write-only, never in the plan or the state. The state keeps target_origin and
+  # target_fingerprint (compare the fingerprint with the one the approver sees).
+  target_url         = var.soc_webhook_url
+  target_url_version = "1"
 
   # the receiver verifies the HMAC signature with this secret; write-only
   signing_secret         = var.soc_webhook_signing_secret

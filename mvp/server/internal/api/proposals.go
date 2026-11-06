@@ -99,10 +99,16 @@ func (s *Server) proposalView(ch *store.AdminChange, resultID string) ojson.Obje
 	if resultID != "" {
 		result = resultID
 	}
+	// the origin and keyed fingerprint of a sealed URL (never the URL): the client compares them with what the approver sees
+	var origin, fp any
+	if o, f := admin.ProposalTarget(ch); o != "" {
+		origin, fp = o, f
+	}
 	return ojson.Object{{Key: "change_id", Value: ch.ID.String()}, {Key: "type", Value: ch.Type},
 		{Key: "status", Value: ch.Status}, {Key: "url", Value: s.proposalURL(ch.ID.String())},
 		{Key: "payload_hash", Value: ch.PayloadHash}, {Key: "expires_at", Value: rt3339(ch.ExpiresAt)},
-		{Key: "applied_at", Value: opt(ch.AppliedAt)}, {Key: "failure", Value: failure}, {Key: "result_id", Value: result}}
+		{Key: "applied_at", Value: opt(ch.AppliedAt)}, {Key: "failure", Value: failure}, {Key: "result_id", Value: result},
+		{Key: "target_origin", Value: origin}, {Key: "target_fingerprint", Value: fp}}
 }
 
 // getProposal is GET /api/proposals/{change_id}: the state of a proposal this client made (pending_approval,

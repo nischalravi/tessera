@@ -644,3 +644,64 @@ func TestProposalsAPI_SealedSecrets(t *testing.T) {
 		t.Errorf("updating a sink that does not exist: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// TestProposalsAPI_SecretKindsAreTenantScoped (#885 L3, H1): a client of tenant A cannot propose a change to tenant B's
+// connection, channel or sink (404, nothing sealed or filed), and a case-variant key is refused over HTTP with no plaintext
+// in the answer or the request rows.
+func TestProposalsAPI_SecretKindsAreTenantScoped(t *testing.T) {
+	e := newOAuthEnv(t)
+	m := e.addMachine("tenant-a", []string{"viewer"}, []string{"tessera:read", "config.propose"}, true)
+	tok := e.machineToken(m, "tenant-a", "tessera:read config.propose")
+	bID, chID, skID := "", uuid.NewString(), uuid.NewString()
+	if err := e.f.DB.InTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+		cs, err := tx.Connections()
+		if err != nil || len(cs) == 0 {
+			return fmt.Errorf("tenant B has no connection: %v", err)
+		}
+		bID = cs[0].ID
+		now := storetest.Now
+		if err := tx.InsertAlertChannel(&store.AlertChannel{ID: chID, Name: "b-mail", Kind: "email", Target: "b@b.example",
+			MinSeverity: "high", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+			return err
+		}
+		return tx.InsertSiemSink(&store.SiemSink{ID: skID, Name: "b-sink", Kind: "syslog", Format: "json", Target: "b.example:6514",
+			Enabled: true, CreatedAt: now, UpdatedAt: now})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	changes := func() int {
+		n := 0
+		if err := e.f.DB.ReadTenant(context.Background(), e.f.A.ID, func(tx *store.TenantTx) error {
+			cs, err := tx.AdminChanges()
+			n = len(cs)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := changes()
+	const secret = "PLAINTEXT-xtenant-secret-9"
+	for path, payload := range map[string]string{
+		"/api/proposals/connections/" + bID:     `{"credential":{"secret":"` + secret + `"}}`,
+		"/api/proposals/alert-channels/" + chID: `{"target":"https://h.example.com/` + secret + `","signing_secret":"` + secret + `-hook"}`,
+		"/api/proposals/siem-sinks/" + skID:     `{"token":"` + secret + `"}`,
+	} {
+		rec := e.call(tok, "POST", path, payload)
+		if rec.Code != 404 || strings.Contains(rec.Body.String(), secret) {
+			t.Errorf("POST %s: %d %s, want 404", path, rec.Code, rec.Body)
+		}
+	}
+	for _, payload := range []string{
+		`{"name":"x","kind":"webhook","Target":"https://h.example.com/` + secret + `","signing_secret":"` + secret + `-hook"}`,
+		`{"name":"x","kind":"webhook","target":"https://h.example.com/` + secret + `","Target_Origin":"https://trusted.example.com:443","signing_secret":"` + secret + `-hook"}`,
+	} {
+		rec := e.call(tok, "POST", "/api/proposals/alert-channels", payload)
+		if rec.Code != 422 || strings.Contains(rec.Body.String(), secret) {
+			t.Errorf("a case-variant key: %d %s", rec.Code, rec.Body)
+		}
+	}
+	if changes() != before {
+		t.Errorf("a refused proposal left %d request rows", changes()-before)
+	}
+}

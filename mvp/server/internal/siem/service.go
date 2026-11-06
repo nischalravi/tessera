@@ -636,7 +636,7 @@ func SinkOrigin(kind, target string) string {
 		}
 		return net.JoinHostPort(strings.ToLower(host), port)
 	}
-	return safehttp.Origin(target)
+	return safehttp.OriginKey(target)
 }
 
 // Rewind sets a sink's cursor: replay from seq+1 (0: the whole ledger), or

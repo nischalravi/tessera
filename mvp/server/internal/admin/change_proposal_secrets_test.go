@@ -227,15 +227,15 @@ func TestProposalSecrets_AADBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	enc := h.change(ch.ID).SecretEnc
-	got, err := admin.OpenProposalSecrets(h.sealer, tenantID, ch.ID, enc)
+	got, err := admin.OpenProposalSecrets(h.sealer, tenantID, ch.ID, enc, admin.KindSiemSink)
 	if err != nil || got["token"] != hecToken || got["target"] == "" {
 		t.Fatalf("own open = %v, %v", got, err)
 	}
 	other := tenancy.MustParse("00000000-0000-4000-8000-0000000000c2")
-	if _, err := admin.OpenProposalSecrets(h.sealer, other, ch.ID, enc); err == nil {
+	if _, err := admin.OpenProposalSecrets(h.sealer, other, ch.ID, enc, admin.KindSiemSink); err == nil {
 		t.Error("opened under another tenant")
 	}
-	if _, err := admin.OpenProposalSecrets(h.sealer, tenantID, uuid.New(), enc); err == nil {
+	if _, err := admin.OpenProposalSecrets(h.sealer, tenantID, uuid.New(), enc, admin.KindSiemSink); err == nil {
 		t.Error("opened under another proposal")
 	}
 	// the blob of one field moved to another field of the same request
@@ -245,11 +245,11 @@ func TestProposalSecrets_AADBinding(t *testing.T) {
 	}
 	m["token"], m["target"] = m["target"], m["token"]
 	swapped, _ := json.Marshal(m)
-	if _, err := admin.OpenProposalSecrets(h.sealer, tenantID, ch.ID, swapped); err == nil {
+	if _, err := admin.OpenProposalSecrets(h.sealer, tenantID, ch.ID, swapped, admin.KindSiemSink); err == nil {
 		t.Error("opened a blob moved to another field")
 	}
 	wrong, _ := seal.New(seal.RandomBytes(32))
-	if _, err := admin.OpenProposalSecrets(wrong, tenantID, ch.ID, enc); err == nil {
+	if _, err := admin.OpenProposalSecrets(wrong, tenantID, ch.ID, enc, admin.KindSiemSink); err == nil {
 		t.Error("opened under another KEK")
 	}
 }
@@ -361,4 +361,165 @@ func TestProposalSecrets_TamperedBlobFails(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// Case-variant keys must not get past the secret split: encoding/json would match "Target" to the field "target", leaving the
+// URL (and its token) in the payload and letting the caller set the server-derived fields (#885 H1).
+func TestProposalSecrets_CaseVariantKeysAreRefused(t *testing.T) {
+	h, _, machine := secretHarness(t)
+	rows := func() int {
+		n := 0
+		h.tx(func(tx *store.TenantTx) error { cs, err := tx.AdminChanges(); n = len(cs); return err })
+		return n
+	}
+	before := rows()
+	for _, tc := range []struct{ kind, body string }{
+		{admin.KindAlertChannel, `{"name":"a","kind":"webhook","Target":"` + hookURL + `","signing_secret":"` + hookSecret + `"}`},
+		{admin.KindAlertChannel, `{"name":"a","kind":"webhook","TARGET":"` + hookURL + `","signing_secret":"` + hookSecret + `"}`},
+		{admin.KindAlertChannel, `{"name":"a","kind":"webhook","target":"` + hookURL + `","Target_Origin":"https://splunk.corp.example:443","signing_secret":"` + hookSecret + `"}`},
+		{admin.KindAlertChannel, `{"name":"a","kind":"webhook","target":"` + hookURL + `","Signing_Secret":"` + hookSecret + `"}`},
+		{admin.KindSiemSink, `{"name":"a","kind":"webhook","format":"json","flavor":"hec","Target":"` + hookURL + `","Token":"` + hecToken + `"}`},
+		{admin.KindConnection, `{"name":"c","connector_type":"okta","Credential":{"secret":"` + connSecret + `"}}`},
+		{admin.KindConnection, `{"name":"c","connector_type":"okta","credential":{"Secret":"` + connSecret + `"}}`},
+		// the fields the server derives are never taken from a caller, even spelled exactly
+		{admin.KindAlertChannel, `{"name":"a","kind":"webhook","target":"` + hookURL + `","target_origin":"https://splunk.corp.example:443","signing_secret":"` + hookSecret + `"}`},
+		{admin.KindSiemSink, `{"name":"a","kind":"syslog","target":"collector:6514","target_fp":"0123456789abcdef"}`},
+		{admin.KindSiemSink, `{"name":"a","kind":"syslog","target":"collector:6514","target_change":"unchanged"}`},
+	} {
+		_, err := h.svc.SubmitProposal(h.ctx, machine, tc.kind, "", json.RawMessage(tc.body))
+		if err == nil {
+			t.Errorf("accepted %s", tc.body)
+			continue
+		}
+		for _, p := range plaintexts {
+			if strings.Contains(err.Error(), p) {
+				t.Errorf("the error echoes %q: %v", p, err)
+			}
+		}
+	}
+	if rows() != before {
+		t.Error("a refused body left a request behind")
+	}
+}
+
+// The approver sees the origin, a keyed fingerprint of the whole URL and what changed; never the path or token (#885 H2).
+func TestProposalSecrets_ApproverSeesFingerprintNotURL(t *testing.T) {
+	h, ad, machine := secretHarness(t)
+	summary := func(id uuid.UUID) string {
+		var s string
+		h.tx(func(tx *store.TenantTx) error {
+			ch, err := tx.AdminChange(id)
+			s = admin.Summarize(tx, ch, h.clk.now())
+			return err
+		})
+		return s
+	}
+	file := func(id, body string) (*store.AdminChange, string) {
+		ch, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindAlertChannel, id, json.RawMessage(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ch, summary(ch.ID)
+	}
+	ch, sum := file("", `{"name":"soc","kind":"webhook","target":"`+hookURL+`","signing_secret":"`+hookSecret+`"}`)
+	fp, err := admin.TargetFingerprint(h.sealer, tenantID, hookURL)
+	if err != nil || len(fp) != 16 {
+		t.Fatalf("fingerprint %q, %v", fp, err)
+	}
+	for _, want := range []string{"https://hooks.example.com:443", "fingerprint " + fp} {
+		if !strings.Contains(sum, want) {
+			t.Errorf("summary %q lacks %q", sum, want)
+		}
+	}
+	for _, bad := range []string{"services", "PLAINTEXT", "T000"} {
+		if strings.Contains(sum, bad) {
+			t.Errorf("summary %q shows %q", sum, bad)
+		}
+	}
+	// the fingerprint is keyed and bound to the tenant: another KEK or tenant gives another one
+	other, _ := seal.New(seal.RandomBytes(32))
+	if f2, _ := admin.TargetFingerprint(other, tenantID, hookURL); f2 == fp {
+		t.Error("the fingerprint does not depend on the key")
+	}
+	if f3, _ := admin.TargetFingerprint(h.sealer, tenancy.MustParse("00000000-0000-4000-8000-0000000000c2"), hookURL); f3 == fp {
+		t.Error("the fingerprint does not depend on the tenant")
+	}
+	if o, p := admin.ProposalTarget(h.change(ch.ID)); o != "https://hooks.example.com:443" || p != fp {
+		t.Errorf("ProposalTarget = %q %q", o, p)
+	}
+	if _, err := h.svc.Approve(h.ctx, h.as(ad[0]), ch.ID, ch.PayloadHash); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	h.tx(func(tx *store.TenantTx) error { cs, _ := tx.AlertChannels(); id = cs[0].ID; return nil })
+	// a path-only change keeps the origin: it is flagged, not hidden
+	_, sum = file(id, `{"target":"https://hooks.example.com/services/T000/B000/OTHER-WORKSPACE"}`)
+	if !strings.Contains(sum, "PATH CHANGED") || strings.Contains(sum, "OTHER-WORKSPACE") {
+		t.Errorf("path change summary: %q", sum)
+	}
+	_, sum = file(id, `{"target":"`+hookURL+`"}`)
+	if !strings.Contains(sum, "same URL as now") {
+		t.Errorf("unchanged summary: %q", sum)
+	}
+	_, sum = file(id, `{"target":"https://elsewhere.example.org/x","signing_secret":"`+hookSecret+`-2"}`)
+	if !strings.Contains(sum, "MOVED to another origin") {
+		t.Errorf("moved summary: %q", sum)
+	}
+}
+
+// A connection proposal that points a stored credential reference at an endpoint says both to the approver (#885 M2), and the
+// refusal of the domain code keeps its per-field detail (#885 L5).
+func TestProposalSecrets_ConnectionSummaryAndFieldErrors(t *testing.T) {
+	h, _, machine := secretHarness(t)
+	ch, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindConnection, "", json.RawMessage(
+		`{"name":"Okta ref","connector_type":"okta","config":{"org_url":"https://evil.example.net"},"credential":{"reference":"vault:kv/prod/okta"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum string
+	h.tx(func(tx *store.TenantTx) error {
+		c, _ := tx.AdminChange(ch.ID)
+		sum = admin.Summarize(tx, c, h.clk.now())
+		return nil
+	})
+	for _, want := range []string{"vault:kv/prod/okta", "org_url=https://evil.example.net"} {
+		if !strings.Contains(sum, want) {
+			t.Errorf("summary %q lacks %q", sum, want)
+		}
+	}
+	_, err = h.svc.SubmitProposal(h.ctx, machine, admin.KindConnection, "", json.RawMessage(
+		`{"name":"c2","connector_type":"okta","config":{"org_url":"https://169.254.169.254"}}`))
+	if err == nil || !strings.Contains(err.Error(), "org_url") {
+		t.Errorf("the refusal does not name the field: %v", err)
+	}
+}
+
+// A sealed blob that names a field this kind does not seal is refused before any key is used; duplicate names are refused so
+// the created object is unambiguous.
+func TestProposalSecrets_BlobKeysAndDuplicateNames(t *testing.T) {
+	h, ad, machine := secretHarness(t)
+	enc, _ := json.Marshal(map[string]string{"": "AA==", "a|b": "AA==", "other": "AA=="})
+	if _, err := admin.OpenProposalSecrets(h.sealer, tenantID, uuid.New(), enc, admin.KindSiemSink); err == nil {
+		t.Error("a blob with foreign keys opened")
+	}
+	body := `{"name":"dup","kind":"webhook","format":"json","flavor":"hec","target":"https://s.example.com/c","token":"` + hecToken + `"}`
+	ch, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindSiemSink, "", json.RawMessage(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.Approve(h.ctx, h.as(ad[0]), ch.ID, ch.PayloadHash); err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.svc.SubmitProposal(h.ctx, machine, admin.KindSiemSink, "", json.RawMessage(body))
+	wantErr(t, err, http.StatusConflict, "duplicate_sink")
+	hook := `{"name":"dup","kind":"email","target":"a@example.com"}`
+	ch, err = h.svc.SubmitProposal(h.ctx, machine, admin.KindAlertChannel, "", json.RawMessage(hook))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.Approve(h.ctx, h.as(ad[0]), ch.ID, ch.PayloadHash); err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.svc.SubmitProposal(h.ctx, machine, admin.KindAlertChannel, "", json.RawMessage(hook))
+	wantErr(t, err, http.StatusConflict, "duplicate_channel")
 }

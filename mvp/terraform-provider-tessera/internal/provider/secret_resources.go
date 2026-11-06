@@ -292,9 +292,10 @@ func (r *connectionResource) ImportState(ctx context.Context, req resource.Impor
 // ---------------------------------------------------------------- tessera_alert_channel
 
 var (
-	_ resource.Resource                = (*alertChannelResource)(nil)
-	_ resource.ResourceWithConfigure   = (*alertChannelResource)(nil)
-	_ resource.ResourceWithImportState = (*alertChannelResource)(nil)
+	_ resource.Resource                   = (*alertChannelResource)(nil)
+	_ resource.ResourceWithConfigure      = (*alertChannelResource)(nil)
+	_ resource.ResourceWithImportState    = (*alertChannelResource)(nil)
+	_ resource.ResourceWithValidateConfig = (*alertChannelResource)(nil)
 )
 
 // NewAlertChannelResource is tessera_alert_channel: where alerts are delivered, an email list or a signed webhook.
@@ -307,6 +308,10 @@ type alertChannelModel struct {
 	Name                 types.String `tfsdk:"name"`
 	Kind                 types.String `tfsdk:"kind"`
 	Target               types.String `tfsdk:"target"`
+	TargetURL            types.String `tfsdk:"target_url"`
+	TargetURLVersion     types.String `tfsdk:"target_url_version"`
+	TargetOrigin         types.String `tfsdk:"target_origin"`
+	TargetFingerprint    types.String `tfsdk:"target_fingerprint"`
 	MinSeverity          types.String `tfsdk:"min_severity"`
 	Enabled              types.Bool   `tfsdk:"enabled"`
 	SigningSecret        types.String `tfsdk:"signing_secret"`
@@ -323,8 +328,8 @@ func (r *alertChannelResource) Schema(_ context.Context, _ resource.SchemaReques
 	resp.Schema = schema.Schema{
 		Description: "A channel that alerts are delivered to: a list of email addresses, or an HTTPS webhook whose payloads are signed with an " +
 			"HMAC secret you choose and give the receiver. " + proposalNote + secretNote +
-			"A webhook URL often carries a token, so `target` is Sensitive (the server seals it and shows only its origin in the approval) " +
-			"but, being needed to plan, it is stored in the state like any argument: protect the state. " +
+			"A webhook URL usually carries a token, so it goes in the write-only `target_url` (with `target_url_version`), never in the state: " +
+			"the server seals it, shows the approver its origin and a keyed fingerprint, and the state keeps those two (`target_origin`, `target_fingerprint`). " +
 			"Channels are switched off with `enabled = false`, not deleted: destroy leaves the channel on the server. " +
 			"The server's read of channels needs the admin scope, so refresh keeps the state unless the client can read them.",
 		Attributes: commonAttrs(map[string]schema.Attribute{
@@ -335,9 +340,8 @@ func (r *alertChannelResource) Schema(_ context.Context, _ resource.SchemaReques
 			"kind": schema.StringAttribute{Required: true, Description: "`email` or `webhook`. It cannot change.",
 				Validators:    []validator.String{oneOf("email", "webhook")},
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
-			"target": schema.StringAttribute{Required: true, Sensitive: true, Validators: nonEmptyString(),
-				Description: "Email: up to 20 addresses separated by commas. Webhook: an absolute `https` URL without credentials, which must not point " +
-					"at a cloud metadata service (the server checks again when the proposal is approved). Moving a webhook to another origin needs a new `signing_secret`."},
+			"target": schema.StringAttribute{Optional: true, Validators: nonEmptyString(),
+				Description: "Email channel: up to 20 addresses separated by commas. A webhook uses `target_url` instead."},
 			"min_severity": schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("high"),
 				Validators: []validator.String{oneOf("low", "medium", "high", "critical")}, Description: "The lowest severity that is sent. Default `high`."},
 			"enabled": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), Description: "Whether alerts are sent. Default true."},
@@ -345,6 +349,17 @@ func (r *alertChannelResource) Schema(_ context.Context, _ resource.SchemaReques
 				"(the server cannot show you one it generated). Write-only: never in the plan or the state.", "signing_secret_version"),
 			"signing_secret_version": versionAttr("Any text; change it along with `signing_secret` to send the new secret."),
 		}),
+	}
+	for k, v := range targetURLAttrs("webhook") {
+		resp.Schema.Attributes[k] = v
+	}
+}
+
+func (r *alertChannelResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var m alertChannelModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &m)...)
+	if !resp.Diagnostics.HasError() {
+		urlKindRule(&resp.Diagnostics, m.Kind, m.Target, m.TargetURL, "webhook")
 	}
 }
 
@@ -369,10 +384,13 @@ type alertChannelRead struct {
 	Enabled     bool   `json:"enabled"`
 }
 
-func (r *alertChannelResource) put(ctx context.Context, plan, state *alertChannelModel, secret string, send bool, id string, d *diag.Diagnostics) {
-	target, enabled := plan.Target.ValueString(), plan.Enabled.ValueBool()
-	b := alertChannelBody{Name: plan.Name.ValueString(), Kind: plan.Kind.ValueString(), Target: &target,
+func (r *alertChannelResource) put(ctx context.Context, plan, state *alertChannelModel, secret string, send bool, rawURL string, sendURL bool, id string, d *diag.Diagnostics) {
+	enabled := plan.Enabled.ValueBool()
+	b := alertChannelBody{Name: plan.Name.ValueString(), Kind: plan.Kind.ValueString(), Target: optString(plan.Target),
 		MinSeverity: plan.MinSeverity.ValueString(), Enabled: &enabled}
+	if sendURL {
+		b.Target = &rawURL
+	}
 	if send {
 		b.SigningSecret = &secret
 	}
@@ -394,6 +412,9 @@ func (r *alertChannelResource) put(ctx context.Context, plan, state *alertChanne
 	}
 	plan.ID = types.StringValue(id)
 	setChange(&plan.ChangeID, &plan.ChangeURL, ch)
+	setTarget(&plan.TargetOrigin, &plan.TargetFingerprint, state, ch, func(m *alertChannelModel) (types.String, types.String) {
+		return m.TargetOrigin, m.TargetFingerprint
+	})
 }
 
 func (r *alertChannelResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -411,7 +432,12 @@ func (r *alertChannelResource) Create(ctx context.Context, req resource.CreateRe
 			"Set signing_secret (and signing_secret_version): the receiver must know it, and the server cannot show a secret it generated for a proposal.")
 		return
 	}
-	if r.put(ctx, &plan, nil, secret, send, "", &resp.Diagnostics); !resp.Diagnostics.HasError() {
+	rawURL, sendURL := secretToSend(ctx, &resp.Diagnostics, req.Config, "target_url", "target_url_version", plan.TargetURLVersion, types.StringNull(), true)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if r.put(ctx, &plan, nil, secret, send, rawURL, sendURL, "", &resp.Diagnostics); !resp.Diagnostics.HasError() {
+		plan.TargetURL = types.StringNull()
 		plan.SigningSecret = types.StringNull()
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 	}
@@ -428,7 +454,12 @@ func (r *alertChannelResource) Update(ctx context.Context, req resource.UpdateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if r.put(ctx, &plan, &state, secret, send, state.ID.ValueString(), &resp.Diagnostics); !resp.Diagnostics.HasError() {
+	rawURL, sendURL := secretToSend(ctx, &resp.Diagnostics, req.Config, "target_url", "target_url_version", plan.TargetURLVersion, state.TargetURLVersion, false)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if r.put(ctx, &plan, &state, secret, send, rawURL, sendURL, state.ID.ValueString(), &resp.Diagnostics); !resp.Diagnostics.HasError() {
+		plan.TargetURL = types.StringNull()
 		plan.SigningSecret = types.StringNull()
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 	}
@@ -477,9 +508,10 @@ func (r *alertChannelResource) ImportState(ctx context.Context, req resource.Imp
 // ---------------------------------------------------------------- tessera_siem_sink
 
 var (
-	_ resource.Resource                = (*siemSinkResource)(nil)
-	_ resource.ResourceWithConfigure   = (*siemSinkResource)(nil)
-	_ resource.ResourceWithImportState = (*siemSinkResource)(nil)
+	_ resource.Resource                   = (*siemSinkResource)(nil)
+	_ resource.ResourceWithConfigure      = (*siemSinkResource)(nil)
+	_ resource.ResourceWithImportState    = (*siemSinkResource)(nil)
+	_ resource.ResourceWithValidateConfig = (*siemSinkResource)(nil)
 )
 
 // NewSiemSinkResource is tessera_siem_sink: a destination the audit ledger is streamed to.
@@ -488,23 +520,27 @@ func NewSiemSinkResource() resource.Resource { return &siemSinkResource{} }
 type siemSinkResource struct{ proposer }
 
 type siemSinkModel struct {
-	ID           types.String `tfsdk:"id"`
-	Name         types.String `tfsdk:"name"`
-	Kind         types.String `tfsdk:"kind"`
-	Format       types.String `tfsdk:"format"`
-	Target       types.String `tfsdk:"target"`
-	Flavor       types.String `tfsdk:"flavor"`
-	CAPEM        types.String `tfsdk:"ca_pem"`
-	IncludeHTTP  types.Bool   `tfsdk:"include_http"`
-	EventFilter  types.Set    `tfsdk:"event_filter"`
-	Region       types.String `tfsdk:"region"`
-	AccessKeyID  types.String `tfsdk:"access_key_id"`
-	Enabled      types.Bool   `tfsdk:"enabled"`
-	Start        types.String `tfsdk:"start"`
-	Token        types.String `tfsdk:"token"`
-	TokenVersion types.String `tfsdk:"token_version"`
-	ChangeID     types.String `tfsdk:"change_id"`
-	ChangeURL    types.String `tfsdk:"change_url"`
+	ID                types.String `tfsdk:"id"`
+	Name              types.String `tfsdk:"name"`
+	Kind              types.String `tfsdk:"kind"`
+	Format            types.String `tfsdk:"format"`
+	Target            types.String `tfsdk:"target"`
+	TargetURL         types.String `tfsdk:"target_url"`
+	TargetURLVersion  types.String `tfsdk:"target_url_version"`
+	TargetOrigin      types.String `tfsdk:"target_origin"`
+	TargetFingerprint types.String `tfsdk:"target_fingerprint"`
+	Flavor            types.String `tfsdk:"flavor"`
+	CAPEM             types.String `tfsdk:"ca_pem"`
+	IncludeHTTP       types.Bool   `tfsdk:"include_http"`
+	EventFilter       types.Set    `tfsdk:"event_filter"`
+	Region            types.String `tfsdk:"region"`
+	AccessKeyID       types.String `tfsdk:"access_key_id"`
+	Enabled           types.Bool   `tfsdk:"enabled"`
+	Start             types.String `tfsdk:"start"`
+	Token             types.String `tfsdk:"token"`
+	TokenVersion      types.String `tfsdk:"token_version"`
+	ChangeID          types.String `tfsdk:"change_id"`
+	ChangeURL         types.String `tfsdk:"change_url"`
 }
 
 func (r *siemSinkResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -516,7 +552,8 @@ func (r *siemSinkResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 		Description: "A SIEM sink: the audit ledger streamed to Splunk HEC (`webhook` with flavor `hec`), a JSON webhook, a syslog-over-TLS " +
 			"collector or an S3 bucket. " + proposalNote + secretNote +
 			"As on the admin routes, a sink that moves to another origin needs a new `token` (the stored one never follows it). " +
-			"A URL target may carry a token: `target` is Sensitive and sealed by the server, but is stored in the state like any argument. " +
+			"A webhook or S3 URL may carry a token, so it goes in the write-only `target_url` (with `target_url_version`), never in the state; the state " +
+			"keeps `target_origin` and `target_fingerprint`, which the approver sees too. " +
 			"Sinks are switched off with `enabled = false`, not deleted: destroy leaves the sink on the server. Refresh reads the sink " +
 			"when the client also holds the audit scope (siem.read) and keeps the state otherwise.",
 		Attributes: commonAttrs(map[string]schema.Attribute{
@@ -528,9 +565,8 @@ func (r *siemSinkResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
 			"format": schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("json"),
 				Validators: []validator.String{oneOf("json", "ocsf")}, Description: "`json` (default) or `ocsf`."},
-			"target": schema.StringAttribute{Required: true, Sensitive: true, Validators: nonEmptyString(),
-				Description: "Webhook or S3: an absolute `https` URL without credentials, not a cloud metadata service (the server checks again " +
-					"when the proposal is approved). Syslog: `host:port` (6514 by default), not a private address."},
+			"target": schema.StringAttribute{Optional: true, Validators: nonEmptyString(),
+				Description: "Syslog collector: `host:port` (6514 by default), not a private address. A webhook or S3 sink uses `target_url` instead."},
 			"flavor": schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString(""),
 				Validators: []validator.String{oneOf("", "hec", "json")}, Description: "A webhook's flavor, `hec` (Splunk) or `json`."},
 			"ca_pem": schema.StringAttribute{Optional: true, Description: "A syslog collector's CA bundle (PEM certificates, public, at most 64 KiB)."},
@@ -547,6 +583,17 @@ func (r *siemSinkResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				"token_version"),
 			"token_version": versionAttr("Any text; change it along with `token` to send the new token."),
 		}),
+	}
+	for k, v := range targetURLAttrs("webhook or S3") {
+		resp.Schema.Attributes[k] = v
+	}
+}
+
+func (r *siemSinkResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var m siemSinkModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &m)...)
+	if !resp.Diagnostics.HasError() {
+		urlKindRule(&resp.Diagnostics, m.Kind, m.Target, m.TargetURL, "webhook", "s3")
 	}
 }
 
@@ -591,14 +638,17 @@ func optString(v types.String) *string {
 	return &s
 }
 
-func (r *siemSinkResource) body(ctx context.Context, plan *siemSinkModel, secret string, send bool, update bool, d *diag.Diagnostics) siemSinkBody {
-	target, inc, en := plan.Target.ValueString(), plan.IncludeHTTP.ValueBool(), plan.Enabled.ValueBool()
+func (r *siemSinkResource) body(ctx context.Context, plan *siemSinkModel, secret string, send bool, rawURL string, sendURL bool, update bool, d *diag.Diagnostics) siemSinkBody {
+	inc, en := plan.IncludeHTTP.ValueBool(), plan.Enabled.ValueBool()
 	filter := stringSetOf(ctx, d, plan.EventFilter)
-	b := siemSinkBody{Name: plan.Name.ValueString(), Kind: plan.Kind.ValueString(), Format: plan.Format.ValueString(), Target: &target,
+	b := siemSinkBody{Name: plan.Name.ValueString(), Kind: plan.Kind.ValueString(), Format: plan.Format.ValueString(), Target: optString(plan.Target),
 		Flavor: plan.Flavor.ValueString(), CAPEM: optString(plan.CAPEM), IncludeHTTP: &inc, EventFilter: &filter,
 		Region: optString(plan.Region), AccessKeyID: optString(plan.AccessKeyID), Enabled: &en}
 	if send {
 		b.Token = &secret
+	}
+	if sendURL {
+		b.Target = &rawURL
 	}
 	if update {
 		b.Kind = "" // fixed after creation
@@ -608,7 +658,7 @@ func (r *siemSinkResource) body(ctx context.Context, plan *siemSinkModel, secret
 	return b
 }
 
-func (r *siemSinkResource) file(ctx context.Context, plan *siemSinkModel, b siemSinkBody, id string, d *diag.Diagnostics) {
+func (r *siemSinkResource) file(ctx context.Context, plan, state *siemSinkModel, b siemSinkBody, id string, d *diag.Diagnostics) {
 	pth, what := "/proposals/siem-sinks", "create the SIEM sink"
 	if id != "" {
 		pth, what = "/proposals/siem-sinks/"+url.PathEscape(id), "update the SIEM sink"
@@ -626,6 +676,9 @@ func (r *siemSinkResource) file(ctx context.Context, plan *siemSinkModel, b siem
 	}
 	plan.ID = types.StringValue(id)
 	setChange(&plan.ChangeID, &plan.ChangeURL, ch)
+	setTarget(&plan.TargetOrigin, &plan.TargetFingerprint, state, ch, func(m *siemSinkModel) (types.String, types.String) {
+		return m.TargetOrigin, m.TargetFingerprint
+	})
 }
 
 func (r *siemSinkResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -638,11 +691,13 @@ func (r *siemSinkResource) Create(ctx context.Context, req resource.CreateReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	b := r.body(ctx, &plan, secret, send, false, &resp.Diagnostics)
+	rawURL, sendURL := secretToSend(ctx, &resp.Diagnostics, req.Config, "target_url", "target_url_version", plan.TargetURLVersion, types.StringNull(), true)
+	b := r.body(ctx, &plan, secret, send, rawURL, sendURL, false, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if r.file(ctx, &plan, b, "", &resp.Diagnostics); !resp.Diagnostics.HasError() {
+	if r.file(ctx, &plan, nil, b, "", &resp.Diagnostics); !resp.Diagnostics.HasError() {
+		plan.TargetURL = types.StringNull()
 		plan.Token = types.StringNull()
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 	}
@@ -659,11 +714,13 @@ func (r *siemSinkResource) Update(ctx context.Context, req resource.UpdateReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	b := r.body(ctx, &plan, secret, send, true, &resp.Diagnostics)
+	rawURL, sendURL := secretToSend(ctx, &resp.Diagnostics, req.Config, "target_url", "target_url_version", plan.TargetURLVersion, state.TargetURLVersion, false)
+	b := r.body(ctx, &plan, secret, send, rawURL, sendURL, true, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if r.file(ctx, &plan, b, state.ID.ValueString(), &resp.Diagnostics); !resp.Diagnostics.HasError() {
+	if r.file(ctx, &plan, &state, b, state.ID.ValueString(), &resp.Diagnostics); !resp.Diagnostics.HasError() {
+		plan.TargetURL = types.StringNull()
 		plan.Token = types.StringNull()
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 	}
@@ -714,4 +771,55 @@ func (r *siemSinkResource) Delete(_ context.Context, _ resource.DeleteRequest, r
 
 func (r *siemSinkResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+}
+
+// targetURLAttrs is the schema of a write-only URL argument and what the server reports about it. A webhook URL usually carries a
+// token (Slack, Teams and Sumo Logic put it in the path), so it is write-only like a secret and never in the state; the state keeps
+// its origin and a keyed fingerprint of the whole URL, which the approver is shown too, so a person can match the two.
+func targetURLAttrs(what string) map[string]schema.Attribute {
+	return map[string]schema.Attribute{
+		"target_url": schema.StringAttribute{Optional: true, Sensitive: true, WriteOnly: true,
+			Description: "The " + what + " URL: absolute, `https`, no credentials, not a cloud metadata service (the server checks again when the proposal " +
+				"is approved). Write-only: never in the plan or the state. The server seals it; the approver sees its origin and a fingerprint.",
+			Validators: []validator.String{stringvalidator.LengthBetween(1, 2000), stringvalidator.AlsoRequires(path.MatchRoot("target_url_version"))}},
+		"target_url_version": versionAttr("Any text; change it along with `target_url` to send the new URL. Without a change the server keeps the URL it has."),
+		"target_origin":      schema.StringAttribute{Computed: true, Description: "The scheme, host and port of the URL the server sealed (never its path)."},
+		"target_fingerprint": schema.StringAttribute{Computed: true, Description: "A keyed fingerprint of the whole sealed URL (16 hex characters), which the approver sees too. " +
+			"Compare it to the one shown for the change request to confirm the receiver, including its path; it cannot be computed from a list of candidate URLs."},
+	}
+}
+
+// urlKindRule is the config check shared by the alert channel and the SIEM sink: a webhook (or S3) sink takes `target_url`, the others
+// `target`, and a write-only URL is needed in the configuration on every run.
+func urlKindRule(d *diag.Diagnostics, kind, target, targetURL types.String, urlKinds ...string) {
+	if !known(kind) {
+		return
+	}
+	isURL := false
+	for _, k := range urlKinds {
+		isURL = isURL || kind.ValueString() == k
+	}
+	switch {
+	case isURL && !targetURL.IsUnknown() && targetURL.IsNull():
+		d.AddAttributeError(path.Root("target_url"), "target_url is required", "A "+kind.ValueString()+" takes its URL in target_url (write-only), with target_url_version.")
+	case isURL && known(target):
+		d.AddAttributeError(path.Root("target"), "target is not used", "A "+kind.ValueString()+" takes its URL in target_url, not target.")
+	case !isURL && !target.IsUnknown() && target.IsNull():
+		d.AddAttributeError(path.Root("target"), "target is required", "A "+kind.ValueString()+" takes target.")
+	case !isURL && known(targetURL):
+		d.AddAttributeError(path.Root("target_url"), "target_url is not used", "A "+kind.ValueString()+" takes target, not target_url.")
+	}
+}
+
+// setTarget records what the server says about the URL it sealed. When this apply sent no URL (the version did not change) the
+// state keeps the origin and fingerprint it had; a computed attribute must never stay unknown.
+func setTarget[M any](origin, fp *types.String, state *M, ch *client.Change, get func(*M) (types.String, types.String)) {
+	switch {
+	case ch.TargetOrigin != nil && ch.TargetFingerprint != nil:
+		*origin, *fp = types.StringValue(*ch.TargetOrigin), types.StringValue(*ch.TargetFingerprint)
+	case state != nil:
+		*origin, *fp = get(state)
+	default:
+		*origin, *fp = types.StringNull(), types.StringNull()
+	}
 }

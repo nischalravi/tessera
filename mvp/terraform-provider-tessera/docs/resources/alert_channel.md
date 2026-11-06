@@ -7,7 +7,7 @@ description: |-
 
 # tessera_alert_channel (Resource)
 
-A channel that alerts are delivered to: a list of email addresses, or an HTTPS webhook whose payloads are signed with an HMAC secret you choose and give the receiver (the server cannot show a secret it generated for a proposal, so a webhook needs `signing_secret`). It needs the `config.propose` scope (see `tessera_alert_rule`) and is applied only after a person approves the proposal with a step-up sign-in; apply waits and fails with the change's URL on a refusal or a timeout. A webhook URL often carries a token, so `target` is `Sensitive` and sealed by the server (the approver sees only its origin), but, being needed to plan, it is stored in the state like any argument: protect the state. The server checks the URL when the proposal is filed and again when it is approved: it must be `https`, carry no credentials and not point at a cloud metadata service. Moving a webhook to another origin needs a new `signing_secret`. Channels are switched off with `enabled = false`, not deleted: destroy only removes the resource from state, with a warning. Reading channels needs the admin scope, so refresh keeps the state as applied unless the client can read them.
+A channel that alerts are delivered to: a list of email addresses, or an HTTPS webhook whose payloads are signed with an HMAC secret you choose and give the receiver (the server cannot show a secret it generated for a proposal, so a webhook needs `signing_secret`). It needs the `config.propose` scope (see `tessera_alert_rule`) and is applied only after a person approves the proposal with a step-up sign-in; apply waits and fails with the change's URL on a refusal or a timeout. A webhook URL usually carries a token (Slack, Teams and Sumo Logic put it in the path), so it goes in the write-only `target_url`, with `target_url_version`: the server seals it, the approver sees its origin and a keyed fingerprint of the whole URL (and a flag when only the path changed), and the state keeps just the origin and fingerprint. The server checks the URL when the proposal is filed and again when it is approved: it must be `https`, carry no credentials and not point at a cloud metadata service. Moving a webhook to another origin needs a new `signing_secret`. Channels are switched off with `enabled = false`, not deleted: destroy only removes the resource from state, with a warning. Reading channels needs the admin scope, so refresh keeps the state as applied unless the client can read them.
 
 ## Secrets
 
@@ -18,6 +18,12 @@ Because the state holds no secret, Terraform cannot see that it changed. `signin
 ## Example Usage
 
 ```terraform
+variable "soc_webhook_url" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+
 variable "soc_webhook_signing_secret" {
   type      = string
   sensitive = true
@@ -27,8 +33,12 @@ variable "soc_webhook_signing_secret" {
 resource "tessera_alert_channel" "soc" {
   name         = "SOC webhook"
   kind         = "webhook"
-  target       = "https://hooks.example.com/services/T000/B000/XXXX" # sensitive; sealed by the server
   min_severity = "high"
+
+  # the URL usually carries a token: write-only, never in the plan or the state. The state keeps target_origin and
+  # target_fingerprint (compare the fingerprint with the one the approver sees).
+  target_url         = var.soc_webhook_url
+  target_url_version = "1"
 
   # the receiver verifies the HMAC signature with this secret; write-only
   signing_secret         = var.soc_webhook_signing_secret
@@ -49,10 +59,12 @@ resource "tessera_alert_channel" "mail" {
 
 - `kind` (String) `email` or `webhook`. Changing it replaces the resource.
 - `name` (String) A name, at most 100 characters.
-- `target` (String, Sensitive) Email: up to 20 addresses separated by commas. Webhook: an absolute `https` URL.
 
 ### Optional
 
+- `target_url` (String, Sensitive, Write-only) The URL (absolute `https`, no credentials, not a cloud metadata service). It usually carries a token, so it is write-only: never in the plan or the state. The server seals it; the approver sees its origin and a keyed fingerprint, and flags a path-only change.
+- `target_url_version` (String) Any text; change it along with `target_url` to send the new URL.
+- `target` (String) Email: up to 20 addresses separated by commas. A webhook uses `target_url`.
 - `enabled` (Boolean) Whether alerts are sent. Default true.
 - `min_severity` (String) `low`, `medium`, `high` (default) or `critical`.
 - `signing_secret` (String, Sensitive, Write-only) A webhook's HMAC signing secret, 16 to 256 characters. Required for a webhook.
@@ -60,6 +72,8 @@ resource "tessera_alert_channel" "mail" {
 
 ### Read-Only
 
+- `target_fingerprint` (String) A keyed fingerprint of the whole sealed URL (16 hex characters), shown to the approver too: compare it with the one on the change request to confirm the receiver, path included. It cannot be computed from a list of candidate URLs.
+- `target_origin` (String) The scheme, host and port of the sealed URL (never its path).
 - `change_id` (String) The id of the change request that applied the last create or update.
 - `change_url` (String) Where a person reviews that change request.
 - `id` (String) The channel id.

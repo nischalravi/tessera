@@ -550,23 +550,33 @@ func TestAcc_Proposals(t *testing.T) {
 	})
 	t.Run("alert channel", func(t *testing.T) {
 		const res = "tessera_alert_channel"
-		cfg := map[string]any{"name": "TF hook", "kind": "webhook", "target": hookURL, "signing_secret": hookSecret, "signing_secret_version": "1"}
-		if _, d := p.apply(res, map[string]any{"name": "TF nosecret", "kind": "webhook", "target": hookURL}, tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "needs its signing secret") {
+		cfg := map[string]any{"name": "TF hook", "kind": "webhook", "target_url": hookURL, "target_url_version": "1",
+			"signing_secret": hookSecret, "signing_secret_version": "1"}
+		if _, d := p.apply(res, map[string]any{"name": "TF nosecret", "kind": "webhook", "target_url": hookURL, "target_url_version": "1"}, tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "needs its signing secret") {
 			t.Fatalf("a webhook without a secret: %q", diagText(d))
 		}
-		if _, d := p.apply(res, map[string]any{"name": "TF meta", "kind": "webhook", "target": "https://169.254.169.254/x", "signing_secret": hookSecret,
-			"signing_secret_version": "1"}, tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "metadata") {
+		if _, d := p.apply(res, map[string]any{"name": "TF meta", "kind": "webhook", "target_url": "https://169.254.169.254/x", "target_url_version": "1",
+			"signing_secret": hookSecret, "signing_secret_version": "1"}, tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "metadata") {
 			t.Fatalf("a metadata target: %q", diagText(d))
 		}
 		st := approveHiding(t, applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil)), hookSecret, "PLAINTEXT-url-token").state
-		notInState(t, st, hookSecret)
+		notInState(t, st, hookSecret, hookURL, "PLAINTEXT-url-token")
 		a := attrs(t, st)
+		// the state keeps the origin and the keyed fingerprint, never the URL; the approver is shown the same fingerprint
+		fp := str(t, a["target_fingerprint"])
+		if str(t, a["target_origin"]) != "https://hooks.example.com:443" || !a["target_url"].IsNull() || len(fp) != 16 {
+			t.Fatalf("target details: %v", st)
+		}
+		if v := alice.must("GET", "/api/admin/change-requests/"+str(t, a["change_id"]), nil, 200); !strings.Contains(fmt.Sprint(v["summary"]), "fingerprint "+fp) ||
+			strings.Contains(fmt.Sprint(v["summary"]), "PLAINTEXT") {
+			t.Fatalf("what the approver sees: %v", v["summary"])
+		}
 		if !uuidRE.MatchString(str(t, a["id"])) || !a["signing_secret"].IsNull() || str(t, a["min_severity"]) != "high" {
 			t.Fatalf("created channel: %v", st)
 		}
 		cfg["enabled"] = false
 		st2 := approveHiding(t, applyAsync(p, res, cfg, st), hookSecret, "PLAINTEXT-url-token").state
-		if boolv(t, attrs(t, st2)["enabled"]) || str(t, attrs(t, st2)["id"]) != str(t, a["id"]) {
+		if boolv(t, attrs(t, st2)["enabled"]) || str(t, attrs(t, st2)["id"]) != str(t, a["id"]) || str(t, attrs(t, st2)["target_fingerprint"]) != fp {
 			t.Fatalf("updated channel: %v", st2)
 		}
 		// an email channel carries no secret
@@ -581,14 +591,17 @@ func TestAcc_Proposals(t *testing.T) {
 	})
 	t.Run("siem sink", func(t *testing.T) {
 		const res = "tessera_siem_sink"
-		cfg := map[string]any{"name": "TF splunk", "kind": "webhook", "flavor": "hec", "target": "https://splunk.example.com:8088/services/collector",
-			"token": hecToken, "token_version": "1"}
-		if _, d := p.apply(res, map[string]any{"name": "TF notoken", "kind": "webhook", "flavor": "hec", "target": "https://splunk.example.com/x"},
+		cfg := map[string]any{"name": "TF splunk", "kind": "webhook", "flavor": "hec",
+			"target_url": "https://splunk.example.com:8088/services/collector", "target_url_version": "1", "token": hecToken, "token_version": "1"}
+		if _, d := p.apply(res, map[string]any{"name": "TF notoken", "kind": "webhook", "flavor": "hec", "target_url": "https://splunk.example.com/x", "target_url_version": "1"},
 			tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "token_required") {
 			t.Fatalf("an HEC sink without its token: %q", diagText(d))
 		}
 		st := approveHiding(t, applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil)), hecToken).state
-		notInState(t, st, hecToken)
+		notInState(t, st, hecToken, "splunk.example.com:8088/services")
+		if o := str(t, attrs(t, st)["target_origin"]); o != "https://splunk.example.com:8088" {
+			t.Fatalf("origin %q", o)
+		}
 		a := attrs(t, st)
 		if !uuidRE.MatchString(str(t, a["id"])) || !a["token"].IsNull() || str(t, a["format"]) != "json" {
 			t.Fatalf("created sink: %v", st)
@@ -599,7 +612,7 @@ func TestAcc_Proposals(t *testing.T) {
 		if !boolv(t, attrs(t, st2)["include_http"]) {
 			t.Fatalf("updated sink: %v", st2)
 		}
-		cfg["target"] = "https://other.example.com:8088/services/collector"
+		cfg["target_url"], cfg["target_url_version"] = "https://other.example.com:8088/services/collector", "2"
 		if _, d := p.apply(res, cfg, st2); !strings.Contains(diagText(d), "credential_required") {
 			t.Fatalf("an origin move without a new token: %q", diagText(d))
 		}

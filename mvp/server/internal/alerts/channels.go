@@ -190,7 +190,7 @@ func prepareUpdate(tx *store.TenantTx, id string, s ChannelSpec, dev bool) (*sto
 	// (#332, as #315). A path-only change keeps the secret.
 	from, to := "", ""
 	if c.Kind == "webhook" {
-		from, to = safehttp.Origin(c.Target), safehttp.Origin(s.Target)
+		from, to = safehttp.OriginKey(c.Target), safehttp.OriginKey(s.Target)
 		if from != to && !s.RotateSecret && s.Secret == "" && len(c.SecretSealed) > 0 {
 			return nil, s, "", "", refuse(422, "credential_required",
 				"changing the webhook's origin (scheme, host, port) needs a new signing secret: set rotate_secret")
