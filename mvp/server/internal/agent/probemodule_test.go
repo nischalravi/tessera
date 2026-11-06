@@ -8,6 +8,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 // TestProbeJob_Module: a probe job that names a module runs that module's
@@ -110,3 +111,29 @@ func TestProbeJob_Module(t *testing.T) {
 }
 
 var _ connectors.Prober = (*stubProber)(nil)
+
+type recDispatcher struct{ jobs []agent.Job }
+
+func (r *recDispatcher) Do(_ context.Context, _ tenancy.ID, _ string, j agent.Job) (agent.Result, error) {
+	r.jobs = append(r.jobs, j)
+	b, _ := json.Marshal(connectors.ConnInfo{Reachable: true})
+	return agent.Result{JobID: j.ID, Payload: b}, nil
+}
+
+// TestRemoteProber_Module: the server-side prober stamps its module on every
+// job it builds; a prober for LDAP stamps none, so its jobs are unchanged.
+func TestRemoteProber_Module(t *testing.T) {
+	for module, want := range map[string]string{"": "", agent.ModuleIBMi: "ibmi"} {
+		d := &recDispatcher{}
+		p, err := agent.NewRemoteModuleProber(d, tenancy.New(), "a1", module, agent.Target{Host: "h.example", Port: 8076}, agent.ProbeConfig{BindDN: "X", CredName: "svc"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.Connect(context.Background()); err != nil || len(d.jobs) != 1 || d.jobs[0].Module != want {
+			t.Errorf("module %q: %v %+v", module, err, d.jobs)
+		}
+	}
+	if _, err := agent.NewRemoteModuleProber(&recDispatcher{}, tenancy.New(), "a1", "nope", agent.Target{}, agent.ProbeConfig{CredName: "svc"}); err == nil {
+		t.Error("an unknown module was accepted")
+	}
+}

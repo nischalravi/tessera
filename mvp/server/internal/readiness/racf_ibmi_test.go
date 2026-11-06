@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -169,4 +170,59 @@ func TestLive_RACFNeverDialsDirectly(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// TestLive_IBMiThroughAgent: an IBM i connection with an agent credential is
+// probed through the agent with its live checks (not attested), the prober
+// names the ibmi module, and a revision with no agent never gets a direct dial.
+func TestLive_IBMiThroughAgent(t *testing.T) {
+	st, s, _, agentID := agentSvc(t)
+	var id string
+	write(t, st, func(c *store.TenantTx) error {
+		b, err := s.Create(c, CreateInput{Name: "AS400", ConnectorType: "ibmi", System: "as400",
+			Config: json.RawMessage(`{"host":"as400.corp.example","port":8076,"bind_dn":"TESSERA","correlation_key":"USER_NAME"}`)}, "admin", t0)
+		if err == nil {
+			id = b.Conn.ID
+			_, err = s.SetCredential(c, id, CredentialInput{Reference: "agent:" + agentID + "/svc-ibmi"}, "admin", t0)
+		}
+		return err
+	})
+	read(t, st, func(c *store.TenantTx) error {
+		b, _ := s.Current(c, id, t0)
+		if err := s.loadCredential(c, b); err != nil {
+			t.Fatal(err)
+		}
+		p, ok, err := s.Runner.Live.liveProber(b, t0)
+		rp, isRemote := p.(*agent.RemoteProber)
+		if !ok || err != nil || !isRemote || rp == nil {
+			t.Errorf("%T %v %v", p, ok, err)
+		}
+		return nil
+	})
+	write(t, st, func(c *store.TenantTx) error {
+		for _, item := range []string{"base.owner", "base.correlation.key", "base.stale.threshold", "ibmi.agent", "ibmi.profile.readonly", "ibmi.status.disabled", "ibmi.priv.authorities"} {
+			if _, err := s.Attest(c, id, item, "checked in the console", "admin", t0); err != nil {
+				return err
+			}
+		}
+		_, err := s.Transition(c, id, store.StateReadyToValidate, "admin", t0)
+		return err
+	})
+	v, err := s.Validate(context.Background(), st, id, "admin", clockAt(t0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The agent is offline: each live check reports it, which proves it ran as a probe.
+	for item, check := range map[string]string{"ibmi.tls": "tls_handshake", "ibmi.reachable": "endpoint_reachable"} {
+		if r := resultFor(v, item, check); r == nil || r.Status != "error" || !strings.Contains(r.Message, "Directory Agent is offline") {
+			t.Errorf("%s: %+v", item, r)
+		}
+	}
+	// The checks that depend on the TLS check wait for it, as the LDAP ones do.
+	for item, check := range map[string]string{"ibmi.tls.chain": "tls_chain", "ibmi.signin": "bind", "ibmi.read.userinfo": "sample_search"} {
+		if r := resultFor(v, item, check); r == nil || r.Kind != "live" || r.Status != "blocked" {
+			t.Errorf("%s: %+v", item, r)
+		}
+	}
+
 }

@@ -657,9 +657,11 @@ agent (`agent:<agent id>/<name>`); a secret typed in Tessera or a vault referenc
   authority or class, since members hold the group's special authorities), each special authority a group (all
   eight are privileged) and the `*SECOFR` and `*SECADM` classes privileged groups. **Verified against an in-process
   fake Mapepire server only**: a real IBM i with Mapepire must confirm the message format, the column names and the
-  `access=read only` property. **The template's items stay attested**: readiness live checks run as agent probe
-  jobs, which carry no module name and use the LDAP prober, so they cannot yet run against Mapepire (a module-aware
-  probe job is a follow-up). The gallery tile keeps its Preview badge. The
+  `access=read only` property. **Readiness live checks** (reachability, TLS handshake and chain, sign-in, a read of `QSYS2.USER_INFO`) run as agent
+  probe jobs that name the module (`module` on the job; omitted for LDAP, so older servers and agents exchange the same
+  bytes, and an older agent refuses a module job rather than run it as LDAP). The agent dispatches to the module's prober;
+  an unknown or uncarried module is refused with fixed text before anything is dialed. The agent and profile-authority
+  items stay attested. The gallery tile keeps its Preview badge. The
   connection's user field holds the profile name (1 to 10 of A-Z, 0-9, `#`, `$`, `@`, `_`, not starting with a digit
   or `_`); no base DN.
 
