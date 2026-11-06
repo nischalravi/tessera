@@ -689,8 +689,8 @@ func (s *Service) fail(ctx context.Context, tenant tenancy.ID, id uuid.UUID, cau
 	var ae *Error
 	if errors.As(cause, &ae) {
 		msg = ae.Msg
-		if staleSyncErr(cause) {
-			code = ae.Code // the caller sees stale_base / stale_plan, as before
+		if staleSyncErr(cause) || ae.Code == "endpoints_changed" {
+			code = ae.Code // the caller sees stale_base / stale_plan, and endpoints_changed, as before
 		}
 		if ae.Code == ReasonProposerRevoked || ae.Code == ReasonPayloadTampered {
 			// the reason is the failure text; the caller gets the 409 with that code

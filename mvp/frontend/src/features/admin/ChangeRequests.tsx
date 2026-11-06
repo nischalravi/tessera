@@ -74,6 +74,53 @@ export function ChangeRequests() {
   );
 }
 
+/** The URL a config proposal seals, as the server derived it at submit: origin and keyed fingerprint (never the URL). */
+function sealedTarget(c: AdminChange): { origin: string; fp: string } | null {
+  const body = (c.payload as { body?: { target_origin?: string; target_fp?: string } } | null)?.body;
+  return c.type === "config.proposal" && body?.target_fp ? { origin: body.target_origin ?? "", fp: body.target_fp } : null;
+}
+
+/** "Check this URL": the approver types the URL they expect; the server answers match or no-match, never the sealed URL. */
+function CheckTarget({ id, origin, fp }: { id: string; origin: string; fp: string }) {
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<{ match: boolean; left: number } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await adminChanges.checkTarget(id, url.trim());
+      setRes({ match: r.match, left: r.attempts_left });
+      setUrl("");
+    } catch (x) {
+      setRes(null);
+      setErr(errText(x));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="card stack-sm" onSubmit={submit} aria-label="Check this URL">
+      <div><b>Check this URL</b></div>
+      <div className="small">It sends to <code>{origin}</code>, URL fingerprint <code>{fp}</code>. Type the full URL you expect; Tessera says whether it is the one in this request, and never shows it. Needs a fresh step-up; a few tries per request.</div>
+      <label className="field">URL you expect
+        <input className="input" type="url" autoComplete="off" spellCheck={false} required value={url} onChange={(e) => setUrl(e.target.value)} />
+      </label>
+      <div className="row">
+        <Button size="sm" type="submit" disabled={busy || url.trim() === ""}>Check</Button>
+      </div>
+      <div role="status" aria-live="polite">
+        {res && (res.match
+          ? <Callout tone="ok">Match: this is the URL in the request. {res.left} {res.left === 1 ? "try" : "tries"} left.</Callout>
+          : <Callout tone="bad">No match: the request does not seal that URL. Do not approve it unless you know why. {res.left} {res.left === 1 ? "try" : "tries"} left.</Callout>)}
+        {err && <Callout tone="warn">{err}</Callout>}
+      </div>
+    </form>
+  );
+}
+
 /** The side panel of one request: facts, payload, notifications and the actions this admin may take. */
 function Detail({ id, me, now, onClose, onChanged }: { id: string; me: string; now: number; onClose: () => void; onChanged: () => void }) {
   const { data: c, reload } = useApi<AdminChange>(`/admin/change-requests/${id}`);
@@ -134,6 +181,7 @@ function Detail({ id, me, now, onClose, onChanged }: { id: string; me: string; n
           <Fact label="Cooling-off">{c.cooling_off_seconds ? `${c.cooling_off_seconds / 3600} h` : "None"}</Fact>
           <Fact label={c.decided_by ? (c.status === "rejected" ? "Rejected by" : "Cancelled by") : "Expires"}>{c.decided_by ? `${c.decided_by.display_name} · ${when(c.decided_at)}` : when(c.expires_at)}</Fact>
         </div>
+        {canApprove(c, me) && sealedTarget(c) && <CheckTarget id={c.id} origin={sealedTarget(c)!.origin} fp={sealedTarget(c)!.fp} />}
         <div>
           <div className="xs faint">Payload (hash <code>{c.payload_hash.slice(0, 16)}…</code>)</div>
           <pre className="sys small card" style={{ margin: 0, overflow: "auto", maxHeight: 220 }}>{JSON.stringify(c.payload, null, 2)}</pre>

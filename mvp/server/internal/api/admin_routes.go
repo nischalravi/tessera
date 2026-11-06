@@ -29,6 +29,8 @@ import (
 //	POST /api/admin/change-requests                         {type, payload, client_secret?}
 //	GET  /api/admin/change-requests/{change_id}
 //	POST /api/admin/change-requests/{change_id}/approve     {payload_hash}: a different admin, STEP_UP_ADMIN
+//	POST /api/admin/change-requests/{change_id}/check-target {url}: match / no-match for the URL a proposal seals (#886); a
+//	                                                         different admin, STEP_UP_ADMIN, 5 tries per request, 20 per approver per hour
 //	POST /api/admin/change-requests/{change_id}/reject
 //	POST /api/admin/change-requests/{change_id}/cancel
 //	POST /api/admin/change-requests/{change_id}/apply       after the cooling-off (409 before)
@@ -54,6 +56,7 @@ func (s *Server) registerAdminRoutes() {
 	s.handle(P, "/api/admin/change-requests", phased, needStepUp(auth.PermAdminChangeReq, adm), s.adminSubmit)
 	s.handle(G, "/api/admin/change-requests/{change_id}", read, need(auth.PermAdminRead), s.adminChange)
 	s.handle(P, "/api/admin/change-requests/{change_id}/approve", phased, needStepUp(auth.PermAdminChangeAppr, adm), s.adminApprove)
+	s.handle(P, "/api/admin/change-requests/{change_id}/check-target", phased, needStepUp(auth.PermAdminChangeAppr, adm), s.adminCheckTarget)
 	s.handle(P, "/api/admin/change-requests/{change_id}/reject", phased, need(auth.PermAdminChangeAppr), s.adminReject)
 	s.handle(P, "/api/admin/change-requests/{change_id}/cancel", phased, need(auth.PermAdminChangeReq), s.adminCancel)
 	s.handle(P, "/api/admin/change-requests/{change_id}/apply", phased, needStepUp(auth.PermAdminChangeAppr, adm), s.adminApply)
@@ -363,6 +366,26 @@ func (s *Server) adminApprove(_ http.ResponseWriter, r *http.Request, p *params)
 		return nil, err
 	}
 	return s.changeResponse(r, ch)
+}
+
+// adminCheckTarget answers whether the URL the approver expects is the one the proposal seals: {match, attempts_left}. It
+// never returns or logs the sealed URL, and the submitted one is not stored (its keyed fingerprint is, in the audit event).
+func (s *Server) adminCheckTarget(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id, err := pathUUID(p, "change_id")
+	if err != nil {
+		return nil, err
+	}
+	var b struct {
+		URL string `json:"url"`
+	}
+	if err := decodeBody(r, &b, false); err != nil {
+		return nil, err
+	}
+	res, err := s.admin.CheckTarget(r.Context(), principal(r), id, b.URL)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"match": res.Match, "attempts_left": res.AttemptsLeft}, nil
 }
 
 func (s *Server) adminReject(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {

@@ -353,6 +353,10 @@ type channelView struct {
 	Enabled     bool      `json:"enabled"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// TargetOrigin and TargetFingerprint identify a URL target without showing it (#886): the origin and the keyed,
+	// tenant-bound fingerprint a proposal's approver compares an update with. Empty for an e-mail target.
+	TargetOrigin      string `json:"target_origin,omitempty"`
+	TargetFingerprint string `json:"target_fingerprint,omitempty"`
 	// Secret is the webhook signing secret, only in the response that created or rotated it.
 	Secret string `json:"secret,omitempty"`
 }
@@ -366,19 +370,21 @@ func redactTarget(c *store.AlertChannel) string {
 	return safehttp.RedactURL(c.Target) // scheme://host[:port]/… (#333)
 }
 
-func channelViewOf(c *store.AlertChannel, secret string) channelView {
-	return channelView{ID: c.ID, Name: c.Name, Kind: c.Kind, Target: redactTarget(c), MinSeverity: c.MinSeverity, Enabled: c.Enabled,
+func (s *Server) channelViewOf(tx *store.TenantTx, c *store.AlertChannel, secret string) channelView {
+	origin, fp := s.targetIdentity(tx, c.Target)
+	return channelView{TargetOrigin: origin, TargetFingerprint: fp, ID: c.ID, Name: c.Name, Kind: c.Kind, Target: redactTarget(c), MinSeverity: c.MinSeverity, Enabled: c.Enabled,
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt, Secret: secret}
 }
 
 func (s *Server) listAlertChannels(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	cs, err := store.TxFrom(r.Context()).AlertChannels()
+	tx := store.TxFrom(r.Context())
+	cs, err := tx.AlertChannels()
 	if err != nil {
 		return nil, err
 	}
 	out := make([]channelView, 0, len(cs))
 	for _, c := range cs {
-		out = append(out, channelViewOf(c, ""))
+		out = append(out, s.channelViewOf(tx, c, ""))
 	}
 	return out, nil
 }
@@ -423,7 +429,7 @@ func (s *Server) createAlertChannel(_ http.ResponseWriter, r *http.Request, _ *p
 	if err != nil {
 		return nil, alertErr(err)
 	}
-	return statusBody{http.StatusCreated, channelViewOf(c, secret)}, nil
+	return statusBody{http.StatusCreated, s.channelViewOf(tx, c, secret)}, nil
 }
 
 func (s *Server) updateAlertChannel(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -446,7 +452,7 @@ func (s *Server) updateAlertChannel(_ http.ResponseWriter, r *http.Request, p *p
 	if err != nil {
 		return nil, alertErr(err)
 	}
-	return channelViewOf(c, secret), nil
+	return s.channelViewOf(tx, c, secret), nil
 }
 
 // testAlertChannel sends a test message outside any transaction, then

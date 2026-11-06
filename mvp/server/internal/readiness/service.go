@@ -1239,7 +1239,7 @@ func restDestination(s *restgen.Spec) string {
 
 // Endpoints lists, as name=value, every setting of a decoded config that says where the connector will connect or send its
 // credential: the host, URL and tenant fields, the host settings of the SSH and governed types, the base and token URLs of a
-// REST spec and the host of a database. None is a secret. It is empty only when the config names no endpoint (the connector
+// REST spec, the host of a database and a governed type's port setting. None is a secret. It is empty only when the config names no endpoint (the connector
 // type's own default applies).
 func (c ConnConfig) Endpoints() []string {
 	var out []string
@@ -1260,7 +1260,8 @@ func (c ConnConfig) Endpoints() []string {
 	add("tenant_id", c.TenantID)
 	add("cloud", c.Cloud)
 	for k, v := range c.Settings {
-		if strings.Contains(k, "host") || strings.Contains(k, "url") || strings.Contains(k, "endpoint") {
+		// the port is part of where the credential goes: a host with another port is another service
+		if strings.Contains(k, "host") || strings.Contains(k, "url") || strings.Contains(k, "endpoint") || k == "port" {
 			add("settings."+k, v)
 		}
 	}

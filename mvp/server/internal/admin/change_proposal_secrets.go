@@ -509,12 +509,8 @@ func planConnection(e *env, id string, b *ConnectionBody) error {
 	if err != nil {
 		return err
 	}
-	eps, err := e.configEndpoints(id, b)
-	if err != nil {
+	if err := e.checkEndpoints(id, b); err != nil {
 		return err
-	}
-	if !slices.Equal(eps, append([]string{}, b.Endpoints...)) {
-		return conflict("endpoints_changed", "the endpoints this connection would have differ from the ones the request showed the approver; file the proposal again")
 	}
 	if id == "" {
 		cs, err := e.tx.Connections()
@@ -550,7 +546,25 @@ func planConnection(e *env, id string, b *ConnectionBody) error {
 	return nil
 }
 
+// checkEndpoints refuses a connection proposal whose resulting endpoint list is no longer the one the approver was shown
+// (the connection's stored config changed since submit). Plan and apply both run it, so a change between approval and
+// apply cannot send the credential somewhere the approver did not see.
+func (e *env) checkEndpoints(id string, b *ConnectionBody) error {
+	eps, err := e.configEndpoints(id, b)
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(eps, append([]string{}, b.Endpoints...)) {
+		return conflict("endpoints_changed", "the endpoints this connection would have differ from the ones the request showed the approver; file the proposal again")
+	}
+	return nil
+}
+
 func applyConnection(e *env, id string, b *ConnectionBody, display string) error {
+	// the approver's list is checked again at the write, not only at plan
+	if err := e.checkEndpoints(id, b); err != nil {
+		return err
+	}
 	rd, err := e.readinessSvc()
 	if err != nil {
 		return err

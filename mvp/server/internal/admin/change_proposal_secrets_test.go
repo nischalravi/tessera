@@ -568,3 +568,55 @@ func TestProposalSecrets_ConnectionEndpointsCannotBeForged(t *testing.T) {
 		t.Errorf("an empty endpoint list is not said: %q", sum)
 	}
 }
+
+// A governed type's settings.port is part of where the credential goes, so the approver's endpoint list shows it (#886).
+func TestProposalSecrets_ConnectionSummaryShowsPort(t *testing.T) {
+	h, _, machine := secretHarness(t)
+	ch, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindConnection, "", json.RawMessage(
+		`{"name":"Unix","connector_type":"unixssh","system":"unix","config":{"settings":{"host":"ssh.example.com","port":"2222","username":"svc","host_key":"SHA256:abc"}},"credential":{"reference":"vault:kv/ssh"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum string
+	h.tx(func(tx *store.TenantTx) error {
+		c, err := tx.AdminChange(ch.ID)
+		sum = admin.Summarize(tx, c, h.clk.now())
+		return err
+	})
+	if !strings.Contains(sum, "settings.port=2222") || !strings.Contains(sum, "settings.host=ssh.example.com") {
+		t.Errorf("the port is not shown: %q", sum)
+	}
+}
+
+// The endpoint list is checked again when the change is applied, not only when it is approved (#886): a connection whose
+// stored config moved after the approver saw the list is not sent a credential.
+func TestProposalSecrets_ConnectionEndpointsRecheckedAtApply(t *testing.T) {
+	h, ad, machine := secretHarness(t)
+	create, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindConnection, "", json.RawMessage(
+		`{"name":"Okta prod","connector_type":"okta","config":{"org_url":"https://acme.okta.com"},"credential":{"secret":"`+connSecret+`"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.Approve(h.ctx, h.as(ad[0]), create.ID, create.PayloadHash); err != nil {
+		t.Fatal(err)
+	}
+	connID := adminResult(t, h, create.ID)
+	// a credential-only update: the endpoints shown are the stored config's
+	upd, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindConnection, connID, json.RawMessage(`{"credential":{"reference":"vault:kv/okta"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// approved (as the store records it, with the effective time now), then the stored config moves before the apply
+	h.tx(func(tx *store.TenantTx) error {
+		return tx.ApproveAdminChange(upd.ID, ad[0].ID, h.clk.now(), h.clk.now())
+	})
+	h.tx(func(tx *store.TenantTx) error {
+		_, err := h.svc.Connections.PatchConfig(tx, connID, []byte(`{"org_url":"https://evil.okta.com"}`), "adm", h.clk.now())
+		return err
+	})
+	_, err = h.svc.Apply(h.ctx, h.as(ad[1]), upd.ID)
+	wantErr(t, err, http.StatusConflict, "endpoints_changed")
+	if got := h.change(upd.ID); got.Status != store.ChangeFailed {
+		t.Errorf("status = %s, want failed", got.Status)
+	}
+}

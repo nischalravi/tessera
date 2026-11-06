@@ -292,7 +292,7 @@ function ChannelList() {
                   <tr key={c.id}>
                     <td>
                       {c.kind === "email" ? <Mail size={14} aria-hidden /> : <Webhook size={14} aria-hidden />} <b>{c.name}</b> {!c.enabled && <Badge tone="outline">Off</Badge>}
-                      <div className="xs faint truncate">{c.target}</div>
+                      <div className="xs faint truncate">{c.target}{c.target_fingerprint && <> · URL fingerprint <code title="Keyed fingerprint of the full URL; an approver compares a proposal's fingerprint with it">{c.target_fingerprint}</code></>}</div>
                     </td>
                     <td className="small hide-narrow">{c.min_severity === "low" ? "Every alert" : `${c.min_severity[0].toUpperCase() + c.min_severity.slice(1)} and above`}</td>
                     <td className="actions-cell">

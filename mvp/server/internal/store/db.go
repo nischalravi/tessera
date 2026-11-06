@@ -304,6 +304,8 @@ var tables = []string{
 	"api_client_limits",
 	// the machine client that proposed a config change request (schema/0952_config_proposals.sql)
 	"admin_change_proposals",
+	// the approver's attempts to check the URL a proposal seals (schema/0964_change_target_checks.sql)
+	"admin_change_target_checks",
 	// MCP resource bindings to an issuer and audience (schema/0700_mcp_resource_bindings.sql)
 	"mcp_resource_bindings",
 	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)

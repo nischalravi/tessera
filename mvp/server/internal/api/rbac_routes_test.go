@@ -843,6 +843,7 @@ GET    /api/admin/change-requests                    admin.read      -  # issue 
 POST   /api/admin/change-requests                    admin.change.request STEP_UP_ADMIN  # issue #16
 GET    /api/admin/change-requests/{change_id}        admin.read      -  # issue #16
 POST   /api/admin/change-requests/{change_id}/approve admin.change.approve STEP_UP_ADMIN  # issue #16
+POST   /api/admin/change-requests/{change_id}/check-target admin.change.approve STEP_UP_ADMIN  # issue #886
 POST   /api/admin/change-requests/{change_id}/reject admin.change.approve -  # issue #16
 POST   /api/admin/change-requests/{change_id}/cancel admin.change.request -  # issue #16
 POST   /api/admin/change-requests/{change_id}/apply  admin.change.approve STEP_UP_ADMIN  # issue #16
