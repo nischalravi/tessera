@@ -40,6 +40,8 @@ type Item struct {
 	Action  string   `json:"action"`
 	Fields  []string `json:"fields,omitempty"` // what differs, for a change
 	Notes   []string `json:"notes,omitempty"`
+	// NeedsTarget: a new object is added disabled because the bundle withheld its target.
+	NeedsTarget bool `json:"needs_target,omitempty"`
 }
 
 // Plan is what applying a bundle would do.
@@ -164,8 +166,12 @@ func devOnly(b *Bundle) []string {
 		}
 	}
 	for _, k := range b.SiemSinks {
-		if loopback(k.Target) {
-			out = append(out, fmt.Sprintf("log-streaming sink %q points at %s, a localhost address, which a production server does not accept", k.Name, k.Target))
+		t := k.Target
+		if t == "" {
+			t = k.TargetOrigin
+		}
+		if loopback(t) {
+			out = append(out, fmt.Sprintf("log-streaming sink %q points at %s, a localhost address, which a production server does not accept", k.Name, t))
 		}
 	}
 	for _, i := range b.IdentityProviders {

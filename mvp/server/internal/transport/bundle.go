@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -45,7 +46,9 @@ const (
 	Format = "tessera-config-bundle"
 	// Version 2 added catalog items, review schedules, alert rules and SIEM sinks (issue #497);
 	// a version 1 bundle is still accepted and has none of them.
-	Version = 2
+	Version = 3
+	// Version 3 leaves the full target of log-streaming sinks out (origin only, target_required_on_import);
+	// a version 2 bundle's plaintext targets are still read, never written.
 	// MinVersion is the oldest bundle version an import accepts.
 	MinVersion = 1
 	// MediaType is the JWS "typ".
@@ -226,6 +229,10 @@ func Collect(tx *store.TenantTx, rd *readiness.Service, now time.Time) (*Bundle,
 			} else {
 				item.Credential = Credential{Kind: "reference", Reference: *r}
 			}
+		}
+		if clean, stripped := stripURLSecrets(item.Config); stripped {
+			item.Config = clean
+			b.Excluded = append(b.Excluded, ExcludedRef{"connections", c.Name, "URL credentials, query and fragment in its configuration were left out: set them here if the connector needs them"})
 		}
 		b.Connections = append(b.Connections, item)
 	}
@@ -428,4 +435,49 @@ func secretKeys(m map[string]any, prefix string) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// stripURLSecrets removes what can carry a token from absolute URLs in a
+// connection's configuration: userinfo, query and fragment. It reports
+// whether anything changed.
+func stripURLSecrets(raw json.RawMessage) (json.RawMessage, bool) {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return raw, false
+	}
+	changed := false
+	var walk func(any) any
+	walk = func(x any) any {
+		switch t := x.(type) {
+		case string:
+			if !strings.Contains(t, "://") {
+				return t
+			}
+			u, err := url.Parse(t)
+			if err != nil || u.Host == "" || (u.User == nil && u.RawQuery == "" && u.Fragment == "" && !u.ForceQuery) {
+				return t
+			}
+			changed = true
+			u.User, u.RawQuery, u.Fragment, u.ForceQuery = nil, "", "", false
+			return u.String()
+		case []any:
+			for i := range t {
+				t[i] = walk(t[i])
+			}
+		case map[string]any:
+			for k := range t {
+				t[k] = walk(t[k])
+			}
+		}
+		return x
+	}
+	v = walk(v)
+	if !changed {
+		return raw, false
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return raw, false
+	}
+	return out, true
 }
