@@ -1,7 +1,7 @@
 # IBM i user profiles and special authorities (issue #561), read by a Directory Agent module inside
-# the customer network. The module contract and mapping ship now; the live transport (Db2 for i
-# QSYS2.USER_INFO over the host servers) is a follow-up, so the live items below stay attested
-# until it exists. Read-only; no write-back.
+# the customer network. The agent reads QSYS2.USER_INFO through Mapepire (TLS WebSocket, port 8076; issue #612).
+# The items below stay attested: readiness live checks run as agent probe jobs, which carry no module and use the
+# LDAP prober, so none can run against Mapepire yet (a module-aware probe job is the follow-up). Read-only; no write-back.
 template: ibmi
 version: 1.0.0
 extends: base@1
@@ -43,7 +43,7 @@ items:
     verify:
       - kind: attestation
     remediation:
-      hint: "Use the TLS-protected host server and a certificate from the digital certificate manager, and add the CA to the connection."
+      hint: "Install Mapepire (TLS only, port 8076) with a certificate from your CA, and add that CA to the connection."
     config_fields: [host, port, tls_mode, ca_bundle]
 
   - id: ibmi.key.profile

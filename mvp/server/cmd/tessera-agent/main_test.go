@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/agent"
-	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ibmi"
 )
 
 func writeConfig(t *testing.T, mutate func(map[string]any)) string {
@@ -133,7 +133,8 @@ func TestExecutor_CarriesTheModules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sy.Discover(t.Context(), agent.SyncLimits{Accounts: 1, Groups: 1, Members: 1}); !errors.Is(err, connectors.ErrUnsupported) {
-		t.Errorf("ibmi: %v", err)
+	if _, err := sy.Discover(t.Context(), agent.SyncLimits{Accounts: 1, Groups: 1, Members: 1}); !errors.Is(err, ibmi.ErrNoDriver) {
+		t.Errorf("ibmi: %v", err) // the live transport refuses a job with no Dialer
+
 	}
 }
