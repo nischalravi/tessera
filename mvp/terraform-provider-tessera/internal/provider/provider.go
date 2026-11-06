@@ -172,7 +172,7 @@ func (p *tesseraProvider) Resources(context.Context) []func() resource.Resource 
 }
 
 func (p *tesseraProvider) DataSources(context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{NewIdentitiesDataSource, NewEntitlementsDataSource, NewConnectorsDataSource, NewRolesDataSource}
+	return []func() datasource.DataSource{NewIdentitiesDataSource, NewEntitlementsDataSource, NewConnectorsDataSource, NewGroupsDataSource, NewRolesDataSource}
 }
 
 // oneOf is stringvalidator.OneOf.

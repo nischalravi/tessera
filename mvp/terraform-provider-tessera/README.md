@@ -68,6 +68,7 @@ In:
 | resource | `tessera_review_schedule` (the issue's "review templates") | `/api/v1/reviews/schedules` (`reviews.manage`: operator with `tessera:write`) |
 | data source | `tessera_identities` | `/api/v1/identities` |
 | data source | `tessera_entitlements` | `/api/v1/groups` |
+| data source | `tessera_groups` | `/api/v1/groups` (read-only view of the same route as `tessera_entitlements`, plus `kind` and `privileged` filters) |
 | data source | `tessera_connectors` | `/api/v1/connections` (needs the auditor role too) |
 | resource | `tessera_alert_rule` | `/api/v1/proposals/alert-rules/{rule_id}` (needs `config.propose`; read with `tessera:audit` and the auditor role) |
 | resource | `tessera_catalog_item` | `/api/v1/proposals/catalog-items/{group_id}` (needs `config.propose`; no read) |
