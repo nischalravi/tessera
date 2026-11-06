@@ -85,6 +85,7 @@ const CHANGE_TEXT: Record<string, string> = {
   unchanged: "the same URL as the object has now",
   path_changed: "PATH CHANGED on the same host: check it is still your receiver",
   origin_changed: "MOVED to another origin",
+  stale: "the object's URL has changed since this was filed: decide on the origin and Check this URL",
 };
 
 /** "Check this URL": the approver types the URL they expect; the server answers match or no-match, never the sealed URL. */

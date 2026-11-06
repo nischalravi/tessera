@@ -4,6 +4,12 @@
 -- risk). fp is the request-bound keyed fingerprint of the SUBMITTED url (16 hex characters) and sealed_fp a per-tenant keyed
 -- fingerprint of the SEALED url, the key the tries are counted by across requests (never returned); neither is a URL.
 --
+-- The same table charges the proposals that seal a URL for an EXISTING channel or sink (a guessed URL would otherwise be
+-- tested against the live one by whether the proposal reads as unchanged): one row per filing, sealed_fp the keyed
+-- counter key of the live OBJECT, checked_by the client, flag the server-only comparison (same / path / moved) and live_fp
+-- the keyed fingerprint of the live URL when it was filed (so a later change of the object reads as stale). Neither is returned
+-- to the proposer or to a reader without the approve permission and a fresh step-up.
+--
 -- Tenant-owned: tenant_id on every row and first in every key. change_id references the request in the same tenant.
 -- Postgres: migration 0972.
 CREATE TABLE IF NOT EXISTS admin_change_target_checks (
@@ -14,6 +20,8 @@ CREATE TABLE IF NOT EXISTS admin_change_target_checks (
   checked_at TEXT NOT NULL,
   fp TEXT NOT NULL CHECK (length(fp) BETWEEN 1 AND 64),
   sealed_fp TEXT NOT NULL CHECK (length(sealed_fp) BETWEEN 1 AND 64),
+  flag TEXT NOT NULL DEFAULT '' CHECK (length(flag) <= 20),
+  live_fp TEXT NOT NULL DEFAULT '' CHECK (length(live_fp) <= 64),
   matched INTEGER NOT NULL CHECK (matched IN (0, 1)),
   PRIMARY KEY (tenant_id, id),
   FOREIGN KEY (tenant_id, change_id) REFERENCES admin_change_requests (tenant_id, id)

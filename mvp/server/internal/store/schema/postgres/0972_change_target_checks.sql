@@ -10,6 +10,8 @@ CREATE TABLE admin_change_target_checks (
   checked_at TEXT NOT NULL,
   fp TEXT NOT NULL CHECK (length(fp) BETWEEN 1 AND 64),
   sealed_fp TEXT NOT NULL CHECK (length(sealed_fp) BETWEEN 1 AND 64),
+  flag TEXT NOT NULL DEFAULT '' CHECK (length(flag) <= 20),
+  live_fp TEXT NOT NULL DEFAULT '' CHECK (length(live_fp) <= 64),
   matched INTEGER NOT NULL CHECK (matched IN (0, 1)),
   PRIMARY KEY (tenant_id, id),
   FOREIGN KEY (tenant_id, change_id) REFERENCES admin_change_requests (tenant_id, id)

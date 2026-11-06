@@ -192,40 +192,121 @@ func TestCheckTarget_TenantCap(t *testing.T) {
 	}
 }
 
-// The flag the approver is shown (same / PATH CHANGED / MOVED) is recomputed against the live object when the request is
-// viewed and when it is planned, so an update filed against an object that moved meanwhile is not approved (#886).
-func TestProposalTargetChange_RecomputedLive(t *testing.T) {
+// How a proposal's URL compares with the live object's is kept server-side, never in the payload or the summary (any admin.read
+// reader would see it), and reads "stale" once the object's URL changed after filing (#886).
+func TestProposalTargetFlag_ServerSideAndStale(t *testing.T) {
 	h, ad, machine := secretHarness(t)
-	file := func(id, body string) *store.AdminChange {
-		ch, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindAlertChannel, id, json.RawMessage(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return ch
+	file := func(id, body string) (*store.AdminChange, error) {
+		return h.svc.SubmitProposal(h.ctx, machine, admin.KindAlertChannel, id, json.RawMessage(body))
 	}
-	create := file("", `{"name":"soc","kind":"webhook","target":"`+hookURL+`","signing_secret":"`+hookSecret+`"}`)
+	create, err := file("", `{"name":"soc","kind":"webhook","target":"`+hookURL+`","signing_secret":"`+hookSecret+`"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.svc.Approve(h.ctx, h.as(ad[0]), create.ID, create.PayloadHash); err != nil {
 		t.Fatal(err)
 	}
 	var id string
 	h.tx(func(tx *store.TenantTx) error { cs, _ := tx.AlertChannels(); id = cs[0].ID; return nil })
-	same := file(id, `{"target":"`+hookURL+`"}`)
-	move := file(id, `{"target":"https://hooks.example.com/services/T000/B000/OTHER"}`)
-	live := func(ch *store.AdminChange) (c string) {
-		h.tx(func(tx *store.TenantTx) error { c = h.svc.LiveTargetChange(tx, h.change(ch.ID)); return nil })
+	same, err := file(id, `{"target":"`+hookURL+`"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	move, err := file(id, `{"target":"https://hooks.example.com/services/T000/B000/OTHER"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flag := func(ch *store.AdminChange) (c string) {
+		h.tx(func(tx *store.TenantTx) error { c = h.svc.TargetFlagFor(tx, h.change(ch.ID)); return nil })
 		return c
 	}
-	if got := live(same); got != "unchanged" {
-		t.Fatalf("live flag = %q, want unchanged", got)
+	if got := flag(same); got != "unchanged" {
+		t.Fatalf("flag = %q, want unchanged", got)
 	}
+	if got := flag(move); got != "path_changed" {
+		t.Errorf("flag = %q, want path_changed", got)
+	}
+	if got := flag(create); got != "new" {
+		t.Errorf("flag of a create = %q, want new", got)
+	}
+	// nothing the admin.read view shows says how the URL compares
+	for _, ch := range []*store.AdminChange{same, move} {
+		var sum string
+		h.tx(func(tx *store.TenantTx) error { sum = admin.Summarize(tx, h.change(ch.ID), h.clk.now()); return nil })
+		for _, bad := range []string{"same URL", "PATH CHANGED", "MOVED", "path_changed", "origin_changed", "target_change"} {
+			if strings.Contains(sum, bad) || strings.Contains(string(h.change(ch.ID).Payload), bad) {
+				t.Errorf("the summary or payload carries %q: %s", bad, sum)
+			}
+		}
+	}
+	// the object moves: reading the flag again compares nothing about the sealed URL
 	if _, err := h.svc.Approve(h.ctx, h.as(ad[1]), move.ID, move.PayloadHash); err != nil {
 		t.Fatal(err)
 	}
-	if got := live(same); got != "path_changed" {
-		t.Errorf("live flag after the object moved = %q, want path_changed", got)
+	if got := flag(same); got != "stale" {
+		t.Errorf("flag after the object moved = %q, want stale", got)
 	}
-	_, err := h.svc.Approve(h.ctx, h.as(ad[1]), same.ID, same.PayloadHash)
-	wantErr(t, err, http.StatusConflict, "target_changed")
+}
+
+// The reviewer's attack (#889 H2): a client with config.propose files update proposals with guessed URLs for one live channel
+// and reads off whether any was "unchanged". It stops at the object's budget, the refusal is audited and raises the alert, and
+// nothing the proposer or an admin.read reader sees says how a guess compared.
+func TestProposalTargetBudget_StopsGuessing(t *testing.T) {
+	h, ad, machine := secretHarness(t)
+	file := func(id, body string) (*store.AdminChange, error) {
+		return h.svc.SubmitProposal(h.ctx, machine, admin.KindAlertChannel, id, json.RawMessage(body))
+	}
+	create, err := file("", `{"name":"soc","kind":"webhook","target":"`+hookURL+`","signing_secret":"`+hookSecret+`"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.Approve(h.ctx, h.as(ad[0]), create.ID, create.PayloadHash); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	h.tx(func(tx *store.TenantTx) error { cs, _ := tx.AlertChannels(); id = cs[0].ID; return nil })
+	guesses := []string{"/g1", "/g2", "/g3", "/g4", "/g5", "/g6", "/g7", "/g8", "/g9", "/g10"}
+	filed := 0
+	for i, g := range guesses {
+		ch, err := file(id, `{"target":"https://hooks.example.com/services/T000/B000`+g+`"}`)
+		if err != nil {
+			wantErr(t, err, http.StatusTooManyRequests, admin.ReasonTargetCheckLocked)
+			if i != admin.MaxTargetChecksPerValue {
+				t.Errorf("refused at guess %d, want %d", i, admin.MaxTargetChecksPerValue)
+			}
+			break
+		}
+		filed++
+		if strings.Contains(string(h.change(ch.ID).Payload), "unchanged") {
+			t.Error("the payload says how the guess compared")
+		}
+	}
+	if filed != admin.MaxTargetChecksPerValue {
+		t.Errorf("%d guesses were filed, want %d", filed, admin.MaxTargetChecksPerValue)
+	}
+	// even the live URL itself is refused now: a refusal that answered would be the oracle
+	_, err = file(id, `{"target":"`+hookURL+`"}`)
+	wantErr(t, err, http.StatusTooManyRequests, admin.ReasonTargetCheckLocked)
+	// the refusals are audited (the filing was rolled back) with no URL, and a create is not charged
+	var refused int
+	h.tx(func(tx *store.TenantTx) error {
+		evs, err := tx.AuditLog(-1)
+		for _, e := range evs {
+			if e.Action == "admin.change.target_check_refused" {
+				refused++
+				if d := string(e.Detail); !strings.Contains(d, id) || strings.Contains(d, "hooks.example.com") || strings.Contains(d, "T000") {
+					t.Errorf("refusal event: %s", d)
+				}
+			}
+		}
+		return err
+	})
+	if refused != 2 {
+		t.Errorf("%d refusals audited, want 2", refused)
+	}
+	if _, err := file("", `{"name":"another","kind":"webhook","target":"`+hookURL+`/n","signing_secret":"`+hookSecret+`"}`); err != nil {
+		t.Errorf("a create is not charged to a live object: %v", err)
+	}
 }
 
 // The limits hold under concurrency with no row lock: DB.InTenant serialises every writer of the tenant (a Postgres

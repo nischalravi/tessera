@@ -88,8 +88,8 @@ func TestProposalsAPI_CheckTarget(t *testing.T) {
 		pl, _ := body(r)["payload"].(map[string]any)
 		inner, _ := pl["body"].(map[string]any)
 		pendingFP = asString(inner["target_fp"])
-		if pendingFP == "" || body(r)["target_change"] != "new" {
-			t.Errorf("the approver's view: fp %q, target_change %v", pendingFP, body(r)["target_change"])
+		if pendingFP == "" || body(r)["target_change"] != "new" || inner["target_change"] != nil {
+			t.Errorf("the approver's view: fp %q, target_change %v, in the payload %v", pendingFP, body(r)["target_change"], inner["target_change"])
 		}
 	}
 	r := serve(e.h, authed(a2, "POST", "/api/alerts/channels", `{"name":"scratch","kind":"webhook","target":"`+target+`","min_severity":"high"}`))
@@ -113,5 +113,75 @@ func TestProposalsAPI_CheckTarget(t *testing.T) {
 	r = serve(e.h, authed(a2, "GET", "/api/siem/sinks", ""))
 	if strings.Contains(r.Body.String(), "fingerprint") || !strings.Contains(r.Body.String(), `"target_origin":"https://splunk.example.com:8088"`) || strings.Contains(r.Body.String(), "PLAINTEXT") {
 		t.Errorf("sink list: %s", r.Body)
+	}
+}
+
+// The reviewer's 10-proposal attack (#889 H2) over HTTP: update proposals with guessed URLs for one live channel stop at the
+// object's budget with 429, and neither the proposer nor an admin.read reader (or an approver without a fresh step-up) is
+// shown how a guess compared.
+func TestProposalsAPI_TargetGuessingStops(t *testing.T) {
+	e := newOAuthEnv(t)
+	e.srv.cfg.Alerts = &alerts.Service{DB: e.f.DB, Sealer: e.sealer, Mail: alerts.LogMailer{}}
+	tenant := e.f.A
+	a2 := signIn(t, e.f.DB, tenant.ID, authtest.User{Email: "ben@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	auditor := signIn(t, e.f.DB, tenant.ID, authtest.User{Email: "aud@a.example", Roles: []auth.Role{auth.RoleAuditor}}, authtest.Phr, storetest.Now)
+	stale := signIn(t, e.f.DB, tenant.ID, authtest.User{Email: "old@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}},
+		authtest.Ctx{AAL: 2, Phr: true, AuthTime: storetest.Now.Add(-time.Hour)}, storetest.Now)
+	m := e.addMachine("tenant-a", []string{"viewer"}, []string{"tessera:read", "config.propose"}, true)
+	tok := e.machineToken(m, "tenant-a", "tessera:read config.propose")
+
+	const live = "https://hooks.example.com/services/PLAINTEXT-live-path"
+	r := serve(e.h, authed(a2, "POST", "/api/alerts/channels", `{"name":"live","kind":"webhook","target":"`+live+`","min_severity":"high"}`))
+	if r.Code != 201 {
+		t.Fatalf("channel: %d %s", r.Code, r.Body)
+	}
+	chID := asString(body(r)["id"])
+	var first string
+	filed := 0
+	for i := 0; i < 10; i++ {
+		guess := live // the last guess is right: it must not be told apart
+		if i < 9 {
+			guess = fmt.Sprintf("https://hooks.example.com/services/PLAINTEXT-guess-%d", i)
+		}
+		rec := e.call(tok, "POST", "/api/proposals/alert-channels/"+chID, `{"target":"`+guess+`"}`)
+		if rec.Code == 429 {
+			if body(rec)["error"] != admin.ReasonTargetCheckLocked || filed != admin.MaxTargetChecksPerValue {
+				t.Fatalf("refused at guess %d (%d filed): %s", i, filed, rec.Body)
+			}
+			break
+		}
+		if rec.Code != 202 || strings.Contains(rec.Body.String(), "target_change") || strings.Contains(rec.Body.String(), "unchanged") {
+			t.Fatalf("guess %d: %d %s", i, rec.Code, rec.Body)
+		}
+		filed++
+		if first == "" {
+			first = asString(body(rec)["change_id"])
+		}
+	}
+	if filed != admin.MaxTargetChecksPerValue {
+		t.Fatalf("%d guesses were filed before the refusal, want %d", filed, admin.MaxTargetChecksPerValue)
+	}
+	if r := e.call(tok, "GET", "/api/proposals/"+first, ""); strings.Contains(r.Body.String(), "target_change") {
+		t.Errorf("the proposer's poll: %s", r.Body)
+	}
+	for name, l := range map[string]authtest.Login{"auditor": auditor, "stale step-up": stale} {
+		if v := serve(e.h, authed(l, "GET", "/api/admin/change-requests/"+first, "")).Body.String(); strings.Contains(v, "target_change") || strings.Contains(v, "path_changed") {
+			t.Errorf("%s sees how the URL compares: %s", name, v)
+		}
+	}
+	if v := body(serve(e.h, authed(a2, "GET", "/api/admin/change-requests/"+first, ""))); v["target_change"] != "path_changed" {
+		t.Errorf("the approver's flag = %v", v["target_change"])
+	}
+	found := false
+	for _, ev := range ledger(t, e.f.DB, tenant.ID) {
+		if ev.Action == "admin.change.target_check_refused" && strings.Contains(string(ev.Detail), chID) {
+			found = true
+			if strings.Contains(string(ev.Detail), "PLAINTEXT") {
+				t.Errorf("refusal event carries a URL: %s", ev.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Error("the refusal was not audited")
 	}
 }

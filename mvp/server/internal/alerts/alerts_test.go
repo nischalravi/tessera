@@ -48,6 +48,7 @@ func TestRuleMatching(t *testing.T) {
 		{"admin_role_granted", ev("admin.change.applied", "success", `{"kind":"role.grant","target_role":"tenant_admin","user":"o@x"}`), true, "o@x/tenant_admin"},
 		{"admin_role_granted", ev("admin.change.applied", "success", `{"kind":"idp.update"}`), false, ""},
 		{"approver_check_locked", ev("admin.change.target_check_refused", "failure", `{"change_id":"c1","reason":"target_check_locked"}`), true, "c1"},
+		{"approver_check_locked", ev("admin.change.target_check_refused", "failure", `{"object_id":"o1","kind":"alert_channel","reason":"target_check_locked"}`), true, "object/o1"},
 		{"approver_check_locked", ev("admin.change.target_check_refused", "failure", `{"change_id":"c1","reason":"target_check_rate_limited"}`), false, ""},
 		{"approver_check_locked", ev("admin.change.target_checked", "success", `{"change_id":"c1"}`), false, ""},
 		{"mfa_bypass", ev("auth.mfa.bypassed", "success", `{"email":"v@x"}`), true, "v@x"},

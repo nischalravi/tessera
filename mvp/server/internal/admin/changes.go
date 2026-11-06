@@ -437,6 +437,12 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 			if err := tx.InsertAdminChangeProposal(ch.ID, clientID, now); err != nil {
 				return err
 			}
+			if pp, ok := v.(*proposalPayload); ok {
+				// a URL set on an existing object is charged to that object's budget (refused past it, #886)
+				if err := e.fileTarget(ch, pp.Kind, pp.ID, clientID); err != nil {
+					return err
+				}
+			}
 		}
 		if typ.afterSubmit != nil {
 			if err := typ.afterSubmit(e, ch, v); err != nil {

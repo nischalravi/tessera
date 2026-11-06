@@ -463,17 +463,14 @@ func TestProposalSecrets_ApproverSeesFingerprintNotURL(t *testing.T) {
 	}
 	var id string
 	h.tx(func(tx *store.TenantTx) error { cs, _ := tx.AlertChannels(); id = cs[0].ID; return nil })
-	// a path-only change keeps the origin: it is flagged, not hidden
+	// the summary names the origin of an update's URL and nothing about how it compares with the live one (#886: that is for an
+	// approver with a step-up only, and tested in TestProposalTargetFlag_ServerSideAndStale)
 	_, sum = file(id, `{"target":"https://hooks.example.com/services/T000/B000/OTHER-WORKSPACE"}`)
-	if !strings.Contains(sum, "PATH CHANGED") || strings.Contains(sum, "OTHER-WORKSPACE") {
+	if !strings.Contains(sum, "https://hooks.example.com:443") || strings.Contains(sum, "OTHER-WORKSPACE") || strings.Contains(sum, "CHANGED") {
 		t.Errorf("path change summary: %q", sum)
 	}
-	_, sum = file(id, `{"target":"`+hookURL+`"}`)
-	if !strings.Contains(sum, "same URL as now") {
-		t.Errorf("unchanged summary: %q", sum)
-	}
 	_, sum = file(id, `{"target":"https://elsewhere.example.org/x","signing_secret":"`+hookSecret+`-2"}`)
-	if !strings.Contains(sum, "MOVED to another origin") {
+	if !strings.Contains(sum, "https://elsewhere.example.org:443") || strings.Contains(sum, "MOVED") {
 		t.Errorf("moved summary: %q", sum)
 	}
 }

@@ -241,10 +241,6 @@ func (s *Server) adminChangeView(tx *store.TenantTx, ch *store.AdminChange, name
 	if client, err := tx.AdminChangeProposer(ch.ID); err == nil && client != "" {
 		out = append(out, ojson.KV{Key: "proposed_by_client", Value: client})
 	}
-	// how the URL a proposal seals differs from the object's URL right now, recomputed on every view (#886)
-	if c := s.admin.LiveTargetChange(tx, ch); c != "" {
-		out = append(out, ojson.KV{Key: "target_change", Value: c})
-	}
 	return out
 }
 
@@ -313,6 +309,14 @@ func (s *Server) adminChange(_ http.ResponseWriter, r *http.Request, p *params) 
 		return nil, err
 	}
 	v := s.adminChangeView(tx, ch, names, s.clock())
+	// how the URL a proposal seals compares with the object's URL: only for an approver with a fresh step-up who did not file
+	// it. A proposer or an admin.read reader holding it could test guessed URLs against a live channel or sink (#886).
+	if pr := principal(r); pr != nil && pr.UserID != nil && *pr.UserID != ch.RequestedBy &&
+		auth.Check(pr, auth.PermAdminChangeAppr, &auth.StepUpAdmin, s.clock()) == nil {
+		if c := s.admin.TargetFlagFor(tx, ch); c != "" {
+			v = append(v, ojson.KV{Key: "target_change", Value: c})
+		}
+	}
 	return append(v, ojson.KV{Key: "notifications", Value: notificationViews(notifs, names)}), nil
 }
 

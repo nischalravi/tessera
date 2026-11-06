@@ -21,7 +21,7 @@ func TestSplitProposalSecrets(t *testing.T) {
 	}{
 		{"webhook URL and secret", KindAlertChannel, `{"name":"a","kind":"webhook","target":"https://h.example.com/x?t=SECRET","signing_secret":"S1"}`,
 			map[string]string{"target": "https://h.example.com/x?t=SECRET", "signing_secret": "S1"},
-			[]string{`"target":"set"`, `"signing_secret":"set"`, `"target_origin":"https://h.example.com:443"`, `"target_fp":"`, `"target_change":"new"`}, []string{"SECRET", "S1"}, false},
+			[]string{`"target":"set"`, `"signing_secret":"set"`, `"target_origin":"https://h.example.com:443"`, `"target_fp":"`}, []string{"SECRET", "S1", "target_change"}, false},
 		{"email target is not a secret", KindAlertChannel, `{"name":"a","kind":"email","target":"a@example.com"}`,
 			map[string]string{}, []string{`"target":"a@example.com"`}, []string{"target_origin"}, false},
 		{"null leaves the secret out", KindSiemSink, `{"name":"a","token":null}`, map[string]string{}, nil, nil, false},

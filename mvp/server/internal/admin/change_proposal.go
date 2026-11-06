@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"slices"
 	"strconv"
@@ -469,7 +470,25 @@ func (s *Service) SubmitProposal(ctx context.Context, p *auth.Principal, kind, i
 	if err != nil {
 		return nil, err
 	}
-	return s.submit(ctx, p, SubmitInput{Type: TypeConfigProposal, Payload: payload, Secrets: secrets, requestID: req}, p.ClientID)
+	ch, err := s.submit(ctx, p, SubmitInput{Type: TypeConfigProposal, Payload: payload, Secrets: secrets, requestID: req}, p.ClientID)
+	var ae *Error
+	if errors.As(err, &ae) && ae.Status == http.StatusTooManyRequests && (ae.Code == ReasonTargetCheckLocked || ae.Code == ReasonTargetCheckRate) {
+		s.auditTargetRefusal(ctx, p, kind, id, ae.Code)
+	}
+	return ch, err
+}
+
+// auditTargetRefusal records, in a transaction of its own (the filing's was rolled back), that a proposal setting an object's
+// URL was refused for its budget. The event is what raises the approver_check_locked alert. No URL is in it.
+func (s *Service) auditTargetRefusal(ctx context.Context, p *auth.Principal, kind, id, reason string) {
+	err := s.DB.InTenant(ctx, p.TenantID, func(tx *store.TenantTx) error {
+		d := ojson.Object{{Key: "reason", Value: reason}, {Key: "kind", Value: kind}, {Key: "object_id", Value: id}, {Key: "client_id", Value: p.ClientID}}
+		_, err := audit.Record(tx.Context(), tx, "admin.change.target_check_refused", d, audit.At(s.now()), audit.Target(kind, id), audit.Outcome(store.OutcomeFailure))
+		return err
+	})
+	if err != nil {
+		s.log().Error("admin: the refusal of a URL proposal could not be audited", "err", err)
+	}
 }
 
 // ---------------------------------------------------------------- config.proposal

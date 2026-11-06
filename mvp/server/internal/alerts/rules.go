@@ -87,7 +87,12 @@ var Rules = []*Rule{
 			if e.Action != "admin.change.target_check_refused" || str(detailOf(e), "reason") != "target_check_locked" {
 				return Hit{}, false
 			}
-			key := orStr(str(detailOf(e), "change_id"), "request")
+			d := detailOf(e)
+			if obj := str(d, "object_id"); obj != "" {
+				// a proposal that sets a live object's URL was refused: the object's URL is being probed
+				return Hit{Key: "object/" + obj, Title: "URL proposals for " + str(d, "kind") + " " + obj + " refused: its change budget is used up"}, true
+			}
+			key := orStr(str(d, "change_id"), "request")
 			return Hit{Key: key, Title: "URL check locked on change request " + key}, true
 		},
 	},

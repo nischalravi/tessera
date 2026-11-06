@@ -4522,8 +4522,8 @@ export interface AdminChange {
   approved_at: string | null; effective_at: string | null; decided_by: AdminPersonRef | null; decided_at: string | null;
   applied_at: string | null; failure: string | null; test_login_at: string | null; payload_hash: string;
   payload: Record<string, unknown> | null;
-  /** A config proposal that seals a URL: how it differs from the object's URL right now (recomputed on every view). */
-  target_change?: "new" | "unchanged" | "path_changed" | "origin_changed";
+  /** A config proposal that seals a URL: how it differs from the object's URL right now (only for an approver with a fresh step-up). */
+  target_change?: "new" | "unchanged" | "path_changed" | "origin_changed" | "stale";
   notifications?: AdminNotification[];
 }
 
