@@ -4,15 +4,19 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 // Config proposals by machine clients (issue #721): the scope arrives only through a two-admin change, a proposal is
@@ -198,11 +202,24 @@ func TestProposalsAPI_Kinds(t *testing.T) {
 	}); err != nil || groupID == 0 {
 		t.Fatalf("no group in the fixture: %v", err)
 	}
+	var ownerID int64
+	if err := e.f.DB.ReadTenant(context.Background(), tenant.ID, func(tx *store.TenantTx) error {
+		is, err := tx.Identities()
+		if len(is) > 0 {
+			ownerID = is[0].ID
+		}
+		return err
+	}); err != nil || ownerID == 0 {
+		t.Fatalf("no identity in the fixture: %v", err)
+	}
 	for _, tc := range []struct{ name, path, body string }{
 		{"catalog item", fmt.Sprintf("/api/proposals/catalog-items/%d", groupID), `{"requestable":true,"risk":"low","description":"proposed","default_hours":8,"max_hours":24}`},
 		{"role", "/api/proposals/roles", fmt.Sprintf(`{"key":"proposed-role","name":"Proposed role","risk":"low","requestable":true,"description":"d","entitlement_group_ids":[%d]}`, groupID)},
 		{"sod ruleset", "/api/proposals/sod-rulesets", `{"name":"Proposed ruleset","key":"proposed"}`},
 		{"alert rule", "/api/proposals/alert-rules/signin_failures", proposedRule},
+		{"birthright rule", "/api/proposals/birthright-rules", `{"name":"Finance staff","description":"d","condition":{"attr":"identity.department","op":"eq","value":"Finance"},"note":"n"}`},
+		{"mitigating control", "/api/proposals/mitigating-controls", fmt.Sprintf(`{"name":"Monthly review","description":"d","owner_id":%d,"type":"detective","frequency":"monthly","evidence_requirement":"signed report"}`, ownerID)},
+		{"approval policy", "/api/proposals/approval-policies", `{"name":"Two step","description":"d","scope":"access","steps":[{"id":"d","type":"approval","approver":"decider"}],"targets":[{"kind":"request_type","target_id":"access"}]}`},
 	} {
 		rec := e.call(tok, "POST", tc.path, tc.body)
 		got := body(rec)
@@ -268,5 +285,202 @@ func TestProposalsAPI_ProposerKeysRotate(t *testing.T) {
 	viewer := signIn(t, e.f.DB, e.f.A.ID, authtest.User{Email: "vic@a.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, storetest.Now)
 	if rec := serve(e.h, authed(viewer, "POST", "/api/admin/api-clients/"+id+"/keys", fmt.Sprintf(`{"mode":"add","jwks":%s}`, pubJWKS(t, "rot9")))); rec.Code != 403 {
 		t.Errorf("a viewer rotating the keys: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestProposalsAPI_NewKinds (issue #719): birthright rules, mitigating controls and approval policies are proposed, never
+// written, until a different human approves with a step-up; the apply goes through the domain code the admin routes use,
+// is audited in the same transaction, can change what it created, and is invisible to another tenant.
+func TestProposalsAPI_NewKinds(t *testing.T) {
+	e := newOAuthEnv(t)
+	tenant := e.f.A
+	a2 := signIn(t, e.f.DB, tenant.ID, authtest.User{Email: "ben@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	b1 := signIn(t, e.f.DB, e.f.B.ID, authtest.User{Email: "bob@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	m := e.addMachine("tenant-a", []string{"viewer"}, []string{"tessera:read", "config.propose"}, true)
+	tok := e.machineToken(m, "tenant-a", "tessera:read config.propose")
+	readOnly := e.addMachine("tenant-a", []string{"viewer"}, []string{"tessera:read", "tessera:write"}, true)
+	roTok := e.machineToken(readOnly, "tenant-a", "tessera:read tessera:write")
+
+	var ownerID int64
+	if err := e.f.DB.ReadTenant(context.Background(), tenant.ID, func(tx *store.TenantTx) error {
+		is, err := tx.Identities()
+		if len(is) > 0 {
+			ownerID = is[0].ID
+		}
+		return err
+	}); err != nil || ownerID == 0 {
+		t.Fatalf("no identity in the fixture: %v", err)
+	}
+	count := func(tenantID tenancy.ID, f func(*store.TenantTx) (int, error)) int {
+		n := 0
+		if err := e.f.DB.ReadTenant(context.Background(), tenantID, func(tx *store.TenantTx) error {
+			var err error
+			n, err = f(tx)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	policies := func(id tenancy.ID) int {
+		return count(id, func(tx *store.TenantTx) (int, error) { ps, err := tx.AbacPolicies(); return len(ps), err })
+	}
+	controls := func(id tenancy.ID) int {
+		return count(id, func(tx *store.TenantTx) (int, error) { cs, err := tx.SodControls(); return len(cs), err })
+	}
+	workflows := func(id tenancy.ID) int {
+		return count(id, func(tx *store.TenantTx) (int, error) { ws, err := tx.Workflows(); return len(ws), err })
+	}
+	basePol, baseCtl, baseWf := policies(tenant.ID), controls(tenant.ID), workflows(tenant.ID)
+
+	rule := `{"name":"Finance staff","description":"d","condition":{"op":"eq","attr":"identity.department","value":"Finance"}}`
+	control := fmt.Sprintf(`{"name":"Monthly review","description":"d","owner_id":%d,"type":"detective","frequency":"monthly"}`, ownerID)
+	policy := `{"name":"Two step","scope":"access","steps":[{"id":"d","type":"approval","approver":"decider"}]}`
+
+	// a client without config.propose (a write token included) can propose nothing, and a person's session is refused
+	for _, path := range []string{"/api/proposals/birthright-rules", "/api/proposals/mitigating-controls", "/api/proposals/approval-policies"} {
+		if rec := e.call(roTok, "POST", path, `{}`); rec.Code != 403 {
+			t.Errorf("a client without config.propose on %s: %d %s", path, rec.Code, rec.Body)
+		}
+		if rec := serve(e.h, authed(a2, "POST", path, `{}`)); rec.Code != 403 {
+			t.Errorf("a person's session on %s: %d", path, rec.Code)
+		}
+	}
+
+	file := func(path, payload string) (cid, hash string) {
+		t.Helper()
+		rec := e.call(tok, "POST", path, payload)
+		got := body(rec)
+		if rec.Code != 202 || got["status"] != "pending_approval" {
+			t.Fatalf("POST %s: %d %s", path, rec.Code, rec.Body)
+		}
+		return asString(got["change_id"]), asString(got["payload_hash"])
+	}
+	approve := func(l authtest.Login, cid, hash string) *httptest.ResponseRecorder {
+		return serve(e.h, authed(l, "POST", "/api/admin/change-requests/"+cid+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, hash)))
+	}
+	stale := signIn(t, e.f.DB, tenant.ID, authtest.User{Email: "old@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}},
+		authtest.Ctx{AAL: 2, Phr: true, AuthTime: storetest.Now.Add(-time.Hour)}, storetest.Now)
+
+	cases := []struct {
+		name, path, payload string
+		count               func(tenancy.ID) int
+		base                int
+	}{
+		{"birthright rule", "/api/proposals/birthright-rules", rule, policies, basePol},
+		{"mitigating control", "/api/proposals/mitigating-controls", control, controls, baseCtl},
+		{"approval policy", "/api/proposals/approval-policies", policy, workflows, baseWf},
+	}
+	results := map[string]string{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cid, hash := file(tc.path, tc.payload)
+			// nothing is written while it waits; the client cannot approve; an approval needs a fresh step-up
+			if tc.count(tenant.ID) != tc.base {
+				t.Fatal("written before approval")
+			}
+			if rec := e.call(tok, "POST", "/api/admin/change-requests/"+cid+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, hash)); rec.Code != 403 {
+				t.Errorf("the client approving: %d", rec.Code)
+			}
+			if rec := approve(stale, cid, hash); rec.Code != 401 || body(rec)["error"] != "step_up_required" {
+				t.Errorf("approval without a step-up: %d %s", rec.Code, rec.Body)
+			}
+			// the approver is another tenant's admin: not found
+			if rec := serve(e.h, authed(b1, "POST", "/api/admin/change-requests/"+cid+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, hash))); rec.Code != 404 {
+				t.Errorf("another tenant's admin approving: %d", rec.Code)
+			}
+			if rec := approve(a2, cid, hash); rec.Code != 200 || body(rec)["status"] != "applied" {
+				t.Fatalf("approval: %d %s", rec.Code, rec.Body)
+			}
+			if got := tc.count(tenant.ID); got != tc.base+1 {
+				t.Errorf("rows after approval = %d, want %d", got, tc.base+1)
+			}
+			if tc.count(e.f.B.ID) != 0 && tc.name != "approval policy" {
+				t.Error("tenant B sees the new row")
+			}
+			rec := e.call(tok, "GET", "/api/proposals/"+cid, "")
+			if body(rec)["status"] != "applied" || asString(body(rec)["result_id"]) == "" {
+				t.Errorf("poll: %d %s", rec.Code, rec.Body)
+			}
+			results[tc.name] = asString(body(rec)["result_id"])
+			// another tenant's admin cannot read the request, and the domain event is in the ledger
+			if code := serve(e.h, authed(b1, "GET", "/api/admin/change-requests/"+cid, "")).Code; code != 404 {
+				t.Errorf("tenant B reading the proposal: %d", code)
+			}
+		})
+	}
+	if tc := workflows(e.f.B.ID); tc != 0 {
+		t.Errorf("tenant B has %d workflows", tc)
+	}
+
+	// the domain events are in the ledger, in the name of the approving admin, next to the change's own
+	want := map[string]bool{"abac.policy.create": false, "sod.control.create": false, "workflow.create": false, "workflow.assign": false}
+	for _, ev := range ledger(t, e.f.DB, tenant.ID) {
+		if _, ok := want[ev.Action]; ok {
+			want[ev.Action] = true
+		}
+	}
+	for a, seen := range want {
+		if !seen && a != "workflow.assign" {
+			t.Errorf("no %s event", a)
+		}
+	}
+
+	// a proposal can change what an earlier one made: the id in the path, the version in the body
+	cid, hash := file("/api/proposals/birthright-rules/"+results["birthright rule"],
+		`{"version":1,"name":"Finance staff","description":"changed","condition":{"attr":"identity.department","op":"eq","value":"Finance"}}`)
+	if rec := approve(a2, cid, hash); rec.Code != 200 {
+		t.Errorf("updating the rule: %d %s", rec.Code, rec.Body)
+	}
+	cid, hash = file("/api/proposals/mitigating-controls/"+results["mitigating control"], fmt.Sprintf(`{"version":1,"name":"Monthly review","description":"changed","owner_id":%d,"type":"detective","frequency":"weekly"}`, ownerID))
+	if rec := approve(a2, cid, hash); rec.Code != 200 {
+		t.Errorf("updating the control: %d %s", rec.Code, rec.Body)
+	}
+	cid, hash = file("/api/proposals/approval-policies/"+results["approval policy"],
+		`{"version":1,"name":"Two step","steps":[{"id":"d","type":"approval","approver":"decider"}],"targets":[{"kind":"request_type","target_id":"access"}]}`)
+	if rec := approve(a2, cid, hash); rec.Code != 200 {
+		t.Errorf("updating the approval policy: %d %s", rec.Code, rec.Body)
+	}
+
+	// refused at the door: validation runs at submit, so nothing bad is filed
+	for _, tc := range []struct {
+		name, path, payload string
+		want                int
+	}{
+		{"rule without a condition", "/api/proposals/birthright-rules", `{"name":"x"}`, 422},
+		{"rule with a bad condition", "/api/proposals/birthright-rules", `{"name":"x","condition":{"attr":"nope","op":"eq","value":1}}`, 422},
+		{"rule name taken", "/api/proposals/birthright-rules", rule, 409},
+		{"rule not found", "/api/proposals/birthright-rules/" + uuid.NewString(), `{"version":1,"name":"x","condition":{"attr":"identity.department","op":"eq","value":"a"}}`, 404},
+		{"rule stale version", "/api/proposals/birthright-rules/" + results["birthright rule"], `{"version":1,"name":"x","condition":{"attr":"identity.department","op":"eq","value":"a"}}`, 409},
+		{"rule unknown field", "/api/proposals/birthright-rules", `{"name":"x","condition":{"attr":"identity.department","op":"eq","value":"a"},"admin":true}`, 422},
+		{"control without an owner", "/api/proposals/mitigating-controls", `{"name":"y","type":"detective","frequency":"monthly"}`, 422},
+		{"control with an unknown owner", "/api/proposals/mitigating-controls", `{"name":"y","owner_id":99999999,"type":"detective","frequency":"monthly"}`, 422},
+		{"control name taken", "/api/proposals/mitigating-controls", control, 409},
+		{"control not found", "/api/proposals/mitigating-controls/nope", `{"version":1,"name":"y"}`, 404},
+		{"policy without steps", "/api/proposals/approval-policies", `{"name":"z","scope":"access","steps":[]}`, 422},
+		{"policy name taken", "/api/proposals/approval-policies", policy, 409},
+		{"policy with a bad target", "/api/proposals/approval-policies", `{"name":"z","scope":"access","steps":[{"id":"d","type":"approval","approver":"decider"}],"targets":[{"kind":"catalog_item","target_id":"nope"}]}`, 404},
+		{"policy not found", "/api/proposals/approval-policies/" + uuid.NewString(), `{"version":1,"name":"z","steps":[{"id":"d","type":"approval","approver":"decider"}]}`, 404},
+	} {
+		if rec := e.call(tok, "POST", tc.path, tc.payload); rec.Code != tc.want {
+			t.Errorf("%s: %d %s, want %d", tc.name, rec.Code, rec.Body, tc.want)
+		}
+	}
+}
+
+// TestProposalsAPI_RolesReadScope (issue #719): tessera:read lists the business roles for a machine client, read-only and
+// in its own tenant; a client without that scope, and one that only proposes, cannot.
+func TestProposalsAPI_RolesReadScope(t *testing.T) {
+	e := newOAuthEnv(t)
+	m := e.addMachine("tenant-a", []string{"viewer"}, []string{"tessera:read"}, true)
+	if rec := e.call(e.machineToken(m, "tenant-a", "tessera:read"), "GET", "/api/roles", ""); rec.Code != 200 {
+		t.Errorf("a read token listing roles: %d %s", rec.Code, rec.Body)
+	}
+	if rec := e.call(e.machineToken(m, "tenant-a", "tessera:read"), "POST", "/api/roles", `{"name":"x"}`); rec.Code != 403 {
+		t.Errorf("a read token creating a role: %d %s", rec.Code, rec.Body)
+	}
+	p := e.addMachine("tenant-a", []string{"viewer"}, []string{"config.propose"}, true)
+	if rec := e.call(e.machineToken(p, "tenant-a", "config.propose"), "GET", "/api/roles", ""); rec.Code != 403 {
+		t.Errorf("a propose-only token listing roles: %d %s", rec.Code, rec.Body)
 	}
 }

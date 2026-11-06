@@ -22,6 +22,10 @@ import (
 //	POST /api/proposals/roles[/{role_id}]          body of POST /api/roles (PUT /api/roles/{role_id} with an id)
 //	POST /api/proposals/sod-rulesets[/{ruleset_id}] body of POST /api/sod/rulesets (PUT with an id)
 //	POST /api/proposals/alert-rules/{rule_id}      body of PUT /api/alerts/rules/{rule_id}
+//	POST /api/proposals/birthright-rules[/{policy_id}]   body of POST /api/abac/policies (PUT with an id): the attribute
+//	                                               condition a role's birthright rule names
+//	POST /api/proposals/mitigating-controls[/{control_id}]  body of POST /api/sod/controls (PUT with an id)
+//	POST /api/proposals/approval-policies[/{workflow_id}]   body of POST /api/workflows (PUT with an id), plus optional targets
 //	GET  /api/proposals/{change_id}                the status of one of this client's own proposals
 //
 // A proposal answers 202 with {change_id, status, url, payload_hash}; the poll adds result_id (the id of what an applied
@@ -37,6 +41,12 @@ func (s *Server) registerProposalRoutes() {
 	s.handle(P, "/api/proposals/sod-rulesets", phased, propose, s.proposer(admin.KindSoDRuleset, ""))
 	s.handle(P, "/api/proposals/sod-rulesets/{ruleset_id}", phased, propose, s.proposer(admin.KindSoDRuleset, "ruleset_id"))
 	s.handle(P, "/api/proposals/alert-rules/{rule_id}", phased, propose, s.proposer(admin.KindAlertRule, "rule_id"))
+	s.handle(P, "/api/proposals/birthright-rules", phased, propose, s.proposer(admin.KindBirthrightRule, ""))
+	s.handle(P, "/api/proposals/birthright-rules/{policy_id}", phased, propose, s.proposer(admin.KindBirthrightRule, "policy_id"))
+	s.handle(P, "/api/proposals/mitigating-controls", phased, propose, s.proposer(admin.KindMitigatingControl, ""))
+	s.handle(P, "/api/proposals/mitigating-controls/{control_id}", phased, propose, s.proposer(admin.KindMitigatingControl, "control_id"))
+	s.handle(P, "/api/proposals/approval-policies", phased, propose, s.proposer(admin.KindApprovalPolicy, ""))
+	s.handle(P, "/api/proposals/approval-policies/{workflow_id}", phased, propose, s.proposer(admin.KindApprovalPolicy, "workflow_id"))
 	s.handle(G, "/api/proposals/{change_id}", read, propose, s.getProposal)
 }
 

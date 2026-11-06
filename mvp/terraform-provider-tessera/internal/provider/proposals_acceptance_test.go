@@ -362,6 +362,111 @@ func TestAcc_Proposals(t *testing.T) {
 		}
 	})
 
+	// the new policy kinds (server issue #719): each is proposed, approved by a person, read back, updated and imported
+	idents, d := p.readData("tessera_identities", map[string]any{"query": "ingrid"})
+	if len(d) > 0 {
+		t.Fatalf("identities: %s", diagText(d))
+	}
+	var ils []tftypes.Value
+	_ = idents["identities"].As(&ils)
+	ownerID := num(t, attrs(t, ils[0])["id"])
+	importVerifies := func(t *testing.T, res string, st tftypes.Value) {
+		t.Helper()
+		imp, d := p.importState(res, str(t, attrs(t, st)["id"]))
+		if len(d) > 0 {
+			t.Fatalf("import: %s", diagText(d))
+		}
+		got, d := p.read(res, imp)
+		if len(d) > 0 {
+			t.Fatalf("read after import: %s", diagText(d))
+		}
+		want, gotA := attrs(t, st), attrs(t, got)
+		for k, v := range want {
+			if k == "change_id" || k == "change_url" || k == "note" {
+				continue // the proposal's own bookkeeping is not on the server
+			}
+			if !gotA[k].Equal(v) {
+				t.Fatalf("import changed %s: %v vs %v", k, gotA[k], v)
+			}
+		}
+	}
+	t.Run("birthright rule", func(t *testing.T) {
+		const res = "tessera_birthright_rule"
+		cond := `{"attr":"identity.department","op":"eq","value":"Finance"}`
+		cfg := map[string]any{"name": "TF finance staff", "description": "from terraform", "condition_json": cond}
+		st := approveNext(applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil))).state
+		a := attrs(t, st)
+		if !uuidRE.MatchString(str(t, a["id"])) || num(t, a["version"]) != 1 || str(t, a["condition_json"]) != cond {
+			t.Fatalf("created rule: %v", st)
+		}
+		if again, d := p.read(res, st); len(d) > 0 || !again.Equal(st) {
+			t.Fatalf("refresh changed the state: %s\n%v\n%v", diagText(d), st, again)
+		}
+		importVerifies(t, res, st)
+		cfg["condition_json"] = `{"any":[{"attr":"identity.department","op":"eq","value":"Finance"},{"attr":"identity.department","op":"eq","value":"Legal"}]}`
+		st2 := approveNext(applyAsync(p, res, cfg, st)).state
+		if a2 := attrs(t, st2); str(t, a2["id"]) != str(t, a["id"]) || num(t, a2["version"]) != 2 {
+			t.Fatalf("updated rule: %v", st2)
+		}
+		// a bad condition is refused by the server before anyone is asked
+		cfg["condition_json"] = `{"attr":"nope","op":"eq","value":1}`
+		if _, d := p.apply(res, cfg, st2); !strings.Contains(diagText(d), "condition:") {
+			t.Fatalf("a bad condition: %q", diagText(d))
+		}
+		if d := p.validate(res, map[string]any{"name": "x", "condition_json": "[1]"}); !strings.Contains(diagText(d), "JSON object") {
+			t.Fatalf("a JSON array as a condition: %q", diagText(d))
+		}
+	})
+	t.Run("mitigating control", func(t *testing.T) {
+		const res = "tessera_mitigating_control"
+		cfg := map[string]any{"name": "TF monthly review", "owner_identity_id": int(ownerID), "type": "detective", "frequency": "monthly",
+			"evidence_requirement": "signed report"}
+		st := approveNext(applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil))).state
+		a := attrs(t, st)
+		if !uuidRE.MatchString(str(t, a["id"])) || num(t, a["version"]) != 1 || num(t, a["owner_identity_id"]) != ownerID {
+			t.Fatalf("created control: %v", st)
+		}
+		if again, d := p.read(res, st); len(d) > 0 || !again.Equal(st) {
+			t.Fatalf("refresh changed the state: %s", diagText(d))
+		}
+		importVerifies(t, res, st)
+		cfg["frequency"] = "weekly"
+		st2 := approveNext(applyAsync(p, res, cfg, st)).state
+		if a2 := attrs(t, st2); num(t, a2["version"]) != 2 || str(t, a2["frequency"]) != "weekly" {
+			t.Fatalf("updated control: %v", st2)
+		}
+		cfg["owner_identity_id"] = 99999999
+		if _, d := p.apply(res, cfg, st2); !strings.Contains(diagText(d), "owner_not_found") {
+			t.Fatalf("an unknown owner: %q", diagText(d))
+		}
+	})
+	t.Run("approval policy", func(t *testing.T) {
+		const res = "tessera_approval_policy"
+		steps := `[{"approver":"decider","id":"d","type":"approval"}]`
+		cfg := map[string]any{"name": "TF one step", "scope": "access", "steps_json": steps}
+		st := approveNext(applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil))).state
+		a := attrs(t, st)
+		if !uuidRE.MatchString(str(t, a["id"])) || num(t, a["version"]) != 1 || str(t, a["steps_json"]) != steps {
+			t.Fatalf("created policy: %v", st)
+		}
+		if again, d := p.read(res, st); len(d) > 0 || !again.Equal(st) {
+			t.Fatalf("refresh changed the state: %s\n%v\n%v", diagText(d), st, again)
+		}
+		importVerifies(t, res, st)
+		tgtType := tftypes.Object{AttributeTypes: map[string]tftypes.Type{"kind": tftypes.String, "target_id": tftypes.String}}
+		cfg["targets"] = tftypes.NewValue(tftypes.Set{ElementType: tgtType}, []tftypes.Value{tftypes.NewValue(tgtType,
+			map[string]tftypes.Value{"kind": tftypes.NewValue(tftypes.String, "request_type"), "target_id": tftypes.NewValue(tftypes.String, "access")})})
+		cfg["steps_json"] = `[{"approver":"manager","id":"m","type":"approval"},{"approver":"decider","id":"d","type":"approval"}]`
+		st2 := approveNext(applyAsync(p, res, cfg, st)).state
+		a2 := attrs(t, st2)
+		var ts []tftypes.Value
+		_ = a2["targets"].As(&ts)
+		if num(t, a2["version"]) != 2 || len(ts) != 1 {
+			t.Fatalf("updated policy: %v", st2)
+		}
+		importVerifies(t, res, st2)
+	})
+
 	// 7. the server refuses a bad proposal before anyone is asked, and says why
 	bad := map[string]any{"rule_id": "no_such_rule", "enabled": true, "severity": "high", "threshold": 1, "window_minutes": 5}
 	if _, d := p.apply(ruleRes, bad, null); !strings.Contains(diagText(d), "rule_not_found") {

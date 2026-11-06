@@ -237,6 +237,16 @@ func TestAcc_DataSources(t *testing.T) {
 		t.Fatalf("the system filter did not narrow: %d vs %d", len(all), len(aws))
 	}
 
+	// a read-only client lists the roles (server issue #719): tessera:read grants roles.read
+	roles := list(t, "tessera_roles", nil, "roles")
+	if len(roles) == 0 {
+		t.Fatal("no roles")
+	}
+	first := str(t, attrs(t, roles[0])["name"])
+	if one := list(t, "tessera_roles", map[string]any{"name": strings.ToUpper(first)}, "roles"); len(one) == 0 || len(one) >= len(roles) && len(roles) > 1 {
+		t.Fatalf("the name filter: %d of %d", len(one), len(roles))
+	}
+
 	conns := list(t, "tessera_connectors", nil, "connectors")
 	if len(conns) == 0 {
 		t.Fatal("no connectors")

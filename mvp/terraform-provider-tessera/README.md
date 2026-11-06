@@ -33,8 +33,8 @@ Checked against the route table and by calling the routes with a machine token:
 | In the issue | Route | Why a machine client cannot manage it |
 | --- | --- | --- |
 | connectors | `/api/connections` | `connections.manage` is tenant admin only; credential and config changes also need step-up. Reads work (`tessera_connectors`) |
-| catalog items, birthright rules | `/api/catalog/items/*` | `catalog.manage` is policy admin, plus step-up. `GET /api/catalog` is refused for a token (403) |
-| business roles | `/api/roles` | `roles.manage` is policy admin, plus step-up; reading roles needs `requests.create`, which no token scope grants (403) |
+| catalog items | `/api/catalog/items/*` | `catalog.manage` is policy admin, plus step-up. `GET /api/catalog` is refused for a token (403) |
+| business roles | `/api/roles` | `roles.manage` is policy admin, plus step-up; reading roles used to need `requests.create`, which no token scope grants; it needs `roles.read` now, which `tessera:read` grants |
 | SoD rules, mitigating controls | `/api/sod/*` | `sod.manage` is policy admin, plus step-up |
 | approval policies | `/api/workflows` | `workflows.manage` is policy admin, plus step-up |
 | alert rules and channels | `/api/alerts/*` | `alerts.configure` needs the admin scope and role, plus step-up |
@@ -55,9 +55,11 @@ never holds an admin role and never passes a step-up, so it cannot approve or ap
 * The provider files the proposal and **waits** (provider settings `wait_timeout`, default 30m, and `poll_interval`, default 5s). The resource
   returns once the change is applied. On a refusal, a withdrawal, an expiry, a failed apply or a timeout, the apply fails with the change id and
   the URL a person opens; a timed-out proposal stays open, and applying again files a new one. Plan stays read-only.
-* Proposable today: alert rules, catalog items, business roles and SoD rulesets (create and update; the server has no proposal for retire or
-  delete, so destroy only removes the resource from state and warns). Connectors, approval policies, SIEM sinks, transport and group folders
-  stay out.
+* Proposable today: alert rules, catalog items, business roles, SoD rulesets, birthright rule conditions, mitigating controls and approval policies (create and update; the server has no proposal for retire or
+  delete, so destroy only removes the resource from state and warns). Connectors, alert channels, SIEM sinks, transport and group folders
+  stay out: they carry secrets, and a proposal would have to hold sealed secrets (the next step, with write-only attributes on the Terraform side).
+* The new resources are imported by their server id (`terraform import tessera_approval_policy.x <workflow id>`). JSON-valued attributes (`condition_json`,
+  `steps_json`) keep your spelling when the server holds the same document.
 
 In:
 
@@ -71,8 +73,12 @@ In:
 | resource | `tessera_catalog_item` | `/api/v1/proposals/catalog-items/{group_id}` (needs `config.propose`; no read) |
 | resource | `tessera_business_role` | `/api/v1/proposals/roles` (needs `config.propose`; read with `tessera:read`) |
 | resource | `tessera_sod_ruleset` | `/api/v1/proposals/sod-rulesets` (needs `config.propose`; read with `tessera:read`) |
+| resource | `tessera_birthright_rule` | `/api/v1/proposals/birthright-rules` (the attribute condition a role's birthright rule names; read `/api/v1/abac/policies/{id}` with `tessera:read`; import by id) |
+| resource | `tessera_mitigating_control` | `/api/v1/proposals/mitigating-controls` (read `/api/v1/sod/controls/{id}` with `tessera:read`; import by id) |
+| resource | `tessera_approval_policy` | `/api/v1/proposals/approval-policies` (a workflow and its targets; read `/api/v1/workflows/{id}` with `tessera:read`; import by id) |
+| data source | `tessera_roles` | `/api/v1/roles` (`tessera:read`; the server grants `roles.read` to that scope since issue #719) |
 
-`tessera_roles` is not offered: the route is refused for tokens. `tessera_review_schedule` supports import (by UUID), plan-time
+`tessera_review_schedule` supports import (by UUID), plan-time
 validation (ranges, enums, `reminder_days < duration_days`, `escalate` needs a reviewer, RFC 3339 times) and server validation errors
 surface unchanged. The API has no delete route and no read-one route: destroy disables the schedule, and read lists and filters.
 No resource here carries a secret, so there is no write-only attribute yet; the provider's own `private_key` is `Sensitive` and is
