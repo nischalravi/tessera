@@ -28,10 +28,9 @@ type Change struct {
 	Failure  *string `json:"failure"`
 	// ResultID is the id of what an applied proposal made or changed (a role or ruleset id), when the server can tell.
 	ResultID *string `json:"result_id"`
-	// TargetOrigin and TargetFingerprint describe the URL the server sealed for a proposal (an alert channel or SIEM sink
-	// webhook): its scheme, host and port, and a keyed fingerprint of the whole URL that the approver sees too. Never the URL.
-	TargetOrigin      *string `json:"target_origin"`
-	TargetFingerprint *string `json:"target_fingerprint"`
+	// TargetOrigin describes the URL the server sealed for a proposal (an alert channel or SIEM sink webhook): its scheme,
+	// host and port. Never the URL, and no fingerprint of it.
+	TargetOrigin *string `json:"target_origin"`
 }
 
 // ChangeError is a proposal that was not applied: a person refused it (Status rejected), it was withdrawn or expired,

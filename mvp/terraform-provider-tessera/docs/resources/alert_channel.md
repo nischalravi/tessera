@@ -35,8 +35,8 @@ resource "tessera_alert_channel" "soc" {
   kind         = "webhook"
   min_severity = "high"
 
-  # the URL usually carries a token: write-only, never in the plan or the state. The state keeps target_origin and
-  # target_fingerprint (compare the fingerprint with the one the approver sees).
+  # the URL usually carries a token: write-only, never in the plan or the state. The state keeps target_origin; the
+  # approver confirms the whole URL with Check this URL in the admin center.
   target_url         = var.soc_webhook_url
   target_url_version = "1"
 
@@ -72,7 +72,7 @@ resource "tessera_alert_channel" "mail" {
 
 ### Read-Only
 
-- `target_fingerprint` (String) A keyed fingerprint of the whole sealed URL (16 hex characters), shown to the approver too: compare it with the one on the change request to confirm the receiver, path included. It cannot be computed from a list of candidate URLs.
+- `target_fingerprint` (String, Deprecated) Always null. The approver confirms the URL with Check this URL in the admin center.
 - `target_origin` (String) The scheme, host and port of the sealed URL (never its path).
 - `change_id` (String) The id of the change request that applied the last create or update.
 - `change_url` (String) Where a person reviews that change request.

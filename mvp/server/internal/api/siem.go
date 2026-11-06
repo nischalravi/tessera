@@ -81,6 +81,8 @@ type sinkView struct {
 	DeadLetterCount int64       `json:"dead_letter_count"`
 	CreatedAt       time.Time   `json:"created_at"`
 	UpdatedAt       time.Time   `json:"updated_at"`
+	// TargetOrigin is the scheme, host and port of a URL target (#886); empty for a syslog host:port.
+	TargetOrigin string `json:"target_origin,omitempty"`
 }
 
 func redactSinkTarget(k *store.SiemSink) string {
@@ -95,7 +97,7 @@ func sinkViewOf(tx *store.TenantTx, k *store.SiemSink, head int64) (sinkView, er
 	if err != nil {
 		return sinkView{}, err
 	}
-	return sinkView{ID: k.ID, Name: k.Name, Kind: k.Kind, Format: k.Format, Target: redactSinkTarget(k), Flavor: k.Flavor,
+	return sinkView{TargetOrigin: urlOrigin(k.Target), ID: k.ID, Name: k.Name, Kind: k.Kind, Format: k.Format, Target: redactSinkTarget(k), Flavor: k.Flavor,
 		HasCA: k.CAPEM != nil, HasToken: len(k.SecretSealed) > 0, IncludeHTTP: k.IncludeHTTP, EventFilter: nonNil(k.EventFilter), Region: k.Region,
 		AccessKeyID: k.AccessKeyID, Enabled: k.Enabled, CursorSeq: k.CursorSeq,
 		HeadSeq: head, Health: siem.HealthOf(k, pending), Attempts: k.Attempts, NextAttemptAt: k.NextAttemptAt, LastError: k.LastError,

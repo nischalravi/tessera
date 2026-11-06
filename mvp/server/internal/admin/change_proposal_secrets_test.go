@@ -422,11 +422,11 @@ func TestProposalSecrets_ApproverSeesFingerprintNotURL(t *testing.T) {
 		return ch, summary(ch.ID)
 	}
 	ch, sum := file("", `{"name":"soc","kind":"webhook","target":"`+hookURL+`","signing_secret":"`+hookSecret+`"}`)
-	fp, err := admin.TargetFingerprint(h.sealer, tenantID, hookURL)
+	fp, err := admin.TargetFingerprint(h.sealer, tenantID, ch.ID, hookURL)
 	if err != nil || len(fp) != 16 {
 		t.Fatalf("fingerprint %q, %v", fp, err)
 	}
-	for _, want := range []string{"https://hooks.example.com:443", "fingerprint " + fp} {
+	for _, want := range []string{"https://hooks.example.com:443", "Check this URL"} {
 		if !strings.Contains(sum, want) {
 			t.Errorf("summary %q lacks %q", sum, want)
 		}
@@ -438,11 +438,22 @@ func TestProposalSecrets_ApproverSeesFingerprintNotURL(t *testing.T) {
 	}
 	// the fingerprint is keyed and bound to the tenant: another KEK or tenant gives another one
 	other, _ := seal.New(seal.RandomBytes(32))
-	if f2, _ := admin.TargetFingerprint(other, tenantID, hookURL); f2 == fp {
+	if f2, _ := admin.TargetFingerprint(other, tenantID, ch.ID, hookURL); f2 == fp {
 		t.Error("the fingerprint does not depend on the key")
 	}
-	if f3, _ := admin.TargetFingerprint(h.sealer, tenancy.MustParse("00000000-0000-4000-8000-0000000000c2"), hookURL); f3 == fp {
+	if f3, _ := admin.TargetFingerprint(h.sealer, tenancy.MustParse("00000000-0000-4000-8000-0000000000c2"), ch.ID, hookURL); f3 == fp {
 		t.Error("the fingerprint does not depend on the tenant")
+	}
+	// and to the request: the same URL in another request gives another value, so a fingerprint compares only through
+	// its own request's check-target (#886)
+	if f4, _ := admin.TargetFingerprint(h.sealer, tenantID, uuid.New(), hookURL); f4 == fp {
+		t.Error("the fingerprint does not depend on the request")
+	}
+	if ch2, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindAlertChannel, "", json.RawMessage(
+		`{"name":"soc2","kind":"webhook","target":"`+hookURL+`","signing_secret":"`+hookSecret+`"}`)); err != nil {
+		t.Fatal(err)
+	} else if _, fp2 := admin.ProposalTarget(h.change(ch2.ID)); fp2 == fp {
+		t.Error("the same URL filed twice shows the same fingerprint")
 	}
 	if o, p := admin.ProposalTarget(h.change(ch.ID)); o != "https://hooks.example.com:443" || p != fp {
 		t.Errorf("ProposalTarget = %q %q", o, p)
@@ -452,17 +463,14 @@ func TestProposalSecrets_ApproverSeesFingerprintNotURL(t *testing.T) {
 	}
 	var id string
 	h.tx(func(tx *store.TenantTx) error { cs, _ := tx.AlertChannels(); id = cs[0].ID; return nil })
-	// a path-only change keeps the origin: it is flagged, not hidden
+	// the summary names the origin of an update's URL and nothing about how it compares with the live one (#886: that is for an
+	// approver with a step-up only, and tested in TestProposalTargetFlag_ServerSideAndStale)
 	_, sum = file(id, `{"target":"https://hooks.example.com/services/T000/B000/OTHER-WORKSPACE"}`)
-	if !strings.Contains(sum, "PATH CHANGED") || strings.Contains(sum, "OTHER-WORKSPACE") {
+	if !strings.Contains(sum, "https://hooks.example.com:443") || strings.Contains(sum, "OTHER-WORKSPACE") || strings.Contains(sum, "CHANGED") {
 		t.Errorf("path change summary: %q", sum)
 	}
-	_, sum = file(id, `{"target":"`+hookURL+`"}`)
-	if !strings.Contains(sum, "same URL as now") {
-		t.Errorf("unchanged summary: %q", sum)
-	}
 	_, sum = file(id, `{"target":"https://elsewhere.example.org/x","signing_secret":"`+hookSecret+`-2"}`)
-	if !strings.Contains(sum, "MOVED to another origin") {
+	if !strings.Contains(sum, "https://elsewhere.example.org:443") || strings.Contains(sum, "MOVED") {
 		t.Errorf("moved summary: %q", sum)
 	}
 }
@@ -566,5 +574,57 @@ func TestProposalSecrets_ConnectionEndpointsCannotBeForged(t *testing.T) {
 	sum = summary(`{"name":"Okta default","connector_type":"okta","credential":{"reference":"vault:kv/okta"}}`, "okta")
 	if !strings.Contains(sum, "endpoint: none named") {
 		t.Errorf("an empty endpoint list is not said: %q", sum)
+	}
+}
+
+// A governed type's settings.port is part of where the credential goes, so the approver's endpoint list shows it (#886).
+func TestProposalSecrets_ConnectionSummaryShowsPort(t *testing.T) {
+	h, _, machine := secretHarness(t)
+	ch, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindConnection, "", json.RawMessage(
+		`{"name":"Unix","connector_type":"unixssh","system":"unix","config":{"settings":{"host":"ssh.example.com","port":"2222","username":"svc","host_key":"SHA256:abc"}},"credential":{"reference":"vault:kv/ssh"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum string
+	h.tx(func(tx *store.TenantTx) error {
+		c, err := tx.AdminChange(ch.ID)
+		sum = admin.Summarize(tx, c, h.clk.now())
+		return err
+	})
+	if !strings.Contains(sum, "settings.port=2222") || !strings.Contains(sum, "settings.host=ssh.example.com") {
+		t.Errorf("the port is not shown: %q", sum)
+	}
+}
+
+// The endpoint list is checked again when the change is applied, not only when it is approved (#886): a connection whose
+// stored config moved after the approver saw the list is not sent a credential.
+func TestProposalSecrets_ConnectionEndpointsRecheckedAtApply(t *testing.T) {
+	h, ad, machine := secretHarness(t)
+	create, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindConnection, "", json.RawMessage(
+		`{"name":"Okta prod","connector_type":"okta","config":{"org_url":"https://acme.okta.com"},"credential":{"secret":"`+connSecret+`"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.Approve(h.ctx, h.as(ad[0]), create.ID, create.PayloadHash); err != nil {
+		t.Fatal(err)
+	}
+	connID := adminResult(t, h, create.ID)
+	// a credential-only update: the endpoints shown are the stored config's
+	upd, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindConnection, connID, json.RawMessage(`{"credential":{"reference":"vault:kv/okta"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// approved (as the store records it, with the effective time now), then the stored config moves before the apply
+	h.tx(func(tx *store.TenantTx) error {
+		return tx.ApproveAdminChange(upd.ID, ad[0].ID, h.clk.now(), h.clk.now())
+	})
+	h.tx(func(tx *store.TenantTx) error {
+		_, err := h.svc.Connections.PatchConfig(tx, connID, []byte(`{"org_url":"https://evil.okta.com"}`), "adm", h.clk.now())
+		return err
+	})
+	_, err = h.svc.Apply(h.ctx, h.as(ad[1]), upd.ID)
+	wantErr(t, err, http.StatusConflict, "endpoints_changed")
+	if got := h.change(upd.ID); got.Status != store.ChangeFailed {
+		t.Errorf("status = %s, want failed", got.Status)
 	}
 }

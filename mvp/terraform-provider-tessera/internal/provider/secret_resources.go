@@ -329,7 +329,7 @@ func (r *alertChannelResource) Schema(_ context.Context, _ resource.SchemaReques
 		Description: "A channel that alerts are delivered to: a list of email addresses, or an HTTPS webhook whose payloads are signed with an " +
 			"HMAC secret you choose and give the receiver. " + proposalNote + secretNote +
 			"A webhook URL usually carries a token, so it goes in the write-only `target_url` (with `target_url_version`), never in the state: " +
-			"the server seals it, shows the approver its origin and a keyed fingerprint, and the state keeps those two (`target_origin`, `target_fingerprint`). " +
+			"the server seals it, shows the approver its origin, and the state keeps it (`target_origin`). " +
 			"Channels are switched off with `enabled = false`, not deleted: destroy leaves the channel on the server. " +
 			"The server's read of channels needs the admin scope, so refresh keeps the state unless the client can read them.",
 		Attributes: commonAttrs(map[string]schema.Attribute{
@@ -553,7 +553,7 @@ func (r *siemSinkResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"collector or an S3 bucket. " + proposalNote + secretNote +
 			"As on the admin routes, a sink that moves to another origin needs a new `token` (the stored one never follows it). " +
 			"A webhook or S3 URL may carry a token, so it goes in the write-only `target_url` (with `target_url_version`), never in the state; the state " +
-			"keeps `target_origin` and `target_fingerprint`, which the approver sees too. " +
+			"keeps `target_origin`, which the approver sees too. " +
 			"Sinks are switched off with `enabled = false`, not deleted: destroy leaves the sink on the server. Refresh reads the sink " +
 			"when the client also holds the audit scope (siem.read) and keeps the state otherwise.",
 		Attributes: commonAttrs(map[string]schema.Attribute{
@@ -775,17 +775,17 @@ func (r *siemSinkResource) ImportState(ctx context.Context, req resource.ImportS
 
 // targetURLAttrs is the schema of a write-only URL argument and what the server reports about it. A webhook URL usually carries a
 // token (Slack, Teams and Sumo Logic put it in the path), so it is write-only like a secret and never in the state; the state keeps
-// its origin and a keyed fingerprint of the whole URL, which the approver is shown too, so a person can match the two.
+// its origin; the approver confirms the whole URL with Check this URL.
 func targetURLAttrs(what string) map[string]schema.Attribute {
 	return map[string]schema.Attribute{
 		"target_url": schema.StringAttribute{Optional: true, Sensitive: true, WriteOnly: true,
 			Description: "The " + what + " URL: absolute, `https`, no credentials, not a cloud metadata service (the server checks again when the proposal " +
-				"is approved). Write-only: never in the plan or the state. The server seals it; the approver sees its origin and a fingerprint.",
+				"is approved). Write-only: never in the plan or the state. The server seals it; the approver sees its origin and checks the whole URL in the admin center.",
 			Validators: []validator.String{stringvalidator.LengthBetween(1, 2000), stringvalidator.AlsoRequires(path.MatchRoot("target_url_version"))}},
 		"target_url_version": versionAttr("Any text; change it along with `target_url` to send the new URL. Without a change the server keeps the URL it has."),
 		"target_origin":      schema.StringAttribute{Computed: true, Description: "The scheme, host and port of the URL the server sealed (never its path)."},
-		"target_fingerprint": schema.StringAttribute{Computed: true, Description: "A keyed fingerprint of the whole sealed URL (16 hex characters), which the approver sees too. " +
-			"Compare it to the one shown for the change request to confirm the receiver, including its path; it cannot be computed from a list of candidate URLs."},
+		"target_fingerprint": schema.StringAttribute{Computed: true, DeprecationMessage: "The server no longer returns a fingerprint of the sealed URL (it would let anyone with the API test guesses against it); the approver confirms the URL with Check this URL in the admin center. Always null.",
+			Description: "Deprecated and always null. The approver checks the URL with the admin center's Check this URL, not by comparing fingerprints."},
 	}
 }
 
@@ -812,13 +812,14 @@ func urlKindRule(d *diag.Diagnostics, kind, target, targetURL types.String, urlK
 }
 
 // setTarget records what the server says about the URL it sealed. When this apply sent no URL (the version did not change) the
-// state keeps the origin and fingerprint it had; a computed attribute must never stay unknown.
+// state keeps the origin it had; a computed attribute must never stay unknown.
 func setTarget[M any](origin, fp *types.String, state *M, ch *client.Change, get func(*M) (types.String, types.String)) {
 	switch {
-	case ch.TargetOrigin != nil && ch.TargetFingerprint != nil:
-		*origin, *fp = types.StringValue(*ch.TargetOrigin), types.StringValue(*ch.TargetFingerprint)
+	case ch.TargetOrigin != nil:
+		*origin, *fp = types.StringValue(*ch.TargetOrigin), types.StringNull()
 	case state != nil:
-		*origin, *fp = get(state)
+		*origin, _ = get(state)
+		*fp = types.StringNull()
 	default:
 		*origin, *fp = types.StringNull(), types.StringNull()
 	}

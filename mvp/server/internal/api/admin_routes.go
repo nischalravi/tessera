@@ -29,6 +29,8 @@ import (
 //	POST /api/admin/change-requests                         {type, payload, client_secret?}
 //	GET  /api/admin/change-requests/{change_id}
 //	POST /api/admin/change-requests/{change_id}/approve     {payload_hash}: a different admin, STEP_UP_ADMIN
+//	POST /api/admin/change-requests/{change_id}/check-target {url}: match / no-match for the URL a proposal seals (#886); a
+//	                                                         different admin, STEP_UP_ADMIN, 5 tries per request, 20 per approver per hour
 //	POST /api/admin/change-requests/{change_id}/reject
 //	POST /api/admin/change-requests/{change_id}/cancel
 //	POST /api/admin/change-requests/{change_id}/apply       after the cooling-off (409 before)
@@ -54,6 +56,7 @@ func (s *Server) registerAdminRoutes() {
 	s.handle(P, "/api/admin/change-requests", phased, needStepUp(auth.PermAdminChangeReq, adm), s.adminSubmit)
 	s.handle(G, "/api/admin/change-requests/{change_id}", read, need(auth.PermAdminRead), s.adminChange)
 	s.handle(P, "/api/admin/change-requests/{change_id}/approve", phased, needStepUp(auth.PermAdminChangeAppr, adm), s.adminApprove)
+	s.handle(P, "/api/admin/change-requests/{change_id}/check-target", phased, needStepUp(auth.PermAdminChangeAppr, adm), s.adminCheckTarget)
 	s.handle(P, "/api/admin/change-requests/{change_id}/reject", phased, need(auth.PermAdminChangeAppr), s.adminReject)
 	s.handle(P, "/api/admin/change-requests/{change_id}/cancel", phased, need(auth.PermAdminChangeReq), s.adminCancel)
 	s.handle(P, "/api/admin/change-requests/{change_id}/apply", phased, needStepUp(auth.PermAdminChangeAppr, adm), s.adminApply)
@@ -203,7 +206,7 @@ func (s *Server) adminActivateConnection(_ http.ResponseWriter, r *http.Request,
 // adminChangeView renders a request for the API. names maps user ids to display
 // names. The sealed secret and the payload's hash input are never included
 // beyond the payload itself (which holds no secret).
-func adminChangeView(tx *store.TenantTx, ch *store.AdminChange, names map[uuid.UUID]string, now time.Time) ojson.Object {
+func (s *Server) adminChangeView(tx *store.TenantTx, ch *store.AdminChange, names map[uuid.UUID]string, now time.Time) ojson.Object {
 	who := func(id *uuid.UUID) any {
 		if id == nil {
 			return nil
@@ -282,7 +285,7 @@ func (s *Server) adminChanges(_ http.ResponseWriter, r *http.Request, p *params)
 		if status != "" && status != "open" && ch.Status != status {
 			continue
 		}
-		out = append(out, adminChangeView(tx, ch, names, now))
+		out = append(out, s.adminChangeView(tx, ch, names, now))
 	}
 	return ojson.Object{{Key: "change_requests", Value: out}, {Key: "types", Value: admin.Types()}}, nil
 }
@@ -305,7 +308,15 @@ func (s *Server) adminChange(_ http.ResponseWriter, r *http.Request, p *params) 
 	if err != nil {
 		return nil, err
 	}
-	v := adminChangeView(tx, ch, names, s.clock())
+	v := s.adminChangeView(tx, ch, names, s.clock())
+	// how the URL a proposal seals compares with the object's URL: only for an approver with a fresh step-up who did not file
+	// it. A proposer or an admin.read reader holding it could test guessed URLs against a live channel or sink (#886).
+	if pr := principal(r); pr != nil && pr.UserID != nil && *pr.UserID != ch.RequestedBy &&
+		auth.Check(pr, auth.PermAdminChangeAppr, &auth.StepUpAdmin, s.clock()) == nil {
+		if c := s.admin.TargetFlagFor(tx, ch); c != "" {
+			v = append(v, ojson.KV{Key: "target_change", Value: c})
+		}
+	}
 	return append(v, ojson.KV{Key: "notifications", Value: notificationViews(notifs, names)}), nil
 }
 
@@ -317,7 +328,7 @@ func (s *Server) changeResponse(r *http.Request, ch *store.AdminChange) (any, er
 		if err != nil {
 			return err
 		}
-		out = adminChangeView(tx, ch, names, s.clock())
+		out = s.adminChangeView(tx, ch, names, s.clock())
 		return nil
 	})
 	return out, err
@@ -363,6 +374,26 @@ func (s *Server) adminApprove(_ http.ResponseWriter, r *http.Request, p *params)
 		return nil, err
 	}
 	return s.changeResponse(r, ch)
+}
+
+// adminCheckTarget answers whether the URL the approver expects is the one the proposal seals: {match, attempts_left}. It
+// never returns or logs the sealed URL, and the submitted one is not stored (its keyed fingerprint is, in the audit event).
+func (s *Server) adminCheckTarget(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id, err := pathUUID(p, "change_id")
+	if err != nil {
+		return nil, err
+	}
+	var b struct {
+		URL string `json:"url"`
+	}
+	if err := decodeBody(r, &b, false); err != nil {
+		return nil, err
+	}
+	res, err := s.admin.CheckTarget(r.Context(), principal(r), id, b.URL)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"match": res.Match, "attempts_left": res.AttemptsLeft}, nil
 }
 
 func (s *Server) adminReject(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {

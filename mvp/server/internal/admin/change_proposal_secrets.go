@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -88,55 +89,38 @@ const (
 	targetMoved       = "origin_changed"
 )
 
-// TargetFingerprint is a keyed, tenant-bound fingerprint of a URL: 16 hex characters of HMAC-SHA256 under a key derived from
-// the KEK for this purpose. It identifies the exact URL to a person who knows it and cannot be brute-forced offline from a list
-// of candidate URLs, because the key never leaves the server.
-func TargetFingerprint(sealer *seal.Sealer, t tenancy.ID, target string) (string, error) {
+// TargetFingerprint is a keyed fingerprint of a URL, bound to the tenant AND the change request it belongs to: 16 hex
+// characters of HMAC-SHA256 under a key derived from the KEK for this purpose. Because the request id is in the input, a
+// value can be compared with a guess only through that request's check-target, which is rate limited; nowhere else (no
+// live object, no other request) yields the same value for the same URL, so it is no oracle for the sealed URL (#886).
+func TargetFingerprint(sealer *seal.Sealer, t tenancy.ID, change uuid.UUID, target string) (string, error) {
+	return keyedFP(sealer, "proposal-target-fingerprint", 16, t.String()+"|"+change.String()+"|"+target)
+}
+
+// sealedValueFP identifies the sealed URL itself (tenant-bound, not request-bound), under its own key, to count the tries
+// made against one value across requests. It is computed in memory from the opened secret, stored only as a counter key
+// in admin_change_target_checks and never returned or audited.
+func sealedValueFP(sealer *seal.Sealer, t tenancy.ID, target string) (string, error) {
+	return keyedFP(sealer, "proposal-target-lockout", 32, t.String()+"|"+target)
+}
+
+func keyedFP(sealer *seal.Sealer, label string, n int, in string) (string, error) {
 	if sealer == nil {
 		return "", newErr(503, "sealer_unavailable", "no key-encryption key is configured to fingerprint the proposal's URL")
 	}
-	key, err := sealer.DeriveKey("proposal-target-fingerprint", 32)
+	key, err := sealer.DeriveKey(label, 32)
 	if err != nil {
 		return "", err
 	}
 	m := hmac.New(sha256.New, key)
-	m.Write([]byte(t.String() + "|" + target))
-	return hex.EncodeToString(m.Sum(nil))[:16], nil
-}
-
-// targetKnown reads the current URL of the channel or sink a proposal changes ("" for none).
-func (s *Service) currentTarget(ctx context.Context, p *auth.Principal, kind, id string) (string, error) {
-	if id == "" {
-		return "", nil
-	}
-	var cur string
-	err := s.DB.ReadTenant(ctx, p.TenantID, func(tx *store.TenantTx) error {
-		switch kind {
-		case KindAlertChannel:
-			c, err := tx.AlertChannel(id)
-			if err == nil {
-				cur = c.Target
-			}
-			return err
-		case KindSiemSink:
-			k, err := tx.SiemSink(id)
-			if err == nil {
-				cur = k.Target
-			}
-			return err
-		}
-		return nil
-	})
-	if errors.Is(err, store.ErrNotFound) {
-		return "", notFound("object")
-	}
-	return cur, err
+	m.Write([]byte(in))
+	return hex.EncodeToString(m.Sum(nil))[:n], nil
 }
 
 // splitProposalSecrets takes the secret fields out of a proposal body. It returns the body with the marker in their place and,
 // for a URL target, the fields the server derives from it (target_origin, target_fp, target_change), and the plaintexts by path.
 // A kind without secret fields is returned as it is.
-func (s *Service) splitProposalSecrets(ctx context.Context, p *auth.Principal, kind, id string, body json.RawMessage) (json.RawMessage, map[string]string, error) {
+func (s *Service) splitProposalSecrets(ctx context.Context, p *auth.Principal, req uuid.UUID, kind, id string, body json.RawMessage) (json.RawMessage, map[string]string, error) {
 	paths := proposalSecretPaths[kind]
 	if len(paths) == 0 {
 		return body, nil, nil
@@ -177,11 +161,11 @@ func (s *Service) splitProposalSecrets(ctx context.Context, p *auth.Principal, k
 		secrets[sp.path] = str
 		parent[key] = secretMarker
 		if sp.path == "target" {
-			origin, fp, change, err := s.deriveTarget(ctx, p, kind, id, str)
+			origin, fp, err := s.deriveTarget(ctx, p, req, kind, id, str)
 			if err != nil {
 				return nil, nil, err
 			}
-			m["target_origin"], m["target_fp"], m["target_change"] = origin, fp, change
+			m["target_origin"], m["target_fp"] = origin, fp
 		}
 	}
 	if kind == KindConnection {
@@ -253,30 +237,31 @@ func (e *env) configEndpoints(id string, b *ConnectionBody) ([]string, error) {
 	return []string{}, nil
 }
 
-// deriveTarget computes what the approver is shown instead of the sealed URL: its origin, its keyed fingerprint and, for an
-// update, how it differs from the URL the object has now.
-func (s *Service) deriveTarget(ctx context.Context, p *auth.Principal, kind, id, target string) (origin, fp, change string, err error) {
+// deriveTarget computes what the approver is shown instead of the sealed URL: its origin and its request-bound keyed
+// fingerprint. How it compares with the object's current URL is NOT put in the payload (any admin.read reader, and the
+// proposer's client, could then test guesses against the live URL): it is kept server-side at filing (fileTarget).
+func (s *Service) deriveTarget(_ context.Context, p *auth.Principal, req uuid.UUID, _, _, target string) (origin, fp string, err error) {
 	origin = safehttp.Origin(target)
 	if origin == "" {
-		return "", "", "", invalid("target is not a valid URL")
+		return "", "", invalid("target is not a valid URL")
 	}
-	if fp, err = TargetFingerprint(s.Sealer, p.TenantID, target); err != nil {
-		return "", "", "", err
+	if fp, err = TargetFingerprint(s.Sealer, p.TenantID, req, target); err != nil {
+		return "", "", err
 	}
-	cur, err := s.currentTarget(ctx, p, kind, id)
+	return origin, fp, nil
+}
+
+// targetChange says how a sealed URL differs from the one the object has now ("" for none, or a create).
+func targetChange(id, cur, target string) string {
 	switch {
-	case err != nil:
-		return "", "", "", err
 	case id == "" || cur == "":
-		change = targetNew
+		return targetNew
 	case cur == target:
-		change = targetUnchanged
-	case safehttp.OriginKey(cur) == origin:
-		change = targetPathChanged
-	default:
-		change = targetMoved
+		return targetUnchanged
+	case safehttp.OriginKey(cur) == safehttp.Origin(target):
+		return targetPathChanged
 	}
-	return origin, fp, change, nil
+	return targetMoved
 }
 
 // checkDerived is the plan-time check that a body's derived fields are the ones the server computes from the sealed URL it
@@ -289,14 +274,140 @@ func (e *env) checkDerived(origin, fp, change string) error {
 		}
 		return nil
 	}
-	gotFP, err := TargetFingerprint(e.svc.Sealer, e.tx.Tenant(), target)
+	gotFP, err := TargetFingerprint(e.svc.Sealer, e.tx.Tenant(), e.change, target)
 	if err != nil {
 		return err
 	}
-	if origin != safehttp.Origin(target) || fp != gotFP || !slices.Contains([]string{targetNew, targetUnchanged, targetPathChanged, targetMoved}, change) {
+	if origin != safehttp.Origin(target) || fp != gotFP || change != "" {
 		return conflict(ReasonPayloadTampered, "the request's target details do not match the URL it holds")
 	}
 	return nil
+}
+
+// liveTarget is the URL the channel or sink has now, read in the env's transaction ("" for none).
+func (e *env) liveTarget(kind, id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	var cur string
+	var err error
+	switch kind {
+	case KindAlertChannel:
+		var c *store.AlertChannel
+		if c, err = e.tx.AlertChannel(id); err == nil {
+			cur = c.Target
+		}
+	case KindSiemSink:
+		var k *store.SiemSink
+		if k, err = e.tx.SiemSink(id); err == nil {
+			cur = k.Target
+		}
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return "", notFound("object")
+	}
+	return cur, err
+}
+
+// TargetFlagFor is how the URL a proposal seals compared with the object's URL when it was filed (new, unchanged,
+// path_changed, origin_changed), or "stale" when the object's URL has changed since (the approver then decides on the
+// origin and Check this URL). It is meant for an approver holding admin.change.approve with a fresh step-up, and for no
+// one else: the proposer and any admin.read reader never see it, because it would tell them whether a guessed URL equals
+// the live one. The comparison is kept server-side at filing and every filing is charged to the object's budget; reading it
+// again compares only keyed fingerprints of the live URL, so rewriting the object cannot turn it into a second oracle.
+func (s *Service) TargetFlagFor(tx *store.TenantTx, ch *store.AdminChange) string {
+	if ch.Type != TypeConfigProposal {
+		return ""
+	}
+	var p proposalPayload
+	if json.Unmarshal(ch.Payload, &p) != nil || (p.Kind != KindAlertChannel && p.Kind != KindSiemSink) {
+		return ""
+	}
+	var b struct {
+		FP string `json:"target_fp"`
+	}
+	if json.Unmarshal(p.Body, &b) != nil || b.FP == "" {
+		return ""
+	}
+	if p.ID == "" {
+		return targetNew
+	}
+	flag, liveFP, err := tx.AdminChangeTargetFiling(ch.ID)
+	if err != nil || flag == "" {
+		return ""
+	}
+	cur, err := s.env(tx, s.now(), ch.RequestedBy).liveTarget(p.Kind, p.ID)
+	if err != nil {
+		return ""
+	}
+	now := ""
+	if cur != "" {
+		if now, err = sealedValueFP(s.Sealer, tx.Tenant(), cur); err != nil {
+			return ""
+		}
+	}
+	if now != liveFP {
+		return "stale"
+	}
+	return flag
+}
+
+// objectKey is the counter key of one live channel or sink (never a URL), under the lockout key.
+func (s *Service) objectKey(t tenancy.ID, kind, id string) (string, error) {
+	return keyedFP(s.Sealer, "proposal-target-lockout", 32, "object|"+t.String()+"|"+kind+"|"+id)
+}
+
+// fileTarget charges the filing of a proposal that seals a URL for an existing channel or sink against that object's
+// budget and keeps the server-side comparison (see TargetFlagFor). It runs in the filing's transaction, after the request
+// row exists. Past the budget (MaxTargetChecksPerValue per TargetLockWindow per object, or the tenant's hourly cap) the
+// filing is refused and rolled back; SubmitProposal audits the refusal.
+func (e *env) fileTarget(ch *store.AdminChange, kind, id, client string) error {
+	target, ok := e.secrets["target"]
+	if !ok || id == "" || (kind != KindAlertChannel && kind != KindSiemSink) {
+		return nil
+	}
+	s, t := e.svc, e.tx.Tenant()
+	key, err := s.objectKey(t, kind, id)
+	if err != nil {
+		return err
+	}
+	perObject, err := e.tx.AdminChangeTargetChecksOf(key, e.now.Add(-TargetLockWindow))
+	if err != nil {
+		return err
+	}
+	perTenant, err := e.tx.AdminChangeTargetChecksTenant(e.now.Add(-TargetCheckWindow))
+	if err != nil {
+		return err
+	}
+	switch {
+	case perObject >= MaxTargetChecksPerValue:
+		return newErr(http.StatusTooManyRequests, ReasonTargetCheckLocked,
+			"this %s has had %d URL changes proposed in %d days; further proposals that set its URL are refused until the window passes", kindNoun(kind), MaxTargetChecksPerValue, int(TargetLockWindow.Hours()/24))
+	case perTenant >= MaxTargetChecksPerTenant:
+		return newErr(http.StatusTooManyRequests, ReasonTargetCheckRate, "too many URL checks and proposals in %s; try again later", TargetCheckWindow)
+	}
+	cur, err := e.liveTarget(kind, id)
+	if err != nil {
+		return err
+	}
+	liveFP := ""
+	if cur != "" {
+		if liveFP, err = sealedValueFP(s.Sealer, t, cur); err != nil {
+			return err
+		}
+	}
+	fp, err := TargetFingerprint(s.Sealer, t, ch.ID, target)
+	if err != nil {
+		return err
+	}
+	return e.tx.InsertAdminChangeTargetFiling(ch.ID, client, fp, key, targetChange(id, cur, target), liveFP, e.now)
+}
+
+func kindNoun(kind string) string {
+	if kind == KindSiemSink {
+		return "SIEM sink"
+	}
+	return "alert channel"
 }
 
 // ProposalTarget is the origin and fingerprint the server derived for a proposal's sealed URL, for the client to compare ("" when
@@ -391,7 +502,7 @@ func (e *env) openSecrets(ch *store.AdminChange) error {
 	if err != nil {
 		return conflict(ReasonPayloadTampered, "the sealed secrets of the request do not open")
 	}
-	e.secrets = s
+	e.secrets, e.change = s, ch.ID
 	return nil
 }
 
@@ -509,12 +620,8 @@ func planConnection(e *env, id string, b *ConnectionBody) error {
 	if err != nil {
 		return err
 	}
-	eps, err := e.configEndpoints(id, b)
-	if err != nil {
+	if err := e.checkEndpoints(id, b); err != nil {
 		return err
-	}
-	if !slices.Equal(eps, append([]string{}, b.Endpoints...)) {
-		return conflict("endpoints_changed", "the endpoints this connection would have differ from the ones the request showed the approver; file the proposal again")
 	}
 	if id == "" {
 		cs, err := e.tx.Connections()
@@ -550,7 +657,25 @@ func planConnection(e *env, id string, b *ConnectionBody) error {
 	return nil
 }
 
+// checkEndpoints refuses a connection proposal whose resulting endpoint list is no longer the one the approver was shown
+// (the connection's stored config changed since submit). Plan and apply both run it, so a change between approval and
+// apply cannot send the credential somewhere the approver did not see.
+func (e *env) checkEndpoints(id string, b *ConnectionBody) error {
+	eps, err := e.configEndpoints(id, b)
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(eps, append([]string{}, b.Endpoints...)) {
+		return conflict("endpoints_changed", "the endpoints this connection would have differ from the ones the request showed the approver; file the proposal again")
+	}
+	return nil
+}
+
 func applyConnection(e *env, id string, b *ConnectionBody, display string) error {
+	// the approver's list is checked again at the write, not only at plan
+	if err := e.checkEndpoints(id, b); err != nil {
+		return err
+	}
 	rd, err := e.readinessSvc()
 	if err != nil {
 		return err
@@ -798,22 +923,14 @@ func secretNote(p *string) string {
 	return "set"
 }
 
-// targetNote describes a sealed URL to the approver: its origin, a fingerprint of the whole URL to compare with the one
-// the proposer reports, and what changed. The path and any token in it are never shown.
-func targetNote(origin, fp, change string) string {
+// targetNote describes a sealed URL to the approver: its origin only. The whole URL is confirmed with "Check this URL", and
+// how it compares with the object's current URL is shown to approvers with a fresh step-up (TargetFlagFor), not in this
+// summary, which any admin.read reader sees. The path and any token in it are never shown.
+func targetNote(origin, _, _ string) string {
 	if origin == "" {
 		return ""
 	}
-	n := " at " + origin + " (URL fingerprint " + fp
-	switch change {
-	case targetUnchanged:
-		n += ", same URL as now"
-	case targetPathChanged:
-		n += ", PATH CHANGED on the same host: check it is still your receiver"
-	case targetMoved:
-		n += ", MOVED to another origin"
-	}
-	return n + ")"
+	return " at " + origin + " (the full URL is sealed: use Check this URL)"
 }
 
 // endpointNote lists the endpoints a connection's resulting config names (it holds no secret), so the approver sees where a

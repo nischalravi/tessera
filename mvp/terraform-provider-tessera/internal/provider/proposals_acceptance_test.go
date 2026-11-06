@@ -562,12 +562,11 @@ func TestAcc_Proposals(t *testing.T) {
 		st := approveHiding(t, applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil)), hookSecret, "PLAINTEXT-url-token").state
 		notInState(t, st, hookSecret, hookURL, "PLAINTEXT-url-token")
 		a := attrs(t, st)
-		// the state keeps the origin and the keyed fingerprint, never the URL; the approver is shown the same fingerprint
-		fp := str(t, a["target_fingerprint"])
-		if str(t, a["target_origin"]) != "https://hooks.example.com:443" || !a["target_url"].IsNull() || len(fp) != 16 {
+		// the state keeps the origin, never the URL, and no fingerprint of it
+		if str(t, a["target_origin"]) != "https://hooks.example.com:443" || !a["target_url"].IsNull() || !a["target_fingerprint"].IsNull() {
 			t.Fatalf("target details: %v", st)
 		}
-		if v := alice.must("GET", "/api/admin/change-requests/"+str(t, a["change_id"]), nil, 200); !strings.Contains(fmt.Sprint(v["summary"]), "fingerprint "+fp) ||
+		if v := alice.must("GET", "/api/admin/change-requests/"+str(t, a["change_id"]), nil, 200); !strings.Contains(fmt.Sprint(v["summary"]), "https://hooks.example.com:443") ||
 			strings.Contains(fmt.Sprint(v["summary"]), "PLAINTEXT") {
 			t.Fatalf("what the approver sees: %v", v["summary"])
 		}
@@ -576,7 +575,7 @@ func TestAcc_Proposals(t *testing.T) {
 		}
 		cfg["enabled"] = false
 		st2 := approveHiding(t, applyAsync(p, res, cfg, st), hookSecret, "PLAINTEXT-url-token").state
-		if boolv(t, attrs(t, st2)["enabled"]) || str(t, attrs(t, st2)["id"]) != str(t, a["id"]) || str(t, attrs(t, st2)["target_fingerprint"]) != fp {
+		if boolv(t, attrs(t, st2)["enabled"]) || str(t, attrs(t, st2)["id"]) != str(t, a["id"]) || !attrs(t, st2)["target_fingerprint"].IsNull() {
 			t.Fatalf("updated channel: %v", st2)
 		}
 		// an email channel carries no secret
