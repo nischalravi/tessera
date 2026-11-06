@@ -37,7 +37,7 @@ func TestSecretArgumentsRefuseOldTerraform(t *testing.T) {
 	p := newProtocol(t)
 	cases := map[string]map[string]any{
 		"tessera_connection":    {"name": "x", "connector_type": "okta", "secret": "s", "secret_version": "1"},
-		"tessera_alert_channel": {"name": "x", "kind": "webhook", "target": "https://h.example.com/x", "signing_secret": "0123456789abcdef", "signing_secret_version": "1"},
+		"tessera_alert_channel": {"name": "x", "kind": "webhook", "target": "https://h.example.com/x", "signing_secret": strings.Repeat("ab", 8), "signing_secret_version": "1"},
 		"tessera_siem_sink":     {"name": "x", "kind": "webhook", "target": "https://h.example.com/x", "token": "t", "token_version": "1"},
 	}
 	for res, cfg := range cases {
