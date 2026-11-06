@@ -523,3 +523,48 @@ func TestProposalSecrets_BlobKeysAndDuplicateNames(t *testing.T) {
 	_, err = h.svc.SubmitProposal(h.ctx, machine, admin.KindAlertChannel, "", json.RawMessage(hook))
 	wantErr(t, err, http.StatusConflict, "duplicate_channel")
 }
+
+// The approver's endpoint list is built from the decoded, typed config, so a spelling the decoder accepts cannot hide an
+// endpoint and a nested host is shown; a key that is not an exact field name is refused inside config too.
+func TestProposalSecrets_ConnectionEndpointsCannotBeForged(t *testing.T) {
+	h, _, machine := secretHarness(t)
+	for _, cfg := range []string{
+		`{"Org_URL":"https://evil.example.net"}`,
+		`{"ORG_URL":"https://evil.example.net"}`,
+		`{"org_url":"https://acme.okta.com","Rest":{"base_url":"https://evil.example.net"}}`,
+		`{"sql":{"Host":"db.evil.example","engine":"postgres","username":"u"}}`,
+	} {
+		_, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindConnection, "", json.RawMessage(
+			`{"name":"c","connector_type":"okta","config":`+cfg+`,"credential":{"reference":"vault:kv/prod/okta"}}`))
+		if err == nil || !strings.Contains(err.Error(), "case-sensitive") {
+			t.Errorf("config %s: %v", cfg, err)
+		}
+	}
+	// the endpoints field is the server's, never a caller's
+	_, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindConnection, "", json.RawMessage(
+		`{"name":"c","connector_type":"okta","config":{"org_url":"https://evil.example.net"},"endpoints":["org_url=https://acme.okta.com"]}`))
+	if err == nil {
+		t.Error("a caller set the endpoints")
+	}
+	summary := func(body, typ string) string {
+		ch, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindConnection, "", json.RawMessage(body))
+		if err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+		var s string
+		h.tx(func(tx *store.TenantTx) error {
+			c, _ := tx.AdminChange(ch.ID)
+			s = admin.Summarize(tx, c, h.clk.now())
+			return nil
+		})
+		return s
+	}
+	sum := summary(`{"name":"DB","connector_type":"sql","system":"orders-db","config":{"sql":{"engine":"postgres","host":"db.example.org","port":5432,"database":"orders","username":"u"}},"credential":{"reference":"vault:kv/db"}}`, "sql")
+	if !strings.Contains(sum, "sql.host=db.example.org:5432") {
+		t.Errorf("the nested database host is not shown: %q", sum)
+	}
+	sum = summary(`{"name":"Okta default","connector_type":"okta","credential":{"reference":"vault:kv/okta"}}`, "okta")
+	if !strings.Contains(sum, "endpoint: none named") {
+		t.Errorf("an empty endpoint list is not said: %q", sum)
+	}
+}

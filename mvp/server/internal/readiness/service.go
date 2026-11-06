@@ -353,9 +353,9 @@ func (s *Service) prepareCreate(in CreateInput) (CreateInput, *template.Resolved
 
 // CheckCreate runs the checks Create makes before it writes (issue #719: a proposal is validated at submit and again at
 // apply), without writing anything.
-func (s *Service) CheckCreate(in CreateInput) error {
-	_, _, _, err := s.prepareCreate(in)
-	return err
+func (s *Service) CheckCreate(in CreateInput) (ConnConfig, error) {
+	_, _, cfg, err := s.prepareCreate(in)
+	return cfg, err
 }
 
 // Create adds a connection in draft (design §4.2: the template must exist and
@@ -591,20 +591,28 @@ func (s *Service) mergedPatch(b *Bundle, patch []byte) (ConnConfig, error) {
 
 // CheckPatch runs the checks PatchConfig makes before it writes, against the connection's current revision, without
 // writing anything (issue #719).
-func (s *Service) CheckPatch(c *store.TenantTx, connID string, patch []byte, now time.Time) error {
+func (s *Service) CheckPatch(c *store.TenantTx, connID string, patch []byte, now time.Time) (ConnConfig, error) {
 	conn, _, _, err := Revisions(c, connID)
 	if err != nil {
-		return err
+		return ConnConfig{}, err
 	}
 	if conn.RetiredAt != nil {
-		return conflict("connection_retired", "connection %s is retired", conn.Name)
+		return ConnConfig{}, conflict("connection_retired", "connection %s is retired", conn.Name)
 	}
 	b, err := s.Current(c, connID, now)
 	if err != nil {
-		return err
+		return ConnConfig{}, err
 	}
-	_, err = s.mergedPatch(b, patch)
-	return err
+	return s.mergedPatch(b, patch)
+}
+
+// CurrentConfig is the config of the connection's current revision.
+func (s *Service) CurrentConfig(c *store.TenantTx, connID string, now time.Time) (ConnConfig, error) {
+	b, err := s.Current(c, connID, now)
+	if err != nil {
+		return ConnConfig{}, err
+	}
+	return b.Config, nil
 }
 
 // PatchConfig applies a partial config to the in-progress revision (creating
@@ -1227,4 +1235,46 @@ func restDestination(s *restgen.Spec) string {
 		return ""
 	}
 	return s.SecretDestination()
+}
+
+// Endpoints lists, as name=value, every setting of a decoded config that says where the connector will connect or send its
+// credential: the host, URL and tenant fields, the host settings of the SSH and governed types, the base and token URLs of a
+// REST spec and the host of a database. None is a secret. It is empty only when the config names no endpoint (the connector
+// type's own default applies).
+func (c ConnConfig) Endpoints() []string {
+	var out []string
+	add := func(k, v string) {
+		if v != "" {
+			out = append(out, k+"="+v)
+		}
+	}
+	host := c.Host
+	if host != "" && c.Port != 0 {
+		host = net.JoinHostPort(host, strconv.Itoa(c.Port))
+	}
+	add("host", host)
+	add("org_url", c.OrgURL)
+	add("base_url", c.BaseURL)
+	add("domain", c.Domain)
+	add("tenant_host", c.TenantHost)
+	add("tenant_id", c.TenantID)
+	add("cloud", c.Cloud)
+	for k, v := range c.Settings {
+		if strings.Contains(k, "host") || strings.Contains(k, "url") || strings.Contains(k, "endpoint") {
+			add("settings."+k, v)
+		}
+	}
+	if c.Rest != nil {
+		add("rest.base_url", c.Rest.BaseURL)
+		add("rest.auth.token_url", c.Rest.Auth.TokenURL)
+	}
+	if c.SQL != nil {
+		h := c.SQL.Host
+		if h != "" && c.SQL.Port != 0 {
+			h = net.JoinHostPort(h, strconv.Itoa(c.SQL.Port))
+		}
+		add("sql.host", h)
+	}
+	slices.Sort(out)
+	return out
 }

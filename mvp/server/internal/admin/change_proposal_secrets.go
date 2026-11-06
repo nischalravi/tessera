@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -64,7 +65,7 @@ const maxProposalSecret = 8192
 
 // derivedKeys are the fields of a body that only the server sets, from the URL it sealed: its origin, a keyed fingerprint of
 // the whole URL and how it differs from the current one. A caller that sends one is refused.
-var derivedKeys = []string{"target_origin", "target_fp", "target_change"}
+var derivedKeys = []string{"target_origin", "target_fp", "target_change", "endpoints"}
 
 func refuseDerivedKeys(body json.RawMessage) error {
 	var obj map[string]json.RawMessage
@@ -183,11 +184,73 @@ func (s *Service) splitProposalSecrets(ctx context.Context, p *auth.Principal, k
 			m["target_origin"], m["target_fp"], m["target_change"] = origin, fp, change
 		}
 	}
+	if kind == KindConnection {
+		eps, err := s.connectionEndpoints(ctx, p, id, body)
+		if err != nil {
+			return nil, nil, err
+		}
+		m["endpoints"] = eps
+	}
 	out, err := json.Marshal(m)
 	if err != nil {
 		return nil, nil, invalid("body: %v", err)
 	}
 	return out, secrets, nil
+}
+
+// connectionEndpoints validates a connection proposal's config as the domain code will and lists every endpoint of the
+// resulting (merged, typed) config, so the approver's list cannot be forged by a spelling the decoder accepts and cannot leave
+// out a nested host.
+func (s *Service) connectionEndpoints(ctx context.Context, p *auth.Principal, id string, body json.RawMessage) ([]string, error) {
+	if s.Connections == nil {
+		return nil, newErr(503, "connections_unavailable", "connection proposals are not available on this server")
+	}
+	b, err := strictBody[ConnectionBody](body)
+	if err != nil {
+		return nil, err
+	}
+	var eps []string
+	err = s.DB.ReadTenant(ctx, p.TenantID, func(tx *store.TenantTx) error {
+		e := s.env(tx, s.now(), uuid.Nil)
+		var err error
+		eps, err = e.configEndpoints(id, b)
+		return err
+	})
+	return eps, err
+}
+
+// configEndpoints is the endpoint list of the config a connection proposal would leave the connection with.
+func (e *env) configEndpoints(id string, b *ConnectionBody) ([]string, error) {
+	rd, err := e.readinessSvc()
+	if err != nil {
+		return nil, err
+	}
+	hasConfig := len(b.Config) > 0 && string(b.Config) != "null"
+	if hasConfig {
+		// encoding/json matches keys case-insensitively, so "Org_URL" would reach the field without being the key the
+		// checks and the approver's list look at: refuse a key that is not exact, nested ones included
+		if err := checkExactKeys(reflect.TypeOf(readiness.ConnConfig{}), b.Config); err != nil {
+			return nil, invalid("config: %v", err)
+		}
+	}
+	var cfg readiness.ConnConfig
+	switch {
+	case id == "":
+		cfg, err = rd.CheckCreate(readiness.CreateInput{Name: b.Name, ConnectorType: b.ConnectorType, System: b.System, Role: b.Role, Config: b.Config})
+	case hasConfig:
+		cfg, err = rd.CheckPatch(e.tx, id, b.Config, e.now)
+	default:
+		cfg, err = rd.CurrentConfig(e.tx, id, e.now)
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, notFound("connection")
+	} else if err != nil {
+		return nil, proposalErr(err)
+	}
+	if eps := cfg.Endpoints(); eps != nil {
+		return eps, nil
+	}
+	return []string{}, nil
 }
 
 // deriveTarget computes what the approver is shown instead of the sealed URL: its origin, its keyed fingerprint and, for an
@@ -360,6 +423,9 @@ type ConnectionBody struct {
 	Role          string                `json:"role"`
 	Config        json.RawMessage       `json:"config"`
 	Credential    *ConnectionCredential `json:"credential"`
+	// Endpoints is every endpoint the connection's merged config names (readiness.ConnConfig.Endpoints), set by the server at
+	// submit and checked again at plan time; the approver sees it next to the credential.
+	Endpoints []string `json:"endpoints,omitempty"`
 }
 
 // ConnectionCredential is a credential: a reference (vault:..., agent:...) or a secret, which is sealed, never stored in the
@@ -443,11 +509,14 @@ func planConnection(e *env, id string, b *ConnectionBody) error {
 	if err != nil {
 		return err
 	}
+	eps, err := e.configEndpoints(id, b)
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(eps, append([]string{}, b.Endpoints...)) {
+		return conflict("endpoints_changed", "the endpoints this connection would have differ from the ones the request showed the approver; file the proposal again")
+	}
 	if id == "" {
-		in := readiness.CreateInput{Name: b.Name, ConnectorType: b.ConnectorType, System: b.System, Role: b.Role, Config: b.Config}
-		if err := rd.CheckCreate(in); err != nil {
-			return err
-		}
 		cs, err := e.tx.Connections()
 		if err != nil {
 			return err
@@ -474,11 +543,6 @@ func planConnection(e *env, id string, b *ConnectionBody) error {
 		return notFound("connection")
 	} else if err != nil {
 		return err
-	}
-	if hasConfig {
-		if err := rd.CheckPatch(e.tx, id, b.Config, e.now); err != nil {
-			return err
-		}
 	}
 	if cred != nil {
 		return rd.CheckCredential(e.tx, rd.TemplateIDOf(conn.ConnectorType), *cred)
@@ -752,24 +816,13 @@ func targetNote(origin, fp, change string) string {
 	return n + ")"
 }
 
-// endpointNote lists the endpoint settings a connection config sets (config holds no secret), so the approver sees where a
-// credential would be sent.
-func endpointNote(cfg json.RawMessage) string {
-	var m map[string]any
-	if json.Unmarshal(cfg, &m) != nil {
-		return ""
+// endpointNote lists the endpoints a connection's resulting config names (it holds no secret), so the approver sees where a
+// credential would be sent; an empty list says so.
+func endpointNote(eps []string) string {
+	if len(eps) == 0 {
+		return "; endpoint: none named in the config (the connector type's default applies)"
 	}
-	var parts []string
-	for _, k := range []string{"base_url", "org_url", "host", "domain", "tenant_host", "url", "endpoint"} {
-		if v, ok := m[k].(string); ok && v != "" {
-			parts = append(parts, k+"="+v)
-		}
-	}
-	slices.Sort(parts)
-	if len(parts) == 0 {
-		return ""
-	}
-	return "; endpoint " + strings.Join(parts, ", ")
+	return "; endpoints " + strings.Join(eps, ", ")
 }
 
 func summarizeSecretKind(id string, body any) (string, bool) {
@@ -790,10 +843,10 @@ func summarizeSecretKind(id string, body any) (string, bool) {
 		}
 		if id == "" {
 			return fmt.Sprintf("create connection %q (%s, as a draft: it still needs validation and a separate activation; credential %s)",
-				b.Name, b.ConnectorType, cred+endpointNote(b.Config)), true
+				b.Name, b.ConnectorType, cred+endpointNote(b.Endpoints)), true
 		}
 		return fmt.Sprintf("change connection %s (config %t, credential %s; activation stays a separate step)", id,
-			len(b.Config) > 0 && string(b.Config) != "null", cred+endpointNote(b.Config)), true
+			len(b.Config) > 0 && string(b.Config) != "null", cred+endpointNote(b.Endpoints)), true
 	case *AlertChannelBody:
 		return fmt.Sprintf("%s (%s%s, signing secret %s)", verb("alert channel", b.Name), b.Kind, targetNote(b.TargetOrigin, b.TargetFP, b.TargetChange), secretNote(b.SigningSecret)), true
 	case *SiemSinkBody:
