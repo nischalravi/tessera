@@ -9,9 +9,10 @@ CREATE TABLE admin_change_target_checks (
   checked_by TEXT NOT NULL CHECK (length(checked_by) BETWEEN 1 AND 64),
   checked_at TEXT NOT NULL,
   fp TEXT NOT NULL CHECK (length(fp) BETWEEN 1 AND 64),
+  sealed_fp TEXT NOT NULL CHECK (length(sealed_fp) BETWEEN 1 AND 64),
   matched INTEGER NOT NULL CHECK (matched IN (0, 1)),
   PRIMARY KEY (tenant_id, id),
   FOREIGN KEY (tenant_id, change_id) REFERENCES admin_change_requests (tenant_id, id)
 );
-CREATE INDEX admin_change_target_checks_change ON admin_change_target_checks (tenant_id, change_id);
+CREATE INDEX admin_change_target_checks_value ON admin_change_target_checks (tenant_id, sealed_fp, checked_at);
 CREATE INDEX admin_change_target_checks_who ON admin_change_target_checks (tenant_id, checked_by, checked_at);

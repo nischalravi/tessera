@@ -460,7 +460,8 @@ func (s *Service) SubmitProposal(ctx context.Context, p *auth.Principal, kind, i
 	if err := refuseDerivedKeys(body); err != nil {
 		return nil, err
 	}
-	clean, secrets, err := s.splitProposalSecrets(ctx, p, kind, id, body)
+	req := uuid.New() // the request's id: the fingerprint of a sealed URL is bound to it
+	clean, secrets, err := s.splitProposalSecrets(ctx, p, req, kind, id, body)
 	if err != nil {
 		return nil, err
 	}
@@ -468,7 +469,7 @@ func (s *Service) SubmitProposal(ctx context.Context, p *auth.Principal, kind, i
 	if err != nil {
 		return nil, err
 	}
-	return s.submit(ctx, p, SubmitInput{Type: TypeConfigProposal, Payload: payload, Secrets: secrets}, p.ClientID)
+	return s.submit(ctx, p, SubmitInput{Type: TypeConfigProposal, Payload: payload, Secrets: secrets, requestID: req}, p.ClientID)
 }
 
 // ---------------------------------------------------------------- config.proposal

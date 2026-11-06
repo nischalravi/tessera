@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 func TestProposalsAPI_CheckTarget(t *testing.T) {
 	e := newOAuthEnv(t)
 	tenant := e.f.A
+	e.srv.cfg.Alerts = &alerts.Service{DB: e.f.DB, Sealer: e.sealer, Mail: alerts.LogMailer{}} // so a channel can be created directly
 	login := func(email string, role auth.Role) authtest.Login {
 		return signIn(t, e.f.DB, tenant.ID, authtest.User{Email: email, Roles: []auth.Role{role}}, authtest.Phr, storetest.Now)
 	}
@@ -33,8 +35,8 @@ func TestProposalsAPI_CheckTarget(t *testing.T) {
 	const guess = "https://hooks.example.com/services/PLAINTEXT-guess-path"
 	rec := e.call(tok, "POST", "/api/proposals/alert-channels", `{"name":"soc","kind":"webhook","target":"`+target+`","signing_secret":"PLAINTEXT-signing-secret-1"}`)
 	got := body(rec)
-	cid, hash, fp := asString(got["change_id"]), asString(got["payload_hash"]), asString(got["target_fingerprint"])
-	if rec.Code != 202 || fp == "" {
+	cid, hash := asString(got["change_id"]), asString(got["payload_hash"])
+	if rec.Code != 202 || got["target_fingerprint"] != nil {
 		t.Fatalf("proposal: %d %s", rec.Code, rec.Body)
 	}
 	path := "/api/admin/change-requests/" + cid + "/check-target"
@@ -65,7 +67,7 @@ func TestProposalsAPI_CheckTarget(t *testing.T) {
 	if code, _, _ := check(a2, "not a url"); code != 422 {
 		t.Errorf("a malformed URL: %d", code)
 	}
-	for i := 0; i < admin.MaxTargetChecksPerRequest-2; i++ {
+	for i := 0; i < admin.MaxTargetChecksPerValue-2; i++ {
 		check(a2, guess)
 	}
 	if code, v, _ := check(a2, target); code != 429 || v["error"] != admin.ReasonTargetCheckLocked {
@@ -77,13 +79,27 @@ func TestProposalsAPI_CheckTarget(t *testing.T) {
 		}
 	}
 
-	// the fingerprint on the live channel is the one the approver compared
+	// the reviewer's attack (#889 H1): creating channels with candidate URLs and comparing the fingerprint with the pending
+	// proposal's target_fp. No response carries a fingerprint any more, and the request's own value is bound to its id
+	var pendingFP string
+	if r := serve(e.h, authed(a2, "GET", "/api/admin/change-requests/"+cid, "")); r.Code != 200 {
+		t.Fatalf("view: %d %s", r.Code, r.Body)
+	} else {
+		pl, _ := body(r)["payload"].(map[string]any)
+		inner, _ := pl["body"].(map[string]any)
+		pendingFP = asString(inner["target_fp"])
+		if pendingFP == "" || body(r)["target_change"] != "new" {
+			t.Errorf("the approver's view: fp %q, target_change %v", pendingFP, body(r)["target_change"])
+		}
+	}
+	r := serve(e.h, authed(a2, "POST", "/api/alerts/channels", `{"name":"scratch","kind":"webhook","target":"`+target+`","min_severity":"high"}`))
+	if r.Code != 201 || strings.Contains(r.Body.String(), "fingerprint") || strings.Contains(r.Body.String(), pendingFP) {
+		t.Errorf("a channel created with the sealed URL shows a fingerprint: %d %s", r.Code, r.Body.String())
+	}
 	if r := serve(e.h, authed(a2, "POST", "/api/admin/change-requests/"+cid+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, hash))); r.Code != 200 {
 		t.Fatalf("approve: %d %s", r.Code, r.Body)
 	}
-	r := serve(e.h, authed(a2, "GET", "/api/alerts/channels", ""))
-	if !strings.Contains(r.Body.String(), `"target_fingerprint":"`+fp+`"`) || !strings.Contains(r.Body.String(), `"target_origin":"https://hooks.example.com:443"`) ||
-		strings.Contains(r.Body.String(), "PLAINTEXT-sealed") {
+	if r := serve(e.h, authed(a2, "GET", "/api/alerts/channels", "")); strings.Contains(r.Body.String(), "fingerprint") || strings.Contains(r.Body.String(), pendingFP) {
 		t.Errorf("channel list: %s", r.Body)
 	}
 	rec = e.call(tok, "POST", "/api/proposals/siem-sinks", `{"name":"splunk","kind":"webhook","format":"json","flavor":"hec","target":"https://splunk.example.com:8088/collector","token":"PLAINTEXT-hec-token-0001"}`)
@@ -95,7 +111,7 @@ func TestProposalsAPI_CheckTarget(t *testing.T) {
 		t.Fatalf("approve sink: %d %s", r.Code, r.Body)
 	}
 	r = serve(e.h, authed(a2, "GET", "/api/siem/sinks", ""))
-	if !strings.Contains(r.Body.String(), `"target_fingerprint":"`+asString(sink["target_fingerprint"])+`"`) || strings.Contains(r.Body.String(), "PLAINTEXT") {
+	if strings.Contains(r.Body.String(), "fingerprint") || !strings.Contains(r.Body.String(), `"target_origin":"https://splunk.example.com:8088"`) || strings.Contains(r.Body.String(), "PLAINTEXT") {
 		t.Errorf("sink list: %s", r.Body)
 	}
 }

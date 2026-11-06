@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"encoding/json"
+	"github.com/google/uuid"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -32,7 +33,7 @@ func TestSplitProposalSecrets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sl, _ := seal.New(seal.RandomBytes(32))
 			svc := &Service{Sealer: sl}
-			clean, secrets, err := svc.splitProposalSecrets(context.Background(), &auth.Principal{TenantID: tenancy.MustParse("00000000-0000-4000-8000-0000000000c1")}, tc.kind, "", json.RawMessage(tc.body))
+			clean, secrets, err := svc.splitProposalSecrets(context.Background(), &auth.Principal{TenantID: tenancy.MustParse("00000000-0000-4000-8000-0000000000c1")}, uuid.New(), tc.kind, "", json.RawMessage(tc.body))
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, want error %t", err, tc.wantErr)
 			}

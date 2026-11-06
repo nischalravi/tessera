@@ -150,6 +150,8 @@ type env struct {
 	// into memory from the sealed blob (openSecrets) or from the submit body, handed to the domain code and never stored,
 	// logged or returned.
 	secrets map[string]string
+	// change is the id of the request being filed, approved or applied: the fingerprint of a sealed URL is bound to it.
+	change uuid.UUID
 }
 
 func (s *Service) env(tx *store.TenantTx, now time.Time, by uuid.UUID) *env {
@@ -314,6 +316,9 @@ type SubmitInput struct {
 	// Secrets are the secret fields of a config.proposal (path to plaintext), taken out of its body by SubmitProposal; they
 	// are sealed with the request and are never part of the payload or its hash.
 	Secrets map[string]string
+	// requestID is the id the request is filed under, when the caller needed it before filing (a proposal's URL
+	// fingerprint is bound to it); zero for a fresh one.
+	requestID uuid.UUID
 }
 
 const maxSecretBytes = 4096
@@ -381,7 +386,11 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 			requester = *p.UserID
 		}
 		e := s.env(tx, now, requester)
-		e.secrets = in.Secrets
+		id := in.requestID
+		if id == uuid.Nil {
+			id = uuid.New()
+		}
+		e.secrets, e.change = in.Secrets, id
 		pl, err := typ.plan(e, v)
 		if err != nil {
 			return err
@@ -395,7 +404,6 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 				"tenant_admin is allowed until it has two, and %s needs an operator co-sign through the admin CLI",
 				bootstrapAdmins, typ.name)
 		}
-		id := uuid.New()
 		var sealed []byte
 		switch {
 		case len(in.Secrets) > 0:

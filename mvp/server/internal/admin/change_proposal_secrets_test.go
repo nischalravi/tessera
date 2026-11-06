@@ -422,11 +422,11 @@ func TestProposalSecrets_ApproverSeesFingerprintNotURL(t *testing.T) {
 		return ch, summary(ch.ID)
 	}
 	ch, sum := file("", `{"name":"soc","kind":"webhook","target":"`+hookURL+`","signing_secret":"`+hookSecret+`"}`)
-	fp, err := admin.TargetFingerprint(h.sealer, tenantID, hookURL)
+	fp, err := admin.TargetFingerprint(h.sealer, tenantID, ch.ID, hookURL)
 	if err != nil || len(fp) != 16 {
 		t.Fatalf("fingerprint %q, %v", fp, err)
 	}
-	for _, want := range []string{"https://hooks.example.com:443", "fingerprint " + fp} {
+	for _, want := range []string{"https://hooks.example.com:443", "Check this URL"} {
 		if !strings.Contains(sum, want) {
 			t.Errorf("summary %q lacks %q", sum, want)
 		}
@@ -438,11 +438,22 @@ func TestProposalSecrets_ApproverSeesFingerprintNotURL(t *testing.T) {
 	}
 	// the fingerprint is keyed and bound to the tenant: another KEK or tenant gives another one
 	other, _ := seal.New(seal.RandomBytes(32))
-	if f2, _ := admin.TargetFingerprint(other, tenantID, hookURL); f2 == fp {
+	if f2, _ := admin.TargetFingerprint(other, tenantID, ch.ID, hookURL); f2 == fp {
 		t.Error("the fingerprint does not depend on the key")
 	}
-	if f3, _ := admin.TargetFingerprint(h.sealer, tenancy.MustParse("00000000-0000-4000-8000-0000000000c2"), hookURL); f3 == fp {
+	if f3, _ := admin.TargetFingerprint(h.sealer, tenancy.MustParse("00000000-0000-4000-8000-0000000000c2"), ch.ID, hookURL); f3 == fp {
 		t.Error("the fingerprint does not depend on the tenant")
+	}
+	// and to the request: the same URL in another request gives another value, so a fingerprint compares only through
+	// its own request's check-target (#886)
+	if f4, _ := admin.TargetFingerprint(h.sealer, tenantID, uuid.New(), hookURL); f4 == fp {
+		t.Error("the fingerprint does not depend on the request")
+	}
+	if ch2, err := h.svc.SubmitProposal(h.ctx, machine, admin.KindAlertChannel, "", json.RawMessage(
+		`{"name":"soc2","kind":"webhook","target":"`+hookURL+`","signing_secret":"`+hookSecret+`"}`)); err != nil {
+		t.Fatal(err)
+	} else if _, fp2 := admin.ProposalTarget(h.change(ch2.ID)); fp2 == fp {
+		t.Error("the same URL filed twice shows the same fingerprint")
 	}
 	if o, p := admin.ProposalTarget(h.change(ch.ID)); o != "https://hooks.example.com:443" || p != fp {
 		t.Errorf("ProposalTarget = %q %q", o, p)

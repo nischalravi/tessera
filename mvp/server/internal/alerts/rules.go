@@ -81,6 +81,17 @@ var Rules = []*Rule{
 		},
 	},
 	{
+		ID: "approver_check_locked", Name: "URL check locked on a proposal", Kind: "event", Severity: "high", Threshold: 1, Window: time.Hour,
+		Description: "An approver's \"check this URL\" on a proposal's sealed URL used up its tries and was locked (#886). Someone may be guessing the URL, or burning the tries to stop others checking it.",
+		Match: func(e *store.AuditEvent) (Hit, bool) {
+			if e.Action != "admin.change.target_check_refused" || str(detailOf(e), "reason") != "target_check_locked" {
+				return Hit{}, false
+			}
+			key := orStr(str(detailOf(e), "change_id"), "request")
+			return Hit{Key: key, Title: "URL check locked on change request " + key}, true
+		},
+	},
+	{
 		ID: "admin_role_granted", Name: "New administrator", Kind: "event", Severity: "high", Threshold: 1, Window: time.Hour,
 		Description: "Someone was given an admin role (tenant_admin, policy_admin or break_glass).",
 		Match: func(e *store.AuditEvent) (Hit, bool) {

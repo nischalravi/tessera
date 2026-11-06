@@ -1261,7 +1261,7 @@ func (c ConnConfig) Endpoints() []string {
 	add("cloud", c.Cloud)
 	for k, v := range c.Settings {
 		// the port is part of where the credential goes: a host with another port is another service
-		if strings.Contains(k, "host") || strings.Contains(k, "url") || strings.Contains(k, "endpoint") || k == "port" {
+		if strings.Contains(k, "host") || strings.Contains(k, "url") || strings.Contains(k, "endpoint") || strings.HasSuffix(k, "port") {
 			add("settings."+k, v)
 		}
 	}
