@@ -56,6 +56,9 @@ type Executor struct {
 	// (modules.go). A sync job that names another module is answered
 	// "unsupported" before anything is dialed.
 	Modules map[string]SyncerFactory
+	// Probers are the probe-job factories of the registered modules that have
+	// one, by module name. A probe job that names a module uses its factory.
+	Probers map[string]ProberFactory
 	// AllowPush is the local allowlist of HTTPS provisioning targets
 	// (allowed_push_targets of the agent's own configuration file; ports 443
 	// and 8443). Empty means no push target at all.
@@ -91,6 +94,13 @@ func (e *Executor) Execute(ctx context.Context, j Job) (res Result) {
 	if err := ValidateJob(j); err != nil {
 		return fail(CodeBadRequest, err.Error())
 	}
+	// A job that names a module runs that module's prober or nothing: an agent
+	// build without it answers "unsupported" before anything is dialed, and
+	// never falls back to the LDAP prober.
+	newProber, ok := e.proberFor(j.Module)
+	if !ok {
+		return fail(CodeUnsupported, "this agent build cannot run that module")
+	}
 	// 2. The local allowlist, before anything is resolved or dialed. A target
 	// that is not listed fails here whatever it is (public ones included).
 	if !safedial.Listed(e.Allow, j.Target.Host, j.Target.Port) {
@@ -118,7 +128,7 @@ func (e *Executor) Execute(ctx context.Context, j Job) (res Result) {
 	if err != nil {
 		return fail(CodeFailed, "dialer: "+err.Error())
 	}
-	p, err := e.New(ProberSpec{Target: j.Target, Config: j.Config, Password: pw, RootCAs: roots, Dialer: d})
+	p, err := newProber(ProberSpec{Target: j.Target, Config: j.Config, Password: pw, RootCAs: roots, Dialer: d})
 	if err != nil {
 		return fail(CodeBadRequest, err.Error())
 	}

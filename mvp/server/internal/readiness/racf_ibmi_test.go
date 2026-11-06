@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -138,8 +139,10 @@ func TestTemplates_RACFAndIBMi(t *testing.T) {
 			t.Errorf("racf live check %s", c)
 		}
 	}
-	if got := live(ibmi); len(got) != 0 {
-		t.Errorf("ibmi has live checks %v before its transport exists", got)
+	got := live(ibmi)
+	slices.Sort(got)
+	if want := []string{"bind", "endpoint_reachable", "sample_search", "tls_chain", "tls_handshake"}; !slices.Equal(got, want) {
+		t.Errorf("ibmi live checks %v, want %v", got, want)
 	}
 }
 

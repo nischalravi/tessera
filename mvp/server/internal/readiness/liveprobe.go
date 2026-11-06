@@ -108,7 +108,7 @@ func (s *Service) bindAgent(c *store.TenantTx, b *Bundle) error {
 // liveCapable reports whether a revision's checks run against the real
 // system (a real LDAP connection) rather than a simulation.
 func liveCapable(b *Bundle) bool {
-	return !b.Simulated() && (b.Template.ID == "ldap" || b.Template.ID == "racf")
+	return !b.Simulated() && (b.Template.ID == "ldap" || b.Template.ID == "racf" || b.Template.ID == "ibmi")
 }
 
 // liveProber returns the real prober for a non-demo revision, or ok=false
@@ -131,13 +131,19 @@ func (o LiveOptions) liveProber(b *Bundle, now time.Time) (p connectors.Prober, 
 		if o.Agents == nil || b.agentID == "" || cfg.BindDN == "" {
 			return nil, true, errors.New("readiness: no Directory Agent, or no bind DN, for the LDAP connection")
 		}
-		rp, err := agent.NewRemoteProber(o.Agents, b.Conn.TenantID, b.agentID, agent.Target{Host: cfg.Host, Port: cfg.Port, TLSMode: cfg.TLSMode},
+		// An IBM i revision names its module, so the agent runs the Mapepire
+		// prober; every other type is probed over LDAP (no module).
+		module := ""
+		if b.Template.ID == "ibmi" {
+			module = agent.ModuleIBMi
+		}
+		rp, err := agent.NewRemoteModuleProber(o.Agents, b.Conn.TenantID, b.agentID, module, agent.Target{Host: cfg.Host, Port: cfg.Port, TLSMode: cfg.TLSMode},
 			agent.ProbeConfig{BindDN: cfg.BindDN, CredName: b.agentCred, BaseDNs: cfg.BaseDNs, UserFilter: cfg.UserFilter,
 				CABundle: cfg.CABundle})
 		return rp, true, err
 	}
 	if b.Template.ID != "ldap" {
-		// RACF is read only through a Directory Agent: never a direct dial from
+		// RACF and IBM i are read only through a Directory Agent: never a direct dial from
 		// the server, whatever credential the revision holds.
 		return nil, true, errors.New("readiness: this connection is read only through a Directory Agent")
 	}

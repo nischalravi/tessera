@@ -1,9 +1,10 @@
 # IBM i user profiles and special authorities (issue #561), read by a Directory Agent module inside
 # the customer network. The agent reads QSYS2.USER_INFO through Mapepire (TLS WebSocket, port 8076; issue #612).
-# The items below stay attested: readiness live checks run as agent probe jobs, which carry no module and use the
-# LDAP prober, so none can run against Mapepire yet (a module-aware probe job is the follow-up). Read-only; no write-back.
+# Readiness live checks (reachability, TLS, sign-in, a read of QSYS2.USER_INFO) run as agent probe jobs that name the
+# "ibmi" module, so the agent runs the Mapepire prober (issue #888). The agent and profile items stay attested: Tessera
+# cannot see the agent's allowlist or the profile's authorities. Read-only; no write-back.
 template: ibmi
-version: 1.0.0
+version: 1.1.0
 extends: base@1
 display_name: IBM i (user profiles)
 connector_types: [ibmi]
@@ -41,10 +42,64 @@ items:
     level: required
     why: "A profile password sent in clear text can be captured on the network."
     verify:
-      - kind: attestation
+      - kind: live
+        check: tls_handshake
+        params: { min_version: "1.2" }
     remediation:
       hint: "Install Mapepire (TLS only, port 8076) with a certificate from your CA, and add that CA to the connection."
     config_fields: [host, port, tls_mode, ca_bundle]
+
+  - id: ibmi.tls.chain
+    title: The server certificate chains to a configured CA, the host name matches, and it is valid more than 30 days
+    category: transport
+    level: required
+    why: "Without certificate validation anyone on the path can impersonate Mapepire and capture the profile password."
+    verify:
+      - kind: live
+        check: tls_chain
+        params: { min_days_valid: 30 }
+    remediation:
+      hint: "Add the CA that issued the Mapepire certificate to the connection, and renew the certificate before it expires."
+    depends_on: [ibmi.tls]
+    config_fields: [host, port, tls_mode, ca_bundle]
+
+  - id: ibmi.reachable
+    title: The Mapepire port is reachable from the agent
+    category: access
+    level: required
+    why: "Baseline connectivity from the agent's network."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Check that Mapepire is started (port 8076), that the host and port are on the agent's allowed_targets, and the firewall."
+    config_fields: [host, port]
+
+  - id: ibmi.signin
+    title: The profile signs in and starts a read-only job
+    category: access
+    level: required
+    why: "Baseline credential check."
+    verify:
+      - kind: live
+        check: bind
+    remediation:
+      hint: "Check the profile name, that its password has not expired and the profile is not disabled, and that the agent's credential matches."
+    depends_on: [ibmi.tls.chain]
+    config_fields: [host, port, bind_dn, ca_bundle, credential]
+
+  - id: ibmi.read.userinfo
+    title: QSYS2.USER_INFO can be read
+    category: scope
+    level: required
+    why: "The profile needs the Db2 for i authority to select from the catalog view; without it a sync returns nothing."
+    verify:
+      - kind: live
+        check: sample_search
+    remediation:
+      hint: "Grant the profile the authority to select from QSYS2.USER_INFO (or the QIBM_DB_SECADM function usage)."
+    depends_on: [ibmi.signin]
+    config_fields: [bind_dn, credential]
 
   - id: ibmi.key.profile
     title: The profile name (USER_NAME) is the account key

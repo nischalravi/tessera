@@ -158,6 +158,13 @@ type Job struct {
 	Arg      string                  `json:"arg,omitempty"`
 	Sample   *connectors.SampleQuery `json:"sample,omitempty"`
 	Deadline time.Time               `json:"deadline"`
+	// Module names the plug-in whose prober runs the job (one of ModuleNames).
+	// Empty is the built-in LDAP prober, and is omitted from the wire form, so a
+	// job without a module is byte-for-byte what older servers and agents
+	// exchange. An agent built before this field refuses a job that carries it
+	// (it decodes with unknown fields disallowed), so a module job never runs
+	// as an LDAP probe by mistake.
+	Module string `json:"module,omitempty"`
 }
 
 // Result error codes. They map to the errors of package connectors.
@@ -262,6 +269,9 @@ func ValidateJob(j Job) error {
 	}
 	if j.ID == "" || len(j.ID) > 64 {
 		return errors.New("job id is required")
+	}
+	if j.Module != "" && !ValidModuleName(j.Module) {
+		return errors.New("module is not valid")
 	}
 	if err := validateTarget(j.Target, j.Config); err != nil {
 		return err
