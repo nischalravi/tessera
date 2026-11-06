@@ -73,7 +73,7 @@ func TestValidateConn_RACFAndIBMi(t *testing.T) {
 			t.Errorf("%s: no error on %s (got %v)", name, tc.field, got)
 		}
 	}
-	if DefaultConfig("racf", tmplOfID(t, "racf")).Port != 636 || DefaultConfig("ibmi", tmplOfID(t, "ibmi")).Port != 9471 {
+	if DefaultConfig("racf", tmplOfID(t, "racf")).Port != 636 || DefaultConfig("ibmi", tmplOfID(t, "ibmi")).Port != 8076 {
 		t.Error("default ports")
 	}
 }
@@ -225,4 +225,12 @@ func TestLive_IBMiThroughAgent(t *testing.T) {
 		}
 	}
 
+}
+
+// TestIBMiDefaultPortIsMapepire: the default port is the one the transport
+// speaks, and an explicitly configured port is still accepted.
+func TestIBMiDefaultPortIsMapepire(t *testing.T) {
+	if got := DefaultConfig("ibmi", tmplOfID(t, "ibmi")).Port; got != 8076 {
+		t.Errorf("default port %d", got)
+	}
 }

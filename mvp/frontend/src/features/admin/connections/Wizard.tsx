@@ -365,7 +365,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
           <div className="form-grid">
             {(ldapLike || tid === "ibmi") && <>
               {input("host", tid === "racf" ? "z/OS LDAP server" : tid === "ibmi" ? "IBM i system" : "Domain controller or server", "A host name or IP address such as ldap.example.com. Not the connection's name, and no ldaps:// or port.")}
-              {input("port", "Port", tid === "ibmi" ? "The TLS-protected host server port, 9471 by default." : "389 or 636, or a port from 1024 up such as 3890 (LLDAP) or 6360. Database and admin ports are refused.", { inputMode: "numeric" })}
+              {input("port", "Port", tid === "ibmi" ? "The Mapepire port (TLS), 8076 by default." : "389 or 636, or a port from 1024 up such as 3890 (LLDAP) or 6360. Database and admin ports are refused.", { inputMode: "numeric" })}
               <Field label="Transport security" hint="Empty: LDAPS on port 636, StartTLS on any other port. Plain LDAP (none) is for development only and can never be activated.">
                 <select className="input" value={v.tls_mode ?? ""} onChange={set("tls_mode")}>
                   <option value="">Automatic (from the port)</option>

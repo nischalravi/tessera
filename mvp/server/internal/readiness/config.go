@@ -587,7 +587,7 @@ func DefaultConfig(connectorType string, t *template.Resolved) ConnConfig {
 	case "ad", "ldap", "racf":
 		cfg.Port = 636
 	case "ibmi":
-		cfg.Port = 9471 // the TLS-protected IBM i host server (database)
+		cfg.Port = 8076 // Mapepire, the TLS WebSocket server the agent module speaks (ibmi.DefaultPort)
 	case "entra":
 		cfg.Cloud = "global"
 	case "google":

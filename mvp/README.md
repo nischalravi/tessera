@@ -657,7 +657,8 @@ agent (`agent:<agent id>/<name>`); a secret typed in Tessera or a vault referenc
   authority or class, since members hold the group's special authorities), each special authority a group (all
   eight are privileged) and the `*SECOFR` and `*SECADM` classes privileged groups. **Verified against an in-process
   fake Mapepire server only**: a real IBM i with Mapepire must confirm the message format, the column names and the
-  `access=read only` property. **Readiness live checks** (reachability, TLS handshake and chain, sign-in, a read of `QSYS2.USER_INFO`) run as agent
+  `access=read only` property. The connection's port defaults to 8076 (Mapepire); an explicit port is kept.
+  **Readiness live checks** (reachability, TLS handshake and chain, sign-in, a read of `QSYS2.USER_INFO`) run as agent
   probe jobs that name the module (`module` on the job; omitted for LDAP, so older servers and agents exchange the same
   bytes, and an older agent refuses a module job rather than run it as LDAP). The agent dispatches to the module's prober;
   an unknown or uncarried module is refused with fixed text before anything is dialed. The agent and profile-authority
