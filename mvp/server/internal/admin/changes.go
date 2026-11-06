@@ -40,6 +40,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/syncverify"
@@ -105,6 +106,9 @@ type Service struct {
 	// EffectivePolicies gives the policies the tenant is checked against now; the prediction check of policy.sync.apply
 	// reads the violations through it. Nil: violations are not compared (permissions still are).
 	EffectivePolicies func(tx *store.TenantTx) ([]*policy.Policy, error)
+	// Connections is the readiness service a connection proposal (issue #719) validates and applies through; nil: those
+	// proposals answer 503.
+	Connections *readiness.Service
 	// SyncObserve, when set, may change the state the prediction check of policy.sync.apply reads after the apply: the seam
 	// where a connector re-collect (or a test's fake target that drops a change) shows what the target holds.
 	SyncObserve func(after *syncverify.State)
@@ -142,6 +146,10 @@ type env struct {
 	tenant *store.Tenant
 	admins []*store.PlatformUser
 	loaded bool
+	// secrets are the plaintext secrets of the proposal being filed, approved or applied (path to value). They are read
+	// into memory from the sealed blob (openSecrets) or from the submit body, handed to the domain code and never stored,
+	// logged or returned.
+	secrets map[string]string
 }
 
 func (s *Service) env(tx *store.TenantTx, now time.Time, by uuid.UUID) *env {
@@ -303,6 +311,9 @@ type SubmitInput struct {
 	Type         string
 	Payload      json.RawMessage
 	ClientSecret string
+	// Secrets are the secret fields of a config.proposal (path to plaintext), taken out of its body by SubmitProposal; they
+	// are sealed with the request and are never part of the payload or its hash.
+	Secrets map[string]string
 }
 
 const maxSecretBytes = 4096
@@ -370,6 +381,7 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 			requester = *p.UserID
 		}
 		e := s.env(tx, now, requester)
+		e.secrets = in.Secrets
 		pl, err := typ.plan(e, v)
 		if err != nil {
 			return err
@@ -386,6 +398,13 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 		id := uuid.New()
 		var sealed []byte
 		switch {
+		case len(in.Secrets) > 0:
+			if typ.name != TypeConfigProposal {
+				return invalid("secrets are not part of a %s request", typ.name)
+			}
+			if sealed, err = e.sealSecrets(id, in.Secrets); err != nil {
+				return err
+			}
 		case typ.submitSecret != nil:
 			if sealed, err = typ.submitSecret(e, v, id, in.ClientSecret); err != nil {
 				return err
@@ -490,7 +509,12 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, id uuid.UUID, 
 			failure = err
 			return errApplierFailed
 		}
-		if _, err := typ.plan(s.env(tx, now, ch.RequestedBy), v); err != nil {
+		pe := s.env(tx, now, ch.RequestedBy)
+		if err := pe.openSecrets(ch); err != nil {
+			failure = err
+			return errApplierFailed
+		}
+		if _, err := typ.plan(pe, v); err != nil {
 			if ch.Type == TypePolicySyncApply && staleSyncErr(err) {
 				// the reviewed plan can never apply: end the request (and free its commit) instead of leaving it pending
 				failure = err
@@ -626,7 +650,12 @@ func (s *Service) apply(ctx context.Context, tenant tenancy.ID, id uuid.UUID, by
 			failure = err
 			return errApplierFailed
 		}
-		if err := typ.apply(s.env(tx, now, ch.RequestedBy), ch, v); err != nil {
+		ae := s.env(tx, now, ch.RequestedBy)
+		if err := ae.openSecrets(ch); err != nil {
+			failure = err
+			return errApplierFailed
+		}
+		if err := typ.apply(ae, ch, v); err != nil {
 			failure = err
 			return errApplierFailed
 		}

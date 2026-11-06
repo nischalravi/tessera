@@ -56,8 +56,17 @@ never holds an admin role and never passes a step-up, so it cannot approve or ap
   returns once the change is applied. On a refusal, a withdrawal, an expiry, a failed apply or a timeout, the apply fails with the change id and
   the URL a person opens; a timed-out proposal stays open, and applying again files a new one. Plan stays read-only.
 * Proposable today: alert rules, catalog items, business roles, SoD rulesets, birthright rule conditions, mitigating controls and approval policies (create and update; the server has no proposal for retire or
-  delete, so destroy only removes the resource from state and warns). Connectors, alert channels, SIEM sinks, transport and group folders
-  stay out: they carry secrets, and a proposal would have to hold sealed secrets (the next step, with write-only attributes on the Terraform side).
+  delete, so destroy only removes the resource from state and warns), and, with secrets (below), connections, alert channels and SIEM sinks.
+  Transport import and export (`/api/config/*`) and group folders stay out: a transport bundle carries no secret (the server refuses one that does), so
+  there is nothing to seal, but it is a signed document of up to 1 MiB that a proposal body (256 KiB) cannot hold, and its export needs the admin scope.
+* **Secrets** (connections, alert channels, SIEM sinks; server issue #719). A secret argument (`secret`, `signing_secret`, `token`) is `Sensitive` and
+  **write-only** (Terraform 1.11 or later; an older Terraform is refused): it is never in the plan or the state. The server seals it at submit,
+  apart from the proposal and bound to the tenant, the proposal and the field, opens it only to apply it after a person approves, never returns or
+  logs it, and deletes it when the proposal ends. Because the state holds no secret, Terraform cannot see that it changed: the companion
+  `secret_version` / `signing_secret_version` / `token_version` argument signals it. The secret is sent on create, and on an update only when that
+  version differs from the one in the state (otherwise the server keeps the secret it has); change the secret and its version together to
+  rotate. A webhook's URL often carries a token, so `target` is `Sensitive` and sealed by the server too, but it is needed to plan and so is in the
+  state: protect the state. A proposal can replace a secret and can never read one. Activating a connection stays a separate step by a person.
 * The new resources are imported by their server id (`terraform import tessera_approval_policy.x <workflow id>`). JSON-valued attributes (`condition_json`,
   `steps_json`) keep your spelling when the server holds the same document.
 
@@ -77,13 +86,16 @@ In:
 | resource | `tessera_birthright_rule` | `/api/v1/proposals/birthright-rules` (the attribute condition a role's birthright rule names; read `/api/v1/abac/policies/{id}` with `tessera:read`; import by id) |
 | resource | `tessera_mitigating_control` | `/api/v1/proposals/mitigating-controls` (read `/api/v1/sod/controls/{id}` with `tessera:read`; import by id) |
 | resource | `tessera_approval_policy` | `/api/v1/proposals/approval-policies` (a workflow and its targets; read `/api/v1/workflows/{id}` with `tessera:read`; import by id) |
+| resource | `tessera_connection` | `/api/v1/proposals/connections` (a connection in draft with its credential; read `/api/v1/connections/{id}` with `tessera:read` and the auditor role; import by id; write-only `secret`) |
+| resource | `tessera_alert_channel` | `/api/v1/proposals/alert-channels` (email, or a webhook with a write-only `signing_secret`; read needs the admin scope, otherwise the state stays as applied; import by id) |
+| resource | `tessera_siem_sink` | `/api/v1/proposals/siem-sinks` (HEC, JSON webhook, syslog, S3; write-only `token`; read with `tessera:audit`; import by id) |
 | data source | `tessera_roles` | `/api/v1/roles` (`tessera:read`; the server grants `roles.read` to that scope since issue #719) |
 
 `tessera_review_schedule` supports import (by UUID), plan-time
 validation (ranges, enums, `reminder_days < duration_days`, `escalate` needs a reviewer, RFC 3339 times) and server validation errors
 surface unchanged. The API has no delete route and no read-one route: destroy disables the schedule, and read lists and filters.
-No resource here carries a secret, so there is no write-only attribute yet; the provider's own `private_key` is `Sensitive` and is
-never put in a diagnostic or log. A resource with a secret (a connector credential) must use a write-only attribute (Terraform 1.11+).
+The provider's own `private_key` is `Sensitive` and is never put in a diagnostic or log; the secrets of the three resources above are
+write-only (see Secrets).
 
 ## Build and test
 

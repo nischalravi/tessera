@@ -449,6 +449,12 @@ POST   /api/proposals/mitigating-controls            config.propose  -  # issue 
 POST   /api/proposals/mitigating-controls/{control_id} config.propose -  # issue #719
 POST   /api/proposals/approval-policies              config.propose  -  # issue #719
 POST   /api/proposals/approval-policies/{workflow_id} config.propose  -  # issue #719
+POST   /api/proposals/connections                    config.propose  -  # issue #719 (secrets sealed apart from the payload)
+POST   /api/proposals/connections/{connection_id}    config.propose  -  # issue #719
+POST   /api/proposals/alert-channels                 config.propose  -  # issue #719
+POST   /api/proposals/alert-channels/{channel_id}    config.propose  -  # issue #719
+POST   /api/proposals/siem-sinks                     config.propose  -  # issue #719
+POST   /api/proposals/siem-sinks/{sink_id}           config.propose  -  # issue #719
 GET    /api/proposals/{change_id}                    config.propose  -  # issue #721 (a client's own proposals only)
 POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106

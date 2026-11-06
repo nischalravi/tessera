@@ -17,8 +17,10 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/roles"
+	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/workflow"
@@ -57,10 +59,13 @@ const (
 	KindBirthrightRule    = "birthright_rule"
 	KindMitigatingControl = "mitigating_control"
 	KindApprovalPolicy    = "approval_policy"
+	// KindConnection, KindAlertChannel and KindSiemSink carry secrets, which are sealed apart from the payload
+	// (change_proposal_secrets.go, issue #719).
 )
 
 // ProposalKinds lists the kinds a machine client can propose.
-var ProposalKinds = []string{KindCatalogItem, KindRole, KindSoDRuleset, KindAlertRule, KindBirthrightRule, KindMitigatingControl, KindApprovalPolicy}
+var ProposalKinds = []string{KindCatalogItem, KindRole, KindSoDRuleset, KindAlertRule, KindBirthrightRule, KindMitigatingControl, KindApprovalPolicy,
+	KindConnection, KindAlertChannel, KindSiemSink}
 
 // maxProposalBody bounds a proposal's body: a role with many entitlements is a few KB.
 const maxProposalBody = 256 << 10
@@ -200,6 +205,12 @@ func decodeProposalBody(kind string, raw json.RawMessage) (any, error) {
 		return strictBody[MitigatingControlBody](raw)
 	case KindApprovalPolicy:
 		return strictBody[ApprovalPolicyBody](raw)
+	case KindConnection:
+		return strictBody[ConnectionBody](raw)
+	case KindAlertChannel:
+		return strictBody[AlertChannelBody](raw)
+	case KindSiemSink:
+		return strictBody[SiemSinkBody](raw)
 	}
 	return nil, invalid("kind %q: want one of %s", kind, strings.Join(ProposalKinds, ", "))
 }
@@ -216,7 +227,7 @@ func checkProposalID(kind, id string) error {
 		if id == "" || len(id) > 64 {
 			return invalid("id is the id of the alert rule")
 		}
-	case KindRole, KindSoDRuleset, KindBirthrightRule, KindMitigatingControl, KindApprovalPolicy:
+	case KindRole, KindSoDRuleset, KindBirthrightRule, KindMitigatingControl, KindApprovalPolicy, KindConnection, KindAlertChannel, KindSiemSink:
 		if len(id) > 64 {
 			return invalid("id is at most 64 characters")
 		}
@@ -393,11 +404,16 @@ func (s *Service) SubmitProposal(ctx context.Context, p *auth.Principal, kind, i
 	if d := auth.Check(p, auth.PermConfigPropose, nil, s.now()); d != nil {
 		return nil, denied(d)
 	}
-	payload, err := ProposalPayload(kind, id, body)
+	// the secret fields leave the body here: the payload and its hash carry the marker "set", the plaintext is sealed
+	clean, secrets, err := splitProposalSecrets(kind, body)
 	if err != nil {
 		return nil, err
 	}
-	return s.submit(ctx, p, SubmitInput{Type: TypeConfigProposal, Payload: payload}, p.ClientID)
+	payload, err := ProposalPayload(kind, id, clean)
+	if err != nil {
+		return nil, err
+	}
+	return s.submit(ctx, p, SubmitInput{Type: TypeConfigProposal, Payload: payload, Secrets: secrets}, p.ClientID)
 }
 
 // ---------------------------------------------------------------- config.proposal
@@ -473,6 +489,18 @@ func planProposal(e *env, v *proposalPayload) (plan, error) {
 		}
 	case *ApprovalPolicyBody:
 		if err := planApprovalPolicy(e, v.ID, b); err != nil {
+			return plan{}, proposalErr(err)
+		}
+	case *ConnectionBody:
+		if err := planConnection(e, v.ID, b); err != nil {
+			return plan{}, proposalErr(err)
+		}
+	case *AlertChannelBody:
+		if err := planAlertChannel(e, v.ID, b); err != nil {
+			return plan{}, proposalErr(err)
+		}
+	case *SiemSinkBody:
+		if err := planSiemSink(e, v.ID, b); err != nil {
 			return plan{}, proposalErr(err)
 		}
 	}
@@ -569,6 +597,14 @@ func proposalErr(err error) error {
 	if errors.As(err, &se) {
 		return newErr(se.Status, se.Code, "%s", se.Msg)
 	}
+	var rd *readiness.Error
+	if errors.As(err, &rd) {
+		return newErr(rd.Status, rd.Code, "%s", rd.Msg)
+	}
+	var sm *siem.Error
+	if errors.As(err, &sm) {
+		return newErr(sm.Status, sm.Code, "%s", sm.Msg)
+	}
 	return err
 }
 
@@ -634,6 +670,12 @@ func applyProposal(e *env, ch *store.AdminChange, v *proposalPayload) error {
 		return proposalErr(err)
 	case *ApprovalPolicyBody:
 		return applyApprovalPolicy(e, v.ID, b, display)
+	case *ConnectionBody:
+		return proposalErr(applyConnection(e, v.ID, b, display))
+	case *AlertChannelBody:
+		return proposalErr(applyAlertChannel(e, v.ID, b, by, display))
+	case *SiemSinkBody:
+		return proposalErr(applySiemSink(e, v.ID, b, by, display))
 	}
 	return invalid("kind %q", v.Kind)
 }
@@ -723,6 +765,9 @@ func summarizeProposal(e *env, v *proposalPayload) string {
 			what = fmt.Sprintf("change approval policy %s to %q (%d steps, %s)", v.ID, b.Name, len(b.Steps), routed)
 		}
 	}
+	if w, ok := summarizeSecretKind(v.ID, body); ok {
+		what = w
+	}
 	return "Proposed by a machine client: " + what
 }
 
@@ -801,6 +846,9 @@ func ProposalResult(tx *store.TenantTx, ch *store.AdminChange) string {
 	body, err := decodeProposalBody(p.Kind, p.Body)
 	if err != nil {
 		return ""
+	}
+	if id := secretKindResult(tx, body); id != "" {
+		return id
 	}
 	switch b := body.(type) {
 	case *RoleBody:

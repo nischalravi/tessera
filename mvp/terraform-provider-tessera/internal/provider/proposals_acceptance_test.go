@@ -467,6 +467,154 @@ func TestAcc_Proposals(t *testing.T) {
 		importVerifies(t, res, st2)
 	})
 
+	// the resources that carry secrets (server issue #719): the secret is write-only, so it is in no plan, no state, no change
+	// request an admin reads and no log; a changed *_version sends a new one and an unchanged one leaves the server's alone
+	const (
+		connSecret = "PLAINTEXT-connector-secret-1"
+		hookSecret = "PLAINTEXT-signing-secret-0001"
+		hookURL    = "https://hooks.example.com/services/PLAINTEXT-url-token"
+		hecToken   = "PLAINTEXT-hec-token-1"
+	)
+	// approveHiding approves the next pending proposal after checking that nothing an admin can read holds a secret
+	approveHiding := func(t *testing.T, done <-chan applied, plaintexts ...string) applied {
+		t.Helper()
+		c := alice.pending("config.proposal", seen)
+		full := alice.must("GET", "/api/admin/change-requests/"+c["id"].(string), nil, 200)
+		for _, v := range []any{c, full} {
+			raw, _ := json.Marshal(v)
+			for _, pt := range plaintexts {
+				if strings.Contains(string(raw), pt) {
+					t.Fatalf("the change request shows %q: %s", pt, raw)
+				}
+			}
+		}
+		alice.approve(c)
+		r := within(t, done, 30*time.Second)
+		if len(r.diags) > 0 {
+			t.Fatalf("apply: %s", diagText(r.diags))
+		}
+		return r
+	}
+	notInState := func(t *testing.T, st tftypes.Value, plaintexts ...string) {
+		t.Helper()
+		for _, pt := range plaintexts {
+			if strings.Contains(st.String(), pt) {
+				t.Fatalf("the state holds %q: %s", pt, st)
+			}
+		}
+	}
+	t.Run("connection", func(t *testing.T) {
+		const res = "tessera_connection"
+		cfg := map[string]any{"name": "TF okta", "connector_type": "okta", "config_json": `{"org_url":"https://tf.okta.com"}`,
+			"secret": connSecret, "secret_version": "1"}
+		if d := p.validate(res, map[string]any{"name": "x", "connector_type": "okta", "secret": "s"}); !strings.Contains(diagText(d), "secret_version") {
+			t.Fatalf("a secret without its version: %q", diagText(d))
+		}
+		st := approveHiding(t, applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil)), connSecret).state
+		a := attrs(t, st)
+		notInState(t, st, connSecret)
+		if !uuidRE.MatchString(str(t, a["id"])) || !a["secret"].IsNull() || str(t, a["secret_version"]) != "1" || str(t, a["state"]) == "active" {
+			t.Fatalf("created connection: %v", st)
+		}
+		if again, d := p.read(res, st); len(d) > 0 || !again.Equal(st) {
+			t.Fatalf("refresh changed the state: %s\n%v\n%v", diagText(d), st, again)
+		}
+		// a change of config alone sends no credential; the same version keeps the server's secret
+		cfg["config_json"] = `{"org_url":"https://tf2.okta.com"}`
+		st2 := approveHiding(t, applyAsync(p, res, cfg, st), connSecret).state
+		notInState(t, st2, connSecret)
+		// a new version with a new secret rotates it; a new version with no secret is refused before anything is filed
+		cfg["secret"], cfg["secret_version"] = "PLAINTEXT-connector-secret-2", "2"
+		st3 := approveHiding(t, applyAsync(p, res, cfg, st2), "PLAINTEXT-connector-secret-2").state
+		notInState(t, st3, "PLAINTEXT-connector-secret-2")
+		if str(t, attrs(t, st3)["secret_version"]) != "2" {
+			t.Fatalf("rotated connection: %v", st3)
+		}
+		delete(cfg, "secret")
+		cfg["secret_version"] = "3"
+		if _, d := p.apply(res, cfg, st3); !strings.Contains(diagText(d), "Version changed without a secret") {
+			t.Fatalf("a new version without a secret: %q", diagText(d))
+		}
+		// the server's own refusals reach the plan: a metadata host is refused before anyone is asked
+		bad := map[string]any{"name": "TF bad", "connector_type": "okta", "config_json": `{"org_url":"https://169.254.169.254"}`}
+		if _, d := p.apply(res, bad, tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "invalid_config") {
+			t.Fatalf("a metadata host: %q", diagText(d))
+		}
+		imp, d := p.importState(res, str(t, a["id"]))
+		if len(d) > 0 {
+			t.Fatalf("import: %s", diagText(d))
+		}
+		if got, d := p.read(res, imp); len(d) > 0 || str(t, attrs(t, got)["name"]) != "TF okta" || str(t, attrs(t, got)["connector_type"]) != "okta" {
+			t.Fatalf("read after import: %v %s", got, diagText(d))
+		}
+	})
+	t.Run("alert channel", func(t *testing.T) {
+		const res = "tessera_alert_channel"
+		cfg := map[string]any{"name": "TF hook", "kind": "webhook", "target": hookURL, "signing_secret": hookSecret, "signing_secret_version": "1"}
+		if _, d := p.apply(res, map[string]any{"name": "TF nosecret", "kind": "webhook", "target": hookURL}, tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "needs its signing secret") {
+			t.Fatalf("a webhook without a secret: %q", diagText(d))
+		}
+		if _, d := p.apply(res, map[string]any{"name": "TF meta", "kind": "webhook", "target": "https://169.254.169.254/x", "signing_secret": hookSecret,
+			"signing_secret_version": "1"}, tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "metadata") {
+			t.Fatalf("a metadata target: %q", diagText(d))
+		}
+		st := approveHiding(t, applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil)), hookSecret, "PLAINTEXT-url-token").state
+		notInState(t, st, hookSecret)
+		a := attrs(t, st)
+		if !uuidRE.MatchString(str(t, a["id"])) || !a["signing_secret"].IsNull() || str(t, a["min_severity"]) != "high" {
+			t.Fatalf("created channel: %v", st)
+		}
+		cfg["enabled"] = false
+		st2 := approveHiding(t, applyAsync(p, res, cfg, st), hookSecret, "PLAINTEXT-url-token").state
+		if boolv(t, attrs(t, st2)["enabled"]) || str(t, attrs(t, st2)["id"]) != str(t, a["id"]) {
+			t.Fatalf("updated channel: %v", st2)
+		}
+		// an email channel carries no secret
+		mail := map[string]any{"name": "TF mail", "kind": "email", "target": "soc@larkspur.example", "min_severity": "critical"}
+		st3 := approveHiding(t, applyAsync(p, res, mail, tftypes.NewValue(p.resourceType(res), nil))).state
+		if str(t, attrs(t, st3)["min_severity"]) != "critical" {
+			t.Fatalf("email channel: %v", st3)
+		}
+		if d := p.destroy(res, st2); diagText(d) != "" || len(d) != 1 {
+			t.Fatalf("destroy should only warn: %v", d)
+		}
+	})
+	t.Run("siem sink", func(t *testing.T) {
+		const res = "tessera_siem_sink"
+		cfg := map[string]any{"name": "TF splunk", "kind": "webhook", "flavor": "hec", "target": "https://splunk.example.com:8088/services/collector",
+			"token": hecToken, "token_version": "1"}
+		if _, d := p.apply(res, map[string]any{"name": "TF notoken", "kind": "webhook", "flavor": "hec", "target": "https://splunk.example.com/x"},
+			tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "token_required") {
+			t.Fatalf("an HEC sink without its token: %q", diagText(d))
+		}
+		st := approveHiding(t, applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil)), hecToken).state
+		notInState(t, st, hecToken)
+		a := attrs(t, st)
+		if !uuidRE.MatchString(str(t, a["id"])) || !a["token"].IsNull() || str(t, a["format"]) != "json" {
+			t.Fatalf("created sink: %v", st)
+		}
+		// the same version keeps the token the server holds; an origin move without a new one is refused by the server
+		cfg["include_http"] = true
+		st2 := approveHiding(t, applyAsync(p, res, cfg, st), hecToken).state
+		if !boolv(t, attrs(t, st2)["include_http"]) {
+			t.Fatalf("updated sink: %v", st2)
+		}
+		cfg["target"] = "https://other.example.com:8088/services/collector"
+		if _, d := p.apply(res, cfg, st2); !strings.Contains(diagText(d), "credential_required") {
+			t.Fatalf("an origin move without a new token: %q", diagText(d))
+		}
+		cfg["token"], cfg["token_version"] = "PLAINTEXT-hec-token-2", "2"
+		st3 := approveHiding(t, applyAsync(p, res, cfg, st2), "PLAINTEXT-hec-token-2").state
+		notInState(t, st3, "PLAINTEXT-hec-token-2")
+		imp, d := p.importState(res, str(t, a["id"]))
+		if len(d) > 0 {
+			t.Fatalf("import: %s", diagText(d))
+		}
+		if _, d := p.read(res, imp); len(d) > 0 {
+			t.Fatalf("read after import: %s", diagText(d))
+		}
+	})
+
 	// 7. the server refuses a bad proposal before anyone is asked, and says why
 	bad := map[string]any{"rule_id": "no_such_rule", "enabled": true, "severity": "high", "threshold": 1, "window_minutes": 5}
 	if _, d := p.apply(ruleRes, bad, null); !strings.Contains(diagText(d), "rule_not_found") {

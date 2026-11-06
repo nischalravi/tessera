@@ -509,7 +509,8 @@ func New(cfg Config) *Server {
 		}
 	}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
-		Prod: cfg.Env == "prod", Log: cfg.Logger, PolicyMaxSteps: cfg.PolicyMaxSteps, EffectivePolicies: s.effectivePolicies}
+		Prod: cfg.Env == "prod", Log: cfg.Logger, PolicyMaxSteps: cfg.PolicyMaxSteps, EffectivePolicies: s.effectivePolicies,
+		Connections: cfg.Readiness}
 	if cfg.RPID != "" && cfg.PublicOrigin != "" {
 		// the ceremony runs on the public origin (and, in dev, the CORS origins)
 		origins := s.csrfOrigins()

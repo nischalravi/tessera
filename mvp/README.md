@@ -63,7 +63,12 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
   option (the UI, the API and `tessera admin add-client` refuse it); two admins grant it with a change request of type `api_client.propose.grant`
   (`POST /api/admin/change-requests`; one requests, a different one approves, both with a step-up). Then:
   `POST /api/proposals/catalog-items/{group_id}`, `/roles[/{role_id}]`, `/sod-rulesets[/{ruleset_id}]`, `/alert-rules/{rule_id}`, `/birthright-rules[/{policy_id}]` (the attribute condition a role's birthright rule names; body of `/api/abac/policies`), `/mitigating-controls[/{control_id}]` (`/api/sod/controls`) and `/approval-policies[/{workflow_id}]` (`/api/workflows`, with optional `targets` as in `/assignments`) take the body of
-  the matching write route and answer `202 {change_id, status, url, payload_hash}`; `GET /api/proposals/{change_id}` (the client's own proposals only)
+  the matching write route; `/connections[/{connection_id}]` (a connection in draft with its `credential` `{secret | reference}`, or with an id a config
+  patch and/or a new credential; never activated), `/alert-channels[/{channel_id}]` (webhooks bring their own `signing_secret`) and `/siem-sinks[/{sink_id}]`
+  carry secrets, which are sealed at submit under the KEK, bound to tenant, request and field, kept in `admin_change_requests.secret_enc` apart from the
+  payload (which holds the marker `"set"`), opened only to validate and apply (the same domain code and SSRF checks as the admin routes, run again at
+  approval), and deleted by every end of the request (reject, cancel, expiry, apply, failure). A field left out of an update keeps its value; no
+  response, audit event or log returns one. All of them answer `202 {change_id, status, url, payload_hash}`; `GET /api/proposals/{change_id}` (the client's own proposals only)
   returns the status (`pending_approval`, `applied`, `rejected`, `cancelled`, `expired`, `failed`), `failure` and `result_id`. A proposal is an ordinary
   `config.proposal` change request (two-person, no cooling-off, 72 hour window) filed in the name of the client's owner, so neither the client nor its owner
   can approve it; an admin approves it at `POST /api/admin/change-requests/{id}/approve` (`admin.change.approve`, fresh step-up, echoing the payload hash)

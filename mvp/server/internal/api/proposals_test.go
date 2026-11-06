@@ -484,3 +484,163 @@ func TestProposalsAPI_RolesReadScope(t *testing.T) {
 		t.Errorf("a propose-only token listing roles: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// TestProposalsAPI_SealedSecrets (issue #719): connections, alert channels and SIEM sinks carry secrets. The client files
+// them; a different admin approves with a step-up; the secret appears in no response, change request, audit event (the
+// http.request ones included) or log line, before or after the apply; and it is gone when a request is rejected.
+func TestProposalsAPI_SealedSecrets(t *testing.T) {
+	e := newOAuthEnv(t)
+	tenant := e.f.A
+	a2 := signIn(t, e.f.DB, tenant.ID, authtest.User{Email: "ben@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	b1 := signIn(t, e.f.DB, e.f.B.ID, authtest.User{Email: "bob@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	stale := signIn(t, e.f.DB, tenant.ID, authtest.User{Email: "old@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}},
+		authtest.Ctx{AAL: 2, Phr: true, AuthTime: storetest.Now.Add(-time.Hour)}, storetest.Now)
+	m := e.addMachine("tenant-a", []string{"viewer"}, []string{"tessera:read", "config.propose"}, true)
+	tok := e.machineToken(m, "tenant-a", "tessera:read config.propose")
+	noScope := e.addMachine("tenant-a", []string{"viewer"}, []string{"tessera:read", "tessera:write"}, true)
+	noTok := e.machineToken(noScope, "tenant-a", "tessera:read tessera:write")
+
+	const secret = "PLAINTEXT-s3cr3t-value-7"
+	hook := `{"name":"soc","kind":"webhook","target":"https://hooks.example.com/services/PLAINTEXT-s3cr3t-path","signing_secret":"` + secret + `-hook"}`
+	sink := `{"name":"splunk","kind":"webhook","format":"json","flavor":"hec","target":"https://splunk.example.com:8088/collector","token":"` + secret + `-hec"}`
+	conn := `{"name":"Okta prod","connector_type":"okta","config":{"org_url":"https://acme.okta.com"},"credential":{"secret":"` + secret + `-conn"}}`
+	paths := map[string]string{"/api/proposals/alert-channels": hook, "/api/proposals/siem-sinks": sink, "/api/proposals/connections": conn}
+
+	// a client without config.propose, and a person's session, file nothing
+	for path, payload := range paths {
+		if rec := e.call(noTok, "POST", path, payload); rec.Code != 403 {
+			t.Errorf("%s without config.propose: %d", path, rec.Code)
+		}
+		if rec := serve(e.h, authed(a2, "POST", path, payload)); rec.Code != 403 {
+			t.Errorf("%s by a person's session: %d", path, rec.Code)
+		}
+	}
+	// nothing leaks from the ledger, rows or responses at any point
+	var responses []string
+	check := func(stage string) {
+		t.Helper()
+		hay := append([]string{}, responses...)
+		for _, ev := range ledger(t, e.f.DB, tenant.ID) {
+			hay = append(hay, ev.Action, string(ev.Detail))
+		}
+		if err := e.f.DB.ReadTenant(context.Background(), tenant.ID, func(tx *store.TenantTx) error {
+			chs, err := tx.AdminChanges()
+			for _, c := range chs {
+				hay = append(hay, string(c.Payload), c.Failure)
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		for i, h := range hay {
+			if strings.Contains(h, "PLAINTEXT-s3cr3t") {
+				t.Fatalf("%s: the secret is in place %d: %.300s", stage, i, h)
+			}
+		}
+	}
+	keep := func(rec *httptest.ResponseRecorder) *httptest.ResponseRecorder {
+		responses = append(responses, rec.Body.String())
+		return rec
+	}
+	type filed struct{ cid, hash string }
+	files := map[string]filed{}
+	for path, payload := range paths {
+		rec := keep(e.call(tok, "POST", path, payload))
+		got := body(rec)
+		if rec.Code != 202 || got["status"] != "pending_approval" {
+			t.Fatalf("POST %s: %d %s", path, rec.Code, rec.Body)
+		}
+		files[path] = filed{asString(got["change_id"]), asString(got["payload_hash"])}
+	}
+	check("after filing")
+	for path, f := range files {
+		// the client reads its own proposal, and an admin the request: markers only
+		keep(e.call(tok, "GET", "/api/proposals/"+f.cid, ""))
+		rec := keep(serve(e.h, authed(a2, "GET", "/api/admin/change-requests/"+f.cid, "")))
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"set"`) {
+			t.Errorf("the request of %s: %d %s", path, rec.Code, rec.Body)
+		}
+		keep(serve(e.h, authed(a2, "GET", "/api/admin/change-requests", "")))
+		// the client cannot approve or apply; an approval needs a step-up and another tenant's admin sees nothing
+		for _, act := range []string{"approve", "apply"} {
+			if rec := e.call(tok, "POST", "/api/admin/change-requests/"+f.cid+"/"+act, fmt.Sprintf(`{"payload_hash":%q}`, f.hash)); rec.Code != 403 {
+				t.Errorf("the client %sing %s: %d", act, path, rec.Code)
+			}
+		}
+		if rec := serve(e.h, authed(stale, "POST", "/api/admin/change-requests/"+f.cid+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, f.hash))); rec.Code != 401 {
+			t.Errorf("approval without step-up on %s: %d", path, rec.Code)
+		}
+		if rec := serve(e.h, authed(b1, "POST", "/api/admin/change-requests/"+f.cid+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, f.hash))); rec.Code != 404 {
+			t.Errorf("another tenant approving %s: %d", path, rec.Code)
+		}
+	}
+	check("after refused approvals")
+	// nothing written yet
+	count := func() (ch, sk, cn int) {
+		if err := e.f.DB.ReadTenant(context.Background(), tenant.ID, func(tx *store.TenantTx) error {
+			cs, _ := tx.AlertChannels()
+			ks, _ := tx.SiemSinks()
+			ns, err := tx.Connections()
+			ch, sk, cn = len(cs), len(ks), len(ns)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	ch0, sk0, cn0 := count()
+	// one is rejected: its secret goes with it
+	rej := files["/api/proposals/connections"]
+	if rec := keep(serve(e.h, authed(a2, "POST", "/api/admin/change-requests/"+rej.cid+"/reject", `{}`))); rec.Code != 200 {
+		t.Fatalf("reject: %d %s", rec.Code, rec.Body)
+	}
+	if err := e.f.DB.ReadTenant(context.Background(), tenant.ID, func(tx *store.TenantTx) error {
+		id, err := uuid.Parse(rej.cid)
+		if err != nil {
+			return err
+		}
+		c, err := tx.AdminChange(id)
+		if len(c.SecretEnc) != 0 {
+			t.Errorf("a rejected request keeps %d sealed bytes", len(c.SecretEnc))
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/proposals/alert-channels", "/api/proposals/siem-sinks"} {
+		f := files[path]
+		if rec := keep(serve(e.h, authed(a2, "POST", "/api/admin/change-requests/"+f.cid+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, f.hash)))); rec.Code != 200 || body(rec)["status"] != "applied" {
+			t.Fatalf("approving %s: %d %s", path, rec.Code, rec.Body)
+		}
+		if rec := keep(e.call(tok, "GET", "/api/proposals/"+f.cid, "")); asString(body(rec)["result_id"]) == "" {
+			t.Errorf("no result id for %s: %s", path, rec.Body)
+		}
+	}
+	if ch, sk, cn := count(); ch != ch0+1 || sk != sk0+1 || cn != cn0 {
+		t.Errorf("rows after = %d %d %d, want %d %d %d", ch, sk, cn, ch0+1, sk0+1, cn0)
+	}
+	// the admin lists show targets redacted and the applied secrets as flags
+	for _, p := range []string{"/api/alerts/channels", "/api/siem/sinks"} {
+		if rec := keep(serve(e.h, authed(a2, "GET", p, ""))); rec.Code != 200 {
+			t.Errorf("GET %s: %d", p, rec.Code)
+		}
+	}
+	check("after the apply")
+	// the connection, filed again, is applied as a draft only
+	cid, hash := func() (string, string) {
+		rec := keep(e.call(tok, "POST", "/api/proposals/connections", conn))
+		return asString(body(rec)["change_id"]), asString(body(rec)["payload_hash"])
+	}()
+	if rec := keep(serve(e.h, authed(a2, "POST", "/api/admin/change-requests/"+cid+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, hash)))); rec.Code != 200 {
+		t.Fatalf("approving the connection: %d %s", rec.Code, rec.Body)
+	}
+	id := asString(body(keep(e.call(tok, "GET", "/api/proposals/"+cid, "")))["result_id"])
+	if rec := keep(serve(e.h, authed(a2, "GET", "/api/connections/"+id, ""))); rec.Code != 200 || strings.Contains(rec.Body.String(), `"state":"active"`) {
+		t.Errorf("the connection: %d %s", rec.Code, rec.Body)
+	}
+	check("after the connection")
+	// and the same proposals in another tenant: refused to a client of tenant A for tenant B's rows
+	if rec := e.call(tok, "POST", "/api/proposals/siem-sinks/"+uuid.NewString(), `{"name":"x"}`); rec.Code != 404 {
+		t.Errorf("updating a sink that does not exist: %d %s", rec.Code, rec.Body)
+	}
+}

@@ -168,7 +168,8 @@ func isTrue(s string) bool { return s == "1" || strings.EqualFold(s, "true") }
 
 func (p *tesseraProvider) Resources(context.Context) []func() resource.Resource {
 	return []func() resource.Resource{NewReviewScheduleResource, NewAlertRuleResource, NewCatalogItemResource, NewBusinessRoleResource,
-		NewSoDRulesetResource, NewBirthrightRuleResource, NewMitigatingControlResource, NewApprovalPolicyResource}
+		NewSoDRulesetResource, NewBirthrightRuleResource, NewMitigatingControlResource, NewApprovalPolicyResource,
+		NewConnectionResource, NewAlertChannelResource, NewSiemSinkResource}
 }
 
 func (p *tesseraProvider) DataSources(context.Context) []func() datasource.DataSource {
