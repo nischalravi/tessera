@@ -64,5 +64,44 @@ func TestIsolation_AdminChangeTargetChecks(t *testing.T) {
 }
 
 func adminTargetChecksCovered() map[string]bool {
-	return map[string]bool{"InsertAdminChangeTargetCheck": true, "AdminChangeTargetChecksOf": true, "AdminChangeTargetChecksTenant": true, "AdminChangeTargetChecksBy": true} // the test above
+	return map[string]bool{"InsertAdminChangeTargetCheck": true, "AdminChangeTargetChecksOf": true, "AdminChangeTargetChecksTenant": true, "AdminChangeTargetChecksBy": true,
+		"InsertAdminChangeTargetFiling": true, "AdminChangeTargetFiling": true} // the test above
+}
+
+// The server-side comparison kept when a proposal is filed against an existing object is the tenant's own: B reads none of A's,
+// cannot file one against A's request, and a filing is counted against its object's key in its own tenant only.
+func TestIsolation_AdminChangeTargetFiling(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	a, b := seedAdminRows(t, f)
+	now := storetest.Now
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		return c.InsertAdminChangeTargetFiling(a.pending.ID, "tsc_x", "0123456789abcdef", "objkey", "unchanged", "livefp", now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if fl, lf, err := c.AdminChangeTargetFiling(a.pending.ID); err != nil || fl != "" || lf != "" {
+			t.Errorf("B reads A's comparison = %q %q, %v", fl, lf, err)
+		}
+		if n, err := c.AdminChangeTargetChecksOf("objkey", now.Add(-time.Hour)); err != nil || n != 0 {
+			t.Errorf("B counts A's object = %d, %v", n, err)
+		}
+		return nil
+	})
+	if err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
+		return c.InsertAdminChangeTargetFiling(a.pending.ID, "tsc_x", "0123456789abcdef", "objkey", "unchanged", "livefp", now)
+	}); err == nil {
+		t.Error("B filed a comparison against A's change request")
+	}
+	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		if fl, lf, err := c.AdminChangeTargetFiling(a.pending.ID); err != nil || fl != "unchanged" || lf != "livefp" {
+			t.Errorf("A's comparison = %q %q, %v", fl, lf, err)
+		}
+		if fl, _, err := c.AdminChangeTargetFiling(b.pending.ID); err != nil || fl != "" {
+			t.Errorf("A reads B's comparison = %q, %v", fl, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
