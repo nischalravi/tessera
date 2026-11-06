@@ -122,12 +122,18 @@ func (f *fakeMapepire) start() { f.once.Do(func() { close(f.ready) }) }
 func (f *fakeMapepire) serve(c net.Conn) {
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
-	if f.hello != nil && f.hello(c) {
+	// Never close before the client does. A server that replies and closes
+	// while the client's request is unread or still in flight resets the TCP
+	// connection, and the client can then see a connection error instead of
+	// the reply the case is about; under load that raced. The client always
+	// closes after a failed call (and the deadline bounds the wait).
+	defer func() { _, _ = io.Copy(io.Discard, c) }()
+	br := bufio.NewReader(c)
+	req, err := http.ReadRequest(br) // the upgrade request is read before any reply, hello included
+	if err != nil {
 		return
 	}
-	br := bufio.NewReader(c)
-	req, err := http.ReadRequest(br)
-	if err != nil {
+	if f.hello != nil && f.hello(c) {
 		return
 	}
 	u, p, ok := req.BasicAuth()
