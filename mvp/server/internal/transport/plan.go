@@ -42,6 +42,9 @@ type Item struct {
 	Notes   []string `json:"notes,omitempty"`
 	// NeedsTarget: a new object is added disabled because the bundle withheld its target.
 	NeedsTarget bool `json:"needs_target,omitempty"`
+	// NeedsValue: a new object is missing values the export left out (see Excluded); an
+	// existing object keeps its own values.
+	NeedsValue bool `json:"needs_value,omitempty"`
 }
 
 // Plan is what applying a bundle would do.
@@ -321,10 +324,18 @@ func planConnections(tx *store.TenantTx, rd *readiness.Service, b *Bundle, p *Pl
 		p.state = append(p.state, "revision|"+n+"|"+l.rev)
 	}
 	inBundle := map[string]bool{}
-	for _, c := range b.Connections {
+	kept := excludedFields(b, "connections")
+	for i := range b.Connections {
+		c := b.Connections[i]
 		inBundle[c.Name] = true
 		it := Item{Section: "connections", Name: c.Name}
 		l, ok := live[c.Name]
+		left := kept[c.Name]
+		if ok && len(left) > 0 {
+			// What the export left out keeps its value here.
+			c.Config = restoreKeys(l.cfg, c.Config, left)
+			b.Connections[i].Config = c.Config
+		}
 		switch {
 		case !ok && takenName[c.Name] != nil:
 			it.Action = Manual
@@ -361,6 +372,10 @@ func planConnections(tx *store.TenantTx, rd *readiness.Service, b *Bundle, p *Pl
 					it.Notes = []string{"invalid_config: " + msg}
 				}
 			}
+		}
+		if !ok && len(left) > 0 {
+			it.NeedsValue = true
+			it.Notes = append(it.Notes, "needs value: the export left out "+strings.Join(left, ", ")+"; set it here before validating")
 		}
 		if c.Credential.Kind == "sealed" && (!ok || l.cred.Kind == "none") {
 			it.Notes = append(it.Notes, "the credential is not in the bundle: set it here")
@@ -410,7 +425,51 @@ func planOverlays(tx *store.TenantTx, rd *readiness.Service, b *Bundle, p *Plan)
 		}
 		p.Items = append(p.Items, it)
 	}
+	for name := range excludedFields(b, "overlays") {
+		if cur, err := tx.LatestOverlay(name); err != nil {
+			return err
+		} else if cur == nil {
+			p.Items = append(p.Items, Item{Section: "overlays", Name: name, Action: Manual, NeedsValue: true,
+				Notes: []string{"needs value: the export left this overlay's body out; set it here"}})
+		}
+	}
 	return nil
+}
+
+// excludedFields maps object names to the values the export left out of a section.
+func excludedFields(b *Bundle, section string) map[string][]string {
+	out := map[string][]string{}
+	for _, x := range b.Excluded {
+		if x.Section == section && len(x.Fields) > 0 {
+			out[x.Name] = append(out[x.Name], x.Fields...)
+		}
+	}
+	return out
+}
+
+// restoreKeys puts the live value of each named top-level key into the
+// bundle's config (or removes the key when the live config has none).
+func restoreKeys(live, bundle json.RawMessage, keys []string) json.RawMessage {
+	var ml, mb map[string]json.RawMessage
+	_ = json.Unmarshal(live, &ml)
+	if json.Unmarshal(bundle, &mb) != nil || mb == nil {
+		mb = map[string]json.RawMessage{}
+	}
+	for _, k := range keys {
+		if k == "*" {
+			continue
+		}
+		if v, ok := ml[k]; ok {
+			mb[k] = v
+		} else {
+			delete(mb, k)
+		}
+	}
+	out, err := json.Marshal(mb)
+	if err != nil {
+		return bundle
+	}
+	return out
 }
 
 func jsonOrTextEq(a, b string) bool {
@@ -431,21 +490,27 @@ func planIdPs(tx *store.TenantTx, b *Bundle, p *Plan) error {
 		byName[c.Name] = c
 		p.state = append(p.state, "idp|"+c.ID.String()+"|"+c.Name)
 	}
+	kept := excludedFields(b, "identity_providers")
 	for _, i := range b.IdentityProviders {
 		it := Item{Section: "identity_providers", Name: i.Name}
 		cur, ok := byName[i.Name]
+		left := kept[i.Name]
 		if !ok {
 			it.Action = Add
 			it.Notes = append(it.Notes, "added as pending: it signs nobody in until an admin activates it")
 			if i.NeedsSecret {
 				it.Notes = append(it.Notes, "set its client secret here")
 			}
+			if len(left) > 0 {
+				it.NeedsValue = true
+				it.Notes = append(it.Notes, "needs value: the export left out "+strings.Join(left, ", ")+"; set it here before activating")
+			}
 			if msg := idpProblem(i); msg != "" {
 				it.Action = Manual
 				it.Notes = []string{"invalid_bundle: " + msg}
 			}
 		} else {
-			it.Fields = idpDiff(idpOf(cur), i)
+			it.Fields = slices.DeleteFunc(idpDiff(idpOf(cur), i), func(f string) bool { return slices.Contains(left, f) })
 			it.Action = Unchanged
 			if len(it.Fields) > 0 {
 				it.Action = Manual
