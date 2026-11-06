@@ -6,20 +6,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/abac"
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/roles"
+	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/workflow"
 )
 
 // Config proposals by machine clients (issue #721). A machine client never holds an admin role and can never pass a
@@ -29,7 +34,8 @@ import (
 //   - api_client.propose.grant gives a machine client the config.propose scope. Two admins always: one requests it
 //     (admin.change.request, step-up), a different one approves it (admin.change.approve, step-up). No other path adds
 //     the scope: the UI, the API and the CLI refuse it at registration.
-//   - config.proposal is one write (a catalog item, a business role, a SoD ruleset or a security alert rule) filed by
+//   - config.proposal is one write (a catalog item, a business role, a SoD ruleset, a security alert rule, a birthright
+//     rule condition, a mitigating control or an approval policy; issue #719) filed by
 //     such a client through POST /api/proposals/... It is two-person, with no cooling-off, so the approval applies it.
 //
 // The request row is the ordinary admin_change_requests row, so the state machine, the payload hash the approver must
@@ -49,10 +55,18 @@ const (
 	KindRole        = "role"
 	KindSoDRuleset  = "sod_ruleset"
 	KindAlertRule   = "alert_rule"
+	// KindBirthrightRule is an attribute condition (the abac policy a role's birthright rule names), KindMitigatingControl
+	// a control of the SoD library and KindApprovalPolicy a workflow definition with its assignments (issue #719).
+	KindBirthrightRule    = "birthright_rule"
+	KindMitigatingControl = "mitigating_control"
+	KindApprovalPolicy    = "approval_policy"
+	// KindConnection, KindAlertChannel and KindSiemSink carry secrets, which are sealed apart from the payload
+	// (change_proposal_secrets.go, issue #719).
 )
 
 // ProposalKinds lists the kinds a machine client can propose.
-var ProposalKinds = []string{KindCatalogItem, KindRole, KindSoDRuleset, KindAlertRule}
+var ProposalKinds = []string{KindCatalogItem, KindRole, KindSoDRuleset, KindAlertRule, KindBirthrightRule, KindMitigatingControl, KindApprovalPolicy,
+	KindConnection, KindAlertChannel, KindSiemSink}
 
 // maxProposalBody bounds a proposal's body: a role with many entitlements is a few KB.
 const maxProposalBody = 256 << 10
@@ -107,6 +121,41 @@ type AlertRuleBody struct {
 	WindowMinutes int    `json:"window_minutes"`
 }
 
+// BirthrightRuleBody is the body of a birthright_rule proposal (POST/PUT /api/abac/policies): the attribute condition a
+// role's birthright rule names in its policy field. The proposal's id is empty to create one and the policy id to change
+// one (then Version is the version the proposer read).
+type BirthrightRuleBody struct {
+	Version     int             `json:"version"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Condition   json.RawMessage `json:"condition"`
+	Note        string          `json:"note"`
+}
+
+// MitigatingControlBody is the body of a mitigating_control proposal (POST/PUT /api/sod/controls): the proposal's id is
+// empty to create a control and the control id to change one.
+type MitigatingControlBody struct {
+	Version             int    `json:"version"`
+	Name                string `json:"name"`
+	Description         string `json:"description"`
+	OwnerID             *int64 `json:"owner_id"`
+	Type                string `json:"type"`
+	Frequency           string `json:"frequency"`
+	EvidenceRequirement string `json:"evidence_requirement"`
+}
+
+// ApprovalPolicyBody is the body of an approval_policy proposal (POST/PUT /api/workflows, then PUT
+// /api/workflows/{id}/assignments when Targets is present): the proposal's id is empty to create a workflow and the
+// workflow id to change one (then Version is the version the proposer read and Scope, if given, must be the workflow's).
+type ApprovalPolicyBody struct {
+	Version     int                `json:"version"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Scope       string             `json:"scope"`
+	Steps       []workflow.Step    `json:"steps"`
+	Targets     *[]workflow.Target `json:"targets"`
+}
+
 type proposalPayload struct {
 	Kind string          `json:"kind"`
 	ID   string          `json:"id"`
@@ -129,6 +178,11 @@ func init() {
 // strictBody decodes a proposal body into T, refusing unknown fields and trailing data.
 func strictBody[T any](raw json.RawMessage) (*T, error) {
 	var v T
+	// encoding/json matches keys case-insensitively, so "Target" would reach the field "target" without passing the
+	// checks that look for the exact key (the secret split, the derived fields): refuse any key that is not exact (#885)
+	if err := checkExactKeys(reflect.TypeOf(v), raw); err != nil {
+		return nil, invalid("body: %v", err)
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&v); err != nil {
@@ -138,6 +192,43 @@ func strictBody[T any](raw json.RawMessage) (*T, error) {
 		return nil, invalid("body: trailing data")
 	}
 	return &v, nil
+}
+
+// checkExactKeys refuses a key of a JSON object that is not exactly the json name of a field of t, recursively for the
+// fields that are structs. It names the key, never its value.
+func checkExactKeys(t reflect.Type, raw json.RawMessage) error {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil || obj == nil {
+		return nil // not an object: the decoder reports it
+	}
+	fields := map[string]reflect.Type{}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "-" || !f.IsExported() {
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		fields[name] = f.Type
+	}
+	for k, v := range obj {
+		ft, ok := fields[k]
+		if !ok {
+			return fmt.Errorf("unknown field %q (field names are case-sensitive)", k)
+		}
+		if err := checkExactKeys(ft, v); err != nil {
+			return fmt.Errorf("%s.%v", k, err)
+		}
+	}
+	return nil
 }
 
 // decodeProposalBody decodes the body of a proposal of this kind.
@@ -151,6 +242,18 @@ func decodeProposalBody(kind string, raw json.RawMessage) (any, error) {
 		return strictBody[SoDRulesetBody](raw)
 	case KindAlertRule:
 		return strictBody[AlertRuleBody](raw)
+	case KindBirthrightRule:
+		return strictBody[BirthrightRuleBody](raw)
+	case KindMitigatingControl:
+		return strictBody[MitigatingControlBody](raw)
+	case KindApprovalPolicy:
+		return strictBody[ApprovalPolicyBody](raw)
+	case KindConnection:
+		return strictBody[ConnectionBody](raw)
+	case KindAlertChannel:
+		return strictBody[AlertChannelBody](raw)
+	case KindSiemSink:
+		return strictBody[SiemSinkBody](raw)
 	}
 	return nil, invalid("kind %q: want one of %s", kind, strings.Join(ProposalKinds, ", "))
 }
@@ -167,7 +270,7 @@ func checkProposalID(kind, id string) error {
 		if id == "" || len(id) > 64 {
 			return invalid("id is the id of the alert rule")
 		}
-	case KindRole, KindSoDRuleset:
+	case KindRole, KindSoDRuleset, KindBirthrightRule, KindMitigatingControl, KindApprovalPolicy, KindConnection, KindAlertChannel, KindSiemSink:
 		if len(id) > 64 {
 			return invalid("id is at most 64 characters")
 		}
@@ -179,6 +282,15 @@ func checkProposalID(kind, id string) error {
 // form (the decoded body marshalled again), so the hash the approver echoes does not depend on how the client
 // spelled its JSON.
 func ProposalPayload(kind, id string, body json.RawMessage) (json.RawMessage, error) {
+	// the fields the server derives from a sealed URL are never taken from a caller
+	if err := refuseDerivedKeys(body); err != nil {
+		return nil, err
+	}
+	return buildProposalPayload(kind, id, body)
+}
+
+// buildProposalPayload is ProposalPayload for a body that splitProposalSecrets has already cleaned and completed.
+func buildProposalPayload(kind, id string, body json.RawMessage) (json.RawMessage, error) {
 	if len(body) == 0 || len(body) > maxProposalBody {
 		return nil, invalid("body is required and at most %d bytes", maxProposalBody)
 	}
@@ -188,6 +300,18 @@ func ProposalPayload(kind, id string, body json.RawMessage) (json.RawMessage, er
 	v, err := decodeProposalBody(kind, body)
 	if err != nil {
 		return nil, err
+	}
+	if b, ok := v.(*BirthrightRuleBody); ok && len(b.Condition) > 0 && string(b.Condition) != "null" {
+		// the condition in its canonical form too (key order, spacing), so the hash is the same for the same rule
+		n, err := abac.Parse(b.Condition)
+		if err != nil {
+			return nil, invalid("condition: %v", err)
+		}
+		c, err := n.Canonical()
+		if err != nil {
+			return nil, invalid("condition: %v", err)
+		}
+		b.Condition = json.RawMessage(c)
 	}
 	canon, err := json.Marshal(v)
 	if err != nil {
@@ -332,11 +456,19 @@ func (s *Service) SubmitProposal(ctx context.Context, p *auth.Principal, kind, i
 	if d := auth.Check(p, auth.PermConfigPropose, nil, s.now()); d != nil {
 		return nil, denied(d)
 	}
-	payload, err := ProposalPayload(kind, id, body)
+	// the secret fields leave the body here: the payload and its hash carry the marker "set", the plaintext is sealed
+	if err := refuseDerivedKeys(body); err != nil {
+		return nil, err
+	}
+	clean, secrets, err := s.splitProposalSecrets(ctx, p, kind, id, body)
 	if err != nil {
 		return nil, err
 	}
-	return s.submit(ctx, p, SubmitInput{Type: TypeConfigProposal, Payload: payload}, p.ClientID)
+	payload, err := buildProposalPayload(kind, id, clean)
+	if err != nil {
+		return nil, err
+	}
+	return s.submit(ctx, p, SubmitInput{Type: TypeConfigProposal, Payload: payload, Secrets: secrets}, p.ClientID)
 }
 
 // ---------------------------------------------------------------- config.proposal
@@ -393,6 +525,39 @@ func planProposal(e *env, v *proposalPayload) (plan, error) {
 		if err := alerts.CheckRule(v.ID, b.spec()); err != nil {
 			return plan{}, proposalErr(err)
 		}
+	case *BirthrightRuleBody:
+		spec, err := b.spec()
+		if err != nil {
+			return plan{}, proposalErr(err)
+		}
+		if v.ID == "" {
+			err = abac.CheckCreate(e.tx, spec)
+		} else {
+			err = abac.CheckUpdate(e.tx, v.ID, b.Version, spec)
+		}
+		if err != nil {
+			return plan{}, proposalErr(err)
+		}
+	case *MitigatingControlBody:
+		if err := e.sodWriter(e.by, "").CheckControl(v.ID, b.Version, b.input()); err != nil {
+			return plan{}, proposalErr(err)
+		}
+	case *ApprovalPolicyBody:
+		if err := planApprovalPolicy(e, v.ID, b); err != nil {
+			return plan{}, proposalErr(err)
+		}
+	case *ConnectionBody:
+		if err := planConnection(e, v.ID, b); err != nil {
+			return plan{}, proposalErr(err)
+		}
+	case *AlertChannelBody:
+		if err := planAlertChannel(e, v.ID, b); err != nil {
+			return plan{}, proposalErr(err)
+		}
+	case *SiemSinkBody:
+		if err := planSiemSink(e, v.ID, b); err != nil {
+			return plan{}, proposalErr(err)
+		}
 	}
 	return plan{twoPerson: true, target: v.Kind + ":" + v.ID}, nil
 }
@@ -408,6 +573,55 @@ func (b *RoleBody) spec() roles.Spec {
 		Requestable: b.Requestable, Birthright: b.Birthright, Entitlements: b.Entitlements, Note: b.Note}
 }
 
+func (b *BirthrightRuleBody) spec() (abac.Spec, error) {
+	s := abac.Spec{Name: b.Name, Description: b.Description, Note: b.Note}
+	if len(b.Condition) == 0 || string(b.Condition) == "null" {
+		return s, nil // abac refuses it: a condition is required
+	}
+	n, err := abac.Parse(b.Condition)
+	if err != nil {
+		return s, err
+	}
+	s.Condition = n
+	return s, nil
+}
+
+func (b *MitigatingControlBody) input() sod.ControlInput {
+	return sod.ControlInput{Name: b.Name, Description: b.Description, OwnerID: b.OwnerID, Type: b.Type, Frequency: b.Frequency,
+		EvidenceRequirement: b.EvidenceRequirement}
+}
+
+func (b *ApprovalPolicyBody) spec() workflow.Spec {
+	return workflow.Spec{Name: b.Name, Description: b.Description, Scope: b.Scope, Steps: b.Steps}
+}
+
+func (e *env) sodWriter(by uuid.UUID, display string) *sod.Writer {
+	return &sod.Writer{Tx: e.tx, By: sod.Actor{UserID: by, Display: display}, Now: e.now}
+}
+
+// planApprovalPolicy validates a workflow definition (and the assignments it carries) without saving it.
+func planApprovalPolicy(e *env, id string, b *ApprovalPolicyBody) error {
+	scope := b.Scope
+	if id == "" {
+		if err := workflow.CheckCreate(e.tx, b.spec()); err != nil {
+			return err
+		}
+	} else {
+		cur, err := workflow.CheckEdit(e.tx, id, b.Version, b.spec())
+		if err != nil {
+			return err
+		}
+		if b.Scope != "" && b.Scope != cur.Scope {
+			return invalid("scope is %s and cannot change", cur.Scope)
+		}
+		scope = cur.Scope
+	}
+	if b.Targets != nil {
+		return workflow.CheckTargets(e.tx, id, scope, b.Steps, *b.Targets)
+	}
+	return nil
+}
+
 func (b *AlertRuleBody) spec() alerts.RuleSpec {
 	return alerts.RuleSpec{Enabled: b.Enabled, Severity: b.Severity, Threshold: b.Threshold, WindowMinutes: b.WindowMinutes}
 }
@@ -417,6 +631,9 @@ func proposalErr(err error) error {
 	var re *requests.Error
 	var rl *roles.Error
 	var al *alerts.Error
+	var ac *abac.Error
+	var ab *abac.Refusal
+	var wf *workflow.Error
 	switch {
 	case errors.As(err, &re):
 		return newErr(re.Status, re.Code, "%s", re.Msg)
@@ -424,10 +641,28 @@ func proposalErr(err error) error {
 		return newErr(rl.Status, rl.Code, "%s", rl.Msg)
 	case errors.As(err, &al):
 		return newErr(al.Status, al.Code, "%s", al.Msg)
+	case errors.As(err, &ac):
+		return newErr(422, "invalid_condition", "%s", ac.Msg)
+	case errors.As(err, &ab):
+		return newErr(ab.Status, ab.Code, "%s", ab.Msg)
+	case errors.As(err, &wf):
+		return newErr(wf.Status, wf.Code, "%s", wf.Msg)
 	}
 	var se *sod.Refusal
 	if errors.As(err, &se) {
 		return newErr(se.Status, se.Code, "%s", se.Msg)
+	}
+	var rd *readiness.Error
+	if errors.As(err, &rd) {
+		msg := rd.Msg
+		for _, f := range rd.Fields {
+			msg += "; " + f.Field + ": " + f.Msg // the fields say which setting was refused; none carries a value
+		}
+		return newErr(rd.Status, rd.Code, "%s", msg)
+	}
+	var sm *siem.Error
+	if errors.As(err, &sm) {
+		return newErr(sm.Status, sm.Code, "%s", sm.Msg)
 	}
 	return err
 }
@@ -472,8 +707,52 @@ func applyProposal(e *env, ch *store.AdminChange, v *proposalPayload) error {
 		return proposalErr(err)
 	case *AlertRuleBody:
 		return proposalErr(alerts.SetRule(e.tx, v.ID, b.spec(), alerts.Actor{UserID: by.String(), Display: display}, e.now))
+	case *BirthrightRuleBody:
+		spec, err := b.spec()
+		if err != nil {
+			return proposalErr(err)
+		}
+		actor := abac.Actor{UserID: by, Display: display}
+		if v.ID == "" {
+			_, err = abac.Create(e.tx, spec, actor, e.now)
+		} else {
+			_, err = abac.Update(e.tx, v.ID, b.Version, spec, actor, e.now)
+		}
+		return proposalErr(err)
+	case *MitigatingControlBody:
+		w := e.sodWriter(by, display)
+		if v.ID == "" {
+			_, err = w.CreateControl(b.input())
+		} else {
+			_, err = w.UpdateControl(v.ID, b.Version, b.input())
+		}
+		return proposalErr(err)
+	case *ApprovalPolicyBody:
+		return applyApprovalPolicy(e, v.ID, b, display)
+	case *ConnectionBody:
+		return proposalErr(applyConnection(e, v.ID, b, display))
+	case *AlertChannelBody:
+		return proposalErr(applyAlertChannel(e, v.ID, b, by, display))
+	case *SiemSinkBody:
+		return proposalErr(applySiemSink(e, v.ID, b, by, display))
 	}
 	return invalid("kind %q", v.Kind)
+}
+
+func applyApprovalPolicy(e *env, id string, b *ApprovalPolicyBody, display string) error {
+	var err error
+	if id == "" {
+		var w *workflow.View
+		if w, err = workflow.Create(e.tx, b.spec(), display, e.now); err == nil {
+			id = w.ID
+		}
+	} else {
+		_, err = workflow.Edit(e.tx, id, b.Version, b.spec(), display, e.now)
+	}
+	if err == nil && b.Targets != nil {
+		_, err = workflow.SetTargets(e.tx, id, *b.Targets, display, e.now)
+	}
+	return proposalErr(err)
 }
 
 func applyCatalogItem(e *env, v *proposalPayload, b *CatalogItemBody, by requests.Actor) error {
@@ -522,6 +801,31 @@ func summarizeProposal(e *env, v *proposalPayload) string {
 		}
 	case *AlertRuleBody:
 		what = fmt.Sprintf("set alert rule %s (enabled %t, severity %s, threshold %d in %d minutes)", v.ID, b.Enabled, b.Severity, b.Threshold, b.WindowMinutes)
+	case *BirthrightRuleBody:
+		if v.ID == "" {
+			what = fmt.Sprintf("create birthright rule condition %q", b.Name)
+		} else {
+			what = fmt.Sprintf("change birthright rule condition %s to %q", v.ID, b.Name)
+		}
+	case *MitigatingControlBody:
+		if v.ID == "" {
+			what = fmt.Sprintf("create mitigating control %q (%s, %s)", b.Name, b.Type, b.Frequency)
+		} else {
+			what = fmt.Sprintf("change mitigating control %s to %q (%s, %s)", v.ID, b.Name, b.Type, b.Frequency)
+		}
+	case *ApprovalPolicyBody:
+		routed := "assignments unchanged"
+		if b.Targets != nil {
+			routed = fmt.Sprintf("routes %d targets", len(*b.Targets))
+		}
+		if v.ID == "" {
+			what = fmt.Sprintf("create approval policy %q (%d steps, %s)", b.Name, len(b.Steps), routed)
+		} else {
+			what = fmt.Sprintf("change approval policy %s to %q (%d steps, %s)", v.ID, b.Name, len(b.Steps), routed)
+		}
+	}
+	if w, ok := summarizeSecretKind(v.ID, body); ok {
+		what = w
 	}
 	return "Proposed by a machine client: " + what
 }
@@ -584,7 +888,7 @@ func applyProposeGrant(e *env, ch *store.AdminChange, v *proposeGrantPayload) er
 
 // ProposalResult is the id of the row an applied proposal made or changed, so the client that proposed a create can
 // find it: the group id of a catalog item and the rule id of an alert rule (the proposal's own id), the id of a role
-// or a SoD ruleset (looked up by its key). It is "" for a request that is not an applied proposal, and for a create
+// or a SoD ruleset (looked up by its key) and of a birthright rule, control or approval policy (looked up by its unique name). It is "" for a request that is not an applied proposal, and for a create
 // that named no key (the server derived one the client cannot know).
 func ProposalResult(tx *store.TenantTx, ch *store.AdminChange) string {
 	if ch.Type != TypeConfigProposal || ch.Status != store.ChangeApplied {
@@ -602,6 +906,9 @@ func ProposalResult(tx *store.TenantTx, ch *store.AdminChange) string {
 	if err != nil {
 		return ""
 	}
+	if id := secretKindResult(tx, body); id != "" {
+		return id
+	}
 	switch b := body.(type) {
 	case *RoleBody:
 		if r, err := tx.BusinessRoleByKey(strings.TrimSpace(b.Key)); err == nil && b.Key != "" {
@@ -610,6 +917,22 @@ func ProposalResult(tx *store.TenantTx, ch *store.AdminChange) string {
 	case *SoDRulesetBody:
 		if r, err := tx.SodRulesetByKey(strings.TrimSpace(b.Key)); err == nil && b.Key != "" {
 			return r.ID
+		}
+	case *BirthrightRuleBody:
+		if r, err := tx.AbacPolicyByName(strings.TrimSpace(b.Name)); err == nil {
+			return r.ID
+		}
+	case *MitigatingControlBody:
+		if r, err := tx.SodControlByName(strings.TrimSpace(b.Name)); err == nil {
+			return r.ID
+		}
+	case *ApprovalPolicyBody:
+		if ws, err := tx.Workflows(); err == nil {
+			for _, w := range ws {
+				if strings.EqualFold(w.Name, strings.TrimSpace(b.Name)) {
+					return w.ID
+				}
+			}
 		}
 	}
 	return ""

@@ -455,11 +455,8 @@ func CreateSink(tx *store.TenantTx, sealer *seal.Sealer, s SinkSpec, dev bool, b
 	if err := s.check(dev); err != nil {
 		return nil, err
 	}
-	if s.Kind == "webhook" && s.Flavor == FlavorHEC && (s.Token == nil || *s.Token == "") {
-		return nil, refuse(422, "token_required", "Splunk HEC needs its token")
-	}
-	if s.Kind == "s3" && (s.Token == nil || *s.Token == "") {
-		return nil, refuse(422, "token_required", "an S3 sink needs its secret access key")
+	if err := s.tokenRequired(); err != nil {
+		return nil, err
 	}
 	k := &store.SiemSink{ID: uuid.NewString(), Name: s.Name, Kind: s.Kind, Format: s.Format, Target: s.Target, Flavor: s.Flavor,
 		IncludeHTTP: s.IncludeHTTP, EventFilter: s.EventFilter, Region: s.Region, AccessKeyID: s.AccessKeyID, Enabled: s.Enabled,
@@ -496,6 +493,31 @@ func CheckSink(s SinkSpec, dev bool) (SinkSpec, error) {
 	return s, err
 }
 
+// CheckSinkCreate validates a new sink as CreateSink would, tokens included, without storing anything (issue #719).
+func CheckSinkCreate(s SinkSpec, dev bool) error {
+	if err := s.check(dev); err != nil {
+		return err
+	}
+	if err := s.tokenRequired(); err != nil {
+		return err
+	}
+	if s.Start != "" && s.Start != "now" && s.Start != "beginning" {
+		return refuse(422, "invalid_start", "start is now or beginning")
+	}
+	return nil
+}
+
+// tokenRequired refuses a new sink whose destination needs a token it has none of.
+func (s *SinkSpec) tokenRequired() error {
+	if s.Kind == "webhook" && s.Flavor == FlavorHEC && (s.Token == nil || *s.Token == "") {
+		return refuse(422, "token_required", "Splunk HEC needs its token")
+	}
+	if s.Kind == "s3" && (s.Token == nil || *s.Token == "") {
+		return refuse(422, "token_required", "an S3 sink needs its secret access key")
+	}
+	return nil
+}
+
 // ImportSink adds a sink that came in a configuration bundle (internal/transport).
 // A bundle never carries a token, so the sink is always added disabled, starts
 // at the current head of the ledger and sends nothing until an admin sets its
@@ -526,6 +548,16 @@ func ImportSink(tx *store.TenantTx, s SinkSpec, dev bool, by Actor, bundleHash s
 
 // UpdateSink replaces a sink's settings; its kind cannot change.
 func UpdateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, dev bool, by Actor, now time.Time) (*store.SiemSink, error) {
+	return updateSink(tx, sealer, id, s, dev, by, now, false)
+}
+
+// CheckSinkUpdate runs every check UpdateSink makes, on a copy of the stored sink, without writing anything (issue #719).
+func CheckSinkUpdate(tx *store.TenantTx, id string, s SinkSpec, dev bool) error {
+	_, err := updateSink(tx, nil, id, s, dev, Actor{}, time.Time{}, true)
+	return err
+}
+
+func updateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, dev bool, by Actor, now time.Time, dry bool) (*store.SiemSink, error) {
 	k, err := tx.SiemSink(id)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, refuse(404, "sink_not_found", "sink not found")
@@ -562,7 +594,16 @@ func UpdateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, 
 	if s.CAPEM != "" {
 		k.CAPEM = &s.CAPEM
 	}
-	if err := sealToken(tx, sealer, k, s.Token); err != nil {
+	if dry {
+		// nothing is sealed or stored in a check: a token is there or it is not
+		switch {
+		case s.Token == nil:
+		case *s.Token == "":
+			k.SecretSealed = nil
+		default:
+			k.SecretSealed = []byte{1}
+		}
+	} else if err := sealToken(tx, sealer, k, s.Token); err != nil {
 		return nil, err
 	}
 	if k.Kind == "webhook" && k.Flavor == FlavorHEC && len(k.SecretSealed) == 0 {
@@ -570,6 +611,9 @@ func UpdateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, 
 	}
 	if k.Kind == "s3" && len(k.SecretSealed) == 0 {
 		return nil, refuse(422, "token_required", "an S3 sink needs its secret access key")
+	}
+	if dry {
+		return k, nil
 	}
 	if err := tx.UpdateSiemSink(k); err != nil {
 		return nil, err
@@ -592,7 +636,7 @@ func SinkOrigin(kind, target string) string {
 		}
 		return net.JoinHostPort(strings.ToLower(host), port)
 	}
-	return safehttp.Origin(target)
+	return safehttp.OriginKey(target)
 }
 
 // Rewind sets a sink's cursor: replay from seq+1 (0: the whole ledger), or

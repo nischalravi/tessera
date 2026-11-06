@@ -307,6 +307,36 @@ func TestProposal_BodyIsCanonical(t *testing.T) {
 	}
 }
 
+// TestProposal_NewKindsValidate (issue #719): the new kinds are checked at submit, with no writes.
+func TestProposal_NewKindsValidate(t *testing.T) {
+	// the condition is canonical too: key order and spacing do not change the hash
+	a, err := admin.ProposalPayload(admin.KindBirthrightRule, "", json.RawMessage(`{"name":"n","condition":{"value":"Finance", "op":"eq","attr":"identity.department"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := admin.ProposalPayload(admin.KindBirthrightRule, "", json.RawMessage(`{"name":"n","condition":{"attr":"identity.department","op":"eq","value":"Finance"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(a) != string(b) {
+		t.Fatalf("the same condition spelled two ways gives two payloads:\n%s\n%s", a, b)
+	}
+	for _, tc := range []struct {
+		name, kind, id, body string
+	}{
+		{"rule with an unparseable condition", admin.KindBirthrightRule, "", `{"name":"n","condition":{"op":"eq"}}`},
+		{"rule with an unknown field", admin.KindBirthrightRule, "", `{"name":"n","condition":{"attr":"identity.department","op":"eq","value":"a"},"x":1}`},
+		{"rule id too long", admin.KindBirthrightRule, strings.Repeat("a", 65), `{"name":"n"}`},
+		{"control with an unknown field", admin.KindMitigatingControl, "", `{"name":"n","x":1}`},
+		{"policy with an unknown step field", admin.KindApprovalPolicy, "", `{"name":"n","steps":[{"id":"a","x":1}]}`},
+		{"policy id too long", admin.KindApprovalPolicy, strings.Repeat("a", 65), `{"name":"n"}`},
+	} {
+		if _, err := admin.ProposalPayload(tc.kind, tc.id, json.RawMessage(tc.body)); err == nil {
+			t.Errorf("%s: accepted", tc.name)
+		}
+	}
+}
+
 // TestProposal_PersonCannotFileOne: a config.proposal comes only from a machine client (issue #740). A person's request
 // of that type is refused, so the "Proposed by a machine client" label always has a client behind it.
 func TestProposal_PersonCannotFileOne(t *testing.T) {

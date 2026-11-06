@@ -17,3 +17,5 @@ cdf23386dabcee7f6f6a34a27230cda7196707e5:mvp/frontend/tests/github-app.test.ts:p
 cdf23386dabcee7f6f6a34a27230cda7196707e5:mvp/frontend/tests/github-app.test.ts:private-key:48
 cdf23386dabcee7f6f6a34a27230cda7196707e5:mvp/frontend/tests/github-app.test.ts:private-key:49
 cdf23386dabcee7f6f6a34a27230cda7196707e5:mvp/frontend/tests/github-app.test.ts:private-key:94
+# False positive: a fake webhook signing secret in a provider test (replaced by a runtime value in c48d1ba; the history keeps it).
+95605d91da582c7e7fb00221d051ed8c12dcbc16:mvp/terraform-provider-tessera/internal/provider/secret_resources_test.go:generic-api-key:40

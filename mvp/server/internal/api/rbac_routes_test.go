@@ -322,7 +322,7 @@ GET    /api/role-mining/runs/{run_id}                graph.read      -  # issue 
 GET    /api/role-mining/candidates/{candidate_id}    graph.read      -  # issue #298
 POST   /api/role-mining/candidates/{candidate_id}/accept roles.manage STEP_UP_POLICY  # issue #298 (creates a draft role, like POST /api/roles)
 POST   /api/role-mining/candidates/{candidate_id}/dismiss roles.manage -  # issue #298
-GET    /api/roles                                    requests.create -  # issue #161
+GET    /api/roles                                    roles.read      -  # issue #161, #719 (tessera:read lists it)
 POST   /api/roles                                    roles.manage    STEP_UP_POLICY  # issue #161
 GET    /api/roles/{role_id}                          graph.read      -  # issue #161
 PUT    /api/roles/{role_id}                          roles.manage    STEP_UP_POLICY  # issue #161
@@ -443,6 +443,18 @@ POST   /api/proposals/roles/{role_id}                config.propose  -  # issue 
 POST   /api/proposals/sod-rulesets                   config.propose  -  # issue #721
 POST   /api/proposals/sod-rulesets/{ruleset_id}      config.propose  -  # issue #721
 POST   /api/proposals/alert-rules/{rule_id}          config.propose  -  # issue #721
+POST   /api/proposals/birthright-rules               config.propose  -  # issue #719
+POST   /api/proposals/birthright-rules/{policy_id}   config.propose  -  # issue #719
+POST   /api/proposals/mitigating-controls            config.propose  -  # issue #719
+POST   /api/proposals/mitigating-controls/{control_id} config.propose -  # issue #719
+POST   /api/proposals/approval-policies              config.propose  -  # issue #719
+POST   /api/proposals/approval-policies/{workflow_id} config.propose  -  # issue #719
+POST   /api/proposals/connections                    config.propose  -  # issue #719 (secrets sealed apart from the payload)
+POST   /api/proposals/connections/{connection_id}    config.propose  -  # issue #719
+POST   /api/proposals/alert-channels                 config.propose  -  # issue #719
+POST   /api/proposals/alert-channels/{channel_id}    config.propose  -  # issue #719
+POST   /api/proposals/siem-sinks                     config.propose  -  # issue #719
+POST   /api/proposals/siem-sinks/{sink_id}           config.propose  -  # issue #719
 GET    /api/proposals/{change_id}                    config.propose  -  # issue #721 (a client's own proposals only)
 POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106

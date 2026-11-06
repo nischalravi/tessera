@@ -116,6 +116,20 @@ func nameFree(tx *store.TenantTx, name, selfID string) error {
 	return nil
 }
 
+// CheckCreate refuses what Create would refuse, and writes nothing.
+func CheckCreate(tx *store.TenantTx, s Spec) error {
+	if _, err := s.validate(); err != nil {
+		return err
+	}
+	return nameFree(tx, s.Name, "")
+}
+
+// CheckUpdate refuses what Update would refuse, and writes nothing.
+func CheckUpdate(tx *store.TenantTx, id string, ver int, s Spec) error {
+	_, err := checkUpdate(tx, id, ver, &s)
+	return err
+}
+
 // Create saves a new policy (version 1) and audits it.
 func Create(tx *store.TenantTx, s Spec, by Actor, now time.Time) (*store.AbacPolicy, error) {
 	cond, err := s.validate()
@@ -136,8 +150,9 @@ func Create(tx *store.TenantTx, s Spec, by Actor, now time.Time) (*store.AbacPol
 	return p, tx.Audit(now, by.Display, "abac.policy.create", detail(p))
 }
 
-// Update saves new content as the next version; ver must be the current one.
-func Update(tx *store.TenantTx, id string, ver int, s Spec, by Actor, now time.Time) (*store.AbacPolicy, error) {
+// checkUpdate loads the policy an update changes and validates the new content (s is normalized in place); it
+// returns the current row and the canonical condition.
+func checkUpdate(tx *store.TenantTx, id string, ver int, s *Spec) (*store.AbacPolicy, error) {
 	old, err := tx.AbacPolicy(id)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, refuse(404, "policy_not_found", "policy not found")
@@ -150,11 +165,20 @@ func Update(tx *store.TenantTx, id string, ver int, s Spec, by Actor, now time.T
 	if ver != old.Version {
 		return nil, refuse(409, "version_conflict", "the policy changed since version %d (now %d); reload it", ver, old.Version)
 	}
-	cond, err := s.validate()
+	if _, err := s.validate(); err != nil {
+		return nil, err
+	}
+	return old, nameFree(tx, s.Name, id)
+}
+
+// Update saves new content as the next version; ver must be the current one.
+func Update(tx *store.TenantTx, id string, ver int, s Spec, by Actor, now time.Time) (*store.AbacPolicy, error) {
+	old, err := checkUpdate(tx, id, ver, &s)
 	if err != nil {
 		return nil, err
 	}
-	if err := nameFree(tx, s.Name, id); err != nil {
+	cond, err := s.Condition.Canonical()
+	if err != nil {
 		return nil, err
 	}
 	p := *old

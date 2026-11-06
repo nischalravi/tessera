@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -397,6 +398,97 @@ func (d *groupsDS) Read(ctx context.Context, req datasource.ReadRequest, resp *d
 		m.Groups = append(m.Groups, entitlementRow{ID: types.Int64Value(w.ID), Key: types.StringValue(w.Key), System: types.StringValue(w.System),
 			Name: types.StringValue(w.Name), Kind: types.StringValue(w.Kind), Privileged: types.BoolValue(w.Privileged),
 			Requestable: types.BoolValue(w.Requestable), Description: types.StringPointerValue(w.Description)})
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+}
+
+// ---------------------------------------------------------------- roles
+
+// NewRolesDataSource is tessera_roles: the business roles (GET /api/v1/roles, which tessera:read lists; server issue #719).
+func NewRolesDataSource() datasource.DataSource { return &rolesDS{} }
+
+type rolesDS struct{ dsBase }
+
+type roleRow struct {
+	ID                  types.String `tfsdk:"id"`
+	Name                types.String `tfsdk:"name"`
+	Description         types.String `tfsdk:"description"`
+	Risk                types.String `tfsdk:"risk"`
+	Requestable         types.Bool   `tfsdk:"requestable"`
+	Status              types.String `tfsdk:"status"`
+	Version             types.Int64  `tfsdk:"version"`
+	MemberCount         types.Int64  `tfsdk:"member_count"`
+	EntitlementGroupIDs types.Set    `tfsdk:"entitlement_group_ids"`
+}
+
+type rolesModel struct {
+	Name  types.String `tfsdk:"name"`
+	Roles []roleRow    `tfsdk:"roles"`
+}
+
+func (d *rolesDS) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_roles"
+}
+
+func (d *rolesDS) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
+	d.configure(req, resp)
+}
+
+func (d *rolesDS) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Description: "The business roles of the tenant (read-only; needs the `tessera:read` scope).",
+		Attributes: map[string]schema.Attribute{
+			"name": schema.StringAttribute{Optional: true, Description: "Only the role with this name (case-insensitive).", Validators: nonEmptyString()},
+			"roles": schema.ListNestedAttribute{Computed: true, Description: "The matching roles.",
+				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
+					"id": schema.StringAttribute{Computed: true}, "name": schema.StringAttribute{Computed: true},
+					"description": schema.StringAttribute{Computed: true}, "risk": schema.StringAttribute{Computed: true},
+					"requestable": schema.BoolAttribute{Computed: true}, "status": schema.StringAttribute{Computed: true, Description: "`active` or `retired`."},
+					"version": schema.Int64Attribute{Computed: true}, "member_count": schema.Int64Attribute{Computed: true},
+					"entitlement_group_ids": schema.SetAttribute{Computed: true, ElementType: types.Int64Type},
+				}}},
+		},
+	}
+}
+
+func (d *rolesDS) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var m rolesModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &m)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	var wire struct {
+		Roles []struct {
+			ID           string `json:"id"`
+			Name         string `json:"name"`
+			Description  string `json:"description"`
+			Risk         string `json:"risk"`
+			Requestable  bool   `json:"requestable"`
+			Status       string `json:"status"`
+			Version      int64  `json:"version"`
+			MemberCount  int64  `json:"member_count"`
+			Entitlements []struct {
+				ID int64 `json:"id"`
+			} `json:"entitlements"`
+		} `json:"roles"`
+	}
+	if err := d.c.Do(ctx, "GET", "/roles", nil, &wire); err != nil {
+		resp.Diagnostics.AddError("Cannot read roles", err.Error())
+		return
+	}
+	m.Roles = make([]roleRow, 0, len(wire.Roles))
+	for _, w := range wire.Roles {
+		if known(m.Name) && !strings.EqualFold(w.Name, m.Name.ValueString()) {
+			continue
+		}
+		ids := make([]attr.Value, 0, len(w.Entitlements))
+		for _, e := range w.Entitlements {
+			ids = append(ids, types.Int64Value(e.ID))
+		}
+		m.Roles = append(m.Roles, roleRow{ID: types.StringValue(w.ID), Name: types.StringValue(w.Name), Description: types.StringValue(w.Description),
+			Risk: types.StringValue(w.Risk), Requestable: types.BoolValue(w.Requestable), Status: types.StringValue(w.Status),
+			Version: types.Int64Value(w.Version), MemberCount: types.Int64Value(w.MemberCount),
+			EntitlementGroupIDs: types.SetValueMust(types.Int64Type, ids)})
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }

@@ -29,7 +29,16 @@ type ChannelSpec struct {
 	Enabled     bool
 	// RotateSecret issues a new webhook signing secret.
 	RotateSecret bool
+	// Secret is a signing secret the caller chose (a webhook only): a configuration proposal (issue #719) cannot read the
+	// one the server would generate, so it brings its own. Empty: the server generates one when it makes or rotates it.
+	Secret string
 }
+
+// MinSigningSecret and MaxSigningSecret bound a caller-chosen webhook signing secret.
+const (
+	MinSigningSecret = 16
+	MaxSigningSecret = 256
+)
 
 // SecretAAD binds a channel's sealed secret to its tenant and row.
 func SecretAAD(t tenancy.ID, channelID string) []byte {
@@ -88,34 +97,91 @@ func CreateChannel(tx *store.TenantTx, sealer *seal.Sealer, s ChannelSpec, dev b
 	if err := s.check(dev); err != nil {
 		return nil, "", err
 	}
+	if err := s.checkSecret(); err != nil {
+		return nil, "", err
+	}
 	c := &store.AlertChannel{ID: uuid.NewString(), Name: s.Name, Kind: s.Kind, Target: s.Target, MinSeverity: s.MinSeverity,
 		Enabled: s.Enabled, CreatedBy: &by.UserID, CreatedAt: now, UpdatedAt: now}
-	secret, err := newSecret(tx, sealer, c)
+	secret, err := newSecret(tx, sealer, c, s.Secret)
 	if err != nil {
 		return nil, "", err
 	}
 	if err := tx.InsertAlertChannel(c); err != nil {
 		return nil, "", err
 	}
-	return c, secret, tx.Audit(now, by.Display, "alert.channel.created", channelAudit(c, secret != ""))
+	return c, secret, tx.Audit(now, by.Display, "alert.channel.created", channelAudit(c, secret != "" || s.Secret != ""))
+}
+
+// CheckChannel validates a new channel (id "") or a change to channel id as CreateChannel or UpdateChannel would, without
+// writing anything (issue #719: a proposal is checked at submit and again at apply).
+func CheckChannel(tx *store.TenantTx, id string, s ChannelSpec, dev bool) error {
+	if id == "" {
+		if err := s.check(dev); err != nil {
+			return err
+		}
+		return s.checkSecret()
+	}
+	_, _, _, _, err := prepareUpdate(tx, id, s, dev)
+	return err
+}
+
+// checkSecret refuses a caller-chosen signing secret that is too short, too long or on a channel that signs nothing.
+func (s *ChannelSpec) checkSecret() error {
+	if s.Secret == "" {
+		return nil
+	}
+	if s.Kind != "webhook" {
+		return refuse(422, "invalid_secret", "only a webhook has a signing secret")
+	}
+	if len(s.Secret) < MinSigningSecret || len(s.Secret) > MaxSigningSecret {
+		return refuse(422, "invalid_secret", "the signing secret is %d to %d characters", MinSigningSecret, MaxSigningSecret)
+	}
+	return nil
 }
 
 // UpdateChannel replaces a channel's settings; its kind cannot change.
 func UpdateChannel(tx *store.TenantTx, sealer *seal.Sealer, id string, s ChannelSpec, dev bool, by Actor, now time.Time) (*store.AlertChannel, string, error) {
+	c, s, from, to, err := prepareUpdate(tx, id, s, dev)
+	if err != nil {
+		return nil, "", err
+	}
+	c.Name, c.Target, c.MinSeverity, c.Enabled, c.UpdatedAt = s.Name, s.Target, s.MinSeverity, s.Enabled, now
+	secret := ""
+	if s.RotateSecret || s.Secret != "" {
+		if secret, err = newSecret(tx, sealer, c, s.Secret); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := tx.UpdateAlertChannel(c); err != nil {
+		return nil, "", err
+	}
+	d := channelAudit(c, s.RotateSecret || s.Secret != "")
+	if from != to {
+		d = append(d, ojson.KV{Key: "previous_origin", Value: from}, ojson.KV{Key: "origin", Value: to})
+	}
+	return c, secret, tx.Audit(now, by.Display, "alert.channel.updated", d)
+}
+
+// prepareUpdate loads channel id and runs every check UpdateChannel makes before it writes; it returns the channel and the
+// origin it is moving from and to.
+func prepareUpdate(tx *store.TenantTx, id string, s ChannelSpec, dev bool) (*store.AlertChannel, ChannelSpec, string, string, error) {
 	c, err := tx.AlertChannel(id)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, "", refuse(404, "channel_not_found", "channel not found")
+		return nil, s, "", "", refuse(404, "channel_not_found", "channel not found")
 	} else if err != nil {
-		return nil, "", err
+		return nil, s, "", "", err
 	}
 	if s.Kind == "" {
 		s.Kind = c.Kind
 	}
 	if s.Kind != c.Kind {
-		return nil, "", refuse(422, "invalid_kind", "a channel's kind cannot change")
+		return nil, s, "", "", refuse(422, "invalid_kind", "a channel's kind cannot change")
 	}
 	if err := s.check(dev); err != nil {
-		return nil, "", err
+		return nil, s, "", "", err
+	}
+	if err := s.checkSecret(); err != nil {
+		return nil, s, "", "", err
 	}
 	// The signing secret is bound to the channel row, not to the receiver: a
 	// webhook that moves to another origin (scheme, host, port) must get a new
@@ -124,30 +190,16 @@ func UpdateChannel(tx *store.TenantTx, sealer *seal.Sealer, id string, s Channel
 	// (#332, as #315). A path-only change keeps the secret.
 	from, to := "", ""
 	if c.Kind == "webhook" {
-		from, to = safehttp.Origin(c.Target), safehttp.Origin(s.Target)
-		if from != to && !s.RotateSecret && len(c.SecretSealed) > 0 {
-			return nil, "", refuse(422, "credential_required",
+		from, to = safehttp.OriginKey(c.Target), safehttp.OriginKey(s.Target)
+		if from != to && !s.RotateSecret && s.Secret == "" && len(c.SecretSealed) > 0 {
+			return nil, s, "", "", refuse(422, "credential_required",
 				"changing the webhook's origin (scheme, host, port) needs a new signing secret: set rotate_secret")
 		}
 	}
-	c.Name, c.Target, c.MinSeverity, c.Enabled, c.UpdatedAt = s.Name, s.Target, s.MinSeverity, s.Enabled, now
-	secret := ""
-	if s.RotateSecret {
-		if secret, err = newSecret(tx, sealer, c); err != nil {
-			return nil, "", err
-		}
-	}
-	if err := tx.UpdateAlertChannel(c); err != nil {
-		return nil, "", err
-	}
-	d := channelAudit(c, secret != "")
-	if from != to {
-		d = append(d, ojson.KV{Key: "previous_origin", Value: from}, ojson.KV{Key: "origin", Value: to})
-	}
-	return c, secret, tx.Audit(now, by.Display, "alert.channel.updated", d)
+	return c, s, from, to, nil
 }
 
-func newSecret(tx *store.TenantTx, sealer *seal.Sealer, c *store.AlertChannel) (string, error) {
+func newSecret(tx *store.TenantTx, sealer *seal.Sealer, c *store.AlertChannel, chosen string) (string, error) {
 	if c.Kind != "webhook" {
 		c.SecretSealed = nil
 		return "", nil
@@ -155,13 +207,17 @@ func newSecret(tx *store.TenantTx, sealer *seal.Sealer, c *store.AlertChannel) (
 	if sealer == nil {
 		return "", errors.New("alerts: no sealer for webhook secrets")
 	}
-	secret := "whsec_" + seal.RandomSecret(32)
+	secret, shown := chosen, ""
+	if secret == "" {
+		secret = "whsec_" + seal.RandomSecret(32)
+		shown = secret // a generated secret is shown once; a chosen one the caller already knows
+	}
 	sealed, err := sealer.Seal([]byte(secret), SecretAAD(tx.Tenant(), c.ID))
 	if err != nil {
 		return "", err
 	}
 	c.SecretSealed = sealed
-	return secret, nil
+	return shown, nil
 }
 
 // channelAudit never includes the target URL's query (it may carry a token)
