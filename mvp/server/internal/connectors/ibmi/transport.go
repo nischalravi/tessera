@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -65,9 +66,9 @@ const (
 	connectProps = "access=read only"
 
 	pageRows     = 200      // rows requested per round trip
-	maxMessage   = 4 << 20  // bytes of one reply
+	maxMessage   = 2 << 20  // bytes of one reply: pageRows rows of at most maxRowLen
 	maxTotal     = 32 << 20 // bytes of all replies of one read
-	maxFieldLen  = 4096     // bytes of one column value
+	maxFieldLen  = 1024     // bytes of one column value
 	ioTimeout    = 20 * time.Second
 	maxPassword  = 128
 	maxPageTurns = 10000
@@ -101,6 +102,18 @@ var (
 // other error from a Source becomes the generic read error.
 var transportErrors = []error{ErrTooLarge, errConnect, errRefused, errTLS, errLogin, errProtocol, errOversize, errTimeout, errClosed}
 
+// validHost reports a plain host name or IP literal, safe to put in the Host
+// header: no CR, LF, space, "@", "/" or other syntax, whatever the dialer checked.
+func validHost(h string) bool {
+	h = strings.TrimSuffix(h, ".")
+	if _, err := netip.ParseAddr(h); err == nil {
+		return true
+	}
+	return len(h) > 0 && len(h) <= 253 && hostRE.MatchString(h)
+}
+
+var hostRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?)*$`)
+
 // userRE is an IBM i profile name the transport signs in as. It also keeps ":"
 // and control characters out of the Basic credential.
 var userRE = regexp.MustCompile(`^[A-Za-z#$@][A-Za-z0-9#$@_]{0,9}$`)
@@ -120,6 +133,9 @@ func OpenMapepire(ctx context.Context, s agent.ProberSpec) (Source, error) {
 	port := s.Target.Port
 	if port == 0 {
 		port = DefaultPort
+	}
+	if !validHost(s.Target.Host) {
+		return nil, errRefused
 	}
 	// ModeLDAPS is safedial's "TLS from the first byte" mode; it verifies the
 	// chain and host name against the Dialer's roots and is the only mode used.
@@ -180,25 +196,6 @@ type request struct {
 	ContID string `json:"cont_id,omitempty"`
 }
 
-// reply is the part of a Mapepire reply the transport reads. "error", "job" and
-// the metadata are deliberately absent: they are server text.
-type reply struct {
-	ID      string           `json:"id"`
-	Success bool             `json:"success"`
-	IsDone  bool             `json:"is_done"`
-	Data    []map[string]any `json:"data"`
-}
-
-// decodeReply parses one reply message and checks it answers wantID and
-// succeeded.
-func decodeReply(b []byte, wantID string) (*reply, error) {
-	var r reply
-	if err := json.Unmarshal(b, &r); err != nil || r.ID != wantID || !r.Success {
-		return nil, errProtocol
-	}
-	return &r, nil
-}
-
 func (m *mapepire) fail(ctx context.Context, err error) error {
 	switch {
 	case ctx.Err() != nil:
@@ -249,11 +246,7 @@ func (m *mapepire) Profiles(ctx context.Context, max int) ([]Profile, error) {
 	}
 	first := m.seq
 	for turns := 0; ; turns++ {
-		for _, row := range rep.Data {
-			p, err := profileOf(row)
-			if err != nil {
-				return nil, err
-			}
+		for _, p := range rep.Data {
 			if len(out) >= max {
 				if !rep.IsDone {
 					m.closeCursor(ctx, first)
@@ -285,47 +278,6 @@ func (m *mapepire) closeCursor(ctx context.Context, first int) {
 func (m *mapepire) Close() {
 	_ = m.ws.writeFrame(opClose, []byte{0x03, 0xE8}, time.Now().Add(time.Second))
 	_ = m.ws.conn.Close()
-}
-
-// profileOf maps one row object to a Profile. A column is a string or null;
-// anything else, or a missing name, is a malformed reply.
-func profileOf(row map[string]any) (Profile, error) {
-	str := func(col string, required bool) (string, error) {
-		v, ok := row[col]
-		if !ok || v == nil {
-			if required {
-				return "", errProtocol
-			}
-			return "", nil
-		}
-		s, ok := v.(string)
-		if !ok || len(s) > maxFieldLen {
-			return "", errProtocol
-		}
-		return strings.TrimSpace(s), nil
-	}
-	var p Profile
-	var err error
-	for _, f := range []struct {
-		col string
-		dst *string
-		req bool
-	}{{"AUTHORIZATION_NAME", &p.Name, true}, {"STATUS", &p.Status, false}, {"USER_CLASS_NAME", &p.UserClass, false},
-		{"GROUP_PROFILE_NAME", &p.GroupProfile, false}, {"TEXT_DESCRIPTION", &p.Text, false}} {
-		if *f.dst, err = str(f.col, f.req); err != nil {
-			return Profile{}, err
-		}
-	}
-	auth, err := str("SPECIAL_AUTHORITIES", false)
-	if err != nil {
-		return Profile{}, err
-	}
-	sup, err := str("SUPPLEMENTAL_GROUP_LIST", false)
-	if err != nil {
-		return Profile{}, err
-	}
-	p.SpecialAuthorities, p.SupplementalGroups = splitList(auth), splitList(sup)
-	return p, nil
 }
 
 // splitList splits a space or comma separated list column.
