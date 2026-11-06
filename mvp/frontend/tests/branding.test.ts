@@ -152,6 +152,16 @@ test("the branding store keeps state on a failed read, ignores a stale tenant, n
   pending.get("b!")!(mk("B2"));
   await r2;
   assert.equal(store.get()?.name, "B2");
+  // out of order: the refresh after a save is answered first, then the older plain read; the older one must not win (#896)
+  const older = new Map<boolean, (v: any) => void>();
+  const store2 = createBrandingStore((_s, fresh) => new Promise((res) => older.set(fresh, res)));
+  store2.use("z");
+  const p2 = store2.refresh();
+  older.get(true)!(mk("saved"));
+  await p2;
+  older.get(false)!(mk("old"));
+  await tick();
+  assert.equal(store2.get()?.name, "saved");
   // unsubscribe stops notifications
   off();
   const before = notified;
