@@ -291,3 +291,35 @@ func TestSiemAPI_RefusesMetadataTargets(t *testing.T) {
 		t.Errorf("an ordinary webhook: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// A sink a config import added without its target (#902) says so: an empty target and needs_target, no "(invalid URL)", and a
+// test that refuses in plain words instead of sending.
+func TestSiemSinkNeedsTarget(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	snd := &okSender{}
+	h := siemServer(t, f, snd)
+	admin := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ta@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	if err := f.DB.InTenant(context.Background(), f.B.ID, func(tx *store.TenantTx) error {
+		return tx.InsertSiemSink(&store.SiemSink{ID: "sink-nt", Name: "Imported", Kind: "webhook", Format: "json", Target: "",
+			Flavor: "json", Enabled: false, CreatedAt: storetest.Now, UpdatedAt: storetest.Now})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := siemDo(h, admin, "GET", "/api/siem/sinks", "")
+	var list []sinkView
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || rec.Code != 200 || len(list) != 1 {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	}
+	if !list[0].NeedsTarget || list[0].Target != "" || list[0].Enabled || strings.Contains(rec.Body.String(), "invalid URL") {
+		t.Errorf("view: %+v", list[0])
+	}
+	rec = siemDo(h, admin, "POST", "/api/siem/sinks/sink-nt/test", "")
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), `"target_required"`) || !strings.Contains(rec.Body.String(), "no target yet") || snd.n != 0 {
+		t.Errorf("test: %d %s (sent %d)", rec.Code, rec.Body, snd.n)
+	}
+	// setting a target goes through the existing two-admin path
+	rec = siemDo(h, admin, "PUT", "/api/siem/sinks/sink-nt", `{"target":"https://siem.example/collector"}`)
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "siem.sink.target") {
+		t.Errorf("set target: %d %s", rec.Code, rec.Body)
+	}
+}
