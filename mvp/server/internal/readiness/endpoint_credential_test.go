@@ -2,6 +2,7 @@ package readiness
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -32,6 +33,19 @@ func TestPatchConfig_EndpointChangeClearsCredential(t *testing.T) {
 		{"scim_app base_url", "scim_app", `{"base_url":"https://scim.example.com"}`, `{"base_url":"https://attacker.example.net"}`, `{"stale_days":60}`},
 		{"entra tenant_id", "entra", `{"tenant_id":"11111111-1111-1111-1111-111111111111","cloud":"public"}`, `{"tenant_id":"22222222-2222-2222-2222-222222222222"}`, `{"stale_days":60}`},
 		{"entra cloud", "entra", `{"tenant_id":"11111111-1111-1111-1111-111111111111","cloud":"public"}`, `{"cloud":"usgov"}`, `{"stale_days":60}`},
+		// Issue #912: any settings key Endpoints() treats as an endpoint drops the credential, not just a fixed list.
+		{"settings foo_url", "unixssh", `{"settings":{"host":"ssh.example.com","username":"svc","foo_url":"https://a.example.com","label":"x"}}`,
+			`{"settings":{"host":"ssh.example.com","username":"svc","foo_url":"https://attacker.example.net","label":"x"}}`,
+			`{"settings":{"host":"ssh.example.com","username":"svc","foo_url":"https://a.example.com","label":"y"}}`},
+		{"settings bar_host", "unixssh", `{"settings":{"host":"ssh.example.com","username":"svc","bar_host":"b.example.com"}}`,
+			`{"settings":{"host":"ssh.example.com","username":"svc","bar_host":"attacker.example.net"}}`,
+			`{"settings":{"host":"ssh.example.com","username":"other","bar_host":"b.example.com"}}`},
+		{"settings x_port", "unixssh", `{"settings":{"host":"ssh.example.com","username":"svc","x_port":"443"}}`,
+			`{"settings":{"host":"ssh.example.com","username":"svc","x_port":"8443"}}`,
+			`{"settings":{"host":"ssh.example.com","username":"other","x_port":"443"}}`},
+		{"settings new endpoint added", "unixssh", `{"settings":{"host":"ssh.example.com","username":"svc"}}`,
+			`{"settings":{"host":"ssh.example.com","username":"svc","api_endpoint":"https://attacker.example.net"}}`,
+			`{"settings":{"host":"ssh.example.com","username":"svc","label":"x"}}`},
 		{"azurerbac settings tenant_id", "azurerbac", `{"settings":{"tenant_id":"11111111-1111-1111-1111-111111111111"}}`,
 			`{"settings":{"tenant_id":"22222222-2222-2222-2222-222222222222"}}`, `{"stale_days":60}`},
 	} {
@@ -125,5 +139,25 @@ func TestPatchConfig_EndpointDropAudited(t *testing.T) {
 	}
 	if strings.Contains(detail, "attacker.example.net") {
 		t.Errorf("audit detail carries a value: %s", detail)
+	}
+}
+
+// Issue #912: the credential-drop check and Endpoints() share one definition of an endpoint setting.
+func TestEndpointChanged_MatchesEndpoints(t *testing.T) {
+	base := ConnConfig{Settings: map[string]string{"foo_url": "u", "bar_host": "h", "x_port": "1", "api_endpoint": "e", "label": "l", "username": "u"}}
+	for k := range base.Settings {
+		next := ConnConfig{Settings: map[string]string{}}
+		for k2, v := range base.Settings {
+			next.Settings[k2] = v
+		}
+		next.Settings[k] = "changed"
+		inEndpoints := !slices.Equal(base.Endpoints(), next.Endpoints())
+		moved := endpointChanged(base, next)
+		if inEndpoints != (len(moved) > 0) {
+			t.Errorf("settings.%s: Endpoints changed=%v, endpointChanged=%v", k, inEndpoints, moved)
+		}
+		if inEndpoints && !slices.Equal(moved, []string{"settings." + k}) {
+			t.Errorf("settings.%s: endpointChanged = %v", k, moved)
+		}
 	}
 }

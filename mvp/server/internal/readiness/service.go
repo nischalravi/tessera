@@ -728,18 +728,37 @@ var endpointFields = []struct {
 	{"tenant_host", func(c ConnConfig) string { return c.TenantHost }},
 	{"tenant_id", func(c ConnConfig) string { return c.TenantID }},
 	{"cloud", func(c ConnConfig) string { return c.Cloud }},
-	{"settings.host", func(c ConnConfig) string { return c.Settings["host"] }},
-	{"settings.port", func(c ConnConfig) string { return c.Settings["port"] }},
-	{"settings.host_key", func(c ConnConfig) string { return c.Settings["host_key"] }},
 	{"settings.tenant_id", func(c ConnConfig) string { return c.Settings["tenant_id"] }},
 }
 
-// endpointChanged names the endpoint fields an edit changes (names only, for the audit event).
+// isEndpointSetting reports whether a settings key says where a connector connects or sends its credential:
+// a name with host, url or endpoint in it, or one ending in port. It is the one definition used both by
+// Endpoints (approvals) and by endpointChanged (credential drop), so the two cannot drift.
+func isEndpointSetting(k string) bool {
+	return strings.Contains(k, "host") || strings.Contains(k, "url") || strings.Contains(k, "endpoint") || strings.HasSuffix(k, "port")
+}
+
+// endpointChanged names the endpoint fields an edit changes (names only, for the audit event): the fixed
+// endpointFields plus every settings key isEndpointSetting accepts, in either config.
 func endpointChanged(a, b ConnConfig) []string {
 	var out []string
 	for _, f := range endpointFields {
 		if f.get(a) != f.get(b) {
 			out = append(out, f.name)
+		}
+	}
+	var keys []string
+	for _, m := range []map[string]string{a.Settings, b.Settings} {
+		for k := range m {
+			if isEndpointSetting(k) && !slices.Contains(keys, k) {
+				keys = append(keys, k)
+			}
+		}
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		if a.Settings[k] != b.Settings[k] {
+			out = append(out, "settings."+k)
 		}
 	}
 	return out
@@ -1268,7 +1287,7 @@ func (c ConnConfig) Endpoints() []string {
 	add("cloud", c.Cloud)
 	for k, v := range c.Settings {
 		// the port is part of where the credential goes: a host with another port is another service
-		if strings.Contains(k, "host") || strings.Contains(k, "url") || strings.Contains(k, "endpoint") || strings.HasSuffix(k, "port") {
+		if isEndpointSetting(k) {
 			add("settings."+k, v)
 		}
 	}
