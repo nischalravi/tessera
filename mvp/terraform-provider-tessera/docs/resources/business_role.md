@@ -57,3 +57,11 @@ resource "tessera_business_role" "engineer" {
 - `change_url` (String) Where a person reviews that change request.
 - `id` (String) The role id.
 - `version` (Number) The role's version on the server.
+
+## Import
+
+Import by the role's id (a UUID, from `tessera_roles`). The server does not return the role's `key` or owner, so set them in the configuration; the first apply records them.
+
+```sh
+terraform import tessera_business_role.support_analyst <role id>
+```

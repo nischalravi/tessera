@@ -52,3 +52,13 @@ provider "tessera" {
 - `poll_interval` (String) How often a waiting resource asks whether the change was approved, as a duration such as `5s` (at least `100ms`). Default `5s`. Env: `TESSERA_POLL_INTERVAL`.
 - `tenant` (String) The tenant slug. Env: `TESSERA_TENANT`.
 - `wait_timeout` (String) How long a resource that proposes a change (`tessera_alert_rule`, `tessera_catalog_item`, `tessera_business_role`, `tessera_sod_ruleset`, `tessera_birthright_rule`, `tessera_mitigating_control`, `tessera_approval_policy`) waits for a person to approve it, as a duration such as `30m`. Default `30m`. On a timeout the apply fails with the change's URL; the proposal stays open for 72 hours. Env: `TESSERA_WAIT_TIMEOUT`.
+
+## Transport export and import stay with a signed-in person (admin center)
+
+The server's transport package (`/api/config/export`, `/api/config/import`) has no Terraform resource, on purpose:
+
+* It needs the `tessera:admin` scope and an admin role. A machine client never holds either, and its permissions never exceed those of the person who approved it.
+* Export now needs a **fresh step-up** sign-in, and applying an import needs one too. A machine client cannot pass a step-up, so a non-interactive provider could never call them.
+* A bundle is a signed document of up to 1 MiB, so it cannot travel as a proposal (the proposal body limit is 256 KiB).
+
+Use Admin > Export / import configuration in the UI (or the `/api/config/*` routes), signed in as a person with a fresh step-up, to move configuration between tenants or environments. Terraform manages the same objects one at a time through the resources above.

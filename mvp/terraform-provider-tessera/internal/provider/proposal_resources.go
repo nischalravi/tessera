@@ -112,6 +112,12 @@ func stringListOf(ctx context.Context, d *diag.Diagnostics, s types.List) []stri
 	return out
 }
 
+// keyChanged requires a replacement when the configured key differs from a key the state holds. After an import the
+// state has none (the server does not return it), and that is not a change of key.
+func keyChanged(_ context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
+	resp.RequiresReplace = !req.StateValue.IsNull() && !req.PlanValue.IsUnknown() && !req.PlanValue.Equal(req.StateValue)
+}
+
 // ---------------------------------------------------------------- tessera_alert_rule
 
 var (
@@ -255,8 +261,9 @@ func (r *alertRuleResource) ImportState(ctx context.Context, req resource.Import
 // ---------------------------------------------------------------- tessera_catalog_item
 
 var (
-	_ resource.Resource              = (*catalogItemResource)(nil)
-	_ resource.ResourceWithConfigure = (*catalogItemResource)(nil)
+	_ resource.Resource                = (*catalogItemResource)(nil)
+	_ resource.ResourceWithConfigure   = (*catalogItemResource)(nil)
+	_ resource.ResourceWithImportState = (*catalogItemResource)(nil)
 )
 
 // NewCatalogItemResource is tessera_catalog_item: the access-request catalog entry of one entitlement group.
@@ -382,6 +389,18 @@ func (r *catalogItemResource) Update(ctx context.Context, req resource.UpdateReq
 // Read keeps the state: a machine client cannot read catalog items.
 func (r *catalogItemResource) Read(context.Context, resource.ReadRequest, *resource.ReadResponse) {}
 
+// ImportState takes the group id. The server offers a machine client no read of a catalog item, so nothing else is
+// filled in: the first plan after an import shows the configuration as changes, and applying proposes them.
+func (r *catalogItemResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	gid, err := strconv.ParseInt(req.ID, 10, 64)
+	if err != nil || gid < 1 || strconv.FormatInt(gid, 10) != req.ID {
+		resp.Diagnostics.AddError("Invalid import id", "The import id is the entitlement group's id (a positive whole number), as listed by tessera_entitlements.")
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("group_id"), gid)...)
+}
+
 func (r *catalogItemResource) Delete(_ context.Context, _ resource.DeleteRequest, resp *resource.DeleteResponse) {
 	r.leftOnServer(&resp.Diagnostics, "The catalog item")
 }
@@ -389,8 +408,9 @@ func (r *catalogItemResource) Delete(_ context.Context, _ resource.DeleteRequest
 // ---------------------------------------------------------------- tessera_business_role
 
 var (
-	_ resource.Resource              = (*businessRoleResource)(nil)
-	_ resource.ResourceWithConfigure = (*businessRoleResource)(nil)
+	_ resource.Resource                = (*businessRoleResource)(nil)
+	_ resource.ResourceWithConfigure   = (*businessRoleResource)(nil)
+	_ resource.ResourceWithImportState = (*businessRoleResource)(nil)
 )
 
 // NewBusinessRoleResource is tessera_business_role: a business role, a bundle of entitlements people request as one.
@@ -426,7 +446,7 @@ func (r *businessRoleResource) Schema(_ context.Context, _ resource.SchemaReques
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 			"key": schema.StringAttribute{Required: true, Description: "The role's stable key (letters, digits, `.`, `_`, `:` and `-`). It never changes: a new key is a new role.",
 				Validators:    []validator.String{stringvalidator.LengthBetween(1, 64)},
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
+				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplaceIf(keyChanged, "A new key is a new resource.", "A new key is a new resource.")}},
 			"name": schema.StringAttribute{Required: true, Validators: []validator.String{stringvalidator.LengthBetween(1, 200), noEdgeSpace}},
 			"description": schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString(""),
 				Validators: []validator.String{stringvalidator.LengthAtMost(1000)}},
@@ -579,6 +599,16 @@ func (r *businessRoleResource) Read(ctx context.Context, req resource.ReadReques
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
+// ImportState takes the role id (a UUID). The server does not return the key, so it is not in the state after an
+// import; the first apply sends the configured key and sets it.
+func (r *businessRoleResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if !uuidRE.MatchString(req.ID) {
+		resp.Diagnostics.AddError("Invalid import id", "The import id is the role's id (a UUID).")
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+}
+
 func (r *businessRoleResource) Delete(_ context.Context, _ resource.DeleteRequest, resp *resource.DeleteResponse) {
 	r.leftOnServer(&resp.Diagnostics, "The business role")
 }
@@ -586,8 +616,9 @@ func (r *businessRoleResource) Delete(_ context.Context, _ resource.DeleteReques
 // ---------------------------------------------------------------- tessera_sod_ruleset
 
 var (
-	_ resource.Resource              = (*sodRulesetResource)(nil)
-	_ resource.ResourceWithConfigure = (*sodRulesetResource)(nil)
+	_ resource.Resource                = (*sodRulesetResource)(nil)
+	_ resource.ResourceWithConfigure   = (*sodRulesetResource)(nil)
+	_ resource.ResourceWithImportState = (*sodRulesetResource)(nil)
 )
 
 // NewSoDRulesetResource is tessera_sod_ruleset: a separation-of-duties ruleset, the container of SoD risks.
@@ -620,7 +651,7 @@ func (r *sodRulesetResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 			"key": schema.StringAttribute{Required: true, Description: "The ruleset's stable key (letters, digits, `.`, `_`, `:` and `-`). A new key is a new ruleset.",
 				Validators:    []validator.String{stringvalidator.LengthBetween(1, 64)},
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
+				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplaceIf(keyChanged, "A new key is a new resource.", "A new key is a new resource.")}},
 			"name":        schema.StringAttribute{Required: true, Validators: []validator.String{stringvalidator.LengthBetween(1, 200), noEdgeSpace}},
 			"description": schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("")},
 			"enabled": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true),
@@ -749,6 +780,16 @@ func (r *sodRulesetResource) Read(ctx context.Context, req resource.ReadRequest,
 	state.fromServer(v)
 	state.Note, state.ChangeID, state.ChangeURL = note, cid, curl
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// ImportState takes the ruleset id (a UUID). The server does not return the key, so it is not in the state after an
+// import; the first apply sends the configured key and sets it.
+func (r *sodRulesetResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if !uuidRE.MatchString(req.ID) {
+		resp.Diagnostics.AddError("Invalid import id", "The import id is the ruleset's id (a UUID).")
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }
 
 func (r *sodRulesetResource) Delete(_ context.Context, _ resource.DeleteRequest, resp *resource.DeleteResponse) {

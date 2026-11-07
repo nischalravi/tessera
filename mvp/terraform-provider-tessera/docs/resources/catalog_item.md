@@ -56,3 +56,11 @@ resource "tessera_catalog_item" "aws_first" {
 - `change_id` (String) The id of the change request that applied the last create or update.
 - `change_url` (String) Where a person reviews that change request.
 - `id` (String) The group id, as text.
+
+## Import
+
+Import by the entitlement group's id (a whole number, from `tessera_entitlements`). A machine client cannot read a catalog item, so the state holds only the id: the first plan shows the configuration as changes and applying proposes them.
+
+```sh
+terraform import tessera_catalog_item.aws_admin <group id>
+```
