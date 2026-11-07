@@ -489,6 +489,9 @@ func (s *Service) validateCreateConfig(in CreateInput, t *template.Resolved, cfg
 			return err
 		}
 	}
+	if err := urlCredentialError(ConnConfig{}, cfg); err != nil {
+		return err
+	}
 	return metadataHostError(cfg)
 }
 
@@ -586,6 +589,11 @@ func (s *Service) mergedPatch(b *Bundle, patch []byte) (ConnConfig, error) {
 	}
 	if cfg.WriteMode != "" && !slices.Contains(template.WriteModes, cfg.WriteMode) {
 		return cfg, unprocessable("invalid_config", "write_mode must be one of %v", template.WriteModes)
+	}
+	// a URL the view showed masked, sent back unchanged, keeps the stored value (issue #908)
+	keepMaskedURLs(&b.Config, &cfg)
+	if err := urlCredentialError(b.Config, cfg); err != nil {
+		return cfg, err
 	}
 	if cfg.Rest != nil && b.Template.ID == "rest_generic" {
 		// the environment's URL policy (https only in prod) applies on save

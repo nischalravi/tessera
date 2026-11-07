@@ -30,20 +30,23 @@ type CredentialView struct {
 
 // RevisionView is one revision.
 type RevisionView struct {
-	ID          string          `json:"id"`
-	Rev         int             `json:"rev"`
-	State       string          `json:"state"`
-	Template    TemplateRef     `json:"template"`
-	Config      ConnConfig      `json:"config"`
-	Credential  CredentialView  `json:"credential"`
-	ConfigHash  string          `json:"config_hash"`
-	WriteMode   string          `json:"write_mode"`
-	GateReport  json.RawMessage `json:"gate_report"`
-	ActivatedAt *string         `json:"activated_at"`
-	ActivatedBy *string         `json:"activated_by"`
-	CreatedBy   string          `json:"created_by"`
-	CreatedAt   string          `json:"created_at"`
-	UpdatedAt   string          `json:"updated_at"`
+	ID         string         `json:"id"`
+	Rev        int            `json:"rev"`
+	State      string         `json:"state"`
+	Template   TemplateRef    `json:"template"`
+	Config     ConnConfig     `json:"config"`
+	Credential CredentialView `json:"credential"`
+	// MaskedFields names the URL fields of Config shown masked (they carry credentials or query values); send a
+	// masked value back unchanged to keep the stored one.
+	MaskedFields []string        `json:"masked_fields,omitempty"`
+	ConfigHash   string          `json:"config_hash"`
+	WriteMode    string          `json:"write_mode"`
+	GateReport   json.RawMessage `json:"gate_report"`
+	ActivatedAt  *string         `json:"activated_at"`
+	ActivatedBy  *string         `json:"activated_by"`
+	CreatedBy    string          `json:"created_by"`
+	CreatedAt    string          `json:"created_at"`
+	UpdatedAt    string          `json:"updated_at"`
 }
 
 // NextStep is the next forward transition and what blocks it.
@@ -95,7 +98,8 @@ func templateRef(b *Bundle) TemplateRef {
 // RevisionOf renders a revision.
 func RevisionOf(b *Bundle) *RevisionView {
 	r := b.Rev
-	v := &RevisionView{ID: r.ID, Rev: r.Rev, State: r.State, Template: templateRef(b), Config: b.Config,
+	cfg, masked := MaskedConfig(b.Config)
+	v := &RevisionView{ID: r.ID, Rev: r.Rev, State: r.State, Template: templateRef(b), Config: cfg, MaskedFields: masked,
 		ConfigHash: r.ConfigHash, WriteMode: r.WriteMode, ActivatedBy: r.ActivatedBy, CreatedBy: r.CreatedBy,
 		CreatedAt: store.RT(r.CreatedAt), UpdatedAt: store.RT(r.UpdatedAt), GateReport: json.RawMessage("null")}
 	if r.SecretRef != nil {
