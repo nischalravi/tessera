@@ -221,10 +221,21 @@ func maskProposalPayload(typ string, payload any) []string {
 	}
 	if eps, ok := body["endpoints"].([]any); ok {
 		for i, e := range eps {
+			// an entry is "field=value" (readiness.ConnConfig.Endpoints): mask the value, keep the field name so
+			// the approver still sees which setting it is
 			if v, ok := e.(string); ok {
-				if mv := readiness.MaskURL(v); mv != v {
+				k, val, kv := strings.Cut(v, "=")
+				if !kv {
+					k, val = "", v
+				}
+				if mv := readiness.MaskURL(val); mv != val {
+					if kv {
+						mv = k + "=" + mv
+					}
 					eps[i] = mv
-					masked = append(masked, "endpoints")
+					if !slices.Contains(masked, "endpoints") {
+						masked = append(masked, "endpoints")
+					}
 				}
 			}
 		}

@@ -29,24 +29,36 @@ func urlSetting(k, v string) bool {
 
 // urlRisk reports whether v carries userinfo, or (strict) a query string or fragment.
 func urlRisk(v string, strict bool) bool {
-	if v == "" || !strings.Contains(v, "://") {
+	if !hasAuthority(v) {
 		return false
 	}
 	u, err := url.Parse(v)
 	if err != nil {
 		return strings.ContainsAny(v, "@?#")
 	}
-	return u.User != nil || (strict && (u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(v, "#")))
+	// strict: an "@" anywhere is refused, so a password holding "/", "?" or "#" (which net/url reads as the end of the
+	// authority) cannot slip through as a path, query or fragment
+	return u.User != nil || (strict && (u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsAny(v, "#@")))
 }
 
-// MaskURL returns v with its userinfo and query values replaced by URLMask and its fragment dropped. A value with
-// neither is returned unchanged. A value that cannot be parsed but may hold a credential is masked whole.
+// hasAuthority reports whether v may name a host with userinfo: it has a scheme separator or is scheme-relative.
+func hasAuthority(v string) bool {
+	return v != "" && (strings.Contains(v, "://") || strings.HasPrefix(strings.TrimSpace(v), "//"))
+}
+
+// MaskURL returns v with its userinfo, query values and fragment replaced by URLMask. A value with
+// none is returned unchanged. A value that cannot be parsed but may hold a credential is masked whole.
 func MaskURL(v string) string {
-	if v == "" || !strings.Contains(v, "://") || !strings.ContainsAny(v, "@?#") {
+	if !hasAuthority(v) || !strings.ContainsAny(v, "@?#") {
 		return v
 	}
 	u, err := url.Parse(v)
 	if err != nil {
+		return URLMask
+	}
+	if u.User == nil && strings.Contains(v, "@") {
+		// an "@" net/url did not read as userinfo ("https://u:p/w@h", "https://u:1?w@h"): the value may still
+		// hold a password whose "/", "?" or "#" ended the authority early, so nothing of it is shown
 		return URLMask
 	}
 	if u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && !strings.Contains(v, "#") {
@@ -58,13 +70,20 @@ func MaskURL(v string) string {
 	if u.RawQuery != "" {
 		pairs := strings.Split(u.RawQuery, "&")
 		for i, kv := range pairs {
-			k, _, _ := strings.Cut(kv, "=")
-			pairs[i] = k + "=" + URLMask
+			if k, _, ok := strings.Cut(kv, "="); ok {
+				pairs[i] = k + "=" + URLMask
+			} else {
+				pairs[i] = URLMask // a bare "?token" is all value
+			}
 		}
 		slices.Sort(pairs)
 		u.RawQuery = strings.Join(pairs, "&")
 	}
-	u.ForceQuery, u.Fragment, u.RawFragment = false, "", ""
+	u.ForceQuery, u.RawFragment = false, ""
+	if u.Fragment != "" || strings.Contains(v, "#") {
+		// masked, not dropped: the URL without its fragment is a value a client may send to clear it
+		u.Fragment = URLMask
+	}
 	return u.String()
 }
 

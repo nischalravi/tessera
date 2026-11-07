@@ -18,14 +18,24 @@ func TestMaskURL(t *testing.T) {
 		{"https://scim.example.com/v2", "https://scim.example.com/v2"},
 		{"https://u:pw@scim.example.com/v2", "https://masked@scim.example.com/v2"},
 		{"https://scim.example.com/?token=abc&a=b", "https://scim.example.com/?a=masked&token=masked"},
-		{"https://scim.example.com/#frag", "https://scim.example.com/"},
+		{"https://scim.example.com/#frag", "https://scim.example.com/#masked"},
 		{"https://%zz@scim.example.com", URLMask},
+		// a bare query is all value
+		{"https://scim.example.com/hook?abcSECRET", "https://scim.example.com/hook?masked"},
+		// a password holding "/", "?" or "#" ends the authority early in net/url: nothing of it is shown
+		{"https://u:12/pwSECRET@scim.example.com", URLMask},
+		{"https://u:12?pwSECRET@scim.example.com", URLMask},
+		{"https://u:12#pwSECRET@scim.example.com", URLMask},
+		// scheme-relative and upper-case schemes carry userinfo too
+		{"//u:pw@scim.example.com/v2", "//masked@scim.example.com/v2"},
+		{"HTTPS://u:pw@scim.example.com", "https://masked@scim.example.com"},
+		{"https://u%3Ax:p%40w@[2001:db8::1]:8443/v2", "https://masked@[2001:db8::1]:8443/v2"},
 	} {
 		got := MaskURL(tc.in)
 		if got != tc.want {
 			t.Errorf("MaskURL(%q) = %q, want %q", tc.in, got, tc.want)
 		}
-		if strings.Contains(got, "pw") || strings.Contains(got, "abc") {
+		if strings.Contains(got, "pw") || strings.Contains(got, "abc") || strings.Contains(got, "SECRET") || strings.Contains(got, "12") {
 			t.Errorf("MaskURL(%q) leaks: %q", tc.in, got)
 		}
 	}
@@ -47,6 +57,14 @@ func TestURLCredentialError(t *testing.T) {
 		{"setting value url", ConnConfig{Settings: map[string]string{"feed": "https://u:pw@x.example.com"}}, "settings.feed"},
 		{"setting query ok", ConnConfig{Settings: map[string]string{"api_url": "https://x.example.com/?v=1"}}, ""},
 		{"setting plain", ConnConfig{Settings: map[string]string{"username": "a@b"}}, ""},
+		{"base scheme-relative userinfo", ConnConfig{BaseURL: "//u:pw@scim.example.com"}, "base_url"},
+		{"base upper-case scheme", ConnConfig{BaseURL: "HTTPS://u:pw@scim.example.com"}, "base_url"},
+		{"base password with slash", ConnConfig{BaseURL: "https://u:12/pw@scim.example.com"}, "base_url"},
+		{"org password with hash", ConnConfig{OrgURL: "https://u:12#pw@a.okta.com"}, "org_url"},
+		{"base ipv6 userinfo", ConnConfig{BaseURL: "https://u:pw@[2001:db8::1]:8443"}, "base_url"},
+		{"base encoded at", ConnConfig{BaseURL: "https://u%40x:pw@scim.example.com"}, "base_url"},
+		{"base ipv6 clean", ConnConfig{BaseURL: "https://[2001:db8::1]:8443/v2"}, ""},
+		{"setting scheme-relative userinfo", ConnConfig{Settings: map[string]string{"api_url": "//u:pw@x.example.com"}}, "settings.api_url"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := urlCredentialError(ConnConfig{}, tc.cfg)
@@ -155,5 +173,29 @@ func TestPatchConfig_MaskedURLRoundTrip(t *testing.T) {
 	})
 	if res.Bundle.Config.BaseURL != "https://new.example.com" {
 		t.Error("a clean URL was not saved")
+	}
+}
+
+// Issue #908: a stored URL whose fragment alone was masked can be cleared by sending it without the fragment; the
+// mask is not the clean URL, so the stored value is not silently kept.
+func TestKeepMaskedURLs_FragmentClears(t *testing.T) {
+	cur := ConnConfig{BaseURL: "https://scim.example.com/v2#tok"}
+	next := ConnConfig{BaseURL: "https://scim.example.com/v2"}
+	keepMaskedURLs(&cur, &next)
+	if next.BaseURL != "https://scim.example.com/v2" {
+		t.Errorf("clean URL replaced by the stored one: %q", next.BaseURL)
+	}
+	next = ConnConfig{BaseURL: MaskURL(cur.BaseURL)}
+	keepMaskedURLs(&cur, &next)
+	if next.BaseURL != cur.BaseURL {
+		t.Errorf("mask sent back did not keep the stored value: %q", next.BaseURL)
+	}
+	// a mask never matches a field with no stored value, and a mask on another host is not the stored one's
+	for _, v := range []string{URLMask, "https://masked@other.example.com/v2"} {
+		next = ConnConfig{BaseURL: v, OrgURL: v}
+		keepMaskedURLs(&ConnConfig{BaseURL: "https://u:pw@scim.example.com/v2"}, &next)
+		if strings.Contains(next.BaseURL, "pw") || strings.Contains(next.OrgURL, "pw") {
+			t.Errorf("%q restored a stored credential: %+v", v, next)
+		}
 	}
 }
