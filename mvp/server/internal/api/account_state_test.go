@@ -156,7 +156,8 @@ func TestAccountState_BulkReportsPerID(t *testing.T) {
 			t.Errorf("result %d = %v", i, m)
 		}
 	}
-	if n := strings.Count(h.audit(), "account.disable_requested"); n != 3 {
+	// one audit event per id, and one for the refused single-form request before
+	if n := strings.Count(h.audit(), "account.disable_requested"); n != 4 {
 		t.Errorf("one audit event per id: %d", n)
 	}
 	// the connector kind decides whether an enable can run at all
@@ -220,9 +221,87 @@ func TestAccountState_PermissionAndStepUp(t *testing.T) {
 			t.Errorf("%s with a stale sign-in: %d %s", p, rec.Code, rec.Body)
 		}
 	}
-	rec := login(auth.RolePolicyAdmin, authtest.Phr).do("POST", paths[0], `{`+stateReason+`}`)
+	u := authtest.User{Email: "linked-policy@larkspur.example", Roles: []auth.Role{auth.RolePolicyAdmin},
+		IdentityID: ensureIdentity(t, h.st.DB, h.st.Tenant, "emp-1030", "test-admin", testkit.Now)}
+	rec := client{t, signIn(t, h.st.DB, h.st.Tenant, u, authtest.Phr, testkit.Now).Handler(h.srv.Handler())}.
+		do("POST", paths[0], `{`+stateReason+`}`)
 	var v map[string]any
 	if rec.Code != http.StatusAccepted || json.Unmarshal(rec.Body.Bytes(), &v) != nil || v["status"] != "queued" {
 		t.Errorf("policy admin: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// Account disable and enable keep the identity-level separation of duties: nobody changes an account of the identity
+// their own Tessera user is linked to, an unlinked user is refused, and the accounts of a disabled identity come back
+// only through Enable of the identity (four eyes), never one account at a time. Each refusal is audited, also in the
+// single form.
+func TestAccountState_SeparationOfDuties(t *testing.T) {
+	h := newProvHarness(t, fake.Options{Token: "tok"})
+	h.seedTarget()
+	h.target(`{"kind":"scim","base_url":"`+h.url+`","token":"tok","write_back":true}`, 200)
+	id := h.accountID("okta", h.alice)
+	var owner int64
+	testkit.Read(t, h.st, func(c *store.TenantTx) error {
+		a, err := c.Account(id)
+		if err == nil && a.IdentityID != nil {
+			owner = *a.IdentityID
+		}
+		return err
+	})
+	if owner == 0 {
+		t.Fatal("alice's account has no identity")
+	}
+	as := func(u authtest.User) client {
+		return client{t, signIn(t, h.st.DB, h.st.Tenant, u, authtest.Phr, testkit.Now).Handler(h.srv.Handler())}
+	}
+	self := as(authtest.User{Email: "alice-admin@larkspur.example", Roles: []auth.Role{auth.RolePolicyAdmin}, IdentityID: &owner})
+	unlinked := as(authtest.User{Email: "unlinked@larkspur.example", Roles: []auth.Role{auth.RolePolicyAdmin}})
+	one := fmt.Sprintf("/api/accounts/%d/", id)
+	bulk := fmt.Sprintf(`{"ids":[%d],%s}`, id, stateReason)
+	for name, c := range map[string]struct {
+		cl         client
+		path, body string
+		code       int
+		err        string
+	}{
+		"self single":     {self, one + "disable", `{` + stateReason + `}`, http.StatusForbidden, refuseSelfAccount},
+		"unlinked single": {unlinked, one + "disable", `{` + stateReason + `}`, http.StatusForbidden, "actor_unlinked"},
+		"self bulk":       {self, "/api/accounts/disable", bulk, http.StatusOK, refuseSelfAccount},
+	} {
+		rec := c.cl.do("POST", c.path, c.body)
+		if rec.Code != c.code || !strings.Contains(rec.Body.String(), c.err) {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	if row := h.accountRow(id); row["pending"] != nil {
+		t.Errorf("a refused disable queued an operation: %v", row)
+	}
+
+	// the identity is disabled (its accounts with it): the linked admin may not enable one of its accounts
+	testkit.Write(t, h.st, func(c *store.TenantTx) error {
+		if err := c.DisableAccount(id); err != nil {
+			return err
+		}
+		return c.SetIdentityStatus(owner, "disabled")
+	})
+	rec := h.c.do("POST", one+"enable", `{`+stateReason+`}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), refuseIdentityDisabled) {
+		t.Errorf("enable an account of a disabled identity: %d %s", rec.Code, rec.Body)
+	}
+	for _, r := range h.c.json("POST", "/api/accounts/enable", bulk, 200).(map[string]any)["results"].([]any) {
+		if m := r.(map[string]any); m["error"] != refuseIdentityDisabled {
+			t.Errorf("bulk enable of a disabled identity's account = %v", m)
+		}
+	}
+	if row := h.accountRow(id); row["pending"] != nil {
+		t.Errorf("a refused enable queued an operation: %v", row)
+	}
+	// every refusal above is in the ledger, the single-form ones included
+	got := h.audit()
+	if n := strings.Count(got, "account.disable_requested"); n != 3 {
+		t.Errorf("disable refusals audited: %d", n)
+	}
+	if n := strings.Count(got, "account.enable_requested"); n != 2 {
+		t.Errorf("enable refusals audited: %d", n)
 	}
 }

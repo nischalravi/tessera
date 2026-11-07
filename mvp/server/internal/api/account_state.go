@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
-	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -84,11 +84,12 @@ func (s *Server) accountStateOne(r *http.Request, p *params, enable bool) (any, 
 	if err != nil {
 		return nil, err
 	}
+	// a refusal answers with a body, not an error, so the transaction commits and the refusal's audit event stays
 	if x := res[0]; x.Status == "error" {
 		if x.code == http.StatusNotFound {
-			return nil, errStatus(http.StatusNotFound, "account not found")
+			return statusBody{http.StatusNotFound, detail("account not found")}, nil
 		}
-		return nil, &readiness.Error{Status: x.code, Code: x.Error, Msg: x.Detail}
+		return statusBody{x.code, ojson.Object{{Key: "error", Value: x.Error}, {Key: "detail", Value: x.Detail}}}, nil
 	}
 	return statusBody{http.StatusAccepted, res[0]}, nil
 }
@@ -147,9 +148,16 @@ func (s *Server) accountState(r *http.Request, ids []int64, reason string, enabl
 			pending[id], pendingOp[id] = dir, op.ID
 		}
 	}
+	// the caller's platform user, for the separation-of-duties checks (nil for a non-user principal)
+	var me *store.PlatformUser
+	if pr := principal(r); pr != nil && pr.UserID != nil {
+		if me, err = c.PlatformUser(*pr.UserID); err != nil {
+			return nil, err
+		}
+	}
 	out := make([]accountStateResult, 0, len(ids))
 	for _, id := range ids {
-		res, err := s.accountStateFor(c, now, r, id, reason, verb, want, enable, pending, pendingOp)
+		res, err := s.accountStateFor(c, now, me, id, verb, want, enable, pending, pendingOp)
 		if err != nil {
 			return nil, err
 		}
@@ -172,7 +180,17 @@ func refuse(id int64, code int, errCode, detail string) accountStateResult {
 	return accountStateResult{ID: id, Status: "error", Error: errCode, Detail: detail, code: code}
 }
 
-func (s *Server) accountStateFor(c *store.TenantTx, now time.Time, r *http.Request, id int64, reason, verb, want string, enable bool,
+// Account state refusals that keep the identity-level controls (#316, #335, #449) from being bypassed one account
+// at a time.
+const (
+	// refuseSelfAccount: the account belongs to the identity the caller's Tessera user is linked to.
+	refuseSelfAccount = "self_account_change_not_allowed"
+	// refuseIdentityDisabled: the account's identity is disabled; only Enable of the identity, with its four-eyes
+	// check, gives its accounts back.
+	refuseIdentityDisabled = "identity_disabled"
+)
+
+func (s *Server) accountStateFor(c *store.TenantTx, now time.Time, me *store.PlatformUser, id int64, verb, want string, enable bool,
 	pending map[int64]string, pendingOp map[int64]string) (accountStateResult, error) {
 	a, err := c.Account(id)
 	if errors.Is(err, store.ErrNotFound) {
@@ -180,6 +198,27 @@ func (s *Server) accountStateFor(c *store.TenantTx, now time.Time, r *http.Reque
 	}
 	if err != nil {
 		return accountStateResult{}, err
+	}
+	if me != nil && me.IdentityID == nil {
+		return refuse(id, http.StatusForbidden, containment.RefuseUnlinked, unlinkedMsg), nil
+	}
+	if me != nil && a.IdentityID != nil && *me.IdentityID == *a.IdentityID {
+		return refuse(id, http.StatusForbidden, refuseSelfAccount,
+			"You cannot "+verb+" an account of the identity linked to your own Tessera user; another admin must do it."), nil
+	}
+	if enable && a.IdentityID != nil {
+		ident, err := c.Identity(*a.IdentityID)
+		if err != nil {
+			return accountStateResult{}, err
+		}
+		open, err := c.OpenIdentityDisable(*a.IdentityID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return accountStateResult{}, err
+		}
+		if ident.Status != "active" || open != nil {
+			return refuse(id, http.StatusConflict, refuseIdentityDisabled,
+				"the account's identity is disabled: enable the identity (a second admin) instead of its accounts"), nil
+		}
 	}
 	if dir, ok := pending[id]; ok {
 		if (dir == "enable") == enable {
