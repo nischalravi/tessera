@@ -1,8 +1,13 @@
 package provider
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 // Plan-time validation and provider configuration: no server needed.
@@ -118,5 +123,26 @@ func TestImport_RejectsANonUUID(t *testing.T) {
 	_, d := newProtocol(t).importState("tessera_review_schedule", "not-a-uuid")
 	if got := diagText(d); !strings.Contains(got, "Invalid import id") {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestKeyChanged(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		state, plan types.String
+		want        bool
+	}{
+		{"same key", types.StringValue("a"), types.StringValue("a"), false},
+		{"new key replaces", types.StringValue("a"), types.StringValue("b"), true},
+		{"after an import the state has no key", types.StringNull(), types.StringValue("a"), false},
+		{"unknown plan", types.StringValue("a"), types.StringUnknown(), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var resp stringplanmodifier.RequiresReplaceIfFuncResponse
+			keyChanged(context.Background(), planmodifier.StringRequest{StateValue: tc.state, PlanValue: tc.plan}, &resp)
+			if resp.RequiresReplace != tc.want {
+				t.Fatalf("RequiresReplace = %v, want %v", resp.RequiresReplace, tc.want)
+			}
+		})
 	}
 }
