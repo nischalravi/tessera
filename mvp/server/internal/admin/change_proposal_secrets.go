@@ -628,9 +628,16 @@ func planConnection(e *env, id string, b *ConnectionBody) error {
 		if err != nil {
 			return err
 		}
+		sys, err := rd.DerivedSystem(readiness.CreateInput{Name: b.Name, ConnectorType: b.ConnectorType, System: b.System, Role: b.Role, Config: b.Config})
+		if err != nil {
+			return err
+		}
 		for _, c := range cs {
 			if strings.EqualFold(c.Name, strings.TrimSpace(b.Name)) {
 				return conflict("duplicate_connection", "a connection with that name already exists")
+			}
+			if c.System == sys {
+				return conflict("duplicate_connection", "a connection for that system already exists")
 			}
 		}
 		if cred != nil {
