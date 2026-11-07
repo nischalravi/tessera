@@ -22,8 +22,11 @@ var (
 		SELECT flag, live_fp FROM admin_change_target_checks WHERE tenant_id = @tenant AND change_id = @change_id AND flag <> ''`)
 	targetCheckCount = tq("admin_change_target_checks.count_value", `
 		SELECT COUNT(*) FROM admin_change_target_checks WHERE tenant_id = @tenant AND sealed_fp = @sealed_fp AND checked_at >= @since`)
+	// an approver's check has no flag; a proposal filing always has one (new, unchanged, path_changed, origin_changed)
 	targetCheckCountTenant = tq("admin_change_target_checks.count_tenant", `
-		SELECT COUNT(*) FROM admin_change_target_checks WHERE tenant_id = @tenant AND checked_at >= @since`)
+		SELECT COUNT(*) FROM admin_change_target_checks WHERE tenant_id = @tenant AND flag = '' AND checked_at >= @since`)
+	targetFilingCountTenant = tq("admin_change_target_checks.count_tenant_filings", `
+		SELECT COUNT(*) FROM admin_change_target_checks WHERE tenant_id = @tenant AND flag <> '' AND checked_at >= @since`)
 	targetCheckCountBy = tq("admin_change_target_checks.count_by", `
 		SELECT COUNT(*) FROM admin_change_target_checks WHERE tenant_id = @tenant AND checked_by = @checked_by AND checked_at >= @since`)
 )
@@ -48,10 +51,18 @@ func (tx *TenantTx) AdminChangeTargetChecksOf(sealedFP string, since time.Time) 
 	return n, err
 }
 
-// AdminChangeTargetChecksTenant counts every attempt in the tenant at or after since.
+// AdminChangeTargetChecksTenant counts the approvers' checks in the tenant at or after since. Proposal filings are not
+// counted (AdminChangeTargetFilingsTenant), so proposers cannot use up the approvers' budget (#907).
 func (tx *TenantTx) AdminChangeTargetChecksTenant(since time.Time) (int, error) {
 	var n int
 	err := tx.queryRow(targetCheckCountTenant, sql.Named("since", RT(since))).Scan(&n)
+	return n, err
+}
+
+// AdminChangeTargetFilingsTenant counts the proposal filings charged in the tenant at or after since.
+func (tx *TenantTx) AdminChangeTargetFilingsTenant(since time.Time) (int, error) {
+	var n int
+	err := tx.queryRow(targetFilingCountTenant, sql.Named("since", RT(since))).Scan(&n)
 	return n, err
 }
 

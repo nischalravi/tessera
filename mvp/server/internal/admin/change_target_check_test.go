@@ -347,3 +347,71 @@ func TestCheckTarget_ConcurrentLimit(t *testing.T) {
 		t.Errorf("%d checks passed and %d were locked, want %d and %d", ok.Load(), locked.Load(), admin.MaxTargetChecksPerValue, n-admin.MaxTargetChecksPerValue)
 	}
 }
+
+// Proposal filings never use up the approvers' budget (#907): they have their own tenant cap and a per-proposer cap, and an
+// approver can still check a URL when the filings are at their cap.
+func TestProposalTargetFilings_SeparateBudget(t *testing.T) {
+	h, ad, machine := secretHarness(t)
+	file := func(id, body string) (*store.AdminChange, error) {
+		return h.svc.SubmitProposal(h.ctx, machine, admin.KindAlertChannel, id, json.RawMessage(body))
+	}
+	// live channels to file against, each with its own per-object budget
+	objects := admin.MaxTargetFilingsPerProposer/admin.MaxTargetChecksPerValue + 1
+	for i := 0; i < objects; i++ {
+		c, err := file("", `{"name":"soc`+string(rune('a'+i))+`","kind":"webhook","target":"`+hookURL+`/`+string(rune('a'+i))+`","signing_secret":"`+hookSecret+`"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.svc.Approve(h.ctx, h.as(ad[0]), c.ID, c.PayloadHash); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var ids []string
+	h.tx(func(tx *store.TenantTx) error {
+		cs, err := tx.AlertChannels()
+		for _, c := range cs {
+			ids = append(ids, c.ID)
+		}
+		return err
+	})
+	filed := 0
+	var last error
+	for i := 0; last == nil && i < objects*admin.MaxTargetChecksPerValue; i++ {
+		_, last = file(ids[i/admin.MaxTargetChecksPerValue], `{"target":"https://hooks.example.com/services/T000/B000/f`+string(rune('a'+i))+`"}`)
+		if last == nil {
+			filed++
+		}
+	}
+	wantErr(t, last, http.StatusTooManyRequests, admin.ReasonTargetCheckRate)
+	if filed != admin.MaxTargetFilingsPerProposer {
+		t.Errorf("%d filings passed before the proposer's cap, want %d", filed, admin.MaxTargetFilingsPerProposer)
+	}
+
+	// the tenant's filings at their cap (other proposers): an approver's check still runs
+	pending, err := file("", `{"name":"new","kind":"webhook","target":"`+hookURL+`/new","signing_secret":"`+hookSecret+`"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.tx(func(tx *store.TenantTx) error {
+		for i := filed; i < admin.MaxTargetChecksPerTenant; i++ {
+			if err := tx.InsertAdminChangeTargetFiling(pending.ID, "tsc_other", "0123456789abcdef", "objkey", "unchanged", "", h.clk.now()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if res, err := h.svc.CheckTarget(h.ctx, h.as(ad[1]), pending.ID, hookURL+"/new"); err != nil || !res.Match {
+		t.Errorf("an approver's check with the filings at their cap = %+v, %v", res, err)
+	}
+	// and the tenant's filing cap holds
+	h.tx(func(tx *store.TenantTx) error {
+		n, err := tx.AdminChangeTargetFilingsTenant(h.clk.now().Add(-admin.TargetCheckWindow))
+		if n != admin.MaxTargetChecksPerTenant {
+			t.Errorf("filings counted = %d, want %d", n, admin.MaxTargetChecksPerTenant)
+		}
+		if c, _ := tx.AdminChangeTargetChecksTenant(h.clk.now().Add(-admin.TargetCheckWindow)); c != 1 {
+			t.Errorf("approver checks counted = %d, want 1", c)
+		}
+		return err
+	})
+}

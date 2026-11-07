@@ -359,8 +359,8 @@ func (s *Service) objectKey(t tenancy.ID, kind, id string) (string, error) {
 
 // fileTarget charges the filing of a proposal that seals a URL for an existing channel or sink against that object's
 // budget and keeps the server-side comparison (see TargetFlagFor). It runs in the filing's transaction, after the request
-// row exists. Past the budget (MaxTargetChecksPerValue per TargetLockWindow per object, or the tenant's hourly cap) the
-// filing is refused and rolled back; SubmitProposal audits the refusal.
+// row exists. Past the budget (MaxTargetChecksPerValue per TargetLockWindow per object, or the proposer's or tenant's hourly
+// filing cap) the filing is refused and rolled back; SubmitProposal audits the refusal.
 func (e *env) fileTarget(ch *store.AdminChange, kind, id, client string) error {
 	target, ok := e.secrets["target"]
 	if !ok || id == "" || (kind != KindAlertChannel && kind != KindSiemSink) {
@@ -375,7 +375,12 @@ func (e *env) fileTarget(ch *store.AdminChange, kind, id, client string) error {
 	if err != nil {
 		return err
 	}
-	perTenant, err := e.tx.AdminChangeTargetChecksTenant(e.now.Add(-TargetCheckWindow))
+	// filings have their own tenant cap and a per-proposer one: they never count against the approvers' checks (#907)
+	perTenant, err := e.tx.AdminChangeTargetFilingsTenant(e.now.Add(-TargetCheckWindow))
+	if err != nil {
+		return err
+	}
+	perProposer, err := e.tx.AdminChangeTargetChecksBy(client, e.now.Add(-TargetCheckWindow))
 	if err != nil {
 		return err
 	}
@@ -383,8 +388,8 @@ func (e *env) fileTarget(ch *store.AdminChange, kind, id, client string) error {
 	case perObject >= MaxTargetChecksPerValue:
 		return newErr(http.StatusTooManyRequests, ReasonTargetCheckLocked,
 			"this %s has had %d URL changes proposed in %d days; further proposals that set its URL are refused until the window passes", kindNoun(kind), MaxTargetChecksPerValue, int(TargetLockWindow.Hours()/24))
-	case perTenant >= MaxTargetChecksPerTenant:
-		return newErr(http.StatusTooManyRequests, ReasonTargetCheckRate, "too many URL checks and proposals in %s; try again later", TargetCheckWindow)
+	case perTenant >= MaxTargetChecksPerTenant || perProposer >= MaxTargetFilingsPerProposer:
+		return newErr(http.StatusTooManyRequests, ReasonTargetCheckRate, "too many proposals that set a URL in %s; try again later", TargetCheckWindow)
 	}
 	cur, err := e.liveTarget(kind, id)
 	if err != nil {
