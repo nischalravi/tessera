@@ -639,6 +639,12 @@ func TestProposalsAPI_SealedSecrets(t *testing.T) {
 		t.Errorf("the connection: %d %s", rec.Code, rec.Body)
 	}
 	check("after the connection")
+	// a different name for a system that is taken is refused at submit, with no secret in the answer
+	taken := `{"name":"Okta second","connector_type":"okta","system":"okta-prod","config":{"org_url":"https://acme.okta.com"},"credential":{"secret":"` + secret + `-conn2"}}`
+	if rec := keep(e.call(tok, "POST", "/api/proposals/connections", taken)); rec.Code != 409 || !strings.Contains(rec.Body.String(), "duplicate_connection") {
+		t.Errorf("a taken system: %d %s", rec.Code, rec.Body)
+	}
+	check("after the refused connection")
 	// and the same proposals in another tenant: refused to a client of tenant A for tenant B's rows
 	if rec := e.call(tok, "POST", "/api/proposals/siem-sinks/"+uuid.NewString(), `{"name":"x"}`); rec.Code != 404 {
 		t.Errorf("updating a sink that does not exist: %d %s", rec.Code, rec.Body)
