@@ -11,7 +11,7 @@ import { AccountRow, ConnectorRow, Group, IdentityDetail, OrgDetail, ResourceRow
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
-  Avatar, Badge, Chip, CommandBar, EmptyState, IdLink, Loading, PathView, PreviewBadge, RiskPill, Sev, SidePanel, Status, Tabs, TypeBadge, TYPE_LABEL, useToast,
+  Avatar, Badge, Chip, CommandBar, EmptyState, IdLink, Loading, PathView, RiskPill, Sev, SidePanel, Status, Tabs, TypeBadge, TYPE_LABEL, useToast,
 } from "../../components";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { LifecycleSection } from "../lifecycle/parts";
@@ -359,7 +359,7 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
           </dl>
         </>
       ) : (
-        <Section title={<>Part of these roles <PreviewBadge /></>}>
+        <Section title="Part of these roles">
           {inRoles.length === 0 ? <div className="small muted">Not bundled in any business role. People request it directly.</div> :
             inRoles.map((r) => <div key={r.id} className="small"><Link to={`/directory/roles?selected=${r.id}`}>{r.name}</Link> <span className="faint">· {r.member_count} members</span></div>)}
         </Section>
