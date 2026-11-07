@@ -115,7 +115,10 @@ const (
 	// affiliations of a person (guest accounts design, issue #64)
 	PermIdentitiesAffiliate Permission = "identities.affiliate"
 	// access requests (issue #164)
-	PermRequestsCreate       Permission = "requests.create"
+	PermRequestsCreate Permission = "requests.create"
+	// PermRolesRead lists the business roles (GET /api/roles). It is held by every role that holds requests.create
+	// (everyone requests from the list) and granted by tessera:read, so a read-only machine client can list roles (issue #719).
+	PermRolesRead            Permission = "roles.read"
 	PermRequestsCreateOthers Permission = "requests.create_for_others"
 	PermRequestsDecide       Permission = "requests.decide"
 	PermCatalogManage        Permission = "catalog.manage"
@@ -224,25 +227,25 @@ const (
 // Everyone but break-glass may request access for themselves; operators
 // and policy admins may also request for others and decide (issue #164).
 var rolePermissions = map[Role][]Permission{
-	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor, PermGroupsRead},
+	RoleViewer: {PermGraphRead, PermRequestsCreate, PermRolesRead, PermGuestsSponsor, PermGroupsRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermReviewsExport, PermHRISSimulateEvent, PermFlatfileUpload, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
+		PermReviewsDecide, PermReviewsExport, PermHRISSimulateEvent, PermFlatfileUpload, PermRequestsCreate, PermRolesRead, PermRequestsCreateOthers, PermRequestsDecide,
 		PermGuestsSponsor, PermGuestsRead, PermGuestsRecover, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDMitigate, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove},
-	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
+	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermRolesRead, PermEmailRead,
 		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermSiemRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead, PermReviewsExport},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermReviewsExport, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermSecretsRotate,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
 		PermIdentityMatchesReview, PermMatchingConfigure, PermGuestLifecycleConfigure,
-		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
+		PermRequestsCreate, PermRolesRead, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
 		PermGuestsSponsor, PermGuestsRead, PermGuestsRecover, PermSponsorshipsApprove, PermTermsManage, PermIdentitiesContain,
 		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermLPManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermWorkflowsManage,
 		PermFlatfileUpload, PermFlatfileCloseTasks,
 		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove, PermHelpdeskRisk, PermSSFConfigure, PermAgentsManage, PermGroupsLoaderAdmin, PermOAuthAppsManage, PermOAuthAppsRevoke},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermEmailDSN, PermPolicyGitHubCheck, PermPolicySync, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin,
+		PermConnectionsActivate, PermRequestsCreate, PermRolesRead, PermEmailRead, PermEmailManage, PermEmailDSN, PermPolicyGitHubCheck, PermPolicySync, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin,
 		PermJobsRead, PermJobsManage, PermProvisioningRead, PermProvisioningManage, PermLPManage, PermConfigTransport,
 		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermFlatfileManage, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermConditionalAccessRead, PermConditionalAccessManage, PermGroupsLoaderAdmin, PermOAuthAppsManage, PermHelpdeskRisk},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
@@ -345,7 +348,7 @@ const (
 var scopeOnlyPermissions = map[Scope][]Permission{ScopeEmailDSN: {PermEmailDSN}, ScopePolicyGitHubCheck: {PermPolicyGitHubCheck}, ScopePolicySync: {PermPolicySync}, ScopeConfigPropose: {PermConfigPropose}}
 
 var scopePermissions = map[Scope][]Permission{
-	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead},
+	ScopeRead: {PermGraphRead, PermRolesRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermConnectionsManage, PermConnectionsActivate, PermSecretsRotate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermLPManage, PermJobsManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermWorkflowsManage, PermFlatfileManage, PermFlatfileUpload, PermFlatfileCloseTasks, PermDriftRemediate, PermDriftPolicy, PermGroupsWrite, PermAgentsManage, PermGroupsLoaderAdmin, PermOAuthAppsManage, PermOAuthAppsRevoke},

@@ -45,7 +45,9 @@ const (
 	Format = "tessera-config-bundle"
 	// Version 2 added catalog items, review schedules, alert rules and SIEM sinks (issue #497);
 	// a version 1 bundle is still accepted and has none of them.
-	Version = 2
+	Version = 3
+	// Version 3 leaves the full target of log-streaming sinks out (origin only, target_required_on_import);
+	// a version 2 bundle's plaintext targets are still read, never written.
 	// MinVersion is the oldest bundle version an import accepts.
 	MinVersion = 1
 	// MediaType is the JWS "typ".
@@ -155,6 +157,9 @@ type ExcludedRef struct {
 	Section string `json:"section"`
 	Name    string `json:"name"`
 	Reason  string `json:"reason"`
+	// Fields names the values left out of the object (connection config keys, IdP
+	// fields, "body" for an overlay); an import keeps the existing value of each.
+	Fields []string `json:"fields,omitempty"`
 }
 
 // ------------------------------------------------------------------ export
@@ -210,7 +215,7 @@ func Collect(tx *store.TenantTx, rd *readiness.Service, now time.Time) (*Bundle,
 	}
 	for _, c := range conns {
 		if c.RetiredAt != nil {
-			b.Excluded = append(b.Excluded, ExcludedRef{"connections", c.Name, "retired"})
+			b.Excluded = append(b.Excluded, ExcludedRef{Section: "connections", Name: c.Name, Reason: "retired"})
 			continue
 		}
 		cur, err := rd.Current(tx, c.ID, now)
@@ -227,6 +232,14 @@ func Collect(tx *store.TenantTx, rd *readiness.Service, now time.Time) (*Bundle,
 				item.Credential = Credential{Kind: "reference", Reference: *r}
 			}
 		}
+		clean, cleaned, left := cleanConfig(item.Config)
+		item.Config = clean
+		if cleaned {
+			b.Excluded = append(b.Excluded, ExcludedRef{Section: "connections", Name: c.Name, Reason: "URL credentials, query and fragment in its configuration were left out: set them here if the connector needs them"})
+		}
+		if len(left) > 0 {
+			b.Excluded = append(b.Excluded, ExcludedRef{Section: "connections", Name: c.Name, Reason: reasonUnchecked, Fields: left})
+		}
 		b.Connections = append(b.Connections, item)
 	}
 	for _, id := range rd.Templates.IDs() {
@@ -234,7 +247,9 @@ func Collect(tx *store.TenantTx, rd *readiness.Service, now time.Time) (*Bundle,
 		if err != nil {
 			return nil, err
 		}
-		if o != nil {
+		if o != nil && !overlayExportable(o.Body) {
+			b.Excluded = append(b.Excluded, ExcludedRef{Section: "overlays", Name: id, Reason: reasonUnchecked, Fields: []string{"body"}})
+		} else if o != nil {
 			b.Overlays = append(b.Overlays, Overlay{TemplateID: id, Version: o.Version, Body: o.Body})
 		}
 	}
@@ -244,10 +259,17 @@ func Collect(tx *store.TenantTx, rd *readiness.Service, now time.Time) (*Bundle,
 	}
 	for _, c := range idps {
 		if c.Profile == "dev_mock" {
-			b.Excluded = append(b.Excluded, ExcludedRef{"identity_providers", c.Name, "the dev mock IdP never travels"})
+			b.Excluded = append(b.Excluded, ExcludedRef{Section: "identity_providers", Name: c.Name, Reason: "the dev mock IdP never travels"})
 			continue
 		}
-		b.IdentityProviders = append(b.IdentityProviders, idpOf(c))
+		i, cleaned, left := cleanIdP(idpOf(c))
+		if cleaned {
+			b.Excluded = append(b.Excluded, ExcludedRef{Section: "identity_providers", Name: c.Name, Reason: "URL credentials, query and fragment in its URLs were left out"})
+		}
+		if len(left) > 0 {
+			b.Excluded = append(b.Excluded, ExcludedRef{Section: "identity_providers", Name: c.Name, Reason: reasonUnchecked, Fields: left})
+		}
+		b.IdentityProviders = append(b.IdentityProviders, i)
 	}
 	for _, collect := range []func(*store.TenantTx, *Bundle) error{collectCatalog, collectReviewSchedules, collectAlertRules, collectSiemSinks} {
 		if err := collect(tx, b); err != nil {
@@ -255,6 +277,26 @@ func Collect(tx *store.TenantTx, rd *readiness.Service, now time.Time) (*Bundle,
 		}
 	}
 	return b, nil
+}
+
+// reasonUnchecked explains a value left out because it could not be checked reliably.
+const reasonUnchecked = "a value that may hold a URL or connection string could not be checked reliably and was left out: set it here"
+
+// cleanIdP cleans the URL fields of a sign-in connection; fields that cannot
+// be cleaned reliably are left out and named in left.
+func cleanIdP(i IdP) (out IdP, cleaned bool, left []string) {
+	for _, f := range []struct {
+		name string
+		p    **string
+	}{{"issuer", &i.Issuer}, {"discovery_url", &i.DiscoveryURL}, {"idp_sso_url", &i.IdPSSOURL}, {"metadata_url", &i.MetadataURL}} {
+		n, c, x := cleanURLField(*f.p)
+		*f.p = n
+		cleaned = cleaned || c
+		if x {
+			left = append(left, f.name)
+		}
+	}
+	return i, cleaned, left
 }
 
 func idpOf(c *store.IdPConnection) IdP {

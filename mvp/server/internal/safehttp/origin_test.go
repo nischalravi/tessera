@@ -1,6 +1,9 @@
 package safehttp
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestOrigin(t *testing.T) {
 	same := [][2]string{
@@ -23,5 +26,17 @@ func TestOrigin(t *testing.T) {
 		if Origin(c[0]) == Origin(c[1]) {
 			t.Errorf("%s and %s should differ in origin: %s", c[0], c[1], Origin(c[0]))
 		}
+	}
+}
+
+// An unparsable URL has no origin and is never echoed (it may carry a token); OriginKey still tells two of them apart.
+func TestOrigin_UnparsableIsNotEchoed(t *testing.T) {
+	bad := "https://h.example.com/%zz?token=SECRET"
+	if got := Origin(bad); got != "" {
+		t.Fatalf("Origin = %q, want empty", got)
+	}
+	k := OriginKey(bad)
+	if strings.Contains(k, "SECRET") || k == OriginKey(bad+"x") || k != OriginKey(bad) {
+		t.Errorf("OriginKey = %q", k)
 	}
 }

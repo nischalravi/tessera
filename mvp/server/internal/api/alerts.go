@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -353,6 +354,9 @@ type channelView struct {
 	Enabled     bool      `json:"enabled"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// TargetOrigin is the scheme, host and port of a URL target (#886); empty for an e-mail target. No fingerprint of the
+	// URL is returned: it would be an unthrottled oracle for a sealed URL.
+	TargetOrigin string `json:"target_origin,omitempty"`
 	// Secret is the webhook signing secret, only in the response that created or rotated it.
 	Secret string `json:"secret,omitempty"`
 }
@@ -366,19 +370,20 @@ func redactTarget(c *store.AlertChannel) string {
 	return safehttp.RedactURL(c.Target) // scheme://host[:port]/… (#333)
 }
 
-func channelViewOf(c *store.AlertChannel, secret string) channelView {
-	return channelView{ID: c.ID, Name: c.Name, Kind: c.Kind, Target: redactTarget(c), MinSeverity: c.MinSeverity, Enabled: c.Enabled,
+func (s *Server) channelViewOf(c *store.AlertChannel, secret string) channelView {
+	return channelView{TargetOrigin: urlOrigin(c.Target), ID: c.ID, Name: c.Name, Kind: c.Kind, Target: redactTarget(c), MinSeverity: c.MinSeverity, Enabled: c.Enabled,
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt, Secret: secret}
 }
 
 func (s *Server) listAlertChannels(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	cs, err := store.TxFrom(r.Context()).AlertChannels()
+	tx := store.TxFrom(r.Context())
+	cs, err := tx.AlertChannels()
 	if err != nil {
 		return nil, err
 	}
 	out := make([]channelView, 0, len(cs))
 	for _, c := range cs {
-		out = append(out, channelViewOf(c, ""))
+		out = append(out, s.channelViewOf(c, ""))
 	}
 	return out, nil
 }
@@ -423,7 +428,7 @@ func (s *Server) createAlertChannel(_ http.ResponseWriter, r *http.Request, _ *p
 	if err != nil {
 		return nil, alertErr(err)
 	}
-	return statusBody{http.StatusCreated, channelViewOf(c, secret)}, nil
+	return statusBody{http.StatusCreated, s.channelViewOf(c, secret)}, nil
 }
 
 func (s *Server) updateAlertChannel(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -446,7 +451,7 @@ func (s *Server) updateAlertChannel(_ http.ResponseWriter, r *http.Request, p *p
 	if err != nil {
 		return nil, alertErr(err)
 	}
-	return channelViewOf(c, secret), nil
+	return s.channelViewOf(c, secret), nil
 }
 
 // testAlertChannel sends a test message outside any transaction, then
@@ -498,4 +503,12 @@ func (s *Server) alertSealer() *seal.Sealer {
 		return nil
 	}
 	return s.cfg.Alerts.Sealer
+}
+
+// urlOrigin is the origin of a URL target ("" for an e-mail list or a syslog host:port).
+func urlOrigin(target string) string {
+	if !strings.Contains(target, "://") {
+		return ""
+	}
+	return safehttp.Origin(target)
 }

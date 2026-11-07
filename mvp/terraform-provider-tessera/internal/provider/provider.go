@@ -77,7 +77,7 @@ func (p *tesseraProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 				Description: "Skip TLS certificate verification. For throwaway test servers only; verification is on by default."},
 			"wait_timeout": schema.StringAttribute{Optional: true,
 				Description: "How long a resource that proposes a change (`tessera_alert_rule`, `tessera_catalog_item`, `tessera_business_role`, " +
-					"`tessera_sod_ruleset`) waits for a person to approve it, as a duration such as `30m`. Default `30m`. On a timeout the apply fails " +
+					"`tessera_sod_ruleset`, `tessera_birthright_rule`, `tessera_mitigating_control`, `tessera_approval_policy`) waits for a person to approve it, as a duration such as `30m`. Default `30m`. On a timeout the apply fails " +
 					"with the change's URL; the proposal stays open for 72 hours. Env: `TESSERA_WAIT_TIMEOUT`.",
 				Validators: []validator.String{durationValidator{min: time.Second}}},
 			"poll_interval": schema.StringAttribute{Optional: true,
@@ -168,11 +168,12 @@ func isTrue(s string) bool { return s == "1" || strings.EqualFold(s, "true") }
 
 func (p *tesseraProvider) Resources(context.Context) []func() resource.Resource {
 	return []func() resource.Resource{NewReviewScheduleResource, NewAlertRuleResource, NewCatalogItemResource, NewBusinessRoleResource,
-		NewSoDRulesetResource}
+		NewSoDRulesetResource, NewBirthrightRuleResource, NewMitigatingControlResource, NewApprovalPolicyResource,
+		NewConnectionResource, NewAlertChannelResource, NewSiemSinkResource}
 }
 
 func (p *tesseraProvider) DataSources(context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{NewIdentitiesDataSource, NewEntitlementsDataSource, NewConnectorsDataSource}
+	return []func() datasource.DataSource{NewIdentitiesDataSource, NewEntitlementsDataSource, NewConnectorsDataSource, NewGroupsDataSource, NewRolesDataSource}
 }
 
 // oneOf is stringvalidator.OneOf.

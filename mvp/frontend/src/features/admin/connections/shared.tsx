@@ -139,7 +139,7 @@ export const CONNECTOR_TYPES: { id: string; label: string; template: string; dem
   { id: "unixssh", label: "Unix/Linux host (SSH)", template: "unixssh", demo: false, blurb: "Local accounts, groups and sudoers rules of one host over SSH with a pinned host key, read-only." },
   { id: "racf", label: "RACF (z/OS)", template: "racf", demo: false, blurb: "Users, groups, connects and the SPECIAL, OPERATIONS, AUDITOR and ROAUDIT attributes through the z/OS LDAP (SDBM) interface, read by a Directory Agent." },
   { id: "ibmi", label: "IBM i", template: "ibmi", demo: false, blurb: "User profiles, group profiles and special authorities, read by a Directory Agent. Preview: it cannot sync yet.",
-    preview: "Preview: IBM i cannot sync yet. The live IBM i transport is not built into the Directory Agent, so a sync answers unsupported and no profiles are read." },
+    preview: "Preview: IBM i cannot sync yet. The Directory Agent reads IBM i through Mapepire (TLS, port 8076), but that transport is only tested against a fake server and not yet confirmed on a real IBM i." },
   { id: "sftpdrop", label: "SFTP file drop (CSV)", template: "sftpdrop", demo: false, blurb: "Accounts and entitlements CSV files that a legacy system exports to an SFTP directory, read with a pinned host key." },
   { id: "githubscan", label: "GitHub (code scan)", template: "githubscan", demo: false, blurb: "Reads MCP configuration and agent credentials from an organization's repositories, read-only." },
   { id: "sap", label: "SAP", template: "erp", demo: false, blurb: "Roles, transaction codes and authorization objects as fine-grained access." },

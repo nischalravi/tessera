@@ -74,8 +74,17 @@ func (w *Writer) CreateControl(in ControlInput) (*store.SodControl, error) {
 	return c, w.audit("sod.control.create", controlDetail(c))
 }
 
-// UpdateControl saves new content as the next version; ver must be current.
-func (w *Writer) UpdateControl(id string, ver int, in ControlInput) (*store.SodControl, error) {
+// CheckControl refuses what CreateControl (id empty) or UpdateControl would refuse, and writes nothing.
+func (w *Writer) CheckControl(id string, ver int, in ControlInput) error {
+	if id == "" {
+		return w.checkControl(&in, "")
+	}
+	_, err := w.checkControlUpdate(id, ver, &in)
+	return err
+}
+
+// checkControlUpdate loads the control an update changes and validates the new content.
+func (w *Writer) checkControlUpdate(id string, ver int, in *ControlInput) (*store.SodControl, error) {
 	old, err := w.Tx.SodControl(id)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, refuse(404, "control_not_found", "control not found")
@@ -88,7 +97,13 @@ func (w *Writer) UpdateControl(id string, ver int, in ControlInput) (*store.SodC
 	if ver != old.Version {
 		return nil, refuse(409, "version_conflict", "the control changed since version %d (now %d); reload it", ver, old.Version)
 	}
-	if err := w.checkControl(&in, id); err != nil {
+	return old, w.checkControl(in, id)
+}
+
+// UpdateControl saves new content as the next version; ver must be current.
+func (w *Writer) UpdateControl(id string, ver int, in ControlInput) (*store.SodControl, error) {
+	old, err := w.checkControlUpdate(id, ver, &in)
+	if err != nil {
 		return nil, err
 	}
 	c := *old

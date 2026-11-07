@@ -40,6 +40,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/syncverify"
@@ -105,6 +106,9 @@ type Service struct {
 	// EffectivePolicies gives the policies the tenant is checked against now; the prediction check of policy.sync.apply
 	// reads the violations through it. Nil: violations are not compared (permissions still are).
 	EffectivePolicies func(tx *store.TenantTx) ([]*policy.Policy, error)
+	// Connections is the readiness service a connection proposal (issue #719) validates and applies through; nil: those
+	// proposals answer 503.
+	Connections *readiness.Service
 	// SyncObserve, when set, may change the state the prediction check of policy.sync.apply reads after the apply: the seam
 	// where a connector re-collect (or a test's fake target that drops a change) shows what the target holds.
 	SyncObserve func(after *syncverify.State)
@@ -142,6 +146,12 @@ type env struct {
 	tenant *store.Tenant
 	admins []*store.PlatformUser
 	loaded bool
+	// secrets are the plaintext secrets of the proposal being filed, approved or applied (path to value). They are read
+	// into memory from the sealed blob (openSecrets) or from the submit body, handed to the domain code and never stored,
+	// logged or returned.
+	secrets map[string]string
+	// change is the id of the request being filed, approved or applied: the fingerprint of a sealed URL is bound to it.
+	change uuid.UUID
 }
 
 func (s *Service) env(tx *store.TenantTx, now time.Time, by uuid.UUID) *env {
@@ -303,6 +313,12 @@ type SubmitInput struct {
 	Type         string
 	Payload      json.RawMessage
 	ClientSecret string
+	// Secrets are the secret fields of a config.proposal (path to plaintext), taken out of its body by SubmitProposal; they
+	// are sealed with the request and are never part of the payload or its hash.
+	Secrets map[string]string
+	// requestID is the id the request is filed under, when the caller needed it before filing (a proposal's URL
+	// fingerprint is bound to it); zero for a fresh one.
+	requestID uuid.UUID
 }
 
 const maxSecretBytes = 4096
@@ -370,6 +386,11 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 			requester = *p.UserID
 		}
 		e := s.env(tx, now, requester)
+		id := in.requestID
+		if id == uuid.Nil {
+			id = uuid.New()
+		}
+		e.secrets, e.change = in.Secrets, id
 		pl, err := typ.plan(e, v)
 		if err != nil {
 			return err
@@ -383,9 +404,15 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 				"tenant_admin is allowed until it has two, and %s needs an operator co-sign through the admin CLI",
 				bootstrapAdmins, typ.name)
 		}
-		id := uuid.New()
 		var sealed []byte
 		switch {
+		case len(in.Secrets) > 0:
+			if typ.name != TypeConfigProposal {
+				return invalid("secrets are not part of a %s request", typ.name)
+			}
+			if sealed, err = e.sealSecrets(id, in.Secrets); err != nil {
+				return err
+			}
 		case typ.submitSecret != nil:
 			if sealed, err = typ.submitSecret(e, v, id, in.ClientSecret); err != nil {
 				return err
@@ -409,6 +436,12 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 		if clientID != "" {
 			if err := tx.InsertAdminChangeProposal(ch.ID, clientID, now); err != nil {
 				return err
+			}
+			if pp, ok := v.(*proposalPayload); ok {
+				// a URL set on an existing object is charged to that object's budget (refused past it, #886)
+				if err := e.fileTarget(ch, pp.Kind, pp.ID, clientID); err != nil {
+					return err
+				}
 			}
 		}
 		if typ.afterSubmit != nil {
@@ -490,7 +523,12 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, id uuid.UUID, 
 			failure = err
 			return errApplierFailed
 		}
-		if _, err := typ.plan(s.env(tx, now, ch.RequestedBy), v); err != nil {
+		pe := s.env(tx, now, ch.RequestedBy)
+		if err := pe.openSecrets(ch); err != nil {
+			failure = err
+			return errApplierFailed
+		}
+		if _, err := typ.plan(pe, v); err != nil {
 			if ch.Type == TypePolicySyncApply && staleSyncErr(err) {
 				// the reviewed plan can never apply: end the request (and free its commit) instead of leaving it pending
 				failure = err
@@ -626,7 +664,12 @@ func (s *Service) apply(ctx context.Context, tenant tenancy.ID, id uuid.UUID, by
 			failure = err
 			return errApplierFailed
 		}
-		if err := typ.apply(s.env(tx, now, ch.RequestedBy), ch, v); err != nil {
+		ae := s.env(tx, now, ch.RequestedBy)
+		if err := ae.openSecrets(ch); err != nil {
+			failure = err
+			return errApplierFailed
+		}
+		if err := typ.apply(ae, ch, v); err != nil {
 			failure = err
 			return errApplierFailed
 		}
@@ -660,8 +703,8 @@ func (s *Service) fail(ctx context.Context, tenant tenancy.ID, id uuid.UUID, cau
 	var ae *Error
 	if errors.As(cause, &ae) {
 		msg = ae.Msg
-		if staleSyncErr(cause) {
-			code = ae.Code // the caller sees stale_base / stale_plan, as before
+		if staleSyncErr(cause) || ae.Code == "endpoints_changed" {
+			code = ae.Code // the caller sees stale_base / stale_plan, and endpoints_changed, as before
 		}
 		if ae.Code == ReasonProposerRevoked || ae.Code == ReasonPayloadTampered {
 			// the reason is the failure text; the caller gets the 409 with that code

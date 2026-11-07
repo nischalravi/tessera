@@ -3896,6 +3896,8 @@ export interface SiemSink {
   format: SiemFormat;
   /** host:port, the webhook URL without its query string, or the bucket URL with its key prefix. */
   target: string;
+  /** The scheme, host and port of a URL target (never its path); empty for syslog. */
+  target_origin?: string;
   flavor: SiemFlavor;
   has_ca: boolean;
   has_token: boolean;
@@ -4253,6 +4255,8 @@ export interface AlertChannel {
   enabled: boolean;
   created_at: string;
   updated_at: string;
+  /** The scheme, host and port of a webhook URL (never its path). */
+  target_origin?: string;
   /** Only in the response that created the channel or rotated its secret. */
   secret?: string;
 }
@@ -4476,7 +4480,7 @@ export interface SigningKey { kid: string; public_key: string; tenant: string; c
 export interface TrustedSigner { kid: string; public_key: string; label: string; added_by: string | null; added_at: string }
 export interface ExportedBundle { hash: string; kid: string; file_name: string; excluded: { section: string; name: string; reason: string }[] | null; bundle: unknown }
 export type ImportAction = "add" | "change" | "remove" | "unchanged" | "manual";
-export interface PlanItem { section: "connections" | "overlays" | "identity_providers" | "catalog_items" | "review_schedules" | "alert_rules" | "siem_sinks"; name: string; action: ImportAction; fields?: string[]; notes?: string[] }
+export interface PlanItem { section: "connections" | "overlays" | "identity_providers" | "catalog_items" | "review_schedules" | "alert_rules" | "siem_sinks"; name: string; action: ImportAction; fields?: string[]; notes?: string[]; needs_target?: boolean }
 export interface ImportPlan {
   hash: string; digest: string; digest_prune: string; signer: string; signer_kid: string; exported_at: string; items: PlanItem[]; refusals: string[];
   source: { tenant_id: string; tenant: string; env: string; instance?: string; exported_by: string };
@@ -4508,7 +4512,7 @@ export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
   | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
   | "groups.loader.save" | "retention.update" | "deletion_guard.update" | "siem.sink.filter"
-  | "siem.sink.target" | "alerts.rule.loosen" | "breach.item.attest" | "provisioning.write_back.enable";
+  | "siem.sink.target" | "alerts.rule.loosen" | "breach.item.attest" | "provisioning.write_back.enable" | "config.proposal";
 
 export interface AdminPersonRef { id: string; display_name: string }
 
@@ -4518,8 +4522,12 @@ export interface AdminChange {
   approved_at: string | null; effective_at: string | null; decided_by: AdminPersonRef | null; decided_at: string | null;
   applied_at: string | null; failure: string | null; test_login_at: string | null; payload_hash: string;
   payload: Record<string, unknown> | null;
+  /** A config proposal that seals a URL: how it differs from the object's URL right now (only for an approver with a fresh step-up). */
+  target_change?: "new" | "unchanged" | "path_changed" | "origin_changed" | "stale";
   notifications?: AdminNotification[];
 }
+
+export interface TargetCheckResult { match: boolean; attempts_left: number }
 
 export interface AdminNotification {
   id: string; kind: string; severity: "info" | "critical"; recipient_type: "admin" | "contact" | "operator"; recipient: string; subject: string;
@@ -4671,6 +4679,8 @@ export const adminChanges = {
   reject: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/reject`, {}),
   cancel: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/cancel`, {}),
   apply: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/apply`, {}),
+  /** Does the URL I expect equal the one this proposal seals? Only match / no-match comes back, and the tries are limited. */
+  checkTarget: (id: string, url: string) => apiNoResume<TargetCheckResult>(`/admin/change-requests/${id}/check-target`, { url }), // never kept for a step-up retry
   activateConnection: (id: string) => api<{ id: string; status: string }>(`/admin/idp-connections/${id}/activate`, {}),
   disableUser: (id: string, reason: string) => api<{ id: string; status: string }>(`/admin/users/${id}/disable`, { reason }),
   cancelRecovery: (id: string) => api<AdminRecovery>(`/admin/recovery/${id}/cancel`, {}),

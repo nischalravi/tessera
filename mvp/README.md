@@ -55,21 +55,27 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
   same address (issue #608).
 * Terraform provider (issue #719): `terraform-provider-tessera/` is a separate Go module (no dependency on `server/`) that signs in as a
   machine client (client credentials, private-key JWT, optional DPoP) and manages `tessera_review_schedule` plus the `tessera_identities`,
-  `tessera_entitlements` and `tessera_connectors` data sources, and, through config proposals (issue #721), `tessera_alert_rule`,
-  `tessera_catalog_item`, `tessera_business_role` and `tessera_sod_ruleset`; see its `README.md`. Tests: `cd terraform-provider-tessera && go test ./...`,
+  `tessera_entitlements`, `tessera_connectors` and `tessera_roles` data sources, and, through config proposals (issues #721, #719), `tessera_alert_rule`,
+  `tessera_catalog_item`, `tessera_business_role`, `tessera_sod_ruleset`, `tessera_birthright_rule`, `tessera_mitigating_control` and `tessera_approval_policy`; see its `README.md`. Tests: `cd terraform-provider-tessera && go test ./...`,
   and `TF_ACC=1 go test ./internal/provider -run Acc` against a real `tessera serve`.
 * Config proposals by machine clients (issue #721): a machine client never holds an admin role and can never pass a step-up, so it cannot write
   configuration. With the `config.propose` scope it can instead *propose* a change, and a person approves it. The scope is not a registration
   option (the UI, the API and `tessera admin add-client` refuse it); two admins grant it with a change request of type `api_client.propose.grant`
   (`POST /api/admin/change-requests`; one requests, a different one approves, both with a step-up). Then:
-  `POST /api/proposals/catalog-items/{group_id}`, `/roles[/{role_id}]`, `/sod-rulesets[/{ruleset_id}]` and `/alert-rules/{rule_id}` take the body of
-  the matching write route and answer `202 {change_id, status, url, payload_hash}`; `GET /api/proposals/{change_id}` (the client's own proposals only)
+  `POST /api/proposals/catalog-items/{group_id}`, `/roles[/{role_id}]`, `/sod-rulesets[/{ruleset_id}]`, `/alert-rules/{rule_id}`, `/birthright-rules[/{policy_id}]` (the attribute condition a role's birthright rule names; body of `/api/abac/policies`), `/mitigating-controls[/{control_id}]` (`/api/sod/controls`) and `/approval-policies[/{workflow_id}]` (`/api/workflows`, with optional `targets` as in `/assignments`) take the body of
+  the matching write route; `/connections[/{connection_id}]` (a connection in draft with its `credential` `{secret | reference}`, or with an id a config
+  patch and/or a new credential; never activated), `/alert-channels[/{channel_id}]` (webhooks bring their own `signing_secret`) and `/siem-sinks[/{sink_id}]`
+  carry secrets, which are sealed at submit under the KEK, bound to tenant, request and field, kept in `admin_change_requests.secret_enc` apart from the
+  payload (which holds the marker `"set"`), opened only to validate and apply (the same domain code and SSRF checks as the admin routes, run again at
+  approval), and deleted by every end of the request (reject, cancel, expiry, apply, failure). A field left out of an update keeps its value; no
+  response, audit event or log returns one. A URL that carries a token is sealed too: the approver is shown its origin, a keyed fingerprint of the whole URL (HMAC under a key derived from the KEK, bound to the tenant) and whether the path or origin changed, and the poll returns `target_origin` and `target_fingerprint` for the client to compare. Body keys are case-sensitive (`Target` is refused), and `target_origin`, `target_fp` and `target_change` are set only by the server. All of them answer `202 {change_id, status, url, payload_hash}`; `GET /api/proposals/{change_id}` (the client's own proposals only)
   returns the status (`pending_approval`, `applied`, `rejected`, `cancelled`, `expired`, `failed`), `failure` and `result_id`. A proposal is an ordinary
   `config.proposal` change request (two-person, no cooling-off, 72 hour window) filed in the name of the client's owner, so neither the client nor its owner
   can approve it; an admin approves it at `POST /api/admin/change-requests/{id}/approve` (`admin.change.approve`, fresh step-up, echoing the payload hash)
   and only then is it applied, with the approving admin as the actor of the domain event. Every `admin.change.*` event of a proposal carries `client_id`,
-  and the admin view shows `proposed_by_client`. Table `admin_change_proposals` (schema `0952`) names the client. Not proposable yet: retiring or
-  deleting anything, SoD risks and functions, connectors, workflows, SIEM, transport.
+  and the admin view shows `proposed_by_client`. Table `admin_change_proposals` (schema `0952`) names the client. The new kinds validate through the same domain code as the admin routes (a dry check at submit and again at approval) and apply in the approval's transaction. `GET /api/roles` needs `roles.read` (held by every role that held `requests.create`, and granted by `tessera:read`), so a read-only machine client can list roles. Not proposable yet: retiring or
+  deleting anything, SoD risks and functions, and anything that carries a secret (connectors, alert channels, SIEM sinks, transport), which needs a proposal that holds sealed secrets.
+  **Check this URL (#886).** On a create the approver has nothing trusted to compare with, so `POST /api/admin/change-requests/{id}/check-target {url}` (`admin.change.approve`, fresh step-up, never the requester) takes the URL they expect and answers `{match, attempts_left}` only, never the sealed value (compared exactly as typed, apart from surrounding whitespace). It is an oracle for the sealed URL, so it is bounded by the sealed VALUE, not the request: 5 tries per URL in 30 days whoever asks and however often it is filed again (then 429 `target_check_locked` for everyone), 20 per approver and 60 per tenant per hour (429 `target_check_rate_limited`). A lockout raises the `approver_check_locked` alert. Each try is a row of `admin_change_target_checks` (schema `0964`: the request-bound fingerprint of the submitted URL and a per-tenant keyed counter key of the sealed one, neither returned) and an `admin.change.target_checked` audit event with the first, never the URL; a refusal is `admin.change.target_check_refused`. The limits hold under concurrency because `DB.InTenant` serialises a tenant's writers. The `target_fp` in a proposal is HMAC(tenant, request id, URL), so it can only be compared through that request's check; no alert-channel or SIEM-sink response carries a fingerprint (only `target_origin`). How a proposal's URL compares with the object's current URL (`target_change`: new, unchanged, path_changed, origin_changed, or stale once the object's URL changed after filing) is kept server-side and shown only to an approver with a fresh step-up on the single-request view, never in the payload, the summary, the list or to the proposer: otherwise it tells a guesser whether a guessed URL equals the live one. For the same reason every proposal that sets the URL of an existing channel or sink is charged to that object's budget (5 per 30 days, plus the tenant hourly cap); past it the filing is a 429 `target_check_locked`, audited (`admin.change.target_check_refused` with `object_id`) and raising `approver_check_locked`. A connection proposal's endpoint list (now including any `*port` setting) is re-checked at apply (409 `endpoints_changed`); connection proposals filed before this change and still pending fail that check and must be filed again, as must pending alert-channel and SIEM-sink proposals with a URL (their fingerprint formula changed).
 * Dev IdP: http://127.0.0.1:8001 (see [Signing in](#signing-in))
 
 Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`
@@ -637,14 +643,27 @@ agent (`agent:<agent id>/<name>`); a secret typed in Tessera or a vault referenc
   connect group authority (USE, CREATE, CONNECT, JOIN), CLAUTH, dataset and general resource profiles are not read. The attribute names follow the IBM SDBM schema and have only been run against the in-process
   fake (a live z/OS check is still to do).
 - **IBM i** (`internal/connectors/ibmi`, template `ibmi`, connector type `ibmi`). IBM i has no LDAP view of its
-  profiles; they are read from Db2 for i (`QSYS2.USER_INFO`) over the host servers (DRDA), which the Go standard
-  library cannot speak. So this release ships the plug-in contract (`ibmi.Source`: list profiles, bounded, read-only)
-  and the module that maps profiles to the typed result: each profile is an account (`*DISABLED` is disabled), each
+  profiles; they are read from Db2 for i (`QSYS2.USER_INFO`). The host servers (DRDA) cannot be spoken by the Go
+  standard library, so the live transport (`ibmi.OpenMapepire`, registered by the agent) uses IBM's open-source
+  **Mapepire** server for IBM i: JSON over a TLS WebSocket, default port 8076 (install Mapepire on the IBM i and give
+  it a certificate from your CA, then put that CA in the connection's CA bundle). The agent dials only through its
+  safedial Dialer (the host and port must be on `allowed_targets`; 8076 passes the port policy), verifies the
+  certificate chain and host name, signs in with HTTP Basic as the connection's user (the IBM i profile) and the
+  credential from the agent's store, and opens the job `access=read only`. It sends one fixed, parameter-free
+  `SELECT ... FROM QSYS2.USER_INFO` and nothing else, pages the result 200 rows at a time, and is bounded by the
+  sync's account limit (more is an error, never a cut-off list), 4 MiB per reply, 32 MiB in all and a 20 s
+  deadline per read or write. Errors have fixed text (`ibmi: the system refused the sign-in`, and so on); the
+  server's own error text and the credential are never read into an error or log. The module maps profiles to the typed result: each profile is an account (`*DISABLED` is disabled), each
   group profile and supplemental group a group (privileged when the group profile itself holds a privileged
   authority or class, since members hold the group's special authorities), each special authority a group (all
-  eight are privileged) and the `*SECOFR` and `*SECADM` classes privileged groups. **The live transport is
-  not built:** the agent build registers `ibmi.NoTransport`, which answers `unsupported`, and the template has no live
-  check (its items are attested); the gallery tile and wizard say it is a preview that cannot sync yet. The
+  eight are privileged) and the `*SECOFR` and `*SECADM` classes privileged groups. **Verified against an in-process
+  fake Mapepire server only**: a real IBM i with Mapepire must confirm the message format, the column names and the
+  `access=read only` property. The connection's port defaults to 8076 (Mapepire); an explicit port is kept.
+  **Readiness live checks** (reachability, TLS handshake and chain, sign-in, a read of `QSYS2.USER_INFO`) run as agent
+  probe jobs that name the module (`module` on the job; omitted for LDAP, so older servers and agents exchange the same
+  bytes, and an older agent refuses a module job rather than run it as LDAP). The agent dispatches to the module's prober;
+  an unknown or uncarried module is refused with fixed text before anything is dialed. The agent and profile-authority
+  items stay attested. The gallery tile keeps its Preview badge. The
   connection's user field holds the profile name (1 to 10 of A-Z, 0-9, `#`, `$`, `@`, `_`, not starting with a digit
   or `_`); no base DN.
 
@@ -822,6 +841,16 @@ fire less often is flagged "loosens detection" in the plan. **SIEM sinks** are m
 settings is *manual*, because where audit events are sent never changes by import. None of the four is
 removed by an import, with prune or without; each plan item carries its section. On a prod server a sink
 aimed at localhost is refused.
+
+**Bundle version 3** leaves where things send data out of the bundle. A SIEM sink travels with its
+origin only (`target_origin`, `scheme://host:port`, or `host:port` for syslog) and
+`target_required_on_import: true`; the full target (a webhook URL can carry a token in its path or
+query) is never exported. On import an existing sink keeps its target (a different origin is shown as
+*manual*); a new sink is added disabled with no target and its plan item has `needs_target: true` and a
+"needs target" note, so nothing is pointed anywhere until a person sets the target and token under Log
+streaming. Version 1 and 2 bundles are still read, plaintext targets included, and never written again.
+Connection configuration loses URL credentials, query and fragment on export (listed under `excluded`).
+Alert channels, provisioning targets and sealed credentials are not part of a bundle.
 
 **From a pipeline.** `tessera-cli config key|export|plan|apply` (`server/cmd/tessera-cli/config.go`)
 makes the same calls as the page, through the signed-in session of `tessera-cli login --scope

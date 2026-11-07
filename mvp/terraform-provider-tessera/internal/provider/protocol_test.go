@@ -118,11 +118,21 @@ func (p *protocol) resourceType(name string) tftypes.Object {
 	return objectType(s)
 }
 
+// validate is what Terraform 1.11 or later asks; validateOld is what an older one asks (it does not allow write-only attributes).
 func (p *protocol) validate(name string, vals map[string]any) []*tfprotov6.Diagnostic {
+	return p.validateWith(name, vals, true)
+}
+
+func (p *protocol) validateOld(name string, vals map[string]any) []*tfprotov6.Diagnostic {
+	return p.validateWith(name, vals, false)
+}
+
+func (p *protocol) validateWith(name string, vals map[string]any, writeOnly bool) []*tfprotov6.Diagnostic {
 	p.t.Helper()
 	typ := p.resourceType(name)
 	resp, err := p.srv.ValidateResourceConfig(context.Background(), &tfprotov6.ValidateResourceConfigRequest{
-		TypeName: name, Config: p.dv(typ, object(p.t, typ, vals))})
+		TypeName: name, Config: p.dv(typ, object(p.t, typ, vals)),
+		ClientCapabilities: &tfprotov6.ValidateResourceConfigClientCapabilities{WriteOnlyAttributesAllowed: writeOnly}})
 	if err != nil {
 		p.t.Fatal(err)
 	}
@@ -284,4 +294,13 @@ func num(t *testing.T, v tftypes.Value) int64 {
 	}
 	i, _ := f.Int64()
 	return i
+}
+
+func boolv(t *testing.T, v tftypes.Value) bool {
+	t.Helper()
+	var b bool
+	if err := v.As(&b); err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

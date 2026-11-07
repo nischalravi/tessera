@@ -195,11 +195,66 @@ func Create(tx *store.TenantTx, s Spec, by string, now time.Time) (*View, error)
 	return Get(tx, id)
 }
 
+// CheckCreate refuses what Create would refuse, and writes nothing.
+func CheckCreate(tx *store.TenantTx, s Spec) error {
+	s = s.trimmed()
+	if err := s.check(tx, s.Scope); err != nil {
+		return err
+	}
+	return nameTaken(tx, s.Name, "")
+}
+
+// CheckEdit refuses what Edit would refuse, and writes nothing.
+func CheckEdit(tx *store.TenantTx, id string, ver int, s Spec) (*View, error) {
+	return checkEdit(tx, id, ver, s.trimmed())
+}
+
+// CheckTargets refuses assignments SetTargets would refuse for a workflow of this scope and steps, and writes nothing.
+// id is the workflow being changed ("" for one not created yet).
+func CheckTargets(tx *store.TenantTx, id, scope string, steps []Step, targets []Target) error {
+	if len(targets) > 500 {
+		return refuse(422, "too_many_targets", "at most 500 targets")
+	}
+	for _, t := range targets {
+		if err := checkTarget(tx, scope, Definition{Steps: steps}, t); err != nil {
+			return err
+		}
+		if held, err := tx.WorkflowAssignmentFor(t.Kind, t.TargetID); err == nil && held.WorkflowID != id {
+			return refuse(409, "target_taken", "%s %s is already routed by another workflow", t.Kind, t.TargetID)
+		} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
 // Edit appends a new version. ver is the version the editor read; a different current version
 // is a conflict, so two admins cannot silently overwrite each other. The assignments are kept
 // when the new version still satisfies them, and the edit is refused otherwise.
 func Edit(tx *store.TenantTx, id string, ver int, s Spec, by string, now time.Time) (*View, error) {
 	s = s.trimmed()
+	if _, err := checkEdit(tx, id, ver, s); err != nil {
+		return nil, err
+	}
+	v, hash, err := version(id, ver+1, s, by)
+	if err != nil {
+		return nil, err
+	}
+	if ok, err := tx.AddWorkflowVersion(v, now); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, refuse(409, "version_conflict", "the workflow changed since version %d; reload it", ver)
+	}
+	if err := tx.Audit(now, by, "workflow.update", ojson.Object{{Key: "workflow_id", Value: id}, {Key: "name", Value: s.Name},
+		{Key: "version", Value: ver + 1}, {Key: "previous_version", Value: ver}, {Key: "steps", Value: len(s.Steps)},
+		{Key: "definition_hash", Value: hash}}); err != nil {
+		return nil, err
+	}
+	return Get(tx, id)
+}
+
+// checkEdit loads the workflow an edit changes and validates the new version; s is already trimmed.
+func checkEdit(tx *store.TenantTx, id string, ver int, s Spec) (*View, error) {
 	cur, err := Get(tx, id)
 	if err != nil {
 		return nil, err
@@ -221,21 +276,7 @@ func Edit(tx *store.TenantTx, id string, ver int, s Spec, by string, now time.Ti
 			return nil, err
 		}
 	}
-	v, hash, err := version(id, ver+1, s, by)
-	if err != nil {
-		return nil, err
-	}
-	if ok, err := tx.AddWorkflowVersion(v, now); err != nil {
-		return nil, err
-	} else if !ok {
-		return nil, refuse(409, "version_conflict", "the workflow changed since version %d; reload it", ver)
-	}
-	if err := tx.Audit(now, by, "workflow.update", ojson.Object{{Key: "workflow_id", Value: id}, {Key: "name", Value: s.Name},
-		{Key: "version", Value: ver + 1}, {Key: "previous_version", Value: ver}, {Key: "steps", Value: len(s.Steps)},
-		{Key: "definition_hash", Value: hash}}); err != nil {
-		return nil, err
-	}
-	return Get(tx, id)
+	return cur, nil
 }
 
 // Retire stops a workflow routing new requests: its assignments are removed (those targets go

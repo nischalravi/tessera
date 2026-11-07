@@ -88,15 +88,22 @@ type AlertRule struct {
 	WindowMinutes int    `json:"window_minutes"`
 }
 
-// SiemSink is a log-streaming destination without its token.
+// SiemSink is a log-streaming destination without its token. From bundle
+// version 3 it also leaves out the full target (a webhook URL can carry a
+// token in its path or query): only the origin travels, with
+// target_required_on_import. A version 2 bundle's plaintext Target is still
+// read, and never written again.
 type SiemSink struct {
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Format      string `json:"format"`
-	Target      string `json:"target"`
-	Flavor      string `json:"flavor,omitempty"`
-	CAPEM       string `json:"ca_pem,omitempty"`
-	IncludeHTTP bool   `json:"include_http"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	Format       string `json:"format"`
+	Target       string `json:"target,omitempty"`        // version 2 bundles only
+	TargetOrigin string `json:"target_origin,omitempty"` // scheme://host:port (syslog: host:port)
+	// TargetRequiredOnImport: the full target was withheld; a new sink is added disabled until a person sets it.
+	TargetRequiredOnImport bool   `json:"target_required_on_import,omitempty"`
+	Flavor                 string `json:"flavor,omitempty"`
+	CAPEM                  string `json:"ca_pem,omitempty"`
+	IncludeHTTP            bool   `json:"include_http"`
 	// NeedsSecret: the source sink had a token; set one here before enabling.
 	NeedsSecret bool `json:"needs_secret"`
 }
@@ -156,7 +163,7 @@ func collectReviewSchedules(tx *store.TenantTx, b *Bundle) error {
 	seen := map[string]bool{}
 	for _, t := range ts {
 		if seen[t.Name] { // names are the key: a second schedule of the same name cannot travel
-			b.Excluded = append(b.Excluded, ExcludedRef{SecReviewSchedules, t.Name, "another schedule has the same name"})
+			b.Excluded = append(b.Excluded, ExcludedRef{Section: SecReviewSchedules, Name: t.Name, Reason: "another schedule has the same name"})
 			continue
 		}
 		seen[t.Name] = true
@@ -190,8 +197,8 @@ func collectSiemSinks(tx *store.TenantTx, b *Bundle) error {
 		return err
 	}
 	for _, k := range sinks {
-		s := SiemSink{Name: k.Name, Kind: k.Kind, Format: k.Format, Target: k.Target, Flavor: k.Flavor, IncludeHTTP: k.IncludeHTTP,
-			NeedsSecret: len(k.SecretSealed) > 0}
+		s := SiemSink{Name: k.Name, Kind: k.Kind, Format: k.Format, TargetOrigin: siem.SinkOrigin(k.Kind, k.Target), TargetRequiredOnImport: true,
+			Flavor: k.Flavor, IncludeHTTP: k.IncludeHTTP, NeedsSecret: len(k.SecretSealed) > 0}
 		if k.CAPEM != nil {
 			s.CAPEM = *k.CAPEM
 		}
@@ -480,9 +487,18 @@ func planAlertRules(tx *store.TenantTx, b *Bundle, p *Plan) error {
 	return nil
 }
 
+// targetWithheld reports a sink whose full target is not in the bundle.
+func (s SiemSink) targetWithheld() bool { return s.Target == "" && s.TargetOrigin != "" }
+
+// sinkSpec is the sink as the siem package checks it. A withheld target is
+// checked as its origin, and marked NoTarget so nothing stores it.
 func sinkSpec(s SiemSink) siem.SinkSpec {
-	return siem.SinkSpec{Name: s.Name, Kind: s.Kind, Format: s.Format, Target: s.Target, Flavor: s.Flavor, CAPEM: s.CAPEM,
+	sp := siem.SinkSpec{Name: s.Name, Kind: s.Kind, Format: s.Format, Target: s.Target, Flavor: s.Flavor, CAPEM: s.CAPEM,
 		IncludeHTTP: s.IncludeHTTP}
+	if s.targetWithheld() {
+		sp.Target, sp.NoTarget = s.TargetOrigin, true
+	}
+	return sp
 }
 
 func planSiemSinks(tx *store.TenantTx, b *Bundle, p *Plan, target Target) error {
@@ -518,7 +534,12 @@ func planSiemSinks(tx *store.TenantTx, b *Bundle, p *Plan, target Target) error 
 		cur, ok := byName[spec.Name]
 		if !ok {
 			it.Action = Add
-			it.Notes = append(it.Notes, "added disabled, without its token: it sends nothing until you set the token and enable it")
+			if s.targetWithheld() {
+				it.NeedsTarget = true
+				it.Notes = append(it.Notes, "needs target: added disabled, without its target or token; it sends nothing until you set both under Log streaming and enable it")
+			} else {
+				it.Notes = append(it.Notes, "added disabled, without its token: it sends nothing until you set the token and enable it")
+			}
 			p.Items = append(p.Items, it)
 			continue
 		}
@@ -533,7 +554,17 @@ func planSiemSinks(tx *store.TenantTx, b *Bundle, p *Plan, target Target) error 
 		}
 		add("kind", cur.Kind == spec.Kind)
 		add("format", cur.Format == spec.Format)
-		add("target", cur.Target == spec.Target)
+		if s.targetWithheld() {
+			// The existing target is never changed; only a different origin is worth showing.
+			if cur.Target == "" {
+				it.NeedsTarget = true
+				it.Notes = append(it.Notes, "needs target: this sink was added without one and stays disabled until you set it under Log streaming")
+			} else {
+				add("target", siem.SinkOrigin(cur.Kind, cur.Target) == siem.SinkOrigin(spec.Kind, spec.Target))
+			}
+		} else {
+			add("target", cur.Target == spec.Target)
+		}
 		add("flavor", cur.Flavor == spec.Flavor)
 		add("ca_pem", curCA == spec.CAPEM)
 		add("include_http", cur.IncludeHTTP == spec.IncludeHTTP)

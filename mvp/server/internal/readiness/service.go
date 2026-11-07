@@ -306,16 +306,17 @@ func validText(s string, max int) bool {
 	return s != "" && len(s) <= max && utf8.ValidString(s) && printable.MatchString(s)
 }
 
-// Create adds a connection in draft (design §4.2: the template must exist and
-// the config must parse into the typed config).
-func (s *Service) Create(c *store.TenantTx, in CreateInput, actor string, now time.Time) (*Bundle, error) {
+// prepareCreate validates a new connection's name, connector type, system, role and config, and returns them
+// completed (system and role defaulted, the config merged over the template's defaults). It writes nothing.
+func (s *Service) prepareCreate(in CreateInput) (CreateInput, *template.Resolved, ConnConfig, error) {
+	var cfg ConnConfig
 	in.Name = strings.TrimSpace(in.Name)
 	if !validText(in.Name, 100) {
-		return nil, unprocessable("invalid_name", "name is required (at most 100 printable characters)")
+		return in, nil, cfg, unprocessable("invalid_name", "name is required (at most 100 printable characters)")
 	}
 	t, ok := s.Templates.ForConnectorType(in.ConnectorType)
 	if !ok {
-		return nil, unprocessable("unknown_connector_type", "no readiness template for connector type %q", in.ConnectorType)
+		return in, nil, cfg, unprocessable("unknown_connector_type", "no readiness template for connector type %q", in.ConnectorType)
 	}
 	if in.System == "" {
 		in.System = demoSystems[in.ConnectorType]
@@ -329,22 +330,39 @@ func (s *Service) Create(c *store.TenantTx, in CreateInput, actor string, now ti
 		in.System = strings.Trim(regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(strings.ToLower(in.Name), "-"), "-")
 	}
 	if !systemRE.MatchString(in.System) {
-		return nil, unprocessable("invalid_system", "system must be lower-case letters, digits, '-' or '_'")
+		return in, nil, cfg, unprocessable("invalid_system", "system must be lower-case letters, digits, '-' or '_'")
 	}
 	if in.Role == "" {
 		in.Role = t.Role
 	}
 	if !slices.Contains(template.Roles, in.Role) {
-		return nil, unprocessable("invalid_role", "role must be authoritative or account_source")
+		return in, nil, cfg, unprocessable("invalid_role", "role must be authoritative or account_source")
 	}
-	cfg := DefaultConfig(in.ConnectorType, t)
+	cfg = DefaultConfig(in.ConnectorType, t)
 	if len(in.Config) > 0 && string(in.Config) != "null" {
 		var err error
 		if cfg, err = MergeConfig(cfg, in.Config); err != nil {
-			return nil, &Error{Status: http.StatusUnprocessableEntity, Code: "invalid_config", Msg: err.Error()}
+			return in, nil, cfg, &Error{Status: http.StatusUnprocessableEntity, Code: "invalid_config", Msg: err.Error()}
 		}
 	}
 	if err := s.validateCreateConfig(in, t, cfg); err != nil {
+		return in, nil, cfg, err
+	}
+	return in, t, cfg, nil
+}
+
+// CheckCreate runs the checks Create makes before it writes (issue #719: a proposal is validated at submit and again at
+// apply), without writing anything.
+func (s *Service) CheckCreate(in CreateInput) (ConnConfig, error) {
+	_, _, cfg, err := s.prepareCreate(in)
+	return cfg, err
+}
+
+// Create adds a connection in draft (design §4.2: the template must exist and
+// the config must parse into the typed config).
+func (s *Service) Create(c *store.TenantTx, in CreateInput, actor string, now time.Time) (*Bundle, error) {
+	in, t, cfg, err := s.prepareCreate(in)
+	if err != nil {
 		return nil, err
 	}
 	ov, err := c.LatestOverlay(t.ID)
@@ -553,6 +571,50 @@ func metadataHostError(cfg ConnConfig) error {
 	return &Error{Status: http.StatusUnprocessableEntity, Code: "invalid_config", Msg: "the configuration is not valid", Fields: bad}
 }
 
+// mergedPatch merges a config patch over the bundle's config and refuses what PATCH .../config refuses on save.
+func (s *Service) mergedPatch(b *Bundle, patch []byte) (ConnConfig, error) {
+	cfg, err := MergeConfig(b.Config, patch)
+	if err != nil {
+		return cfg, &Error{Status: http.StatusUnprocessableEntity, Code: "invalid_config", Msg: err.Error()}
+	}
+	if cfg.WriteMode != "" && !slices.Contains(template.WriteModes, cfg.WriteMode) {
+		return cfg, unprocessable("invalid_config", "write_mode must be one of %v", template.WriteModes)
+	}
+	if cfg.Rest != nil && b.Template.ID == "rest_generic" {
+		// the environment's URL policy (https only in prod) applies on save
+		if err := s.restSpecError(cfg.Rest); err != nil {
+			return cfg, err
+		}
+	}
+	return cfg, metadataHostError(cfg)
+}
+
+// CheckPatch runs the checks PatchConfig makes before it writes, against the connection's current revision, without
+// writing anything (issue #719).
+func (s *Service) CheckPatch(c *store.TenantTx, connID string, patch []byte, now time.Time) (ConnConfig, error) {
+	conn, _, _, err := Revisions(c, connID)
+	if err != nil {
+		return ConnConfig{}, err
+	}
+	if conn.RetiredAt != nil {
+		return ConnConfig{}, conflict("connection_retired", "connection %s is retired", conn.Name)
+	}
+	b, err := s.Current(c, connID, now)
+	if err != nil {
+		return ConnConfig{}, err
+	}
+	return s.mergedPatch(b, patch)
+}
+
+// CurrentConfig is the config of the connection's current revision.
+func (s *Service) CurrentConfig(c *store.TenantTx, connID string, now time.Time) (ConnConfig, error) {
+	b, err := s.Current(c, connID, now)
+	if err != nil {
+		return ConnConfig{}, err
+	}
+	return b.Config, nil
+}
+
 // PatchConfig applies a partial config to the in-progress revision (creating
 // one when the connection is active) and moves the revision back through the
 // gates whose evidence the change invalidated.
@@ -561,20 +623,8 @@ func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, ac
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := MergeConfig(b.Config, patch)
+	cfg, err := s.mergedPatch(b, patch)
 	if err != nil {
-		return nil, &Error{Status: http.StatusUnprocessableEntity, Code: "invalid_config", Msg: err.Error()}
-	}
-	if cfg.WriteMode != "" && !slices.Contains(template.WriteModes, cfg.WriteMode) {
-		return nil, unprocessable("invalid_config", "write_mode must be one of %v", template.WriteModes)
-	}
-	if cfg.Rest != nil && b.Template.ID == "rest_generic" {
-		// the environment's URL policy (https only in prod) applies on save
-		if err := s.restSpecError(cfg.Rest); err != nil {
-			return nil, err
-		}
-	}
-	if err := metadataHostError(cfg); err != nil {
 		return nil, err
 	}
 	before := passing(b.Eval)
@@ -734,6 +784,77 @@ type CredentialInput struct {
 
 var refRE = regexp.MustCompile(`^(vault|agent):[A-Za-z0-9._/:@-]{1,200}$`)
 
+// credentialRef validates a credential input (a reference's form, an agent's existence, a secret's size) and returns the
+// reference the revision will hold; a secret gets a fresh sealed:<id> one. It writes nothing.
+func (s *Service) credentialRef(c *store.TenantTx, in CredentialInput) (string, error) {
+	var ref string
+	switch {
+	case in.Secret != "" && in.Reference != "":
+		return "", unprocessable("invalid_credential", "send either secret or reference, not both")
+	case in.Reference != "":
+		if !refRE.MatchString(in.Reference) {
+			if strings.Contains(in.Reference, "=") && strings.Contains(in.Reference, ",") {
+				return "", unprocessable("invalid_credential", "that looks like a distinguished name: enter the bind DN in Bind DN, and the password in Or the secret; this field is only a reference such as vault:<path> or agent:<id>/<name>")
+			}
+			return "", unprocessable("invalid_credential", "reference must look like vault:<path> or agent:<id>/<name>; the bind DN goes in Bind DN and the password in Or the secret")
+		}
+		if strings.HasPrefix(in.Reference, "agent:") {
+			id, _, ok := agent.ParseRef(in.Reference)
+			if !ok {
+				return "", unprocessable("invalid_credential", "an agent reference must look like agent:<agent id>/<credential name>")
+			}
+			// The agent must be an active one of this tenant (another tenant's
+			// agent is indistinguishable from a missing one).
+			if s.Runner.Live.Agents != nil {
+				if _, err := s.Runner.Live.Agents.Active(c, id); errors.Is(err, store.ErrNotFound) {
+					return "", unprocessable("unknown_agent", "no active Directory Agent with that id")
+				} else if err != nil {
+					return "", err
+				}
+			}
+		}
+		ref = in.Reference
+	case in.Secret != "":
+		if len(in.Secret) > 8192 {
+			return "", unprocessable("invalid_credential", "secret is longer than 8 KiB")
+		}
+		ref = "sealed:" + store.NewID()
+	default:
+		return "", unprocessable("invalid_credential", "secret or reference is required")
+	}
+	return ref, nil
+}
+
+// CheckCredential runs the checks SetCredential makes before it writes. templateID is the connection's template (a
+// connection that is being created is checked by its connector type's template); it writes nothing (issue #719).
+func (s *Service) CheckCredential(c *store.TenantTx, templateID string, in CredentialInput) error {
+	ref, err := s.credentialRef(c, in)
+	if err != nil {
+		return err
+	}
+	return s.templateCredentialError(templateID, in, ref)
+}
+
+// TemplateIDOf is the id of the template a connector type uses, or "" when there is none.
+func (s *Service) TemplateIDOf(connectorType string) string {
+	if t, ok := s.Templates.ForConnectorType(connectorType); ok {
+		return t.ID
+	}
+	return ""
+}
+
+func (s *Service) templateCredentialError(templateID string, in CredentialInput, ref string) error {
+	if templateID == "awsorg" && in.Secret != "" && !s.AWSAllowStaticKeys {
+		return unprocessable("static_keys_disabled", "stored AWS access keys are disabled on this server; AWS reads with federated credentials")
+	}
+	// RACF and IBM i are read by a Directory Agent module only, so their
+	// credential is the one on the agent.
+	if (templateID == "racf" || templateID == "ibmi") && !strings.HasPrefix(ref, "agent:") {
+		return unprocessable("agent_required", "this connector is read by a Directory Agent: reference the credential stored on the agent as agent:<agent id>/<credential name>")
+	}
+	return nil
+}
+
 // SetCredential records a credential reference on the in-progress revision.
 //
 // A submitted secret is sealed under the KEK (internal/seal, AAD bound to the
@@ -746,52 +867,16 @@ var refRE = regexp.MustCompile(`^(vault|agent):[A-Za-z0-9._/:@-]{1,200}$`)
 // revision still references it (a new revision copies its predecessor's
 // reference, so the live revision may still use it).
 func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialInput, actor string, now time.Time) (*Bundle, error) {
-	var ref string
-	switch {
-	case in.Secret != "" && in.Reference != "":
-		return nil, unprocessable("invalid_credential", "send either secret or reference, not both")
-	case in.Reference != "":
-		if !refRE.MatchString(in.Reference) {
-			if strings.Contains(in.Reference, "=") && strings.Contains(in.Reference, ",") {
-				return nil, unprocessable("invalid_credential", "that looks like a distinguished name: enter the bind DN in Bind DN, and the password in Or the secret; this field is only a reference such as vault:<path> or agent:<id>/<name>")
-			}
-			return nil, unprocessable("invalid_credential", "reference must look like vault:<path> or agent:<id>/<name>; the bind DN goes in Bind DN and the password in Or the secret")
-		}
-		if strings.HasPrefix(in.Reference, "agent:") {
-			id, _, ok := agent.ParseRef(in.Reference)
-			if !ok {
-				return nil, unprocessable("invalid_credential", "an agent reference must look like agent:<agent id>/<credential name>")
-			}
-			// The agent must be an active one of this tenant (another tenant's
-			// agent is indistinguishable from a missing one).
-			if s.Runner.Live.Agents != nil {
-				if _, err := s.Runner.Live.Agents.Active(c, id); errors.Is(err, store.ErrNotFound) {
-					return nil, unprocessable("unknown_agent", "no active Directory Agent with that id")
-				} else if err != nil {
-					return nil, err
-				}
-			}
-		}
-		ref = in.Reference
-	case in.Secret != "":
-		if len(in.Secret) > 8192 {
-			return nil, unprocessable("invalid_credential", "secret is longer than 8 KiB")
-		}
-		ref = "sealed:" + store.NewID()
-	default:
-		return nil, unprocessable("invalid_credential", "secret or reference is required")
+	ref, err := s.credentialRef(c, in)
+	if err != nil {
+		return nil, err
 	}
 	b, _, err := s.pendingBundle(c, connID, actor, now)
 	if err != nil {
 		return nil, err
 	}
-	if b.Template.ID == "awsorg" && in.Secret != "" && !s.AWSAllowStaticKeys {
-		return nil, unprocessable("static_keys_disabled", "stored AWS access keys are disabled on this server; AWS reads with federated credentials")
-	}
-	// RACF and IBM i are read by a Directory Agent module only, so their
-	// credential is the one on the agent.
-	if (b.Template.ID == "racf" || b.Template.ID == "ibmi") && !strings.HasPrefix(ref, "agent:") {
-		return nil, unprocessable("agent_required", "this connector is read by a Directory Agent: reference the credential stored on the agent as agent:<agent id>/<credential name>")
+	if err := s.templateCredentialError(b.Template.ID, in, ref); err != nil {
+		return nil, err
 	}
 	rev := *b.Rev
 	version := store.NewID()
@@ -1150,4 +1235,47 @@ func restDestination(s *restgen.Spec) string {
 		return ""
 	}
 	return s.SecretDestination()
+}
+
+// Endpoints lists, as name=value, every setting of a decoded config that says where the connector will connect or send its
+// credential: the host, URL and tenant fields, the host settings of the SSH and governed types, the base and token URLs of a
+// REST spec, the host of a database and a governed type's port setting. None is a secret. It is empty only when the config names no endpoint (the connector
+// type's own default applies).
+func (c ConnConfig) Endpoints() []string {
+	var out []string
+	add := func(k, v string) {
+		if v != "" {
+			out = append(out, k+"="+v)
+		}
+	}
+	host := c.Host
+	if host != "" && c.Port != 0 {
+		host = net.JoinHostPort(host, strconv.Itoa(c.Port))
+	}
+	add("host", host)
+	add("org_url", c.OrgURL)
+	add("base_url", c.BaseURL)
+	add("domain", c.Domain)
+	add("tenant_host", c.TenantHost)
+	add("tenant_id", c.TenantID)
+	add("cloud", c.Cloud)
+	for k, v := range c.Settings {
+		// the port is part of where the credential goes: a host with another port is another service
+		if strings.Contains(k, "host") || strings.Contains(k, "url") || strings.Contains(k, "endpoint") || strings.HasSuffix(k, "port") {
+			add("settings."+k, v)
+		}
+	}
+	if c.Rest != nil {
+		add("rest.base_url", c.Rest.BaseURL)
+		add("rest.auth.token_url", c.Rest.Auth.TokenURL)
+	}
+	if c.SQL != nil {
+		h := c.SQL.Host
+		if h != "" && c.SQL.Port != 0 {
+			h = net.JoinHostPort(h, strconv.Itoa(c.SQL.Port))
+		}
+		add("sql.host", h)
+	}
+	slices.Sort(out)
+	return out
 }

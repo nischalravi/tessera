@@ -60,7 +60,7 @@ function ExportCard() {
       <p className="small muted" style={{ margin: 0 }}>
         The bundle holds connections (with their configuration and owners), readiness overlays, sign-in connections, catalog items, review schedules, alert rules and log-streaming sinks. It never holds secrets:
         sealed credentials, sink tokens and client secrets stay here, and external references such as <code>vault:…</code> travel as they are. Retired connections and the dev IdP are left out.
-        An import adds review schedules paused and log-streaming sinks disabled, keeps the people and first runs set here, and never changes where audit events are sent.
+        Log-streaming sinks travel with their origin only, never the full target. An import adds review schedules paused and log-streaming sinks disabled (a new sink is marked "needs target" until you set its target and token), keeps the people and first runs set here, and never changes where audit events are sent.
       </p>
       <p className="small muted" style={{ margin: 0 }}>
         From a pipeline: <code>tessera-cli login --scope "tessera:admin"</code>, then <code>tessera-cli config export -o bundle.json</code>, and in the destination <code>tessera-cli config plan -f bundle.json</code> and <code>tessera-cli config apply -f bundle.json</code>.

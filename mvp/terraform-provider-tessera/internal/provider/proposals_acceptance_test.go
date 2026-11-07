@@ -362,6 +362,271 @@ func TestAcc_Proposals(t *testing.T) {
 		}
 	})
 
+	// the new policy kinds (server issue #719): each is proposed, approved by a person, read back, updated and imported
+	idents, d := p.readData("tessera_identities", map[string]any{"query": "ingrid"})
+	if len(d) > 0 {
+		t.Fatalf("identities: %s", diagText(d))
+	}
+	var ils []tftypes.Value
+	_ = idents["identities"].As(&ils)
+	ownerID := num(t, attrs(t, ils[0])["id"])
+	importVerifies := func(t *testing.T, res string, st tftypes.Value) {
+		t.Helper()
+		imp, d := p.importState(res, str(t, attrs(t, st)["id"]))
+		if len(d) > 0 {
+			t.Fatalf("import: %s", diagText(d))
+		}
+		got, d := p.read(res, imp)
+		if len(d) > 0 {
+			t.Fatalf("read after import: %s", diagText(d))
+		}
+		want, gotA := attrs(t, st), attrs(t, got)
+		for k, v := range want {
+			if k == "change_id" || k == "change_url" || k == "note" {
+				continue // the proposal's own bookkeeping is not on the server
+			}
+			if !gotA[k].Equal(v) {
+				t.Fatalf("import changed %s: %v vs %v", k, gotA[k], v)
+			}
+		}
+	}
+	t.Run("birthright rule", func(t *testing.T) {
+		const res = "tessera_birthright_rule"
+		cond := `{"attr":"identity.department","op":"eq","value":"Finance"}`
+		cfg := map[string]any{"name": "TF finance staff", "description": "from terraform", "condition_json": cond}
+		st := approveNext(applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil))).state
+		a := attrs(t, st)
+		if !uuidRE.MatchString(str(t, a["id"])) || num(t, a["version"]) != 1 || str(t, a["condition_json"]) != cond {
+			t.Fatalf("created rule: %v", st)
+		}
+		if again, d := p.read(res, st); len(d) > 0 || !again.Equal(st) {
+			t.Fatalf("refresh changed the state: %s\n%v\n%v", diagText(d), st, again)
+		}
+		importVerifies(t, res, st)
+		cfg["condition_json"] = `{"any":[{"attr":"identity.department","op":"eq","value":"Finance"},{"attr":"identity.department","op":"eq","value":"Legal"}]}`
+		st2 := approveNext(applyAsync(p, res, cfg, st)).state
+		if a2 := attrs(t, st2); str(t, a2["id"]) != str(t, a["id"]) || num(t, a2["version"]) != 2 {
+			t.Fatalf("updated rule: %v", st2)
+		}
+		// a bad condition is refused by the server before anyone is asked
+		cfg["condition_json"] = `{"attr":"nope","op":"eq","value":1}`
+		if _, d := p.apply(res, cfg, st2); !strings.Contains(diagText(d), "condition:") {
+			t.Fatalf("a bad condition: %q", diagText(d))
+		}
+		if d := p.validate(res, map[string]any{"name": "x", "condition_json": "[1]"}); !strings.Contains(diagText(d), "JSON object") {
+			t.Fatalf("a JSON array as a condition: %q", diagText(d))
+		}
+	})
+	t.Run("mitigating control", func(t *testing.T) {
+		const res = "tessera_mitigating_control"
+		cfg := map[string]any{"name": "TF monthly review", "owner_identity_id": int(ownerID), "type": "detective", "frequency": "monthly",
+			"evidence_requirement": "signed report"}
+		st := approveNext(applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil))).state
+		a := attrs(t, st)
+		if !uuidRE.MatchString(str(t, a["id"])) || num(t, a["version"]) != 1 || num(t, a["owner_identity_id"]) != ownerID {
+			t.Fatalf("created control: %v", st)
+		}
+		if again, d := p.read(res, st); len(d) > 0 || !again.Equal(st) {
+			t.Fatalf("refresh changed the state: %s", diagText(d))
+		}
+		importVerifies(t, res, st)
+		cfg["frequency"] = "weekly"
+		st2 := approveNext(applyAsync(p, res, cfg, st)).state
+		if a2 := attrs(t, st2); num(t, a2["version"]) != 2 || str(t, a2["frequency"]) != "weekly" {
+			t.Fatalf("updated control: %v", st2)
+		}
+		cfg["owner_identity_id"] = 99999999
+		if _, d := p.apply(res, cfg, st2); !strings.Contains(diagText(d), "owner_not_found") {
+			t.Fatalf("an unknown owner: %q", diagText(d))
+		}
+	})
+	t.Run("approval policy", func(t *testing.T) {
+		const res = "tessera_approval_policy"
+		steps := `[{"approver":"decider","id":"d","type":"approval"}]`
+		cfg := map[string]any{"name": "TF one step", "scope": "access", "steps_json": steps}
+		st := approveNext(applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil))).state
+		a := attrs(t, st)
+		if !uuidRE.MatchString(str(t, a["id"])) || num(t, a["version"]) != 1 || str(t, a["steps_json"]) != steps {
+			t.Fatalf("created policy: %v", st)
+		}
+		if again, d := p.read(res, st); len(d) > 0 || !again.Equal(st) {
+			t.Fatalf("refresh changed the state: %s\n%v\n%v", diagText(d), st, again)
+		}
+		importVerifies(t, res, st)
+		tgtType := tftypes.Object{AttributeTypes: map[string]tftypes.Type{"kind": tftypes.String, "target_id": tftypes.String}}
+		cfg["targets"] = tftypes.NewValue(tftypes.Set{ElementType: tgtType}, []tftypes.Value{tftypes.NewValue(tgtType,
+			map[string]tftypes.Value{"kind": tftypes.NewValue(tftypes.String, "request_type"), "target_id": tftypes.NewValue(tftypes.String, "access")})})
+		cfg["steps_json"] = `[{"approver":"manager","id":"m","type":"approval"},{"approver":"decider","id":"d","type":"approval"}]`
+		st2 := approveNext(applyAsync(p, res, cfg, st)).state
+		a2 := attrs(t, st2)
+		var ts []tftypes.Value
+		_ = a2["targets"].As(&ts)
+		if num(t, a2["version"]) != 2 || len(ts) != 1 {
+			t.Fatalf("updated policy: %v", st2)
+		}
+		importVerifies(t, res, st2)
+	})
+
+	// the resources that carry secrets (server issue #719): the secret is write-only, so it is in no plan, no state, no change
+	// request an admin reads and no log; a changed *_version sends a new one and an unchanged one leaves the server's alone
+	const (
+		connSecret = "PLAINTEXT-connector-secret-1"
+		hookSecret = "PLAINTEXT-signing-secret-0001"
+		hookURL    = "https://hooks.example.com/services/PLAINTEXT-url-token"
+		hecToken   = "PLAINTEXT-hec-token-1"
+	)
+	// approveHiding approves the next pending proposal after checking that nothing an admin can read holds a secret
+	approveHiding := func(t *testing.T, done <-chan applied, plaintexts ...string) applied {
+		t.Helper()
+		c := alice.pending("config.proposal", seen)
+		full := alice.must("GET", "/api/admin/change-requests/"+c["id"].(string), nil, 200)
+		for _, v := range []any{c, full} {
+			raw, _ := json.Marshal(v)
+			for _, pt := range plaintexts {
+				if strings.Contains(string(raw), pt) {
+					t.Fatalf("the change request shows %q: %s", pt, raw)
+				}
+			}
+		}
+		alice.approve(c)
+		r := within(t, done, 30*time.Second)
+		if len(r.diags) > 0 {
+			t.Fatalf("apply: %s", diagText(r.diags))
+		}
+		return r
+	}
+	notInState := func(t *testing.T, st tftypes.Value, plaintexts ...string) {
+		t.Helper()
+		for _, pt := range plaintexts {
+			if strings.Contains(st.String(), pt) {
+				t.Fatalf("the state holds %q: %s", pt, st)
+			}
+		}
+	}
+	t.Run("connection", func(t *testing.T) {
+		const res = "tessera_connection"
+		cfg := map[string]any{"name": "TF okta", "connector_type": "okta", "config_json": `{"org_url":"https://tf.okta.com"}`,
+			"secret": connSecret, "secret_version": "1"}
+		if d := p.validate(res, map[string]any{"name": "x", "connector_type": "okta", "secret": "s"}); !strings.Contains(diagText(d), "secret_version") {
+			t.Fatalf("a secret without its version: %q", diagText(d))
+		}
+		st := approveHiding(t, applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil)), connSecret).state
+		a := attrs(t, st)
+		notInState(t, st, connSecret)
+		if !uuidRE.MatchString(str(t, a["id"])) || !a["secret"].IsNull() || str(t, a["secret_version"]) != "1" || str(t, a["state"]) == "active" {
+			t.Fatalf("created connection: %v", st)
+		}
+		if again, d := p.read(res, st); len(d) > 0 || !again.Equal(st) {
+			t.Fatalf("refresh changed the state: %s\n%v\n%v", diagText(d), st, again)
+		}
+		// a change of config alone sends no credential; the same version keeps the server's secret
+		cfg["config_json"] = `{"org_url":"https://tf2.okta.com"}`
+		st2 := approveHiding(t, applyAsync(p, res, cfg, st), connSecret).state
+		notInState(t, st2, connSecret)
+		// a new version with a new secret rotates it; a new version with no secret is refused before anything is filed
+		cfg["secret"], cfg["secret_version"] = "PLAINTEXT-connector-secret-2", "2"
+		st3 := approveHiding(t, applyAsync(p, res, cfg, st2), "PLAINTEXT-connector-secret-2").state
+		notInState(t, st3, "PLAINTEXT-connector-secret-2")
+		if str(t, attrs(t, st3)["secret_version"]) != "2" {
+			t.Fatalf("rotated connection: %v", st3)
+		}
+		delete(cfg, "secret")
+		cfg["secret_version"] = "3"
+		if _, d := p.apply(res, cfg, st3); !strings.Contains(diagText(d), "Version changed without a secret") {
+			t.Fatalf("a new version without a secret: %q", diagText(d))
+		}
+		// the server's own refusals reach the plan: a metadata host is refused before anyone is asked
+		bad := map[string]any{"name": "TF bad", "connector_type": "okta", "config_json": `{"org_url":"https://169.254.169.254"}`}
+		if _, d := p.apply(res, bad, tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "invalid_config") {
+			t.Fatalf("a metadata host: %q", diagText(d))
+		}
+		imp, d := p.importState(res, str(t, a["id"]))
+		if len(d) > 0 {
+			t.Fatalf("import: %s", diagText(d))
+		}
+		if got, d := p.read(res, imp); len(d) > 0 || str(t, attrs(t, got)["name"]) != "TF okta" || str(t, attrs(t, got)["connector_type"]) != "okta" {
+			t.Fatalf("read after import: %v %s", got, diagText(d))
+		}
+	})
+	t.Run("alert channel", func(t *testing.T) {
+		const res = "tessera_alert_channel"
+		cfg := map[string]any{"name": "TF hook", "kind": "webhook", "target_url": hookURL, "target_url_version": "1",
+			"signing_secret": hookSecret, "signing_secret_version": "1"}
+		if _, d := p.apply(res, map[string]any{"name": "TF nosecret", "kind": "webhook", "target_url": hookURL, "target_url_version": "1"}, tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "needs its signing secret") {
+			t.Fatalf("a webhook without a secret: %q", diagText(d))
+		}
+		if _, d := p.apply(res, map[string]any{"name": "TF meta", "kind": "webhook", "target_url": "https://169.254.169.254/x", "target_url_version": "1",
+			"signing_secret": hookSecret, "signing_secret_version": "1"}, tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "metadata") {
+			t.Fatalf("a metadata target: %q", diagText(d))
+		}
+		st := approveHiding(t, applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil)), hookSecret, "PLAINTEXT-url-token").state
+		notInState(t, st, hookSecret, hookURL, "PLAINTEXT-url-token")
+		a := attrs(t, st)
+		// the state keeps the origin, never the URL, and no fingerprint of it
+		if str(t, a["target_origin"]) != "https://hooks.example.com:443" || !a["target_url"].IsNull() || !a["target_fingerprint"].IsNull() {
+			t.Fatalf("target details: %v", st)
+		}
+		if v := alice.must("GET", "/api/admin/change-requests/"+str(t, a["change_id"]), nil, 200); !strings.Contains(fmt.Sprint(v["summary"]), "https://hooks.example.com:443") ||
+			strings.Contains(fmt.Sprint(v["summary"]), "PLAINTEXT") {
+			t.Fatalf("what the approver sees: %v", v["summary"])
+		}
+		if !uuidRE.MatchString(str(t, a["id"])) || !a["signing_secret"].IsNull() || str(t, a["min_severity"]) != "high" {
+			t.Fatalf("created channel: %v", st)
+		}
+		cfg["enabled"] = false
+		st2 := approveHiding(t, applyAsync(p, res, cfg, st), hookSecret, "PLAINTEXT-url-token").state
+		if boolv(t, attrs(t, st2)["enabled"]) || str(t, attrs(t, st2)["id"]) != str(t, a["id"]) || !attrs(t, st2)["target_fingerprint"].IsNull() {
+			t.Fatalf("updated channel: %v", st2)
+		}
+		// an email channel carries no secret
+		mail := map[string]any{"name": "TF mail", "kind": "email", "target": "soc@larkspur.example", "min_severity": "critical"}
+		st3 := approveHiding(t, applyAsync(p, res, mail, tftypes.NewValue(p.resourceType(res), nil))).state
+		if str(t, attrs(t, st3)["min_severity"]) != "critical" {
+			t.Fatalf("email channel: %v", st3)
+		}
+		if d := p.destroy(res, st2); diagText(d) != "" || len(d) != 1 {
+			t.Fatalf("destroy should only warn: %v", d)
+		}
+	})
+	t.Run("siem sink", func(t *testing.T) {
+		const res = "tessera_siem_sink"
+		cfg := map[string]any{"name": "TF splunk", "kind": "webhook", "flavor": "hec",
+			"target_url": "https://splunk.example.com:8088/services/collector", "target_url_version": "1", "token": hecToken, "token_version": "1"}
+		if _, d := p.apply(res, map[string]any{"name": "TF notoken", "kind": "webhook", "flavor": "hec", "target_url": "https://splunk.example.com/x", "target_url_version": "1"},
+			tftypes.NewValue(p.resourceType(res), nil)); !strings.Contains(diagText(d), "token_required") {
+			t.Fatalf("an HEC sink without its token: %q", diagText(d))
+		}
+		st := approveHiding(t, applyAsync(p, res, cfg, tftypes.NewValue(p.resourceType(res), nil)), hecToken).state
+		notInState(t, st, hecToken, "splunk.example.com:8088/services")
+		if o := str(t, attrs(t, st)["target_origin"]); o != "https://splunk.example.com:8088" {
+			t.Fatalf("origin %q", o)
+		}
+		a := attrs(t, st)
+		if !uuidRE.MatchString(str(t, a["id"])) || !a["token"].IsNull() || str(t, a["format"]) != "json" {
+			t.Fatalf("created sink: %v", st)
+		}
+		// the same version keeps the token the server holds; an origin move without a new one is refused by the server
+		cfg["include_http"] = true
+		st2 := approveHiding(t, applyAsync(p, res, cfg, st), hecToken).state
+		if !boolv(t, attrs(t, st2)["include_http"]) {
+			t.Fatalf("updated sink: %v", st2)
+		}
+		cfg["target_url"], cfg["target_url_version"] = "https://other.example.com:8088/services/collector", "2"
+		if _, d := p.apply(res, cfg, st2); !strings.Contains(diagText(d), "credential_required") {
+			t.Fatalf("an origin move without a new token: %q", diagText(d))
+		}
+		cfg["token"], cfg["token_version"] = "PLAINTEXT-hec-token-2", "2"
+		st3 := approveHiding(t, applyAsync(p, res, cfg, st2), "PLAINTEXT-hec-token-2").state
+		notInState(t, st3, "PLAINTEXT-hec-token-2")
+		imp, d := p.importState(res, str(t, a["id"]))
+		if len(d) > 0 {
+			t.Fatalf("import: %s", diagText(d))
+		}
+		if _, d := p.read(res, imp); len(d) > 0 {
+			t.Fatalf("read after import: %s", diagText(d))
+		}
+	})
+
 	// 7. the server refuses a bad proposal before anyone is asked, and says why
 	bad := map[string]any{"rule_id": "no_such_rule", "enabled": true, "severity": "high", "threshold": 1, "window_minutes": 5}
 	if _, d := p.apply(ruleRes, bad, null); !strings.Contains(diagText(d), "rule_not_found") {

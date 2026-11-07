@@ -32,7 +32,7 @@ import (
 //	POST /api/role-requests/{request_id}/deny        {reason}
 //	POST /api/role-requests/{request_id}/cancel
 //
-// Listing roles needs requests.create (everyone requests from it); a role's
+// Listing roles needs roles.read (every role that requests holds it, and tessera:read grants it); a role's
 // members, versions and drift need graph.read; changing roles needs
 // roles.manage and a fresh phishing-resistant sign-in. Role requests follow
 // the request service: requests.create, requests.create_for_others and
@@ -41,8 +41,9 @@ import (
 func (s *Server) registerRoleRoutes() {
 	const G, P = http.MethodGet, http.MethodPost
 	create, graph := need(auth.PermRequestsCreate), need(auth.PermGraphRead)
+	list := need(auth.PermRolesRead)
 	manage := needStepUp(auth.PermRolesManage, auth.StepUpPolicy)
-	s.handle(G, "/api/roles", read, create, s.listRoles)
+	s.handle(G, "/api/roles", read, list, s.listRoles)
 	s.handle(P, "/api/roles", write, manage, s.createRole)
 	s.handle(G, "/api/roles/{role_id}", read, graph, s.getRole)
 	s.handle(http.MethodPut, "/api/roles/{role_id}", write, manage, s.updateRole)

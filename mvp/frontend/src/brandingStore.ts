@@ -9,13 +9,16 @@ export type BrandingFetcher = (slug: string, fresh: boolean) => Promise<PublicBr
 export function createBrandingStore(fetcher: BrandingFetcher) {
   let state: { slug: string; branding: PublicBranding | null } = { slug: "", branding: null };
   const subs = new Set<() => void>();
+  let latest = 0; // the newest request issued; an older answer arriving after it is stale
   const set = (slug: string, branding: PublicBranding | null) => {
     state = { slug, branding };
     subs.forEach((f) => f());
   };
   async function load(slug: string, fresh: boolean) {
+    const seq = ++latest;
     const b = await fetcher(slug, fresh);
     if (state.slug !== slug) return; // the tenant changed while this was in flight: its answer is stale
+    if (seq !== latest) return; // a newer read (for example the refresh after Save branding) was issued since: this one is stale
     set(slug, b ?? state.branding); // a failed read keeps what is shown
   }
   return {
