@@ -25,7 +25,9 @@ import (
 // Because the answer is an oracle for the sealed URL, it is bounded, and the bounds are counted by the sealed VALUE, not
 // the request: at most MaxTargetChecksPerValue tries against one URL in TargetLockWindow whoever asks and however often
 // it is filed again (then it is locked for checking and the approver decides without it); MaxTargetChecksPerApprover per
-// approver and MaxTargetChecksPerTenant per tenant per TargetCheckWindow. A lockout is audited and raises the
+// approver and MaxTargetChecksPerTenant per tenant per TargetCheckWindow. Proposal filings that set a URL on an existing
+// object (fileTarget) are counted apart: MaxTargetFilingsPerProposer per proposer and their own MaxTargetChecksPerTenant per
+// tenant per TargetCheckWindow, so a proposer cannot use up the approvers' budget (#907). A lockout is audited and raises the
 // approver_check_locked alert, since anyone able to approve can burn the tries and deny the others the check. Every try
 // is audited with the request-bound fingerprint of the submitted URL and never the URL.
 //
@@ -34,11 +36,12 @@ import (
 // (internal/store/db.go inTenantOn) and SQLite has a single writer lock. A change that ran this outside InTenant, or
 // that split the count from the insert, would let concurrent checks overshoot the limits.
 const (
-	MaxTargetChecksPerValue    = 5
-	MaxTargetChecksPerApprover = 20
-	MaxTargetChecksPerTenant   = 60
-	TargetCheckWindow          = time.Hour
-	TargetLockWindow           = 30 * 24 * time.Hour
+	MaxTargetChecksPerValue     = 5
+	MaxTargetChecksPerApprover  = 20
+	MaxTargetChecksPerTenant    = 60
+	MaxTargetFilingsPerProposer = 20
+	TargetCheckWindow           = time.Hour
+	TargetLockWindow            = 30 * 24 * time.Hour
 )
 
 // Reasons a check is refused for the limit.

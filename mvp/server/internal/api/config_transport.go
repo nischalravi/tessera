@@ -22,7 +22,8 @@ import (
 func (s *Server) registerTransportRoutes() {
 	G, P, D := http.MethodGet, http.MethodPost, http.MethodDelete
 	s.handle(G, "/api/config/signing-key", read, need(auth.PermAdminRead), s.rd(s.configSigningKey))
-	s.handle(P, "/api/config/export", write, need(auth.PermConfigTransport), s.rd(s.configExport))
+	// step-up like import apply: the bundle is the tenant's whole configuration, signed with its key (#909)
+	s.handle(P, "/api/config/export", write, needStepUp(auth.PermConfigTransport, auth.StepUpPolicy), s.rd(s.configExport))
 	s.handle(G, "/api/config/trusted-signers", read, need(auth.PermAdminRead), s.rd(s.listTrustedSigners))
 	s.handle(P, "/api/config/trusted-signers", write, needStepUp(auth.PermConfigTransport, auth.StepUpPolicy), s.rd(s.addTrustedSigner))
 	s.handle(D, "/api/config/trusted-signers/{kid}", write, needStepUp(auth.PermConfigTransport, auth.StepUpPolicy), s.rd(s.removeTrustedSigner))

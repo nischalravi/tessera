@@ -4499,7 +4499,11 @@ export interface ConfigImport { id: string; bundle_hash: string; signer_kid: str
 
 export const configTransport = {
   signingKey: () => api<{ key: SigningKey | null }>("/config/signing-key"),
-  export: () => api<ExportedBundle>("/config/export", {}),
+  /**
+   * Needs a fresh sign-in: a step_up_required answer opens the step-up dialog, and the export is not resumed afterwards
+   * (a resumed export would sign a bundle nobody downloads), so the admin exports again once signed in.
+   */
+  export: () => apiNoResume<ExportedBundle>("/config/export", {}),
   signers: () => api<TrustedSigner[]>("/config/trusted-signers"),
   trust: (body: { kid: string; public_key: string; label: string }) => api<TrustedSigner>("/config/trusted-signers", body),
   untrust: (kid: string) => api<{ removed: string }>(`/config/trusted-signers/${encodeURIComponent(kid)}`, undefined, "DELETE"),

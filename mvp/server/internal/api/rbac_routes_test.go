@@ -637,7 +637,7 @@ GET    /api/rotation/bulk                            graph.read         -
 POST   /api/rotation/bulk                            secrets.rotate     STEP_UP_POLICY
 GET    /api/rotation/bulk/{id}                       graph.read         -
 GET    /api/config/signing-key                       admin.read      -  # issue #170
-POST   /api/config/export                            config.transport -  #
+POST   /api/config/export                            config.transport STEP_UP_POLICY #
 GET    /api/config/trusted-signers                   admin.read      -  #
 POST   /api/config/trusted-signers                   config.transport STEP_UP_POLICY #
 DELETE /api/config/trusted-signers/{kid}             config.transport STEP_UP_POLICY #

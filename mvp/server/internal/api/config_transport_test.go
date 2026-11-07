@@ -313,3 +313,31 @@ func TestConfigTransport_ProdRefusesDevOnly(t *testing.T) {
 		t.Errorf("prod apply %d: %s", rec.Code, rec.Body)
 	}
 }
+
+// Export needs a fresh phishing-resistant sign-in, like import apply (#909): a stale session is asked to step up and no bundle
+// is signed.
+func TestConfigTransport_ExportRequiresStepUp(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	sealer, err := seal.New(seal.RandomBytes(seal.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newIsolationServer(f)
+	s.cfg.Sealer = sealer
+	stale := testSrv{s, signIn(t, f.DB, f.A.ID, testAdmin, staleAuth, storetest.Now)}.Handler()
+	rec := serveOnce(stale, http.MethodPost, "/api/config/export", "{}")
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "step_up_required") || strings.Contains(rec.Body.String(), "bundle") {
+		t.Fatalf("export with a 20-minute-old sign-in: %d %s, want 401 step_up_required", rec.Code, rec.Body)
+	}
+	var k struct {
+		Key any `json:"key"`
+	}
+	decodeJSON(t, serveOnce(stale, http.MethodGet, "/api/config/signing-key", "").Body.String(), &k)
+	if k.Key != nil {
+		t.Error("a refused export created the signing key")
+	}
+	fresh := asAdmin(t, s, f.DB, f.A.ID, storetest.Now).Handler()
+	if rec := serveOnce(fresh, http.MethodPost, "/api/config/export", "{}"); rec.Code != http.StatusOK {
+		t.Errorf("export with a fresh sign-in: %d %s", rec.Code, rec.Body)
+	}
+}
