@@ -3898,6 +3898,8 @@ export interface SiemSink {
   target: string;
   /** The scheme, host and port of a URL target (never its path); empty for syslog. */
   target_origin?: string;
+  /** True when the sink has no target yet (a config import withheld it); target is "" and the sink stays disabled until one is set. */
+  needs_target?: boolean;
   flavor: SiemFlavor;
   has_ca: boolean;
   has_token: boolean;
@@ -4183,6 +4185,10 @@ export const SIEM_HEALTH: Record<SiemSink["health"]["status"], { tone: "ok" | "i
   failing: { tone: "critical", label: "Failing" },
   paused: { tone: "outline", label: "Paused" },
 };
+
+/** What the list shows for a sink: a sink with no target is "Needs target", whatever its health says. */
+export const siemSinkState = (k: Pick<SiemSink, "needs_target" | "health">): { tone: "ok" | "info" | "warning" | "critical" | "outline"; label: string } =>
+  k.needs_target ? { tone: "warning", label: "Needs target" } : SIEM_HEALTH[k.health.status];
 // ---------------------------------------------------------------- alerts (#168)
 
 export type AlertSeverity = "low" | "medium" | "high" | "critical";

@@ -31,3 +31,11 @@ test("every health status has a label", () => {
   }
   assert.equal(api.SIEM_HEALTH.failing.tone, "critical");
 });
+
+test("a sink with no target shows Needs target", () => {
+  const health = { status: "paused", lag: 0 } as const;
+  assert.equal(api.siemSinkState({ needs_target: true, health }).label, "Needs target");
+  assert.equal(api.siemSinkState({ needs_target: true, health }).tone, "warning");
+  assert.equal(api.siemSinkState({ needs_target: false, health }).label, "Paused");
+  assert.equal(api.siemSinkState({ health: { status: "healthy", lag: 0 } }).label, "Healthy");
+});

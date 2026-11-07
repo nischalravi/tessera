@@ -358,6 +358,13 @@ func (s *Service) CheckCreate(in CreateInput) (ConnConfig, error) {
 	return cfg, err
 }
 
+// DerivedSystem returns the system a new connection would be stored under (the explicit value, the connector's default,
+// or a slug of the name), so a proposal can be checked against the (tenant, system) unique constraint before apply.
+func (s *Service) DerivedSystem(in CreateInput) (string, error) {
+	in, _, _, err := s.prepareCreate(in)
+	return in.System, err
+}
+
 // Create adds a connection in draft (design §4.2: the template must exist and
 // the config must parse into the typed config).
 func (s *Service) Create(c *store.TenantTx, in CreateInput, actor string, now time.Time) (*Bundle, error) {
