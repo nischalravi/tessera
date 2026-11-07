@@ -311,10 +311,18 @@ func (s *Server) adminChange(_ http.ResponseWriter, r *http.Request, p *params) 
 	v := s.adminChangeView(tx, ch, names, s.clock())
 	// how the URL a proposal seals compares with the object's URL: only for an approver with a fresh step-up who did not file
 	// it. A proposer or an admin.read reader holding it could test guessed URLs against a live channel or sink (#886).
-	if pr := principal(r); pr != nil && pr.UserID != nil && *pr.UserID != ch.RequestedBy &&
+	// "Filed it" is the person, not the account (store.SameActor, as in approve, cancel and check-target): another platform
+	// user of the proposer's identity must not see the flag either.
+	if pr := principal(r); pr != nil && pr.UserID != nil &&
 		auth.Check(pr, auth.PermAdminChangeAppr, &auth.StepUpAdmin, s.clock()) == nil {
-		if c := s.admin.TargetFlagFor(tx, ch); c != "" {
-			v = append(v, ojson.KV{Key: "target_change", Value: c})
+		own, err := tx.SameActor(ch.RequestedBy.String(), pr.UserID.String())
+		if err != nil {
+			return nil, err
+		}
+		if !own {
+			if c := s.admin.TargetFlagFor(tx, ch); c != "" {
+				v = append(v, ojson.KV{Key: "target_change", Value: c})
+			}
 		}
 	}
 	return append(v, ojson.KV{Key: "notifications", Value: notificationViews(notifs, names)}), nil
