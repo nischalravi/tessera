@@ -2,6 +2,8 @@ package store
 
 import (
 	"database/sql"
+	"errors"
+	"strings"
 	"time"
 )
 
@@ -108,6 +110,10 @@ var (
 		SELECT `+provOpCols+` FROM provisioning_ops o WHERE o.tenant_id = @tenant AND o.id = @id`)
 	provOpByKey = tq("provisioning_ops.by_key", `
 		SELECT `+provOpCols+` FROM provisioning_ops o WHERE o.tenant_id = @tenant AND o.idempotency_key = @key`)
+	provOpInFlightLike = tq("provisioning_ops.in_flight_like", `
+		SELECT `+provOpCols+` FROM provisioning_ops o
+		WHERE o.tenant_id = @tenant AND o.idempotency_key LIKE @pattern AND o.status IN ('queued','sent','pending_verification')
+		ORDER BY o.created_at, o.rowid`)
 	provOpList = tq("provisioning_ops.list", `
 		SELECT `+provOpCols+` FROM provisioning_ops o
 		WHERE o.tenant_id = @tenant AND (@status = '' OR o.status = @status) AND (@kind = '' OR o.kind = @kind)
@@ -263,6 +269,15 @@ func (tx *TenantTx) ProvOp(id string) (*ProvOp, error) {
 // ProvOpByKey returns the operation with an idempotency key.
 func (tx *TenantTx) ProvOpByKey(key string) (*ProvOp, error) {
 	return one(tx, scanProvOp, provOpByKey, sql.Named("key", key))
+}
+
+// InFlightProvOpsByKeyPrefix lists the queued, sent and pending-verification operations whose idempotency key starts
+// with prefix (a literal: it must hold no LIKE wildcards), oldest first.
+func (tx *TenantTx) InFlightProvOpsByKeyPrefix(prefix string) ([]*ProvOp, error) {
+	if strings.ContainsAny(prefix, "%_\\") {
+		return nil, errors.New("store: key prefix holds a LIKE wildcard")
+	}
+	return collect(tx, scanProvOp, provOpInFlightLike, sql.Named("pattern", prefix+"%"))
 }
 
 // ProvOps lists operations, newest first.
