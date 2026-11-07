@@ -9,7 +9,8 @@ export type BrandingFetcher = (slug: string, fresh: boolean) => Promise<PublicBr
 export function createBrandingStore(fetcher: BrandingFetcher) {
   let state: { slug: string; branding: PublicBranding | null } = { slug: "", branding: null };
   const subs = new Set<() => void>();
-  let latest = 0; // the newest request issued; an older answer arriving after it is stale
+  let latest = 0; // the newest request issued
+  let applied = 0; // the newest request whose successful answer is shown; an older answer arriving after it is stale
   const set = (slug: string, branding: PublicBranding | null) => {
     state = { slug, branding };
     subs.forEach((f) => f());
@@ -18,8 +19,10 @@ export function createBrandingStore(fetcher: BrandingFetcher) {
     const seq = ++latest;
     const b = await fetcher(slug, fresh);
     if (state.slug !== slug) return; // the tenant changed while this was in flight: its answer is stale
-    if (seq !== latest) return; // a newer read (for example the refresh after Save branding) was issued since: this one is stale
-    set(slug, b ?? state.branding); // a failed read keeps what is shown
+    if (!b) return; // a failed read keeps what is shown, and never supersedes an older read that succeeded
+    if (seq < applied) return; // a newer read (for example the refresh after Save branding) already answered: this one is stale
+    applied = seq;
+    set(slug, b);
   }
   return {
     get: () => state.branding,
@@ -31,6 +34,7 @@ export function createBrandingStore(fetcher: BrandingFetcher) {
     /** Switch to a tenant and load it (no-op if already on it). */
     use(slug: string) {
       if (!slug || state.slug === slug) return;
+      applied = latest; // answers to reads issued for the previous tenant are dropped by the slug check; start clean
       set(slug, null);
       void load(slug, false);
     },
