@@ -6,8 +6,9 @@ import { useNavigate } from "react-router-dom";
 import { ApiError, Campaign, DisableRecord, DisableResult, IdentityBrief, api, disableIdentity, enableIdentity, fmtDate, identityDisables } from "../api";
 import { useConfirm } from "../components/Dialog";
 import { useToast } from "../components/Toast";
-import { mockIdentityOps } from "../mocks";
-import { usePersona } from "./persona";
+
+/** The Help desk's New reset case dialog, opened for one identity and a password reset. */
+export const helpdeskResetHref = (identityId: number) => `/helpdesk?new=1&identity=${identityId}&kind=password`;
 
 const DISABLE_BODY = (
   <>
@@ -26,7 +27,6 @@ export function useIdentityActions() {
   const nav = useNavigate();
   const confirm = useConfirm();
   const toast = useToast();
-  const { actor } = usePersona();
 
   return {
     async disable(i: IdentityBrief) {
@@ -107,10 +107,9 @@ export function useIdentityActions() {
         toast(`${i.name} is a machine identity. Rotate its secret instead.`, { kind: "info" });
         return;
       }
-      const ok = await confirm({ title: `Reset password for ${i.name}?`, body: "Sends a reset link through the identity provider and signs them out everywhere. Tessera never sees the password. Preview: no email is sent yet.", confirmLabel: "Send reset link" });
-      if (ok === null) return;
-      await mockIdentityOps.resetPassword(i.name, actor);
-      toast(`Reset link sent to ${i.name} (preview)`);
+      // a reset only runs through the Help desk's verified flow: the person is verified (and a privileged one approved
+      // by a second admin) before anything is reset, so open its New reset case dialog for this identity
+      nav(helpdeskResetHref(i.id));
     },
     requestFor(i: IdentityBrief) {
       nav(`/access/request?for=${i.id}`);

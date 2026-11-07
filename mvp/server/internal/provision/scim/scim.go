@@ -446,7 +446,15 @@ func (c *Client) update(ctx context.Context, r target.Request) error {
 		if !attrRE.MatchString(path) {
 			return target.Permanent("update account: %q is not a valid attribute path", path)
 		}
-		ops = append(ops, map[string]any{"op": c.opName("replace"), "path": path, "value": r.Account.Attrs[path]})
+		var val any = r.Account.Attrs[path]
+		if path == "active" { // the enable path of an account: a boolean, in the dialect's own form
+			b, err := strconv.ParseBool(r.Account.Attrs[path])
+			if err != nil {
+				return target.Permanent("update account: active must be true or false")
+			}
+			val = c.boolValue(b)
+		}
+		ops = append(ops, map[string]any{"op": c.opName("replace"), "path": path, "value": val})
 	}
 	if len(ops) == 0 {
 		return nil
@@ -580,6 +588,11 @@ func (c *Client) verifyUpdate(ctx context.Context, u *user, r target.Request) (t
 	}
 	for _, path := range sortedKeys(r.Account.Attrs) {
 		want := r.Account.Attrs[path]
+		if path == "active" { // a dialect may answer "True": compare as booleans
+			if b, err := strconv.ParseBool(fmt.Sprint(raw[path])); err == nil && fmt.Sprint(b) == want {
+				continue
+			}
+		}
 		if got := fmt.Sprint(raw[path]); raw[path] == nil || got != want {
 			return verdict(false, path+"="+want, path+"="+got), nil
 		}

@@ -558,7 +558,20 @@ export interface AccountRow {
   created_at: string | null;
   last_login_at: string | null;
   identity: IdentityBrief | null;
+  /** A disable or enable sent to the target that its re-read has not confirmed yet; absent otherwise. */
+  pending?: "disable" | "enable";
 }
+
+/** The outcome of a disable or enable for one account (issue #915). */
+export interface AccountStateResult {
+  id: number;
+  status: "queued" | "pending" | "held" | "error";
+  op_id?: string;
+  /** Set when status is "error", for example target_read_only, not_found, invalid_state, operation_in_flight. */
+  error?: string;
+  detail?: string;
+}
+export interface AccountStateBulk { results: AccountStateResult[]; accepted: number; failed: number }
 
 /** One audit ledger event (GET /api/audit). `id` is the per-tenant sequence number. */
 export interface AuditRow {
@@ -2511,6 +2524,11 @@ export const disableIdentity = (identityId: number, reason: string) =>
   api<DisableResult>(`/identities/${identityId}/disable`, { reason });
 export const enableIdentity = (identityId: number, reason: string) =>
   api<EnableResult>(`/identities/${identityId}/enable`, { reason });
+/** Disable accounts in their target systems: each becomes a provisioning operation the target's re-read confirms. */
+export const disableAccounts = (ids: number[], reason: string) => api<AccountStateBulk>("/accounts/disable", { ids, reason });
+export const enableAccounts = (ids: number[], reason: string) => api<AccountStateBulk>("/accounts/enable", { ids, reason });
+export const disableAccount = (id: number, reason: string) => api<AccountStateResult>(`/accounts/${id}/disable`, { reason });
+export const enableAccount = (id: number, reason: string) => api<AccountStateResult>(`/accounts/${id}/enable`, { reason });
 export const identityDisables = (identityId: number) =>
   api<{ identity_id: number; disables: DisableRecord[] }>(`/identities/${identityId}/disables`);
 

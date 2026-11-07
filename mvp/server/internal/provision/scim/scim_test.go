@@ -349,3 +349,30 @@ func TestScim_RemoveMemberDialects(t *testing.T) {
 		})
 	}
 }
+
+// Enable is an update of "active": sent as a boolean in the dialect's form and confirmed by re-reading it, also when
+// the target answers "True" (Entra).
+func TestScim_EnableByActiveUpdate(t *testing.T) {
+	for _, dialect := range []string{scim.Standard, scim.Entra} {
+		f := fake.New(fake.Options{StringBooleans: dialect == scim.Entra})
+		f.AddUser(alice, "Alice", false)
+		c := newClient(t, f.Handler(), dialect)
+		r := target.Request{Kind: target.UpdateAccount, Key: "e1", Account: target.Account{Username: alice, Attrs: map[string]string{"active": "true"}}}
+		if v, err := c.Verify(context.Background(), r); err != nil || v.OK {
+			t.Fatalf("%v before: %+v %v", dialect, v, err)
+		}
+		if err := c.Apply(context.Background(), r); err != nil {
+			t.Fatalf("%v Apply: %v", dialect, err)
+		}
+		if v, err := c.Verify(context.Background(), r); err != nil || !v.OK {
+			t.Errorf("%v after: %+v %v", dialect, v, err)
+		}
+		if _, active := f.Active(alice); !active {
+			t.Errorf("%v: still inactive", dialect)
+		}
+		r.Account.Attrs["active"] = "maybe"
+		if err := c.Apply(context.Background(), r); err == nil || target.Retryable(err) {
+			t.Errorf("%v: a non-boolean active gave %v", dialect, err)
+		}
+	}
+}

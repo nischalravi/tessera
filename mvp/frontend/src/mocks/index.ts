@@ -43,11 +43,6 @@ function log(actor: string, action: string, target: string) {
 
 // -------------------------------------------------------- identity ops
 export const mockIdentityOps = {
-  /** Would trigger a reset through the identity provider; Tessera never sees the password. */
-  async resetPassword(name: string, actor: string) {
-    commit({ ...state, log: log(actor, "identity.reset_password", name) });
-    return delay({ channel: "IdP reset email" });
-  },
   async importRows(kind: string, rows: number, actor: string) {
     commit({ ...state, log: log(actor, `import.${kind}`, `${rows} rows`) });
     return delay({ accepted: rows });
