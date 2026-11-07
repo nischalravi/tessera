@@ -681,6 +681,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 			queries = []string{fmt.Sprintf("?identity_id=%d", b["alice"]), fmt.Sprintf("?resource_id=%d", b["resource:aws:prod"]),
 				fmt.Sprintf("?identity_id=%d&perm_key=perm:%d", b["alice"], b["perm:aws:get-pii"])}
 		}
+		if path == "/api/directory/manual/lookup" {
+			continue // needs a target and an id: TestDirectoryImportAPI_CrossTenant
+		}
 		if path == "/api/groups/permissions/check" {
 			continue // needs a resource and an action: TestGroupsPermissionsAPI
 		}

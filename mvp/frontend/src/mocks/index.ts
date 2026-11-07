@@ -48,10 +48,6 @@ export const mockIdentityOps = {
     commit({ ...state, log: log(actor, "identity.reset_password", name) });
     return delay({ channel: "IdP reset email" });
   },
-  async importRows(kind: string, rows: number, actor: string) {
-    commit({ ...state, log: log(actor, `import.${kind}`, `${rows} rows`) });
-    return delay({ accepted: rows });
-  },
 };
 
 /** Create / edit / import for objects that have no write endpoint yet (accounts, orgs, machine identities...). */

@@ -42,6 +42,26 @@ const (
 	CodeUnknownAccount = "unknown_account"
 )
 
+// Limits bound one parse. The zero value is the flat-file default (MaxBytes, MaxRows); the directory CSV
+// import (issue #915) takes a larger file.
+type Limits struct {
+	MaxBytes int
+	MaxRows  int
+}
+
+// DirectoryLimits are the bounds of a directory CSV import: 5 MiB and 10,000 rows.
+var DirectoryLimits = Limits{MaxBytes: 5 << 20, MaxRows: 10000}
+
+func (l Limits) norm() Limits {
+	if l.MaxBytes <= 0 {
+		l.MaxBytes = MaxBytes
+	}
+	if l.MaxRows <= 0 {
+		l.MaxRows = MaxRows
+	}
+	return l
+}
+
 // RowError is one rejected row. Row is the 1-based data row, counted after
 // the header (blank lines are not rows); Row 0 is the file as a whole.
 type RowError struct {
@@ -73,12 +93,16 @@ type Table struct {
 // that is too large, is not valid UTF-8, has no header, a repeated header
 // name, or too many rows or columns; a row of the wrong length is reported
 // in Short and the rest are still read, so one pass lists every problem.
-func Parse(raw []byte) (*Table, []RowError) {
+func Parse(raw []byte) (*Table, []RowError) { return ParseWith(raw, Limits{}) }
+
+// ParseWith is Parse under the given limits.
+func ParseWith(raw []byte, lim Limits) (*Table, []RowError) {
+	lim = lim.norm()
 	fileErr := func(code, format string, a ...any) (*Table, []RowError) {
 		return nil, []RowError{{Code: code, Message: fmt.Sprintf(format, a...)}}
 	}
-	if len(raw) > MaxBytes {
-		return fileErr(CodeFileTooLarge, "the file is larger than %d KiB", MaxBytes>>10)
+	if len(raw) > lim.MaxBytes {
+		return fileErr(CodeFileTooLarge, "the file is larger than %s", sizeText(lim.MaxBytes))
 	}
 	if !utf8.Valid(raw) || bytes.IndexByte(raw, 0) >= 0 {
 		return fileErr(CodeNotUTF8, "the file is not valid UTF-8 text (save it as CSV UTF-8)")
@@ -120,8 +144,8 @@ func Parse(raw []byte) (*Table, []RowError) {
 		if len(rec) == 1 && strings.TrimSpace(rec[0]) == "" {
 			continue // a blank line is not a row
 		}
-		if t.Total++; t.Total > MaxRows {
-			return fileErr(CodeTooManyRows, "the file has more than %d rows", MaxRows)
+		if t.Total++; t.Total > lim.MaxRows {
+			return fileErr(CodeTooManyRows, "the file has more than %d rows", lim.MaxRows)
 		}
 		if len(rec) != len(t.Header) {
 			t.Short = append(t.Short, RowError{Row: t.Total, Code: CodeColumnCount,
@@ -137,4 +161,11 @@ func Parse(raw []byte) (*Table, []RowError) {
 		return fileErr(CodeNoHeader, "the file is empty: the first row must be the column names")
 	}
 	return &t, nil
+}
+
+func sizeText(n int) string {
+	if n >= 1<<20 && n%(1<<20) == 0 {
+		return fmt.Sprintf("%d MiB", n>>20)
+	}
+	return fmt.Sprintf("%d KiB", n>>10)
 }

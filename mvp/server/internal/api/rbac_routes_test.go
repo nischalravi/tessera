@@ -502,6 +502,11 @@ GET    /api/flatfile/uploads                         graph.read      -  # issue 
 GET    /api/flatfile/uploads/{upload_id}             graph.read      -  # issue #105
 GET    /api/flatfile/tasks                           graph.read      -  # issue #105
 POST   /api/flatfile/tasks/{task_id}/close           flatfile.close_tasks STEP_UP_POLICY  # issue #105
+GET    /api/directory/imports/sources                graph.read      -  # issue #915
+POST   /api/directory/imports/plan                   directory.import -  # issue #915: a dry run
+POST   /api/directory/imports/apply                  directory.import STEP_UP_POLICY  # issue #915
+PUT    /api/directory/manual/records                 directory.import STEP_UP_POLICY  # issue #915
+GET    /api/directory/manual/lookup                  graph.read      -  # issue #915
 GET    /api/access/as-of                             graph.read      -  # issue #111
 GET    /api/evidence/packs                           audit.read      -  # issue #111
 POST   /api/evidence/packs                           audit.read      -  # issue #111

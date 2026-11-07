@@ -13,7 +13,7 @@ import { BundleSection } from "./bundle";
 import { IdentityCard, MatchHistory, SourceAndTerms, SponsorshipsSection } from "./guestProfile";
 import { MergeDialog } from "./correlation";
 import { ContainDialog } from "./containment";
-import { PreviewFormDrawer } from "./shared";
+import { ObjectFormDrawer } from "./shared";
 import { LifecycleSection } from "../lifecycle/parts";
 
 /** Dry-run first, then apply: shows the blast radius of removing one grant before anything changes. */
@@ -153,20 +153,13 @@ function Header({ d }: { d: IdentityDetail }) {
         />
       )}
       {edit && (
-        <PreviewFormDrawer
+        <ObjectFormDrawer
           title={`Edit ${d.name}`}
-          kind="identity"
-          verb="update"
+          target="people"
+          id={d.id}
+          human={human}
+          known={{ name: d.name, title: d.title ?? "", department: d.department ?? "", email: d.email ?? "" }}
           onClose={() => setEdit(false)}
-          note={human ? "Workday is authoritative for name, department and title. Edits here are overwritten on the next sync unless the attribute is mastered in Tessera." : undefined}
-          initial={{ name: d.name, title: d.title ?? "", department: d.department ?? "", email: d.email ?? "", description: d.description ?? "" }}
-          fields={[
-            { id: "name", label: "Display name", required: true },
-            { id: "title", label: human ? "Job title" : "Kind" },
-            { id: "department", label: "Department" },
-            { id: "email", label: "Email" },
-            { id: "description", label: "Notes", textarea: true },
-          ]}
         />
       )}
     </>

@@ -17,7 +17,7 @@ import { StateBadge, WORKER_LABEL } from "../lifecycle/parts";
 import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel } from "./Panels";
 import { BulkOwnerDrawer } from "./owners";
 import { ViewToggle } from "./groups/ViewToggle";
-import { ImportDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
+import { ImportDrawer, ObjectFormDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
 import { HierarchySourceCard } from "./orgSettings";
 import { AFFILIATION_LABEL, STATE_LABEL as PERSON_STATE_LABEL } from "./affiliationModel";
 
@@ -44,12 +44,12 @@ function useDrawerParam(name: "new" | "import") {
 
 function useImport() {
   const [open, setOpen] = useDrawerParam("import");
-  const [file, setFile] = useState<{ rows: Record<string, string>[]; name: string } | null>(null);
+  const [file, setFile] = useState<{ file?: File; name: string } | null>(null);
   return {
     open: open || !!file,
     file,
     start: () => setOpen(true),
-    onImport: (rows: Record<string, string>[], name: string) => setFile({ rows, name }),
+    onImport: (_rows: Record<string, string>[], name: string, f?: File) => setFile({ file: f, name }),
     close: () => {
       setFile(null);
       setOpen(false);
@@ -184,7 +184,7 @@ export function People() {
       />
       {selected && <IdentityPanel id={selected} onClose={() => setSelected(null)} />}
       {newOpen && <NewPersonDrawer onClose={() => setNew(false)} />}
-      {imp.open && <ImportDrawer kind="people" label="people" columns={["email", "name", "department", "title", "manager_email"]} rows={imp.file?.rows} fileName={imp.file?.name} onClose={imp.close} />}
+      {imp.open && <ImportDrawer kind="people" label="people" file={imp.file?.file} onClose={imp.close} onDone={reload} />}
     </Page>
   );
 }
@@ -350,7 +350,7 @@ export function Accounts() {
           { id: "status", label: "Status", options: opts(uniq((data ?? []).map((r) => r.status))), get: (r) => r.status },
           { id: "corr", label: "Correlation", options: [{ value: "yes", label: "Correlated" }, { value: "no", label: "Uncorrelated" }], get: (r) => (r.identity ? "yes" : "no") },
         ]}
-        commands={[newCmd("New account", () => setNew(true), true)]}
+        commands={[newCmd("New account", () => setNew(true))]}
         onRefresh={reload}
         bulkActions={[
           { label: "Disable", icon: <Ban size={16} />, danger: true, run: async (rs) => { await mockObjects.save("account", `${rs.length} accounts`, actor, "update"); toast(`${rs.length} accounts queued to disable (preview)`); } },
@@ -363,17 +363,11 @@ export function Accounts() {
       />
       {open && <AccountPanel a={open} onClose={() => setSelected(null)} />}
       {newOpen && (
-        <PreviewFormDrawer title="New account" kind="account" onClose={() => setNew(false)}
+        <ObjectFormDrawer title="New account" target="accounts" onClose={() => setNew(false)} onSaved={reload}
           note="Most accounts are created by provisioning when access is granted. Use this for a one-off account in a system without a connector."
-          fields={[
-            { id: "username", label: "Username", required: true },
-            { id: "system", label: "System", required: true, options: uniq((data ?? []).map((r) => r.system)) },
-            { id: "kind", label: "Kind", options: uniq((data ?? []).map((r) => r.kind)) },
-            { id: "owner", label: "Belongs to (email)", placeholder: "name@larkspur.example" },
-          ]}
         />
       )}
-      {imp.open && <ImportDrawer kind="accounts" label="accounts" columns={["username", "system", "kind", "owner_email", "status"]} rows={imp.file?.rows} fileName={imp.file?.name} onClose={imp.close} />}
+      {imp.open && <ImportDrawer kind="accounts" label="accounts" file={imp.file?.file} onClose={imp.close} onDone={reload} />}
     </Page>
   );
 }
@@ -415,7 +409,7 @@ function GroupList({ id, kinds, newLabel, title, toggle }: { id: string; kinds?:
           { id: "kind", label: "Kind", options: uniq((rows ?? []).map((r) => r.kind)).map((k) => ({ value: k, label: KIND_LABEL[k] ?? k })), get: (r) => r.kind },
           { id: "priv", label: "Privileged", options: [{ value: "yes", label: "Privileged" }, { value: "no", label: "Not privileged" }], get: (r) => (r.privileged ? "yes" : "no") },
         ]}
-        commands={[newCmd(newLabel, () => setNew(true), true)]}
+        commands={[newCmd(newLabel, () => setNew(true))]}
         onRefresh={reload}
         bulkActions={[{ label: "Request access", icon: <ShoppingCart size={16} />, run: (rs) => nav(`/access/request?add=${rs.map((r) => `g${r.id}`).join(",")}`) }]}
         rowLabel={(r) => `${r.system}:${r.name}`}
@@ -426,18 +420,11 @@ function GroupList({ id, kinds, newLabel, title, toggle }: { id: string; kinds?:
       />
       {open && <GroupPanel g={open} onClose={() => setSelected(null)} />}
       {newOpen && (
-        <PreviewFormDrawer title={newLabel} kind={id} onClose={() => setNew(false)}
+        <ObjectFormDrawer title={newLabel} target="entitlements" onClose={() => setNew(false)} onSaved={reload}
           note="Entitlements are normally discovered by connector sync. Create one here to manage a system without a connector."
-          fields={[
-            { id: "name", label: "Name", required: true },
-            { id: "system", label: "System", required: true, options: uniq((data ?? []).map((r) => r.system)) },
-            { id: "kind", label: "Kind", options: Object.values(KIND_LABEL) },
-            { id: "privileged", label: "Privileged", options: ["No", "Yes"] },
-            { id: "description", label: "Description", textarea: true },
-          ]}
         />
       )}
-      {imp.open && <ImportDrawer kind={id} label={id} columns={["name", "system", "kind", "privileged", "description"]} rows={imp.file?.rows} fileName={imp.file?.name} onClose={imp.close} />}
+      {imp.open && <ImportDrawer kind="entitlements" label={id} file={imp.file?.file} onClose={imp.close} onDone={reload} />}
     </Page>
   );
 }

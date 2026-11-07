@@ -306,6 +306,8 @@ var tables = []string{
 	"admin_change_proposals",
 	// the approver's attempts to check the URL a proposal seals (schema/0964_change_target_checks.sql)
 	"admin_change_target_checks",
+	// the snapshot of the people and entitlements a directory CSV import left (schema/0965_dirimport.sql)
+	"dirimport_records",
 	// MCP resource bindings to an issuer and audience (schema/0700_mcp_resource_bindings.sql)
 	"mcp_resource_bindings",
 	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)

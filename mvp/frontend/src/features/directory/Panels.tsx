@@ -22,7 +22,7 @@ import { ContainDialog, ContainmentRetries } from "./containment";
 import { RevokeDrawer } from "./IdentityPage";
 import { OwnershipRows } from "./owners";
 import { CatalogSettings } from "./catalog";
-import { PreviewFormDrawer } from "./shared";
+import { ObjectFormDrawer } from "./shared";
 
 const I = 16;
 
@@ -256,20 +256,14 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
 
       {rotate && <PlanDrawer title={`Rotate ${d.name}'s secrets`} secretIds={d.secrets.map((x) => x.id)} onClose={() => setRotate(false)} />}
       {edit && (
-        <PreviewFormDrawer
+        <ObjectFormDrawer
           title={`Edit ${d.name}`}
-          kind="identity"
-          verb="update"
+          target="people"
+          id={d.id}
+          human={human}
+          known={{ name: d.name, title: d.title ?? "", department: d.department ?? "", email: d.email ?? "" }}
           onClose={() => setEdit(false)}
-          note={human ? "Workday is authoritative for name, department and title. Edits here are overwritten on the next sync unless the attribute is mastered in Tessera." : undefined}
-          initial={{ name: d.name, title: d.title ?? "", department: d.department ?? "", email: d.email ?? "", description: d.description ?? "" }}
-          fields={[
-            { id: "name", label: "Display name", required: true },
-            { id: "title", label: human ? "Job title" : "Kind" },
-            { id: "department", label: "Department" },
-            { id: "email", label: "Email" },
-            { id: "description", label: "Notes", textarea: true },
-          ]}
+          onSaved={reload}
         />
       )}
       {revoke !== null && <RevokeDrawer edgeId={revoke} onClose={() => setRevoke(null)} onDone={reload} />}
@@ -365,9 +359,8 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
         </Section>
       )}
       {edit && (
-        <PreviewFormDrawer title={`Edit ${g.name}`} kind="entitlement" verb="update" onClose={() => setEdit(false)}
-          initial={{ name: g.name, description: g.description ?? "" }}
-          fields={[{ id: "name", label: "Name", required: true }, { id: "description", label: "Description", textarea: true }]}
+        <ObjectFormDrawer title={`Edit ${g.name}`} target="entitlements" id={g.id} source={g.system} onClose={() => setEdit(false)}
+          known={{ name: g.name, description: g.description ?? "", kind: g.kind, privileged: g.privileged ? "yes" : "no" }}
         />
       )}
     </SidePanel>
