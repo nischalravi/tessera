@@ -306,6 +306,8 @@ var tables = []string{
 	"admin_change_proposals",
 	// the approver's attempts to check the URL a proposal seals (schema/0964_change_target_checks.sql)
 	"admin_change_target_checks",
+	// who asked to disable an account through the account route, for its re-enable's four eyes (schema/0965_account_disable_requests.sql)
+	"account_disable_requests",
 	// MCP resource bindings to an issuer and audience (schema/0700_mcp_resource_bindings.sql)
 	"mcp_resource_bindings",
 	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)

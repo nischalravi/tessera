@@ -2,7 +2,9 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -135,6 +137,11 @@ var (
 	delItemSet = tq("deletion_hold_items.set", `
 		UPDATE deletion_hold_items SET status = @status, note = @note
 		WHERE tenant_id = @tenant AND hold_id = @hold_id AND ord = @ord AND status = 'held'`)
+
+	delItemHeldLike = tq("deletion_hold_items.held_like", `
+		SELECT i.ref FROM deletion_hold_items i JOIN deletion_holds h ON h.tenant_id = i.tenant_id AND h.id = i.hold_id
+		WHERE i.tenant_id = @tenant AND h.tenant_id = @tenant AND i.kind = @kind AND i.status = 'held' AND h.status = 'held' AND i.ref LIKE @pattern
+		ORDER BY h.created_at, i.ord`)
 
 	delPopGroups = tq("deletion_guard.pop_groups", `
 		SELECT COUNT(*) FROM grp_groups g WHERE g.tenant_id = @tenant AND g.status <> 'deleted'`)
@@ -391,4 +398,21 @@ func (tx *TenantTx) AppendDeletionHoldItems(h *DeletionHold, items []DeletionHol
 func (tx *TenantTx) SetDeletionHoldReason(id, reason string) error {
 	_, err := tx.exec(delHoldReason, sql.Named("id", id), sql.Named("reason", reason))
 	return err
+}
+
+// HeldDeletionItemRefs lists the refs of the still-held items of an open hold, of one kind, whose ref contains
+// fragment (a literal: it must hold no LIKE wildcards), oldest first.
+func (tx *TenantTx) HeldDeletionItemRefs(kind, fragment string) ([]string, error) {
+	if strings.ContainsAny(fragment, "%_\\") {
+		return nil, errors.New("store: held item fragment holds a LIKE wildcard")
+	}
+	refs, err := collect(tx, func(s scanner) (*string, error) {
+		var ref string
+		return &ref, s.Scan(&ref)
+	}, delItemHeldLike, sql.Named("kind", kind), sql.Named("pattern", "%"+fragment+"%"))
+	out := make([]string, len(refs))
+	for i, r := range refs {
+		out[i] = *r
+	}
+	return out, err
 }

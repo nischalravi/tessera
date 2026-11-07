@@ -10,6 +10,8 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
+	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/fake"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
@@ -85,7 +87,8 @@ func TestAccountState_DisableEnableClosesTheLoop(t *testing.T) {
 		t.Errorf("disable of a disabled account: %d %s", rec.Code, rec.Body)
 	}
 
-	h.c.json("POST", path+"enable", `{`+stateReason+`}`, http.StatusAccepted)
+	// the admin who asked for the disable may not undo it (four eyes); a second admin may
+	h.second().json("POST", path+"enable", `{`+stateReason+`}`, http.StatusAccepted)
 	if row = h.accountRow(id); row["status"] != "disabled" || row["pending"] != "enable" {
 		t.Errorf("enable pending row = %v", row)
 	}
@@ -303,5 +306,120 @@ func TestAccountState_SeparationOfDuties(t *testing.T) {
 	}
 	if n := strings.Count(got, "account.enable_requested"); n != 2 {
 		t.Errorf("enable refusals audited: %d", n)
+	}
+}
+
+// second is another linked admin, who may undo what the first asked for.
+func (h *provHarness) second() client {
+	h.t.Helper()
+	id := ensureIdentity(h.t, h.st.DB, h.st.Tenant, "second-admin", "second-admin", testkit.Now)
+	u := authtest.User{Email: "second-admin@larkspur.example", Roles: []auth.Role{auth.RolePolicyAdmin}, IdentityID: id}
+	return client{h.t, signIn(h.t, h.st.DB, h.st.Tenant, u, authtest.Phr, testkit.Now).Handler(h.srv.Handler())}
+}
+
+// Enable of an account disabled through the account route needs a different person than the one who asked for the
+// disable, single and bulk; the refusal is audited, and an account nobody asked to disable here has no one to differ from.
+func TestAccountState_EnableNeedsFourEyes(t *testing.T) {
+	h := newProvHarness(t, fake.Options{Token: "tok"})
+	h.seedTarget()
+	h.target(`{"kind":"scim","base_url":"`+h.url+`","token":"tok","write_back":true}`, 200)
+	id := h.accountID("okta", h.alice)
+	path := fmt.Sprintf("/api/accounts/%d/", id)
+	bulk := fmt.Sprintf(`{"ids":[%d],%s}`, id, stateReason)
+	h.c.json("POST", path+"disable", `{`+stateReason+`}`, http.StatusAccepted)
+	for i := 0; i < 3; i++ {
+		h.run()
+	}
+	if row := h.accountRow(id); row["status"] != "disabled" {
+		t.Fatalf("the disable did not complete: %v", row)
+	}
+
+	rec := h.c.do("POST", path+"enable", `{`+stateReason+`}`)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "four_eyes_required") {
+		t.Errorf("same admin, single: %d %s", rec.Code, rec.Body)
+	}
+	for _, r := range h.c.json("POST", "/api/accounts/enable", bulk, 200).(map[string]any)["results"].([]any) {
+		if m := r.(map[string]any); m["error"] != "four_eyes_required" || m["status"] != "error" {
+			t.Errorf("same admin, bulk = %v", m)
+		}
+	}
+	if row := h.accountRow(id); row["pending"] != nil || row["status"] != "disabled" {
+		t.Errorf("a refused enable queued an operation: %v", row)
+	}
+	if n := strings.Count(h.audit(), "account.enable_requested"); n != 2 {
+		t.Errorf("enable refusals audited: %d", n)
+	}
+
+	other := h.second()
+	for _, r := range other.json("POST", "/api/accounts/enable", bulk, 200).(map[string]any)["results"].([]any) {
+		if m := r.(map[string]any); m["status"] != "queued" {
+			t.Errorf("second admin, bulk = %v", m)
+		}
+	}
+
+	// disabled by something else (no request recorded here): any admin may enable
+	bob := h.accountID("okta", h.bob)
+	testkit.Write(t, h.st, func(c *store.TenantTx) error { return c.DisableAccount(bob) })
+	h.c.json("POST", fmt.Sprintf("/api/accounts/%d/enable", bob), `{`+stateReason+`}`, http.StatusAccepted)
+}
+
+// A disable the deletion guard holds is pending for its account: asking again creates no second held item, so
+// releasing the hold queues one disable. The opposite direction is refused while it waits.
+func TestAccountState_HeldDisableIsNotDuplicated(t *testing.T) {
+	h := newProvHarness(t, fake.Options{Token: "tok"})
+	h.seedTarget()
+	h.target(`{"kind":"scim","base_url":"`+h.url+`","token":"tok","write_back":true}`, 200)
+	id := h.accountID("okta", h.alice)
+	path := fmt.Sprintf("/api/accounts/%d/", id)
+	bulk := fmt.Sprintf(`{"ids":[%d],%s}`, id, stateReason)
+	zero := 0
+	testkit.Write(t, h.st, func(c *store.TenantTx) error {
+		return deleteguard.Set(c, deleteguard.Policy{Category: deleteguard.CatAccounts, MaxCount: &zero, WindowMinutes: 60, Mode: deleteguard.ModeHoldAll}, nil, testkit.Now)
+	})
+	heldItems := func() (n int, hold string) {
+		testkit.Read(t, h.st, func(c *store.TenantTx) error {
+			hs, err := c.DeletionHolds("held", deleteguard.CatAccounts, 10, 0)
+			for _, x := range hs {
+				items, _ := c.DeletionHoldItems(x.ID)
+				n += len(items)
+				hold = x.ID
+			}
+			return err
+		})
+		return
+	}
+
+	if v := h.c.json("POST", path+"disable", `{`+stateReason+`}`, http.StatusAccepted).(map[string]any); v["status"] != "held" {
+		t.Fatalf("first disable = %v", v)
+	}
+	if v := h.c.json("POST", path+"disable", `{`+stateReason+`}`, http.StatusAccepted).(map[string]any); v["status"] != "pending" {
+		t.Errorf("second disable = %v", v)
+	}
+	for _, r := range h.c.json("POST", "/api/accounts/disable", bulk, 200).(map[string]any)["results"].([]any) {
+		if m := r.(map[string]any); m["status"] != "pending" {
+			t.Errorf("bulk disable of a held account = %v", m)
+		}
+	}
+	if rec := h.second().do("POST", path+"enable", `{`+stateReason+`}`); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "operation_in_flight") {
+		t.Errorf("enable while a disable is held: %d %s", rec.Code, rec.Body)
+	}
+	n, hold := heldItems()
+	if n != 1 {
+		t.Fatalf("held items = %d, want 1", n)
+	}
+
+	testkit.Write(t, h.st, func(c *store.TenantTx) error {
+		_, err := deleteguard.Release(c, testkit.Now, hold, "approver", nil, deleteguard.Appliers{provision.ItemOp: provision.ReleaseHeld})
+		return err
+	})
+	if got := h.ops(""); len(got) != 1 {
+		t.Errorf("operations after the release = %d, want 1", len(got))
+	}
+	// released and queued: now in flight, still one operation
+	if v := h.c.json("POST", path+"disable", `{`+stateReason+`}`, http.StatusAccepted).(map[string]any); v["status"] != "pending" || v["op_id"] == "" {
+		t.Errorf("disable after the release = %v", v)
+	}
+	if got := h.ops(""); len(got) != 1 {
+		t.Errorf("operations after asking again = %d, want 1", len(got))
 	}
 }
