@@ -2,12 +2,14 @@ package flatfile_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
 	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
@@ -455,4 +457,108 @@ func TestUpsertRecord_CreateAndEditOneObject(t *testing.T) {
 	if _, err = up("people", map[string]string{"email": "c@t.example", "name": "C", "salary": "1"}); err == nil {
 		t.Error("an unknown field was accepted")
 	}
+}
+
+// Security review of #915: an entitlements import never takes over a group of its system that another feed
+// wrote (a connector that began writing to the system after the source was named): the row is refused and the
+// group is left as it was. The source's own entitlements stay editable.
+func TestImport_EntitlementsNeverTakeOverAnotherFeedsGroup(t *testing.T) {
+	e := newEnv(t)
+	if out, _, err := e.imp(flatfile.TargetEntitlements, "name,external_id,privileged\nOurs,ours,no\n", true); err != nil || out.Plan.Added != 1 {
+		t.Fatalf("first import = %+v, %v", out, err)
+	}
+	// another feed writes a privileged, non-requestable group into the same system
+	e.tx(func(c *store.TenantTx) error {
+		_, err := ingest.Import(c, e.now, &connectors.DiscoveryResult{System: dsys, Groups: []connectors.GroupRecord{
+			{System: dsys, ExternalID: "admins", Name: "Admins", Kind: "group", Privileged: true}}})
+		return err
+	})
+	csv := "name,external_id,privileged\nOurs,ours,yes\nAdmins,admins,no\n"
+	for _, apply := range []bool{false, true} {
+		out, pl, err := e.imp(flatfile.TargetEntitlements, csv, apply)
+		if apply {
+			if err != nil || out == nil {
+				t.Fatalf("apply: %+v, %v", out, err)
+			}
+			pl = out.Plan
+		}
+		if err != nil || len(pl.Errors) != 1 || pl.Errors[0].Code != flatfile.CodeOwnedElsewhere || pl.Errors[0].Row != 2 {
+			t.Fatalf("apply=%v: plan %+v, %v; want one owned_by_other_source on row 2", apply, pl, err)
+		}
+	}
+	e.read(func(c *store.TenantTx) {
+		g, err := c.GroupByXID(dsys, "admins")
+		if err != nil || !g.Privileged || g.Requestable {
+			t.Errorf("the other feed's group changed: %+v, %v", g, err)
+		}
+		if g, _ := c.GroupByXID(dsys, "ours"); g.Privileged {
+			t.Error("a refused file changed the source's own entitlement")
+		}
+		if rows, _ := c.ImportRecords(dsys, store.ImportEntitlements); len(rows) != 1 {
+			t.Errorf("snapshot has %d rows, want 1", len(rows))
+		}
+	})
+	// the source's own row alone is applied
+	if out, _, err := e.imp(flatfile.TargetEntitlements, "name,external_id,privileged\nOurs,ours,yes\n", true); err != nil || out.Plan.Changed != 1 {
+		t.Fatalf("own edit = %+v, %v", out, err)
+	}
+}
+
+// A system a configured connector writes to without a connection row is refused on every call, also once a
+// manual source of that name exists (named before the connector's first sync); the forms refuse it too.
+func TestImport_RefusesAReservedConnectorSystem(t *testing.T) {
+	e := newEnv(t)
+	if out, _, err := e.imp(flatfile.TargetPeople, people(1), true); err != nil || out.Plan.Added != 1 {
+		t.Fatalf("setup = %+v, %v", out, err)
+	}
+	reserved := map[string]bool{dsys: true}
+	fieldOf := map[string]string{flatfile.TargetPeople: "name", flatfile.TargetAccounts: "account_id", flatfile.TargetEntitlements: "name"}
+	for _, target := range []string{flatfile.TargetPeople, flatfile.TargetAccounts, flatfile.TargetEntitlements} {
+		var errs [3]error
+		e.tx(func(c *store.TenantTx) error {
+			in := flatfile.ImportInput{System: dsys, Target: target, Filename: "f.csv", Raw: []byte("name\nX\n"), By: "Ivan", Reserved: reserved}
+			_, errs[0] = flatfile.PlanImport(c, e.now, in)
+			_, errs[1] = flatfile.ApplyImport(c, e.now, in)
+			_, errs[2] = flatfile.UpsertRecord(c, e.now, flatfile.RecordInput{System: dsys, Target: target,
+				Fields: map[string]string{fieldOf[target]: "x"}, By: "Ivan", Reserved: reserved})
+			return nil
+		})
+		for i, err := range errs {
+			var fe *flatfile.Error
+			if !errors.As(err, &fe) || fe.Code != "system_not_manual" {
+				t.Errorf("%s call %d: %v, want system_not_manual", target, i, err)
+			}
+		}
+	}
+}
+
+// The directory.import event names the file's digest and the keys it added, changed and removed, so the
+// ledger says which people a file touched.
+func TestImport_AuditNamesTheFileAndTheKeys(t *testing.T) {
+	e := newEnv(t)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(2), true); err != nil {
+		t.Fatal(err)
+	}
+	e.setPolicy(deleteguard.CatIdentities, 100, deleteguard.ModeOff)
+	if _, _, err := e.imp(flatfile.TargetPeople, "email,name,department\np00@t.example,Person 00,Finance\n", true); err != nil {
+		t.Fatal(err)
+	}
+	e.read(func(c *store.TenantTx) {
+		evs, err := c.AuditEvents(store.AuditFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var last string // the second import's event: the one that changed a row
+		for _, ev := range evs {
+			b, _ := json.Marshal(ev.Detail)
+			if ev.Action == "directory.import" && strings.Contains(string(b), `"changed":1`) {
+				last = string(b)
+			}
+		}
+		for _, want := range []string{`"sha256":"`, `"changed":["p00@t.example"]`, `"removed":["p01@t.example"]`, `"keys_truncated":false`} {
+			if !strings.Contains(last, want) {
+				t.Errorf("directory.import detail %s lacks %s", last, want)
+			}
+		}
+	})
 }

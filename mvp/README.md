@@ -4266,7 +4266,8 @@ The Directory lists' **Bulk import** (people, accounts, entitlements) and the **
 
 - **Manual source.** A file loads into a *manual source*: a system the admin names (`hr-sheet`, shown as "HR
   spreadsheet"), never one a connector owns. A name a connection feeds, or a system that already holds data from another
-  source, is refused (409 `system_not_manual`). Accounts use the flat-file tables (mapping, upload history, manual
+  source, is refused (409 `system_not_manual`); so is a system a configured connector (`TESSERA_CONNECTORS`) feeds,
+  on every call, even if a manual source of that name already exists. Accounts use the flat-file tables (mapping, upload history, manual
   tasks; a new source gets the canonical mapping `account_id, username, email, identity_id, status`). People and
   entitlements keep a snapshot in `dirimport_records` (kind `people` | `entitlements`).
 - **Targets.** `people` (columns `email, name` required; `external_id, department, title, manager_email, status`)
@@ -4274,7 +4275,8 @@ The Directory lists' **Bulk import** (people, accounts, entitlements) and the **
   required; `external_id, kind, privileged, description`) become catalog groups of the source. All go through
   `ingest.Import`, so the resolver, authoritative-attribute rules and the deletion guard apply as for a connector.
   A row naming a person another source already owns (same external id, or same email under another id) is refused
-  (`owned_by_other_source`, `email_in_use`).
+  (`owned_by_other_source`, `email_in_use`); so is an entitlement whose group another feed wrote to the same system
+  (`owned_by_other_source`).
 - **Removals** reach only rows the same source imported before. A person missing from a later file is set to
   terminated; an account is disabled and its import grants dropped; an entitlement is retired (no longer requestable,
   grants kept for review). All three are vetted by the deletion guard (a feed's default is `hold_all`): held removals
@@ -4293,7 +4295,8 @@ The Directory lists' **Bulk import** (people, accounts, entitlements) and the **
   applies the source's rows plus this one through the same code), `GET /api/directory/manual/lookup?target=&id=` (who
   owns the object and its fields when a manual source does). `directory.import` is a new permission, granted to tenant
   admins. An apply records `directory.import` (and for accounts `flatfile.upload`) in the same transaction; a refused
-  file records a failed `directory.import`.
+  file records a failed `directory.import`. Both name the file's `sha256`; an applied one also lists the external ids
+  it added, changed and removed (up to 100 of each, `keys_truncated`).
 - **Forms.** `ObjectFormDrawer` (`features/directory/shared.tsx`; rules in `importModel.ts`) creates only in a manual
   source and edits only objects one owns. For an object a connector owns it shows the source's fields read-only with
   "Managed by <system>" and offers only what Tessera keeps: an owner (`PUT /api/ownership`, `ownership.manage`) for

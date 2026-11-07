@@ -1,7 +1,9 @@
 package flatfile
 
 import (
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,6 +64,9 @@ type ImportInput struct {
 	Filename string
 	Raw      []byte
 	By       string
+	// Reserved are the systems a configured connector writes to without a connection row (TESSERA_CONNECTORS):
+	// an import refuses them as it refuses a connection's system.
+	Reserved map[string]bool
 }
 
 // ImportOutcome is what an applied import did.
@@ -193,9 +198,14 @@ func SystemFree(c *store.TenantTx, system string) error {
 }
 
 // checkSource refuses a source an import may not write to: an invalid name, or a system a connector owns.
-func checkSource(c *store.TenantTx, system string) error {
+// reserved are the systems configured connectors write to without a connection row; they are refused on
+// every call, also for a source that already exists (one named before the connector's first sync).
+func checkSource(c *store.TenantTx, system string, reserved map[string]bool) error {
 	if !ValidSystem(system) {
 		return &Error{"invalid_system", "name the source with 1 to 63 lower-case letters, digits, '.', '_' or '-'"}
+	}
+	if reserved[system] {
+		return &Error{"system_not_manual", "a connector feeds the system " + system + ": a CSV import never writes to a connector's system"}
 	}
 	conns, err := c.Connections()
 	if err != nil {
@@ -218,7 +228,7 @@ func PlanImport(c *store.TenantTx, now time.Time, in ImportInput) (*Plan, error)
 	if !ValidTarget(in.Target) {
 		return nil, &Error{"invalid_target", "target must be people, accounts or entitlements"}
 	}
-	if err := checkSource(c, in.System); err != nil {
+	if err := checkSource(c, in.System, in.Reserved); err != nil {
 		return nil, err
 	}
 	switch in.Target {
@@ -262,7 +272,7 @@ func ApplyImport(c *store.TenantTx, now time.Time, in ImportInput) (*ImportOutco
 	if !ValidTarget(in.Target) {
 		return nil, &Error{"invalid_target", "target must be people, accounts or entitlements"}
 	}
-	if err := checkSource(c, in.System); err != nil {
+	if err := checkSource(c, in.System, in.Reserved); err != nil {
 		return nil, err
 	}
 	out := &ImportOutcome{}
@@ -329,17 +339,43 @@ func ApplyImport(c *store.TenantTx, now time.Time, in ImportInput) (*ImportOutco
 		}
 	}
 	pl := out.Plan
+	keys, truncated := changeKeys(pl.Changes)
 	err := c.Audit(now, in.By, "directory.import", ojson.Object{{Key: "system", Value: in.System}, {Key: "target", Value: in.Target},
-		{Key: "filename", Value: SafeFilename(in.Filename)}, {Key: "rows", Value: pl.RowsTotal}, {Key: "added", Value: pl.Added},
-		{Key: "changed", Value: pl.Changed}, {Key: "removed", Value: pl.Removed - out.Held}, {Key: "held", Value: out.Held}})
+		{Key: "filename", Value: SafeFilename(in.Filename)}, {Key: "sha256", Value: fileSum(in.Raw)}, {Key: "rows", Value: pl.RowsTotal},
+		{Key: "added", Value: pl.Added}, {Key: "changed", Value: pl.Changed}, {Key: "removed", Value: pl.Removed - out.Held},
+		{Key: "held", Value: out.Held}, {Key: "keys", Value: keys}, {Key: "keys_truncated", Value: truncated}})
 	return out, err
+}
+
+// maxAuditKeys bounds the keys of each change type a directory.import event names.
+const maxAuditKeys = 100
+
+// changeKeys are the external ids an import added, changed and removed, so the ledger says which people and
+// entitlements a file touched (their snapshot keeps only the latest rows).
+func changeKeys(chs []Change) (ojson.Object, bool) {
+	by := map[string][]string{Added: {}, Changed: {}, Removed: {}}
+	truncated := false
+	for _, ch := range chs {
+		if len(by[ch.Type]) >= maxAuditKeys {
+			truncated = true
+			continue
+		}
+		by[ch.Type] = append(by[ch.Type], ch.Key)
+	}
+	return ojson.Object{{Key: "added", Value: by[Added]}, {Key: "changed", Value: by[Changed]}, {Key: "removed", Value: by[Removed]}}, truncated
+}
+
+func fileSum(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // rejected records a refused file: nothing else changed, the attempt is kept in the audit ledger.
 func rejected(c *store.TenantTx, now time.Time, in ImportInput, pl *Plan) error {
 	_, err := c.RecordAudit(store.AuditRecord{At: now, Action: "directory.import", LegacyActor: in.By, Outcome: store.OutcomeFailure,
 		TargetType: "directory_import", TargetID: in.System, Detail: ojson.Object{{Key: "system", Value: in.System},
-			{Key: "target", Value: in.Target}, {Key: "filename", Value: SafeFilename(in.Filename)}, {Key: "rows", Value: pl.RowsTotal},
+			{Key: "target", Value: in.Target}, {Key: "filename", Value: SafeFilename(in.Filename)}, {Key: "sha256", Value: fileSum(in.Raw)},
+			{Key: "rows", Value: pl.RowsTotal},
 			{Key: "errors", Value: len(pl.Errors)}}})
 	return err
 }
@@ -711,7 +747,47 @@ func prepareEntitlements(c *store.TenantTx, in ImportInput) (*dirPrep, error) {
 			"privileged": priv, "description": Neutralize(cols.get(row, "description"))}))
 	}
 	d.errs = errs
-	return d, d.finish(c)
+	if err := d.finish(c); err != nil {
+		return nil, err
+	}
+	if len(d.errs) == 0 {
+		conflicts, err := entitlementConflicts(c, d, rowOf)
+		if err != nil {
+			return nil, err
+		}
+		if len(conflicts) > 0 {
+			d.errs = conflicts
+			sortErrors(d.errs)
+			d.delta = Delta{}
+		}
+	}
+	return d, nil
+}
+
+// entitlementConflicts refuses a row that would take over a group of the system this source did not import:
+// one another feed wrote to the same system (a connector that started writing to it after the source was
+// named, an agent listing). An import changes and retires only the entitlements it created.
+func entitlementConflicts(c *store.TenantTx, d *dirPrep, rowOf map[string]int) ([]RowError, error) {
+	ours := map[string]bool{}
+	for _, p := range d.prev {
+		ours[p.Key] = true
+	}
+	var errs []RowError
+	for _, r := range d.recs {
+		if ours[r.Key] {
+			continue
+		}
+		g, err := c.GroupByXID(d.in.System, r.Key)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		errs = append(errs, RowError{Row: rowOf[r.Key], Column: "external_id", Code: CodeOwnedElsewhere,
+			Message: fmt.Sprintf("%s is already in the directory from another source; an import does not take over its entitlements", show(g.Name))})
+	}
+	return errs, nil
 }
 
 // ReleaseRetire applies a held retirement: the entitlement stops being requestable. Grants stay, so a review
@@ -814,6 +890,8 @@ type RecordInput struct {
 	// Fields by canonical column name (AccountColumns, PeopleColumns, EntitlementColumns).
 	Fields map[string]string
 	By     string
+	// Reserved: see ImportInput.
+	Reserved map[string]bool
 }
 
 // UpsertRecord adds or replaces one row of a manual source's snapshot and applies the result, the same
@@ -841,7 +919,7 @@ func UpsertRecord(c *store.TenantTx, now time.Time, in RecordInput) (*ImportOutc
 			return nil, &Error{"invalid_field", "unknown field " + show(k)}
 		}
 	}
-	if err := checkSource(c, in.System); err != nil {
+	if err := checkSource(c, in.System, in.Reserved); err != nil {
 		return nil, err
 	}
 	colName, rows, err := currentRows(c, in)
@@ -879,7 +957,8 @@ func UpsertRecord(c *store.TenantTx, now time.Time, in RecordInput) (*ImportOutc
 		_ = w.Write(line)
 	}
 	w.Flush()
-	return ApplyImport(c, now, ImportInput{System: in.System, Name: in.Name, Target: in.Target, Filename: "form.csv", Raw: []byte(b.String()), By: in.By})
+	return ApplyImport(c, now, ImportInput{System: in.System, Name: in.Name, Target: in.Target, Filename: "form.csv", Raw: []byte(b.String()), By: in.By,
+		Reserved: in.Reserved})
 }
 
 func mergeFields(old, upd map[string]string) map[string]string {

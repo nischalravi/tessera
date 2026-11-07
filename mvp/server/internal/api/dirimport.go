@@ -93,7 +93,21 @@ func importQuery(p *params) (*string, *string, string, string) {
 	return target, system, name, filename
 }
 
-func readImport(r *http.Request, p *params) (flatfile.ImportInput, error) {
+// reservedSystems are the systems the configured (legacy) connectors write to without a connection row: an
+// import may not name one, even before the connector's first sync has put data there.
+func (s *Server) reservedSystems() (map[string]bool, error) {
+	conns, err := s.cfg.Connectors(s.clock())
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(conns))
+	for _, c := range conns {
+		out[c.System()] = true
+	}
+	return out, nil
+}
+
+func (s *Server) readImport(r *http.Request, p *params) (flatfile.ImportInput, error) {
 	var in flatfile.ImportInput
 	target, system, name, filename := importQuery(p)
 	if err := validated(p, nil); err != nil {
@@ -122,7 +136,11 @@ func readImport(r *http.Request, p *params) (flatfile.ImportInput, error) {
 		}
 		return in, errBodyUnreadable
 	}
-	return flatfile.ImportInput{System: *system, Name: name, Target: *target, Filename: filename, Raw: raw, By: actor(r)}, nil
+	reserved, err := s.reservedSystems()
+	if err != nil {
+		return in, err
+	}
+	return flatfile.ImportInput{System: *system, Name: name, Target: *target, Filename: filename, Raw: raw, By: actor(r), Reserved: reserved}, nil
 }
 
 const (
@@ -172,7 +190,7 @@ func importError(err error) error {
 }
 
 func (s *Server) planDirImport(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	in, err := readImport(r, p)
+	in, err := s.readImport(r, p)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +202,7 @@ func (s *Server) planDirImport(_ http.ResponseWriter, r *http.Request, p *params
 }
 
 func (s *Server) applyDirImport(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	in, err := readImport(r, p)
+	in, err := s.readImport(r, p)
 	if err != nil {
 		return nil, err
 	}
@@ -241,8 +259,12 @@ func (s *Server) putManualRecord(r *http.Request, _ *params) (int, any, error) {
 			return 0, nil, badRequest("invalid_fields", "a value is too long")
 		}
 	}
+	reserved, err := s.reservedSystems()
+	if err != nil {
+		return 0, nil, err
+	}
 	res, err := flatfile.UpsertRecord(store.TxFrom(r.Context()), s.clock(), flatfile.RecordInput{System: b.System, Name: strings.TrimSpace(b.Name),
-		Target: b.Target, Fields: b.Fields, By: actor(r)})
+		Target: b.Target, Fields: b.Fields, By: actor(r), Reserved: reserved})
 	out, err := s.finishImport(res, err)
 	if err != nil {
 		return 0, nil, err

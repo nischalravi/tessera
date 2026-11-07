@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 )
 
@@ -298,4 +301,26 @@ func someoneElse(t *testing.T, e *ffEnv) (int64, string) {
 	}
 	t.Fatal("the fixture has no identity with an email")
 	return 0, ""
+}
+
+// Security review of #915: a system a configured connector writes to without a connection row (the test
+// server's "tiny") is refused by the plan, the apply and the form, before its first sync has put data there.
+func TestDirectoryImportAPI_RefusesAConfiguredConnectorsSystem(t *testing.T) {
+	e := newFFEnv(t)
+	for _, verb := range []string{"plan", "apply"} {
+		if rec := e.imp(e.admin, verb, "accounts", "tiny", diAccounts); rec.Code != 409 || !strings.Contains(rec.Body.String(), "a connector feeds the system tiny") {
+			t.Errorf("%s: %d %s, want 409", verb, rec.Code, rec.Body)
+		}
+	}
+	if rec := e.json(e.admin, "PUT", "/api/directory/manual/records", `{"target":"accounts","system":"tiny","fields":{"account_id":"x1","username":"x"}}`); rec.Code != 409 {
+		t.Errorf("form: %d %s, want 409", rec.Code, rec.Body)
+	}
+	if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
+		if _, err := c.FlatMapping("tiny"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("a refused import saved a mapping for tiny: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
