@@ -62,6 +62,13 @@ test("a change request that carries a client secret is not kept; one without a s
   assert.equal(mem.size, 1);
 });
 
+test("a config export refused for step-up opens the dialog and is not resumed (#909)", async () => {
+  await assert.rejects(api.configTransport.export());
+  assert.deepEqual(events, ["step-up"]);
+  assert.equal(mem.size, 0);
+  assert.equal(api.takePendingAction(), null);
+});
+
 test("a read refused for step-up keeps nothing", async () => {
   await assert.rejects(api.api("/audit"));
   assert.equal(mem.size, 0);

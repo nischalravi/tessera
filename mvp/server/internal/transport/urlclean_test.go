@@ -92,8 +92,14 @@ func TestOverlayExportable(t *testing.T) {
 
 func (e *env) seedUnsafe(t *testing.T, destToo bool) {
 	write(t, e.src, func(tx *store.TenantTx) error {
-		if _, err := e.rd.Create(tx, readiness.CreateInput{Name: "Corp AD", ConnectorType: "demo-ad", System: "corp-ad",
-			Config: json.RawMessage(`{"host":"dc01.corp.example","user_filter":"jdbc:postgresql://db/app?password=hunter2","base_url":"https://u:pw@dc01.corp.example/x?token=abc"}`)}, "admin", t0); err != nil {
+		b, err := e.rd.Create(tx, readiness.CreateInput{Name: "Corp AD", ConnectorType: "demo-ad", System: "corp-ad",
+			Config: json.RawMessage(`{"host":"dc01.corp.example","user_filter":"jdbc:postgresql://db/app?password=hunter2","base_url":"https://dc01.corp.example/x"}`)}, "admin", t0)
+		if err != nil {
+			return err
+		}
+		// a value stored before saving a credentialed URL was refused (issue #908)
+		dirty := strings.Replace(b.Rev.Config, "https://dc01.corp.example/x", "https://u:pw@dc01.corp.example/x?token=abc", 1)
+		if err := tx.UpdateRevisionConfig(b.Rev.ID, dirty, b.Rev.ConfigHash, b.Rev.WriteMode, b.Rev.ExpectedCounts, t0); err != nil {
 			return err
 		}
 		if _, err := e.rd.PutOverlay(tx, "ad", []byte(`{"add_items":[{"id":"custom.ticket","title":"Ticket","category":"ownership","level":"required",`+

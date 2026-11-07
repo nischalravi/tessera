@@ -808,6 +808,7 @@ Admin → Export / import configuration moves a tenant's connections (config, ow
 log-streaming sinks to another tenant, usually on another
 instance, as a **signed bundle** (`server/internal/transport`). Export signs with the tenant's
 Ed25519 key (made on first export, sealed under the KEK; a server without a KEK cannot export).
+Export, like apply and the trusted-signer changes, needs a fresh phishing-resistant sign-in (step-up).
 Import accepts only bundles signed by a **trusted signer**: paste the exporting tenant's public
 key under Trusted signers first (a tenant does not trust its own key implicitly). The preview
 lists add / change / remove / manual per item; apply is bound to the previewed plan (`digest`, or
@@ -864,7 +865,7 @@ tessera-cli config apply  -f bundle.json [--prune] [--digest D]   # plans, then 
 
 `--digest` takes the `digest` of an earlier `plan --json`: the apply then happens only if nothing changed
 since it was reviewed. The destination must trust the source's key first (`config key` prints it; add it
-under Trusted signers). Exit 3 means the server wants a fresher sign-in (apply needs step-up).
+under Trusted signers). Exit 3 means the server wants a fresher sign-in (export and apply need step-up).
 
 **Not in a bundle yet** (each needs cross-tenant id mapping for the groups and entitlements it
 names): business roles and their versions and members, ABAC policies and bindings, approval
@@ -3684,6 +3685,7 @@ writes:                                        # request templates; see below
   `max_response_bytes` per response (also bounded by the server's outbound client), `max_pages` and `max_records`
   per listing (a listing cut short marks the result `Partial`, so the deletion guard holds every removal).
   All calls go through `internal/safehttp`.
+- Connection URL settings (`org_url`, `base_url`, URL-type `settings`) are refused with `400 url_credentials_refused` when they carry userinfo (`user:pass@`) or, for `base_url`/`org_url`, a query string or fragment (create, `PATCH .../config`, connection proposals). A value stored earlier is shown masked (`masked` in place of the credential, query values and fragment; the whole value when it cannot be split safely) in connection and change-request views, with `masked_fields` naming it; sending the masked value back unchanged keeps the stored one.
 - **Validation on save** names every bad field (`rest.users.fields.id`, `writes.lookup`, ...). A connection's
   `PATCH /api/connections/{id}/config` takes `"rest"` as an object or as a string of YAML/JSON text, and the server
   applies the environment's URL policy (https only in prod). `POST /api/connections` runs the same checks on the

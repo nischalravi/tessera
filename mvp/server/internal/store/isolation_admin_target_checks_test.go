@@ -65,7 +65,8 @@ func TestIsolation_AdminChangeTargetChecks(t *testing.T) {
 
 func adminTargetChecksCovered() map[string]bool {
 	return map[string]bool{"InsertAdminChangeTargetCheck": true, "AdminChangeTargetChecksOf": true, "AdminChangeTargetChecksTenant": true, "AdminChangeTargetChecksBy": true,
-		"InsertAdminChangeTargetFiling": true, "AdminChangeTargetFiling": true} // the test above
+		"AdminChangeTargetFilingsTenant": true,
+		"InsertAdminChangeTargetFiling":  true, "AdminChangeTargetFiling": true} // the test above
 }
 
 // The server-side comparison kept when a proposal is filed against an existing object is the tenant's own: B reads none of A's,
@@ -86,6 +87,9 @@ func TestIsolation_AdminChangeTargetFiling(t *testing.T) {
 		if n, err := c.AdminChangeTargetChecksOf("objkey", now.Add(-time.Hour)); err != nil || n != 0 {
 			t.Errorf("B counts A's object = %d, %v", n, err)
 		}
+		if n, err := c.AdminChangeTargetFilingsTenant(now.Add(-time.Hour)); err != nil || n != 0 {
+			t.Errorf("B counts A's filings = %d, %v", n, err)
+		}
 		return nil
 	})
 	if err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
@@ -99,6 +103,13 @@ func TestIsolation_AdminChangeTargetFiling(t *testing.T) {
 		}
 		if fl, _, err := c.AdminChangeTargetFiling(b.pending.ID); err != nil || fl != "" {
 			t.Errorf("A reads B's comparison = %q, %v", fl, err)
+		}
+		// a filing is not an approver's check (#907)
+		if n, err := c.AdminChangeTargetFilingsTenant(now.Add(-time.Hour)); err != nil || n != 1 {
+			t.Errorf("A's filings = %d, %v", n, err)
+		}
+		if n, err := c.AdminChangeTargetChecksTenant(now.Add(-time.Hour)); err != nil || n != 0 {
+			t.Errorf("A's approver checks count the filing = %d, %v", n, err)
 		}
 		return nil
 	}); err != nil {

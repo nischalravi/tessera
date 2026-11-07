@@ -4487,6 +4487,9 @@ export interface TrustedSigner { kid: string; public_key: string; label: string;
 export interface ExportedBundle { hash: string; kid: string; file_name: string; excluded: { section: string; name: string; reason: string }[] | null; bundle: unknown }
 export type ImportAction = "add" | "change" | "remove" | "unchanged" | "manual";
 export interface PlanItem { section: "connections" | "overlays" | "identity_providers" | "catalog_items" | "review_schedules" | "alert_rules" | "siem_sinks"; name: string; action: ImportAction; fields?: string[]; notes?: string[]; needs_target?: boolean }
+/** The notes shown for a plan item; a SIEM sink imported without a target says so, since it sends nothing until one is set. */
+export const NEEDS_TARGET_NOTE = "Needs target after import: it sends nothing until you set one.";
+export const planItemNotes = (it: Pick<PlanItem, "notes" | "needs_target">): string[] => [...(it.notes ?? []), ...(it.needs_target ? [NEEDS_TARGET_NOTE] : [])];
 export interface ImportPlan {
   hash: string; digest: string; digest_prune: string; signer: string; signer_kid: string; exported_at: string; items: PlanItem[]; refusals: string[];
   source: { tenant_id: string; tenant: string; env: string; instance?: string; exported_by: string };
@@ -4496,7 +4499,11 @@ export interface ConfigImport { id: string; bundle_hash: string; signer_kid: str
 
 export const configTransport = {
   signingKey: () => api<{ key: SigningKey | null }>("/config/signing-key"),
-  export: () => api<ExportedBundle>("/config/export", {}),
+  /**
+   * Needs a fresh sign-in: a step_up_required answer opens the step-up dialog, and the export is not resumed afterwards
+   * (a resumed export would sign a bundle nobody downloads), so the admin exports again once signed in.
+   */
+  export: () => apiNoResume<ExportedBundle>("/config/export", {}),
   signers: () => api<TrustedSigner[]>("/config/trusted-signers"),
   trust: (body: { kid: string; public_key: string; label: string }) => api<TrustedSigner>("/config/trusted-signers", body),
   untrust: (kid: string) => api<{ removed: string }>(`/config/trusted-signers/${encodeURIComponent(kid)}`, undefined, "DELETE"),

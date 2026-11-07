@@ -11,6 +11,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +203,28 @@ func (ts *testServer) proposerConfig(clientID string, extra map[string]any) map[
 	return c
 }
 
+// importMatches imports res by id and reads it, and checks every attribute except skip equals the applied state st.
+func importMatches(t *testing.T, p *protocol, res string, st tftypes.Value, skip ...string) {
+	t.Helper()
+	imp, d := p.importState(res, str(t, attrs(t, st)["id"]))
+	if len(d) > 0 {
+		t.Fatalf("import: %s", diagText(d))
+	}
+	got, d := p.read(res, imp)
+	if len(d) > 0 {
+		t.Fatalf("read after import: %s", diagText(d))
+	}
+	gotA := attrs(t, got)
+	for k, v := range attrs(t, st) {
+		if k == "change_id" || k == "change_url" || k == "note" || slices.Contains(skip, k) {
+			continue
+		}
+		if !gotA[k].Equal(v) {
+			t.Fatalf("import changed %s: %v vs %v", k, gotA[k], v)
+		}
+	}
+}
+
 func TestAcc_Proposals(t *testing.T) {
 	ts := startTestServerWithIdP(t)
 	alice, ivan := ts.signIn(t, "00u-alice-admin"), ts.signIn(t, "00u-ivan-admin2")
@@ -314,6 +337,10 @@ func TestAcc_Proposals(t *testing.T) {
 		if again, d := p.read(res, st); len(d) > 0 || !again.Equal(st) {
 			t.Fatalf("refresh changed the state: %s\n%v\n%v", diagText(d), st, again)
 		}
+		importMatches(t, p, res, st, "key", "owner_identity_id") // the server returns neither
+		if _, d := p.importState(res, "not-a-uuid"); !strings.Contains(diagText(d), "Invalid import id") {
+			t.Fatalf("a bad role import id: %q", diagText(d))
+		}
 		cfg["name"] = "TF role (renamed)"
 		st2 := approveNext(applyAsync(p, res, cfg, st)).state
 		a2 := attrs(t, st2)
@@ -337,6 +364,10 @@ func TestAcc_Proposals(t *testing.T) {
 		if !uuidRE.MatchString(str(t, a["id"])) || num(t, a["version"]) != 1 || !a["enabled"].Equal(tftypes.NewValue(tftypes.Bool, true)) {
 			t.Fatalf("created ruleset: %v", st)
 		}
+		importMatches(t, p, res, st)
+		if _, d := p.importState(res, "7"); !strings.Contains(diagText(d), "Invalid import id") {
+			t.Fatalf("a bad ruleset import id: %q", diagText(d))
+		}
 		cfg["enabled"] = false
 		st2 := approveNext(applyAsync(p, res, cfg, st)).state
 		if a2 := attrs(t, st2); num(t, a2["version"]) != 2 || !a2["enabled"].Equal(tftypes.NewValue(tftypes.Bool, false)) {
@@ -354,6 +385,16 @@ func TestAcc_Proposals(t *testing.T) {
 		// the server lets a machine client read no catalog item: refresh keeps what was applied
 		if again, d := p.read(res, st); len(d) > 0 || !again.Equal(st) {
 			t.Fatalf("refresh: %s", diagText(d))
+		}
+		// the import carries the group id only: no read exists for a machine client
+		imp, d := p.importState(res, fmt.Sprint(groupID))
+		if len(d) > 0 || str(t, attrs(t, imp)["id"]) != fmt.Sprint(groupID) || num(t, attrs(t, imp)["group_id"]) != groupID {
+			t.Fatalf("catalog item import: %v %s", imp, diagText(d))
+		}
+		for _, bad := range []string{"0", "abc", "01"} {
+			if _, d := p.importState(res, bad); !strings.Contains(diagText(d), "Invalid import id") {
+				t.Fatalf("catalog item import id %q: %q", bad, diagText(d))
+			}
 		}
 		cfg["risk"] = "high"
 		st2 := approveNext(applyAsync(p, res, cfg, st)).state
