@@ -2,7 +2,7 @@ import { FormEvent, useState } from "react";
 import { History, Plus, Radio, Send } from "lucide-react";
 import { TwoAdminDialog } from "./TwoAdminDialog";
 import { TwoAdminType, siemFilterPayload, siemTargetPayload, twoAdminType } from "./twoAdmin";
-import { SIEM_HEALTH, SiemDeadLetter, SiemFlavor, SiemFormat, SiemKind, SiemSink, SiemSinkInput, relTime, siemApi, useApi } from "../../api";
+import { SiemDeadLetter, SiemFlavor, SiemFormat, SiemKind, SiemSink, SiemSinkInput, relTime, siemApi, siemSinkState, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { Badge, Button, Callout, Drawer, EmptyState, Loading, useConfirm, useToast } from "../../components";
 
@@ -22,6 +22,10 @@ export function SiemSinks() {
   const [dead, setDead] = useState<SiemSink | null>(null);
   if (!data) return <div className="card flush"><Loading error={error} /></div>;
   const test = async (k: SiemSink) => {
+    if (k.needs_target) {
+      toast(`${k.name} has no target yet. Set its target before testing.`, { kind: "error" });
+      return;
+    }
     try {
       const r = await siemApi.test(k.id);
       toast(r.ok ? `Test event sent to ${k.name}` : `Test to ${k.name} failed: ${r.error}`, r.ok ? undefined : { kind: "error" });
@@ -52,16 +56,17 @@ export function SiemSinks() {
               <thead><tr><th>Sink</th><th>Health</th><th className="hide-narrow">Delivered</th><th className="hide-narrow">Last success</th><th /></tr></thead>
               <tbody>
                 {data.map((k) => {
-                  const h = SIEM_HEALTH[k.health.status];
+                  const h = siemSinkState(k);
                   return (
                     <tr key={k.id}>
                       <td>
                         <b>{k.name}</b> <Badge tone="outline">{k.format === "ocsf" ? "OCSF" : "JSON"}</Badge>{k.event_filter.length > 0 && <> <Badge tone="info">{k.event_filter.length} event filter{k.event_filter.length === 1 ? "" : "s"}</Badge></>}
-                        <div className="xs faint truncate">{KIND_LABEL[`${k.kind}/${k.flavor}`] ?? k.kind} · {k.target}</div>
+                        <div className="xs faint truncate">{KIND_LABEL[`${k.kind}/${k.flavor}`] ?? k.kind} · {k.needs_target ? <span>No target set</span> : k.target}</div>
                       </td>
                       <td>
                         <Badge tone={h.tone}>{h.label}</Badge>
-                        <div className="xs faint">{k.health.lag ? `${k.health.lag.toLocaleString()} behind` : "Up to date"}{k.next_attempt_at && k.attempts > 0 && ` · retry ${relTime(k.next_attempt_at)}`}</div>
+                        {k.needs_target && <div className="xs">Imported without a target. It sends nothing until you set one.</div>}
+                        {!k.needs_target && <div className="xs faint">{k.health.lag ? `${k.health.lag.toLocaleString()} behind` : "Up to date"}{k.next_attempt_at && k.attempts > 0 && ` · retry ${relTime(k.next_attempt_at)}`}</div>}
                         {k.last_error && k.attempts > 0 && <div className="xs faint truncate" title={k.last_error}>{k.last_error}</div>}
                       </td>
                       <td className="small hide-narrow">
@@ -70,7 +75,7 @@ export function SiemSinks() {
                       </td>
                       <td className="small hide-narrow">{k.last_success_at ? relTime(k.last_success_at) : <span className="faint">Never</span>}</td>
                       <td className="actions-cell">
-                        {manage && <><Button size="sm" icon={<Send size={14} />} onClick={() => test(k)}>Test</Button>{" "}<Button size="sm" variant="ghost" icon={<History size={14} />} onClick={() => replay(k)}>Replay</Button>{" "}<Button size="sm" variant="ghost" onClick={() => setEdit(k)}>Edit</Button></>}
+                        {manage && <>{k.needs_target ? <Button size="sm" variant="primary" onClick={() => setEdit(k)}>Set target</Button> : <Button size="sm" icon={<Send size={14} />} onClick={() => test(k)}>Test</Button>}{" "}<Button size="sm" variant="ghost" icon={<History size={14} />} onClick={() => replay(k)}>Replay</Button>{" "}<Button size="sm" variant="ghost" onClick={() => setEdit(k)}>Edit</Button></>}
                       </td>
                     </tr>
                   );
@@ -177,7 +182,7 @@ function SinkForm({ sink, onClose, onSaved }: { sink: SiemSink | null; onClose: 
           </fieldset>
         )}
         <label className="field">{kind === "syslog" ? "Collector (host:port)" : kind === "s3" ? "Bucket URL with an optional key prefix (https)" : "URL (https)"}
-          <input className="input" value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })} required={!k} placeholder={k ? `Keep ${k.target}` : placeholder} />
+          <input className="input" value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })} required={!k || !!k.needs_target} placeholder={k && !k.needs_target ? `Keep ${k.target}` : placeholder} />
         </label>
         {kind === "webhook" && (
           <label className="field">{f.preset === "hec" ? "HEC token" : "Bearer token (optional)"}

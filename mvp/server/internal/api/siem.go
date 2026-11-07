@@ -83,9 +83,15 @@ type sinkView struct {
 	UpdatedAt       time.Time   `json:"updated_at"`
 	// TargetOrigin is the scheme, host and port of a URL target (#886); empty for a syslog host:port.
 	TargetOrigin string `json:"target_origin,omitempty"`
+	// NeedsTarget: the sink has no target yet (a config import withheld it, #902); target is "" and the sink stays disabled
+	// until a person sets one (a siem.sink.target change request).
+	NeedsTarget bool `json:"needs_target"`
 }
 
 func redactSinkTarget(k *store.SiemSink) string {
+	if k.Target == "" {
+		return ""
+	}
 	if k.Kind == "syslog" {
 		return k.Target
 	}
@@ -97,7 +103,7 @@ func sinkViewOf(tx *store.TenantTx, k *store.SiemSink, head int64) (sinkView, er
 	if err != nil {
 		return sinkView{}, err
 	}
-	return sinkView{TargetOrigin: urlOrigin(k.Target), ID: k.ID, Name: k.Name, Kind: k.Kind, Format: k.Format, Target: redactSinkTarget(k), Flavor: k.Flavor,
+	return sinkView{NeedsTarget: k.Target == "", TargetOrigin: urlOrigin(k.Target), ID: k.ID, Name: k.Name, Kind: k.Kind, Format: k.Format, Target: redactSinkTarget(k), Flavor: k.Flavor,
 		HasCA: k.CAPEM != nil, HasToken: len(k.SecretSealed) > 0, IncludeHTTP: k.IncludeHTTP, EventFilter: nonNil(k.EventFilter), Region: k.Region,
 		AccessKeyID: k.AccessKeyID, Enabled: k.Enabled, CursorSeq: k.CursorSeq,
 		HeadSeq: head, Health: siem.HealthOf(k, pending), Attempts: k.Attempts, NextAttemptAt: k.NextAttemptAt, LastError: k.LastError,
@@ -320,6 +326,10 @@ func (s *Server) testSiemSink(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, errSinkNotFound
 	} else if err != nil {
 		return 0, nil, err
+	}
+	if k.Target == "" {
+		return 0, nil, &readiness.Error{Status: http.StatusConflict, Code: "target_required",
+			Msg: "this sink has no target yet: set its destination (a siem.sink.target change request) before testing it"}
 	}
 	slug := p.scope.Tenant.String()
 	if ts, err := s.store.ActiveTenants(r.Context()); err == nil {
