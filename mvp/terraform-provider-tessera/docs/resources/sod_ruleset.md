@@ -43,3 +43,11 @@ resource "tessera_sod_ruleset" "payments" {
 - `change_url` (String) Where a person reviews that change request.
 - `id` (String) The ruleset id.
 - `version` (Number) The ruleset's version on the server.
+
+## Import
+
+Import by the ruleset's id (a UUID).
+
+```sh
+terraform import tessera_sod_ruleset.core_sod <ruleset id>
+```

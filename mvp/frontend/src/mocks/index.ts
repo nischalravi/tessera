@@ -41,15 +41,6 @@ function log(actor: string, action: string, target: string) {
   return [{ at: new Date().toISOString(), actor, action, target }, ...state.log].slice(0, 200);
 }
 
-// -------------------------------------------------------- identity ops
-export const mockIdentityOps = {
-  /** Would trigger a reset through the identity provider; Tessera never sees the password. */
-  async resetPassword(name: string, actor: string) {
-    commit({ ...state, log: log(actor, "identity.reset_password", name) });
-    return delay({ channel: "IdP reset email" });
-  },
-};
-
 /** Create / edit / import for objects that have no write endpoint yet (accounts, orgs, machine identities...). */
 export const mockObjects = {
   async save(kind: string, name: string, actor: string, verb: "create" | "update" = "create") {

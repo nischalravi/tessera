@@ -221,6 +221,10 @@ PUT    /api/aws/pr-comment                           connections.manage STEP_UP_
 GET    /api/correlation/queue                        graph.read      -  # issue #160
 GET    /api/correlation/decisions                    graph.read      -  # issue #160
 POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
+POST   /api/accounts/disable                       identities.contain STEP_UP_POLICY  # issue #915
+POST   /api/accounts/enable                        identities.contain STEP_UP_POLICY  # issue #915
+POST   /api/accounts/{account_id}/disable          identities.contain STEP_UP_POLICY  # issue #915
+POST   /api/accounts/{account_id}/enable           identities.contain STEP_UP_POLICY  # issue #915
 POST   /api/accounts/{account_id}/not-person         identities.correlate STEP_UP_POLICY  # issue #160
 DELETE /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
 GET    /api/correlation/link-requests                identities.correlate STEP_UP_POLICY  # issue #376

@@ -68,6 +68,7 @@ never holds an admin role and never passes a step-up, so it cannot approve or ap
   rotate. A webhook's URL usually carries a token (Slack, Teams, Sumo Logic put it in the path), so it is write-only too: `target_url` with
   `target_url_version`. The server seals it, shows the approver its origin and whether it is new, the same, a changed path or a moved origin, lets the approver confirm the whole
   URL with Check this URL (a match / no-match answer with a few tries), and the state keeps only `target_origin` (`target_fingerprint` is deprecated and null). A proposal can replace a secret and can never read one. Activating a connection stays a separate step by a person.
+* Every resource supports `terraform import` (catalog item by group id, the others by their server id; see each resource's docs). Transport export/import has no resource (see `docs/index.md`).
 * The new resources are imported by their server id (`terraform import tessera_approval_policy.x <workflow id>`). JSON-valued attributes (`condition_json`,
   `steps_json`) keep your spelling when the server holds the same document.
 

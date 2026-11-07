@@ -13,7 +13,9 @@ import (
 const (
 	CompleteEdgeRemove     = "graph.edge_remove"
 	CompleteAccountDisable = "graph.account_disable"
-	CompleteGrantRevoke    = "grant.revoke"
+	// CompleteAccountEnable sets a disabled account back to active once the target confirms it is active again.
+	CompleteAccountEnable = "graph.account_enable"
+	CompleteGrantRevoke   = "grant.revoke"
 	// CompleteAccountDelete marks an account deleted once the target confirms the
 	// delete (the guest lifecycle's grace period, issue #74).
 	CompleteAccountDelete = "graph.account_delete"
@@ -55,6 +57,14 @@ func init() {
 		}
 		return tx.DisableAccount(d.AccountID)
 	})
+	RegisterCompletion(CompleteAccountEnable, func(tx *store.TenantTx, _ time.Time, raw json.RawMessage) error {
+		var d AccountData
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return err
+		}
+		_, err := tx.EnableAccount(d.AccountID)
+		return err
+	})
 	RegisterCompletion(CompleteAccountDelete, func(tx *store.TenantTx, _ time.Time, raw json.RawMessage) error {
 		var d AccountData
 		if err := json.Unmarshal(raw, &d); err != nil {
@@ -79,3 +89,8 @@ func init() {
 		return tx.RevokeEdge(d.EdgeID, now, "least-privilege")
 	})
 }
+
+// SupportsEnable reports whether a target kind can set an account active again. An enable is an update_account
+// with active=true, which the SCIM connector (and the dev fake, a SCIM server) sends as a boolean and re-reads; the
+// other connectors have no such change, so Tessera refuses it up front instead of queueing a change that cannot run.
+func SupportsEnable(kind string) bool { return kind == KindSCIM || kind == KindFake }

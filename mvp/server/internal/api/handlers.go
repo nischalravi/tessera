@@ -822,16 +822,24 @@ func (s *Server) listAccounts(_ http.ResponseWriter, r *http.Request, p *params)
 	if err != nil {
 		return nil, err
 	}
+	pending, err := pendingAccountStates(c)
+	if err != nil {
+		return nil, err
+	}
 	out := []ojson.Object{}
 	for _, ac := range accts {
 		var ident any
 		if ac.IdentityID != nil {
 			ident = brief(people[*ac.IdentityID])
 		}
-		out = append(out, ojson.Object{{Key: "id", Value: ac.ID}, {Key: "system", Value: ac.System},
+		row := ojson.Object{{Key: "id", Value: ac.ID}, {Key: "system", Value: ac.System},
 			{Key: "username", Value: ac.Username}, {Key: "kind", Value: ac.Kind}, {Key: "status", Value: ac.Status},
 			{Key: "created_at", Value: timeutil.ISOPtr(ac.CreatedAt)}, {Key: "last_login_at", Value: timeutil.ISOPtr(ac.LastLoginAt)},
-			{Key: "identity", Value: ident}})
+			{Key: "identity", Value: ident}}
+		if dir, ok := pending[ac.ID]; ok { // a disable or enable the target has not confirmed yet (absent otherwise)
+			row = append(row, ojson.KV{Key: "pending", Value: dir})
+		}
+		out = append(out, row)
 	}
 	return out, nil
 }

@@ -637,6 +637,7 @@ func New(cfg Config) *Server {
 	s.registerEmailRoutes()
 	s.registerNotifyAdminRoutes()
 	s.registerContainmentRoutes()
+	s.registerAccountStateRoutes()
 	// the attribute routes name literal segments under /api/groups, so they come
 	// before the {id} routes (the first registered route that matches wins)
 	s.registerGroupsAttrRoutes()

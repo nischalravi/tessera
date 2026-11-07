@@ -9,13 +9,11 @@ import {
 } from "lucide-react";
 import { AccountRow, ConnectorRow, Group, IdentityDetail, OrgDetail, ResourceRow, RolesView, Violation, ago, api, fmtDay, invalidLink, isNumericId, orgPath, relTime, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
-import { usePersona } from "../../app/persona";
 import {
-  Avatar, Badge, Chip, CommandBar, EmptyState, IdLink, Loading, PathView, PreviewBadge, RiskPill, Sev, SidePanel, Status, Tabs, TypeBadge, TYPE_LABEL, useToast,
+  Avatar, Badge, Chip, CommandBar, EmptyState, IdLink, Loading, PathView, RiskPill, Sev, SidePanel, Status, Tabs, TypeBadge, TYPE_LABEL, useToast,
 } from "../../components";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { LifecycleSection } from "../lifecycle/parts";
-import { mockObjects } from "../../mocks";
 import { PlanDrawer, RotationBadge, useRotationStatus } from "../rotation/shared";
 import { useSession } from "../../app/auth";
 import { ContainDialog, ContainmentRetries } from "./containment";
@@ -23,6 +21,8 @@ import { RevokeDrawer } from "./IdentityPage";
 import { OwnershipRows } from "./owners";
 import { CatalogSettings } from "./catalog";
 import { ObjectFormDrawer } from "./shared";
+import { useAccountActions } from "./accountActions";
+import { accountStatusLabel } from "./accountState";
 
 const I = 16;
 
@@ -273,16 +273,17 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
 }
 
 // --------------------------------------------------------------- account
-export function AccountPanel({ a, onClose }: { a: AccountRow; onClose: () => void }) {
+export function AccountPanel({ a, onClose, onChanged }: { a: AccountRow; onClose: () => void; onChanged?: () => void }) {
   const nav = useNavigate();
-  const toast = useToast();
-  const { actor } = usePersona();
+  const { can } = useSession();
+  const acts = useAccountActions(onChanged);
   const owner = a.identity;
+  const noPerm = can("identities.contain") ? undefined : "Needs the identities.contain permission";
   return (
     <SidePanel
       title={a.username}
       avatar={<span className="avatar" aria-hidden><UserRound size={18} /></span>}
-      sub={<><Chip mono>{a.system}</Chip><Status s={a.status} /></>}
+      sub={<><Chip mono>{a.system}</Chip><Status s={a.status} />{a.pending && <> <Badge tone="warning">{accountStatusLabel(a)}</Badge></>}</>}
       onClose={onClose}
       fullHref={owner ? `/directory/identities/${owner.id}` : undefined}
       fullLabel={owner ? `Open ${owner.name}'s full page` : undefined}
@@ -292,7 +293,9 @@ export function AccountPanel({ a, onClose }: { a: AccountRow; onClose: () => voi
           items={[
             owner && { label: "Open owner", icon: <UserRound size={I} />, onClick: () => nav(`/directory/${owner.type === "human" ? "people" : "machine"}?selected=${owner.id}`) },
             owner && { label: "Open in graph", icon: <Network size={I} />, onClick: () => nav(`/insights/graph?identity=${owner.id}`) },
-            { label: "Disable account", icon: <Ban size={I} />, danger: true, onClick: async () => { await mockObjects.save("account", a.username, actor, "update"); toast(`${a.username} queued to disable (preview)`); } },
+            a.status === "disabled"
+              ? { label: "Enable account", icon: <UserCheck size={I} />, disabled: !!a.pending || !can("identities.contain"), title: a.pending ? `An ${a.pending} is waiting for the target` : noPerm, onClick: () => acts.enable([a]) }
+              : { label: "Disable account", icon: <Ban size={I} />, danger: true, disabled: a.status !== "active" || !!a.pending || !can("identities.contain"), title: a.pending ? `A ${a.pending} is waiting for the target` : noPerm, onClick: () => acts.disable([a]) },
           ]}
         />
       }
@@ -301,7 +304,7 @@ export function AccountPanel({ a, onClose }: { a: AccountRow; onClose: () => voi
         <dt>Username</dt><dd className="sys">{a.username}</dd>
         <dt>System</dt><dd>{a.system}</dd>
         <dt>Kind</dt><dd>{a.kind.replace(/_/g, " ")}</dd>
-        <dt>Status</dt><dd><Status s={a.status} /></dd>
+        <dt>Status</dt><dd><Status s={a.status} />{a.pending && <> <Badge tone="warning">{accountStatusLabel(a)}</Badge></>}</dd>
         <dt>Belongs to</dt><dd>{owner ? <><IdLink i={owner} /> <TypeBadge type={owner.type} /></> : <Badge tone="critical">Uncorrelated</Badge>}</dd>
         <dt>Created</dt><dd>{fmtDay(a.created_at)}</dd>
         <dt>Last sign-in</dt><dd>{relTime(a.last_login_at)}</dd>
@@ -353,7 +356,7 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
           </dl>
         </>
       ) : (
-        <Section title={<>Part of these roles <PreviewBadge /></>}>
+        <Section title="Part of these roles">
           {inRoles.length === 0 ? <div className="small muted">Not bundled in any business role. People request it directly.</div> :
             inRoles.map((r) => <div key={r.id} className="small"><Link to={`/directory/roles?selected=${r.id}`}>{r.name}</Link> <span className="faint">· {r.member_count} members</span></div>)}
         </Section>
