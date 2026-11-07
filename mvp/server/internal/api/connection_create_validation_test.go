@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -69,4 +70,25 @@ func TestPatchConfig_RefusesMetadataHosts(t *testing.T) {
 	}
 	o := c.json("POST", "/api/connections", `{"name":"Okta","connector_type":"okta"}`, http.StatusCreated)["id"].(string)
 	c.json("PATCH", "/api/connections/"+o+"/config", `{"org_url":"https://metadata.google.internal"}`, http.StatusUnprocessableEntity)
+}
+
+// Issue #908: a URL setting that carries credentials or a query string is refused on create and on save with
+// url_credentials_refused (400), and the value is not echoed.
+func TestConnectionURLCredentialsRefused(t *testing.T) {
+	t.Parallel()
+	c := newRD(t, func(cfg *Config) { cfg.Env = "dev" })
+	check := func(v map[string]any) {
+		t.Helper()
+		if v["error"] != "url_credentials_refused" {
+			t.Fatalf("response = %v", v)
+		}
+		if b, _ := json.Marshal(v); strings.Contains(string(b), "secretpw") || strings.Contains(string(b), "tok123") {
+			t.Fatalf("the refusal echoes the value: %s", b)
+		}
+	}
+	check(c.json("POST", "/api/connections", `{"name":"Okta","connector_type":"okta","config":{"org_url":"https://u:secretpw@a.okta.com"}}`, http.StatusBadRequest))
+	check(c.json("POST", "/api/connections", `{"name":"SCIM","connector_type":"scim_app","config":{"base_url":"https://s.example.com/?token=tok123"}}`, http.StatusBadRequest))
+	o := c.json("POST", "/api/connections", `{"name":"Okta","connector_type":"okta"}`, http.StatusCreated)["id"].(string)
+	check(c.json("PATCH", "/api/connections/"+o+"/config", `{"org_url":"https://u:secretpw@a.okta.com"}`, http.StatusBadRequest))
+	c.json("PATCH", "/api/connections/"+o+"/config", `{"org_url":"https://a.okta.com"}`, http.StatusOK)
 }

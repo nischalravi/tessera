@@ -15,6 +15,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -203,6 +204,34 @@ func (s *Server) adminActivateConnection(_ http.ResponseWriter, r *http.Request,
 
 // ---------------------------------------------------------------- change requests
 
+// maskProposalPayload masks, in the decoded payload of a connection proposal, the URL fields of its config and the
+// endpoint list that still carry credentials or query values. It returns the masked field names.
+func maskProposalPayload(typ string, payload any) []string {
+	pm, ok := payload.(map[string]any)
+	if !ok || typ != admin.TypeConfigProposal || pm["kind"] != admin.KindConnection {
+		return nil
+	}
+	body, ok := pm["body"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	var masked []string
+	if cm, ok := body["config"].(map[string]any); ok {
+		masked = readiness.MaskConfigMap(cm)
+	}
+	if eps, ok := body["endpoints"].([]any); ok {
+		for i, e := range eps {
+			if v, ok := e.(string); ok {
+				if mv := readiness.MaskURL(v); mv != v {
+					eps[i] = mv
+					masked = append(masked, "endpoints")
+				}
+			}
+		}
+	}
+	return masked
+}
+
 // adminChangeView renders a request for the API. names maps user ids to display
 // names. The sealed secret and the payload's hash input are never included
 // beyond the payload itself (which holds no secret).
@@ -218,6 +247,8 @@ func (s *Server) adminChangeView(tx *store.TenantTx, ch *store.AdminChange, name
 	if dec.Decode(&payload) != nil {
 		payload = nil
 	}
+	// a stored URL that carries credentials or query values is shown masked; the payload itself stays hash-bound (issue #908)
+	masked := maskProposalPayload(ch.Type, payload)
 	var failure any
 	if ch.Failure != "" {
 		failure = ch.Failure
@@ -240,6 +271,9 @@ func (s *Server) adminChangeView(tx *store.TenantTx, ch *store.AdminChange, name
 	// a change a machine client proposed names the client (issue #721); a person's change has no such key
 	if client, err := tx.AdminChangeProposer(ch.ID); err == nil && client != "" {
 		out = append(out, ojson.KV{Key: "proposed_by_client", Value: client})
+	}
+	if len(masked) > 0 {
+		out = append(out, ojson.KV{Key: "masked_fields", Value: masked})
 	}
 	return out
 }

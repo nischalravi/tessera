@@ -371,3 +371,20 @@ func TestAdminAPI_RecoveryRoutes(t *testing.T) {
 		t.Errorf("failure reasons %v, want the first (newest) refusal to say the code is used or the recovery is not pending", reasons)
 	}
 }
+
+// Issue #908: a connection proposal filed with a credentialed URL is shown masked; the stored payload is untouched.
+func TestMaskProposalPayload(t *testing.T) {
+	var p any
+	raw := `{"kind":"connection","id":"","body":{"config":{"base_url":"https://u:pw@s.example.com","settings":{"api_url":"https://x.example.com/?k=abc"}},"endpoints":["https://u:pw@s.example.com","https://ok.example.com"]}}`
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatal(err)
+	}
+	got := maskProposalPayload("config.proposal", p)
+	b, _ := json.Marshal(p)
+	if len(got) != 3 || strings.Contains(string(b), "pw") || strings.Contains(string(b), "abc") || !strings.Contains(string(b), "https://ok.example.com") {
+		t.Errorf("masked = %v, payload = %s", got, b)
+	}
+	if maskProposalPayload("role.grant", p) != nil {
+		t.Error("another change type was masked")
+	}
+}

@@ -3685,6 +3685,7 @@ writes:                                        # request templates; see below
   per listing (a listing cut short marks the result `Partial`, so the deletion guard holds every removal).
   All calls go through `internal/safehttp`.
 - **Validation on save** names every bad field (`rest.users.fields.id`, `writes.lookup`, ...). A connection's
+  Connection URL settings (`org_url`, `base_url`, URL-type `settings`) are refused with `400 url_credentials_refused` when they carry userinfo (`user:pass@`) or, for `base_url`/`org_url`, a query string or fragment (create, `PATCH .../config`, connection proposals). A value stored earlier is shown masked (`masked` in place of the credential and query values) in connection and change-request views, with `masked_fields` naming it; sending the masked value back unchanged keeps the stored one.
   `PATCH /api/connections/{id}/config` takes `"rest"` as an object or as a string of YAML/JSON text, and the server
   applies the environment's URL policy (https only in prod). `POST /api/connections` runs the same checks on the
   settings it is sent (a blank draft is still fine; a `rest_generic` create that carries a config must carry its
