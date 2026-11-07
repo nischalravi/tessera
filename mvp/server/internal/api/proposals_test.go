@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -645,9 +646,57 @@ func TestProposalsAPI_SealedSecrets(t *testing.T) {
 		t.Errorf("a taken system: %d %s", rec.Code, rec.Body)
 	}
 	check("after the refused connection")
+	// the same refusal when the system is derived from the name (no explicit system): "Okta-prod" becomes okta-prod
+	derived := `{"name":"Okta-prod","connector_type":"okta","config":{"org_url":"https://acme.okta.com"},"credential":{"secret":"` + secret + `-conn3"}}`
+	if rec := keep(e.call(tok, "POST", "/api/proposals/connections", derived)); rec.Code != 409 || !strings.Contains(rec.Body.String(), "duplicate_connection") {
+		t.Errorf("a system taken through the derived name: %d %s", rec.Code, rec.Body)
+	}
+	check("after the derived-system refusal")
 	// and the same proposals in another tenant: refused to a client of tenant A for tenant B's rows
 	if rec := e.call(tok, "POST", "/api/proposals/siem-sinks/"+uuid.NewString(), `{"name":"x"}`); rec.Code != 404 {
 		t.Errorf("updating a sink that does not exist: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestProposalsAPI_DuplicateConnectionAtApproval (#901, #904): two pending proposals for one system both pass the
+// submit check; approving the first applies it, approving the second is refused with 409 duplicate_connection and
+// the proposal stays pending.
+func TestProposalsAPI_DuplicateConnectionAtApproval(t *testing.T) {
+	e := newOAuthEnv(t)
+	a2 := signIn(t, e.f.DB, e.f.A.ID, authtest.User{Email: "ben@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	signIn(t, e.f.DB, e.f.A.ID, authtest.User{Email: "old@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now) // a second admin lifts the bootstrap restriction
+	m := e.addMachine("tenant-a", []string{"viewer"}, []string{"tessera:read", "config.propose"}, true)
+	tok := e.machineToken(m, "tenant-a", "tessera:read config.propose")
+	file := func(name string) (string, string) {
+		payload := `{"name":"` + name + `","connector_type":"okta","system":"okta-twin","config":{"org_url":"https://acme.okta.com"},"credential":{"secret":"PLAINTEXT-twin"}}`
+		rec := e.call(tok, "POST", "/api/proposals/connections", payload)
+		if rec.Code != 200 && rec.Code != 201 && rec.Code != 202 {
+			t.Fatalf("filing %s: %d %s", name, rec.Code, rec.Body)
+		}
+		var b map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &b)
+		return asString(b["change_id"]), asString(b["payload_hash"])
+	}
+	cid1, h1 := file("Okta twin one")
+	cid2, h2 := file("Okta twin two")
+	approve := func(cid, hash string) *httptest.ResponseRecorder {
+		return serve(e.h, authed(a2, "POST", "/api/admin/change-requests/"+cid+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, hash)))
+	}
+	if rec := approve(cid1, h1); rec.Code != 200 {
+		t.Fatalf("approving the first: %d %s", rec.Code, rec.Body)
+	}
+	rec := approve(cid2, h2)
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "duplicate_connection") {
+		t.Fatalf("approving the second: %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "PLAINTEXT") {
+		t.Errorf("the refusal leaks the secret: %s", rec.Body)
+	}
+	got := e.call(tok, "GET", "/api/proposals/"+cid2, "")
+	var st map[string]any
+	_ = json.Unmarshal(got.Body.Bytes(), &st)
+	if asString(st["status"]) != "pending_approval" {
+		t.Errorf("the refused proposal is %v, want pending_approval: %s", st["status"], got.Body)
 	}
 }
 

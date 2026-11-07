@@ -181,3 +181,18 @@ test("publicBranding revalidates (cache: no-cache) only when asked for a fresh c
   assert.equal(init.cache, "no-cache");
   (globalThis as any).fetch = orig;
 });
+
+test("a failed newer read does not discard a successful older one (#905)", async () => {
+  const { createBrandingStore } = await import("../src/brandingStore.ts");
+  const ok = { name: "first", configured: true, primary_color: "#0f6cbd", on_primary_color: "#ffffff", logo_url: null };
+  const pend = new Map<boolean, (v: any) => void>();
+  const store = createBrandingStore((_s, fresh) => new Promise((res) => pend.set(fresh, res)));
+  store.use("q"); // the first read is in flight
+  const r = store.refresh(); // the refresh after Save is issued, then fails
+  pend.get(true)!(null);
+  await r;
+  assert.equal(store.get(), null);
+  pend.get(false)!(ok); // the older read then succeeds: it must show
+  await new Promise((res) => setTimeout(res, 0));
+  assert.equal(store.get()?.name, "first");
+});

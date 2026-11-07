@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Copy, Download, FileUp, KeyRound, ShieldCheck, Trash2, Upload } from "lucide-react";
-import { ConfigImport, ImportPlan, ImportAction, SigningKey, TrustedSigner, configTransport, fmtDate, useApi } from "../../api";
+import { ConfigImport, ImportPlan, ImportAction, SigningKey, TrustedSigner, configTransport, fmtDate, planItemNotes, useApi } from "../../api";
 import { Badge, Button, Callout, EmptyState, useConfirm, useToast } from "../../components";
 
 const ACTION_TONE: Record<ImportAction, "ok" | "warning" | "critical" | "neutral" | "outline"> = {
@@ -190,7 +190,7 @@ function PlanView({ plan, prune }: { plan: ImportPlan; prune: boolean }) {
                 <td><b>{it.name}</b>{it.fields && it.fields.length > 0 && <div className="xs faint sys">{it.fields.join(", ")}</div>}</td>
                 <td className="small">{SECTION[it.section] ?? it.section}</td>
                 <td><Badge tone={ACTION_TONE[it.action]}>{it.action}</Badge></td>
-                <td className="small">{it.notes?.join(" ")}</td>
+                <td className="small">{planItemNotes(it).join(" ")}</td>
               </tr>
             ))}
           </tbody>
