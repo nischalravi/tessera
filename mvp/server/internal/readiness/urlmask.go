@@ -102,6 +102,21 @@ func urlFieldPtrs(cfg *ConnConfig) map[string]*string {
 	return map[string]*string{"org_url": &cfg.OrgURL, "base_url": &cfg.BaseURL}
 }
 
+// textFieldPtrs returns the typed free-text fields of a config by their JSON name: values an admin types in, none of
+// them a URL by design (owners, a correlation key, a tenant host, a schedule). A URL with credentials pasted into one
+// is kept in clear all the same, so it is refused and masked like a URL under settings (issue #926). ca_bundle (a PEM)
+// and the structured rest and sql blocks have their own checks.
+func textFieldPtrs(cfg *ConnConfig) map[string]*string {
+	return map[string]*string{
+		"host": &cfg.Host, "bind_dn": &cfg.BindDN, "user_filter": &cfg.UserFilter, "group_filter": &cfg.GroupFilter,
+		"tenant_id": &cfg.TenantID, "cloud": &cfg.Cloud, "customer": &cfg.Customer, "domain": &cfg.Domain,
+		"admin_email": &cfg.AdminEmail, "preset": &cfg.Preset, "tenant_host": &cfg.TenantHost, "api_version": &cfg.APIVersion,
+		"interface": &cfg.Interface, "time_zone": &cfg.TimeZone, "correlation_key": &cfg.CorrelationKey,
+		"hr_id_attribute": &cfg.HRIDAttribute, "technical_owner": &cfg.TechnicalOwner, "business_owner": &cfg.BusinessOwner,
+		"sync_schedule": &cfg.SyncSchedule,
+	}
+}
+
 // MaskedConfig returns cfg for a view: URL-valued fields that still carry credentials or query values are masked,
 // and the names of the fields that were are returned. cfg is not modified.
 func MaskedConfig(cfg ConnConfig) (ConnConfig, []string) {
@@ -110,6 +125,14 @@ func MaskedConfig(cfg ConnConfig) (ConnConfig, []string) {
 		if m := MaskURL(*p); m != *p {
 			*p = m
 			masked = append(masked, name)
+		}
+	}
+	for name, p := range textFieldPtrs(&cfg) {
+		if urlshape.HasAuthority(*p) {
+			if m := MaskURL(*p); m != *p {
+				*p = m
+				masked = append(masked, name)
+			}
 		}
 	}
 	if len(cfg.Settings) > 0 {
@@ -139,6 +162,13 @@ func MaskConfigMap(m map[string]any) []string {
 			}
 		}
 	}
+	for name := range textFieldPtrs(&ConnConfig{}) {
+		if v, ok := m[name].(string); ok && urlshape.HasAuthority(v) {
+			if mv := MaskURL(v); mv != v {
+				m[name], masked = mv, append(masked, name)
+			}
+		}
+	}
 	if st, ok := m["settings"].(map[string]any); ok {
 		for k, x := range st {
 			if v, ok := x.(string); ok && urlSetting(k, v) {
@@ -161,6 +191,12 @@ func keepMaskedURLs(cur, next *ConnConfig) {
 			*p = o
 		}
 	}
+	oldText := textFieldPtrs(cur)
+	for name, p := range textFieldPtrs(next) {
+		if o := *oldText[name]; *p != o && urlshape.HasAuthority(o) && *p == MaskURL(o) {
+			*p = o
+		}
+	}
 	for k, v := range next.Settings {
 		if o, ok := cur.Settings[k]; ok && v != o && urlSetting(k, o) && v == MaskURL(o) {
 			next.Settings[k] = o
@@ -178,6 +214,18 @@ func urlCredentialError(cur, cfg ConnConfig) error {
 	}
 	if cfg.BaseURL != cur.BaseURL && urlRisk(cfg.BaseURL, true) {
 		bad = append(bad, FieldError{"base_url", "must not carry credentials, a query string or a fragment"})
+	}
+	curText := textFieldPtrs(&cur)
+	textNames := make([]string, 0, len(curText))
+	for name := range curText {
+		textNames = append(textNames, name)
+	}
+	slices.Sort(textNames)
+	nextText := textFieldPtrs(&cfg)
+	for _, name := range textNames {
+		if v := *nextText[name]; v != *curText[name] && urlshape.HasAuthority(v) && urlRisk(v, false) {
+			bad = append(bad, FieldError{name, "must not carry credentials"})
+		}
 	}
 	keys := make([]string, 0, len(cfg.Settings))
 	for k := range cfg.Settings {
