@@ -136,10 +136,28 @@ func textTokenEnd(r rune) bool {
 	return (unicode.IsSpace(r) && r != '\t' && r != '\n' && r != '\r') || strings.ContainsRune("\"'<>`", r)
 }
 
+// foldText is v as a reader sees it: Unicode format characters (zero-width space and joiners, bidi marks) dropped
+// and the fullwidth colon and solidus read as ":" and "/", so "https\u200b://u:p@h" and "https\uff1a//u:p@h" are
+// found like "https://u:p@h" (issue #932).
+func foldText(v string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case unicode.Is(unicode.Cf, r):
+			return -1
+		case r == '\uff1a':
+			return ':'
+		case r == '\uff0f':
+			return '/'
+		}
+		return r
+	}, v)
+}
+
 // textRisk reports whether a free-text value holds a URL with userinfo: the whole value read as a URL that names a
 // host, or any URL in it ("Ops team <https://u:p@h>", "see https:u:p@h"). A typed text field is never a URL by
 // design, so a URL anywhere in it is checked, not only one that starts the value.
 func textRisk(v string) bool {
+	v = foldText(v)
 	if urlshape.HasAuthority(v) {
 		return urlRisk(v, false)
 	}
