@@ -126,12 +126,19 @@ func suffix(base, key string) string {
 
 func vetIdentities(c *store.TenantTx, now time.Time, ref deleteguard.SourceRef, results []*connectors.DiscoveryResult,
 	tenantCount int, seen map[string]bool, h *held) error {
-	partial, records := "", 0
+	partial, records, population := "", 0, 0
 	for _, r := range results {
 		if r.Partial != "" {
 			partial = r.Partial
 		}
-		records += len(r.Identities)
+		if r.Population > 0 {
+			population = r.Population
+		}
+		if r.FeedRecords > 0 {
+			records += r.FeedRecords
+		} else {
+			records += len(r.Identities)
+		}
 	}
 	var items []deleteguard.Item
 	active := map[string]bool{}
@@ -183,7 +190,7 @@ func vetIdentities(c *store.TenantTx, now time.Time, ref deleteguard.SourceRef, 
 	// the source's own last good run is the basis. A source with none yet (its first run) has nothing to be
 	// measured against, and the tenant's identities are other sources' too; only a result that names no
 	// source keeps the tenant-wide count as its basis.
-	fallback := 0
+	fallback := population // a source that states its own size is measured against it
 	if !ref.Valid() {
 		fallback = tenantCount
 	}
@@ -198,7 +205,7 @@ func vetIdentities(c *store.TenantTx, now time.Time, ref deleteguard.SourceRef, 
 	if len(items) > 0 {
 		d, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatIdentities, Items: items,
 			Source: deleteguard.SourceConnector, SourceID: ref.ID, SourceRef: ref, Correlation: suffix("ingest:identities", ref.ID),
-			SourceDriven: true, Sanity: sanity, PrevCount: prev, NewCount: records})
+			SourceDriven: true, Sanity: sanity, PrevCount: prev, NewCount: records, Population: population})
 		if err != nil {
 			return err
 		}

@@ -168,6 +168,10 @@ var crossTenantCases = map[string]crossTenantCase{
 		body: func(id int64) string { return fmt.Sprintf(`{"identity_id":%d,"reason":"x"}`, id) }},
 	"POST account not person": {method: "POST", path: pathf("/api/accounts/%d/not-person"), key: "acct:okta:alice",
 		body: func(int64) string { return `{"reason":"x"}` }},
+	"POST disable account": {method: "POST", path: pathf("/api/accounts/%d/disable"), key: "acct:okta:alice",
+		body: func(int64) string { return `{"reason":"leaver cleanup"}` }},
+	"POST enable account": {method: "POST", path: pathf("/api/accounts/%d/enable"), key: "acct:okta:alice",
+		body: func(int64) string { return `{"reason":"leaver cleanup"}` }},
 	"DELETE account link":         {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
 	"DELETE account link request": {method: "DELETE", path: pathf("/api/correlation/link-requests/%d"), key: "acct:okta:alice"},
 	"POST merge identity": {method: "POST", path: pathf("/api/identities/%d/merge"), key: "alice",
@@ -232,6 +236,8 @@ var routeParamCases = map[string][]string{
 	"POST /api/accounts/{account_id}/link":                {"POST link account"},
 	"POST /api/accounts/{account_id}/not-person":          {"POST account not person"},
 	"DELETE /api/accounts/{account_id}/link":              {"DELETE account link"},
+	"POST /api/accounts/{account_id}/disable":             {"POST disable account"},
+	"POST /api/accounts/{account_id}/enable":              {"POST enable account"},
 	"DELETE /api/correlation/link-requests/{account_id}":  {"DELETE account link request"},
 	"POST /api/identities/{identity_id}/merge":            {"POST merge identity"},
 	"GET /api/identities/{identity_id}/affiliations":      {"GET identity affiliations"},
@@ -680,6 +686,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if path == "/api/graph" {
 			queries = []string{fmt.Sprintf("?identity_id=%d", b["alice"]), fmt.Sprintf("?resource_id=%d", b["resource:aws:prod"]),
 				fmt.Sprintf("?identity_id=%d&perm_key=perm:%d", b["alice"], b["perm:aws:get-pii"])}
+		}
+		if path == "/api/directory/manual/lookup" {
+			continue // needs a target and an id: TestDirectoryImportAPI_CrossTenant
 		}
 		if path == "/api/groups/permissions/check" {
 			continue // needs a resource and an action: TestGroupsPermissionsAPI

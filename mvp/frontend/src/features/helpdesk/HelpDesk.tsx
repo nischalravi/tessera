@@ -53,7 +53,9 @@ export function HelpDesk() {
   const { can } = useSession();
   const cases = useApi<{ cases: HelpdeskCase[] }>("/helpdesk/cases");
   const findings = useApi<{ findings: HelpdeskFinding[] }>("/helpdesk/findings");
-  const [starting, setStarting] = useState(false);
+  // /helpdesk?new=1&identity=7&kind=password opens the New reset case dialog for that identity (the Directory's Reset password)
+  const [starting, setStarting] = useState(params.get("new") === "1");
+  const preset = { who: Number(params.get("identity")) || null, kind: params.get("kind") === "password" ? ("password" as const) : ("mfa" as const) };
   const [, setSelected] = useSelected();
   const open = (cases.data?.cases ?? []).filter((c) => c.status === "open" || c.status === "failed").length;
   return (
@@ -89,7 +91,8 @@ export function HelpDesk() {
       {tab === "settings" && <Settings />}
       {starting && (
         <StartDialog
-          onClose={() => setStarting(false)}
+          initial={preset}
+          onClose={() => { setStarting(false); if (params.get("new")) setParams({}, { replace: true }); }}
           onStarted={(c) => { setStarting(false); setParams({ tab: "cases" }, { replace: true }); cases.reload(); setSelected(c.id); }}
         />
       )}
@@ -377,11 +380,11 @@ function Detections({ q }: { q: Loaded<{ findings: HelpdeskFinding[] }> }) {
   );
 }
 
-function StartDialog({ onClose, onStarted }: { onClose: () => void; onStarted: (c: HelpdeskCase) => void }) {
+function StartDialog({ onClose, onStarted, initial }: { onClose: () => void; onStarted: (c: HelpdeskCase) => void; initial?: { who: number | null; kind: "password" | "mfa" } }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
-  const [who, setWho] = useState<number | null>(null);
-  const [kind, setKind] = useState<"password" | "mfa">("mfa");
+  const [who, setWho] = useState<number | null>(initial?.who ?? null);
+  const [kind, setKind] = useState<"password" | "mfa">(initial?.kind ?? "mfa");
   const [system, setSystem] = useState("okta");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);

@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { Network, Pencil, RefreshCw, Settings, ShoppingCart, Timer } from "lucide-react";
 import { AccountRow, ConnectorRow, Group, OrgDetail, ResourceRow, RolesView, api, orgPath, relTime, useApi } from "../../api";
 import { Badge, Button, Callout, Chip, EmptyState, IdLink, Loading, Page, Status, useToast } from "../../components";
-import { PreviewFormDrawer } from "./shared";
+import { ObjectFormDrawer } from "./shared";
 import { OrgSettingsPanel } from "./orgSettings";
 
 function ObjectHead({ icon, meta, actions }: { icon?: ReactNode; meta: ReactNode; actions: ReactNode }) {
@@ -76,10 +76,8 @@ export function EntitlementPage() {
         </div>
       </div>
       {edit && (
-        <PreviewFormDrawer title={`Edit ${g.name}`} kind="entitlement" verb="update" onClose={() => setEdit(false)}
-          note={`Name and membership are owned by ${g.system}. Tessera stores the description, owner and risk labels.`}
-          initial={{ name: g.name, description: g.description ?? "", privileged: g.privileged ? "Yes" : "No" }}
-          fields={[{ id: "name", label: "Name", required: true }, { id: "description", label: "Description", textarea: true }, { id: "privileged", label: "Privileged", options: ["No", "Yes"] }, { id: "owner", label: "Owner" }]}
+        <ObjectFormDrawer title={`Edit ${g.name}`} target="entitlements" id={g.id} source={g.system} onClose={() => setEdit(false)}
+          known={{ name: g.name, description: g.description ?? "", kind: g.kind, privileged: g.privileged ? "yes" : "no" }}
         />
       )}
     </Page>

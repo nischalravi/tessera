@@ -53,6 +53,12 @@ func TestIsolation_Provisioning(t *testing.T) {
 		if os, err := c.ProvOps(store.ProvOpFilter{}); err != nil || len(os) != 0 {
 			t.Errorf("ProvOps = %v, %v", os, err)
 		}
+		if os, err := c.InFlightProvOpsByKeyPrefix("k"); err != nil || len(os) != 0 {
+			t.Errorf("InFlightProvOpsByKeyPrefix = %v, %v", os, err)
+		}
+		if _, err := c.InFlightProvOpsByKeyPrefix("k%"); err == nil {
+			t.Error("a LIKE wildcard in the prefix was accepted")
+		}
 		if os, err := c.DueProvOps(now.Add(time.Hour), 10); err != nil || len(os) != 0 {
 			t.Errorf("DueProvOps = %v, %v", os, err)
 		}
@@ -110,6 +116,9 @@ func TestIsolation_Provisioning(t *testing.T) {
 		if err != nil || len(due) != 1 || due[0].ID != "po-a" {
 			t.Fatalf("DueProvOps = %v, %v", due, err)
 		}
+		if os, err := c.InFlightProvOpsByKeyPrefix("k"); err != nil || len(os) != 1 || os[0].ID != "po-a" {
+			t.Errorf("InFlightProvOpsByKeyPrefix = %v, %v", os, err)
+		}
 		if err := c.SetProvOpState("po-a", "queued", store.ProvOpState{Status: "sent", Attempts: 1, NextAttemptAt: now}, now); err != nil {
 			t.Errorf("SetProvOpState = %v", err)
 		}
@@ -132,7 +141,7 @@ func TestIsolation_Provisioning(t *testing.T) {
 func provisioningCovered() map[string]bool {
 	out := map[string]bool{}
 	for _, k := range []string{"UpsertProvTarget", "ProvTarget", "ProvTargetBySystem", "ProvTargets", "DeleteProvTarget", "SetProvTargetWriteBack",
-		"InsertProvOp", "ProvOp", "ProvOpByKey", "ProvOps", "DueProvOps", "SetProvOpState", "RequeueStaleProvOps",
+		"InsertProvOp", "ProvOp", "ProvOpByKey", "ProvOps", "DueProvOps", "InFlightProvOpsByKeyPrefix", "SetProvOpState", "RequeueStaleProvOps",
 		"ProvOpCounts", "InsertProvFinding", "ProvFindings", "ResolveProvFindings"} {
 		out[k] = true // TestIsolation_Provisioning
 	}

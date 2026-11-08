@@ -317,6 +317,8 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/agents\/([^/]+)\/revoke$/, (m) => `Revoke Directory Agent ${m[1]}`],
   [/^\/flatfile\/apps\/([^/]+)\/mapping$/, (m) => `Save the column mapping of ${m[1]}`],
   [/^\/flatfile\/tasks\/([^/]+)\/close$/, () => "Close the manual task"],
+  [/^\/directory\/imports\/apply$/, () => "Apply the directory import"],
+  [/^\/directory\/manual\/records$/, () => "Save the change to a manually managed object"],
   [/^\/access\/(policies|networks|device-signals)(\/[^/]+)?$/, (m) => `Change conditional access (${m[1].replace("-", " ")})`],
   [/^\/auth\/device\/approve$/, () => "Approve the command-line sign-in"],
   [/^\/helpdesk\/cases\/([^/]+)\/execute$/, () => "Run the verified reset"],
@@ -558,7 +560,20 @@ export interface AccountRow {
   created_at: string | null;
   last_login_at: string | null;
   identity: IdentityBrief | null;
+  /** A disable or enable sent to the target that its re-read has not confirmed yet; absent otherwise. */
+  pending?: "disable" | "enable";
 }
+
+/** The outcome of a disable or enable for one account (issue #915). */
+export interface AccountStateResult {
+  id: number;
+  status: "queued" | "pending" | "held" | "error";
+  op_id?: string;
+  /** Set when status is "error", for example target_read_only, not_found, invalid_state, operation_in_flight. */
+  error?: string;
+  detail?: string;
+}
+export interface AccountStateBulk { results: AccountStateResult[]; accepted: number; failed: number }
 
 /** One audit ledger event (GET /api/audit). `id` is the per-tenant sequence number. */
 export interface AuditRow {
@@ -2511,6 +2526,11 @@ export const disableIdentity = (identityId: number, reason: string) =>
   api<DisableResult>(`/identities/${identityId}/disable`, { reason });
 export const enableIdentity = (identityId: number, reason: string) =>
   api<EnableResult>(`/identities/${identityId}/enable`, { reason });
+/** Disable accounts in their target systems: each becomes a provisioning operation the target's re-read confirms. */
+export const disableAccounts = (ids: number[], reason: string) => api<AccountStateBulk>("/accounts/disable", { ids, reason });
+export const enableAccounts = (ids: number[], reason: string) => api<AccountStateBulk>("/accounts/enable", { ids, reason });
+export const disableAccount = (id: number, reason: string) => api<AccountStateResult>(`/accounts/${id}/disable`, { reason });
+export const enableAccount = (id: number, reason: string) => api<AccountStateResult>(`/accounts/${id}/enable`, { reason });
 export const identityDisables = (identityId: number) =>
   api<{ identity_id: number; disables: DisableRecord[] }>(`/identities/${identityId}/disables`);
 
@@ -2692,6 +2712,69 @@ export const uploadFlatFile = (system: string, kind: FlatKind, file: File) =>
     "POST",
     { data: file, contentType: "text/csv", resultStatuses: [422] },
   );
+
+// ----------------------------------------------- directory CSV import and forms (issue #915)
+
+export type ImportTarget = "people" | "accounts" | "entitlements";
+export interface ImportGuard { category: string; mode: string; limit: number | null; active: number; removals: number; would_hold: boolean; reasons?: string[] }
+export interface ImportPlan {
+  system: string;
+  target: ImportTarget;
+  rows: number;
+  added: number;
+  changed: number;
+  removed: number;
+  unchanged: number;
+  errors: FlatRowError[];
+  error_count: number;
+  errors_truncated: boolean;
+  changes: { kind: string; change: "added" | "removed" | "changed"; label: string; detail?: string }[];
+  changes_truncated: boolean;
+  guard: ImportGuard | null;
+  /** People (a people import) whose email matches existing connector accounts nobody owns: the next sync correlates them. */
+  claims?: ImportClaim[];
+}
+/** One imported person and the uncorrelated accounts in other systems they would claim. */
+export interface ImportClaim { key: string; email: string; accounts: number; systems: string[] }
+export interface ImportResult {
+  plan: ImportPlan;
+  /** Absent when the file was refused (422, error "invalid_file"). */
+  status?: "applied" | "partially_applied" | "held";
+  applied?: number;
+  held?: number;
+  hold_id?: string;
+  message?: string;
+  error?: string;
+  detail?: string;
+}
+export interface ManualSource { system: string; name: string; people: number; accounts: number; entitlements: number; account_columns: string[] }
+export interface ImportSources {
+  sources: ManualSource[];
+  limits: { max_bytes: number; max_rows: number };
+  columns: Record<ImportTarget, { all: string[]; required: string[] }>;
+}
+/** One object of a manual source, or who owns it when a connector does. */
+export interface ManualLookup { target: ImportTarget; managed: boolean; system: string; fields?: Record<string, string> }
+
+const importPath = (verb: "plan" | "apply", target: ImportTarget, system: string, name: string, filename: string) =>
+  `/directory/imports/${verb}?${new URLSearchParams({ target, system, ...(name ? { name } : {}), filename })}`;
+
+/** Dry run of a CSV for a manual source (directory.import): nothing is written. */
+export const planDirectoryImport = (target: ImportTarget, system: string, name: string, file: File) =>
+  api<{ plan: ImportPlan; valid: boolean }>(importPath("plan", target, system, name, file.name), undefined, "POST", { data: file, contentType: "text/csv" });
+
+/**
+ * Apply a CSV (directory.import, fresh sign-in). Resolves with the result either way: a file with an invalid row
+ * is refused whole (422, plan.errors lists every bad row) and nothing is changed.
+ */
+export const applyDirectoryImport = (target: ImportTarget, system: string, name: string, file: File) =>
+  api<ImportResult>(importPath("apply", target, system, name, file.name), undefined, "POST", { data: file, contentType: "text/csv", resultStatuses: [422] });
+
+/** Create or edit one object of a manual source (directory.import, fresh sign-in). Resolves with the result either way. */
+export const putManualRecord = (body: { target: ImportTarget; system: string; name?: string; fields: Record<string, string> }) =>
+  api<ImportResult>("/directory/manual/records", body, "PUT");
+
+export const manualLookupPath = (target: ImportTarget, id: number) => `/directory/manual/lookup?${new URLSearchParams({ target, id: String(id) })}`;
 
 /** Close a manual task by hand, with a reason (flatfile.close_tasks, fresh sign-in). */
 export const closeFlatTask = (taskId: string, reason: string) =>

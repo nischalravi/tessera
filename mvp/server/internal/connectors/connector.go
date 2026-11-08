@@ -243,6 +243,12 @@ type DiscoveryResult struct {
 	// its last good record counts; a result with neither is judged under the tenant's settings alone.
 	System   string
 	SourceID string
+	// Population, when set, is the size of this source before the result (a manual source of a Directory
+	// import): the identity guard judges its removals and its feed against that, not the tenant's identities.
+	Population int
+	// FeedRecords, when set, is how many identities the source's feed listed, in place of len(Identities): a
+	// Directory import appends the people its file dropped to end them, which are not part of the feed.
+	FeedRecords int
 	// Partial, when set, says the read was partial or failed part way (why): the deletion guard then
 	// holds every removal this result would cause (internal/deleteguard).
 	Partial string

@@ -957,7 +957,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `POST /api/breach/inventory {vendor}` · `GET|POST /api/breach/plans` · `GET /api/breach/plans/{id}[/evidence]` ·
 `POST /api/breach/plans/{id}/run|verify` · `POST /api/breach/plans/{id}/items/{item}/attest {note}` (409 `two_admin_change_required`: a second admin approves a `breach.item.attest` change) ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
-`POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
+`POST /api/accounts/{id}/disable|enable {reason}` · `POST /api/accounts/disable|enable {ids, reason}` (account disable and enable, see the Account Disable / Enable row of the UI map) · `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` (pin and release need two admins with `identities.correlate`, #376: the first
 request answers 202 `pending_second_admin` and stores a request for 72 hours; the same admin again, from any
 session or any sign-in user linked to the same identity, is 403 `four_eyes_required`; a different admin's identical
@@ -3685,7 +3685,7 @@ writes:                                        # request templates; see below
   `max_response_bytes` per response (also bounded by the server's outbound client), `max_pages` and `max_records`
   per listing (a listing cut short marks the result `Partial`, so the deletion guard holds every removal).
   All calls go through `internal/safehttp`.
-- Connection URL settings (`org_url`, `base_url`, URL-type `settings`) are refused with `400 url_credentials_refused` when they carry userinfo (`user:pass@`) or, for `base_url`/`org_url`, a query string or fragment (create, `PATCH .../config`, connection proposals). A value stored earlier is shown masked (`masked` in place of the credential, query values and fragment; the whole value when it cannot be split safely) in connection and change-request views, with `masked_fields` naming it; sending the masked value back unchanged keeps the stored one.
+- Connection URL settings (`org_url`, `base_url`, URL-type `settings`) are refused with `400 url_credentials_refused` when they carry userinfo (`user:pass@`) or, for `base_url`/`org_url`, a query string or fragment (create, `PATCH .../config`, connection proposals). A value stored earlier is shown masked (`masked` in place of the credential, query values and fragment; the whole value when it cannot be split safely) in connection and change-request views, with `masked_fields` naming it; sending the masked value back unchanged keeps the stored one. A value is read as browsers read it (`internal/urlshape`, shared by refusal, masking, the credential drop and the config export): `https:` followed by any mix of `/` and `\` (or none), tabs and line breaks in it and a leading `\\` count as `https://`, and `base_url`/`org_url` also refuse an `@` in a value with any other scheme prefix. A URL-valued setting (key with `url`, `uri` or `endpoint`, any case, or a value that names a host) is an endpoint: changing it drops the stored credential.
 - **Validation on save** names every bad field (`rest.users.fields.id`, `writes.lookup`, ...). A connection's
   `PATCH /api/connections/{id}/config` takes `"rest"` as an object or as a string of YAML/JSON text, and the server
   applies the environment's URL policy (https only in prod). `POST /api/connections` runs the same checks on the
@@ -4219,7 +4219,7 @@ to the account by a `direct_grant` edge. Agent delegations are left alone.
 - `PUT /api/flatfile/apps/{system}/mapping` `{name, owner, accounts{account_id, username, email,
   identity_id, status}, entitlements{account_id, entitlement, name, privileged}}` saves the column
   mapping (`flatfile.manage`: tenant admin; step-up). `system` is the app's permanent name
-  (`^[a-z0-9][a-z0-9_.-]{0,62}$`); one that a connection or another source already feeds is `409`.
+  (`^[a-z0-9][a-z0-9_.-]{0,62}$`); one that a connection, a configured connector (`TESSERA_CONNECTORS`) or another source already feeds is `409`.
   `GET /api/flatfile/apps` lists the mappings.
 - `POST /api/flatfile/apps/{system}/uploads?kind=accounts|entitlements&filename=` takes the CSV as the
   request body (`Content-Type: text/csv`, the one non-JSON body the API accepts, declared per route)
@@ -4258,6 +4258,66 @@ to the account by a `direct_grant` edge. Agent delegations are left alone.
 - UI: **Settings, Flat-file apps** (`/admin/flat-files`): the mapping editor (with column suggestions
   from a sample file's first line), Upload CSV, upload history with a side panel of per-row errors and
   the delta, and the manual task list with Close.
+
+### Directory CSV import and create / edit forms (issue #915)
+
+The Directory lists' **Bulk import** (people, accounts, entitlements) and the **New / Edit** forms write through
+`internal/flatfile` (`dirimport.go`, `plan.go`; schema `0965_dirimport.sql`, Postgres `0973_dirimport.sql`). Rules:
+
+- **Manual source.** A file loads into a *manual source*: a system the admin names (`hr-sheet`, shown as "HR
+  spreadsheet"), never one a connector owns. A name a connection feeds, or a system that already holds data from another
+  source, is refused (409 `system_not_manual`); so is a system a configured connector (`TESSERA_CONNECTORS`) feeds,
+  on every call, even if a manual source of that name already exists. Accounts use the flat-file tables (mapping, upload history, manual
+  tasks; a new source gets the canonical mapping `account_id, username, email, identity_id, status`). People and
+  entitlements keep a snapshot in `dirimport_records` (kind `people` | `entitlements`).
+- **Targets.** `people` (columns `email, name` required; `external_id, department, title, manager_email, status`)
+  become identities; `accounts` become accounts correlated by `identity_id` then `email`; `entitlements` (`name`
+  required; `external_id, kind, privileged, description`) become catalog groups of the source. All go through
+  `ingest.Import`, so the resolver, authoritative-attribute rules and the deletion guard apply as for a connector.
+  A row naming a person another source already owns (same external id, or same email under another id) is refused
+  (`owned_by_other_source`, `email_in_use`); so is an entitlement whose group another feed wrote to the same system
+  (`owned_by_other_source`).
+- **Removals** reach only rows the same source imported before. A person missing from a later file is set to
+  terminated; an account is disabled and its import grants dropped; an entitlement is retired (no longer requestable,
+  grants kept for review). All three are vetted by the deletion guard (a feed's default is `hold_all`): held removals
+  stay as they are and keep their snapshot row until a second admin releases the hold (appliers
+  `ingest.ReleaseIdentity`, `flatfile.ReleaseDrop`, `flatfile.ReleaseRetire`).
+- **Claiming existing accounts.** A person's email can match accounts in connector systems that nobody owns yet; the
+  next sync correlates them to the person, who then holds their access. The plan of a people import lists, per added or
+  changed person, how many such accounts (active or not, other systems only, username or account id equal to the email)
+  they would claim and in which systems (`plan.claims`: `key, email, accounts, systems`); the UI shows it before *Apply*.
+  Nothing is listed when the tenant's correlation order (Admin > Identity rules) has no email key. The apply records the
+  admin's platform user id as `imported_by` of each row, and access-review routing (`reviews.avoidImporter`) never makes
+  that admin (or another account of the same person) the manager-reviewer of a person they imported or last edited: the
+  item goes to the review type's fallback reviewer, else the security lead. Rows an earlier server wrote hold the display
+  name and are not matched.
+- **Re-imports** keep what other admins changed: `Requestable` of an entitlement is set when it is created only (an
+  entitlement retired by a removal stays retired if the file lists it again; a catalog admin re-enables it), and a
+  person already terminated keeps their `terminated_at`.
+- **Deletion guard per source.** The people of a manual source are their own guard key (`SourceRef` kind `connection`, id
+  the source; hold correlation `ingest:identities:<source>`): removals are judged against the source's size
+  (`DiscoveryResult.Population`, a percent limit of it) and its feed against its own last good run (`FeedRecords`, the rows
+  the file lists, not the people it dropped), never against all the tenant's identities. The window is the guard's own.
+- **Limits.** 5 MiB, 10,000 rows, 64 columns, 256 characters a cell, UTF-8 with a header row; binary or non-UTF-8
+  input is `not_utf8`. A cell that starts `= + - @` in an identifier column is refused; in a text column it is stored
+  with a leading apostrophe. Every export neutralises such cells again (`toCsv`, `flatfile.Neutralize`). The request
+  cap of the two file routes is raised to the file limit; every other route keeps 1 MiB.
+- **Routes** (`internal/api/dirimport.go`): `GET /api/directory/imports/sources` (`graph.read`),
+  `POST /api/directory/imports/plan?target=&system=&name=&filename=` (the CSV as `text/csv`; `directory.import`; a dry run:
+  adds, changes, removals, every bad row up to 200, and the deletion guard's view; writes nothing),
+  `POST /api/directory/imports/apply` (same file; `directory.import` + step-up; 201, or 422 `invalid_file` with the
+  rows and nothing changed; `status` is `applied`, `partially_applied` or `held`),
+  `PUT /api/directory/manual/records` (`{target, system, name?, fields}`: the forms; `directory.import` + step-up; it
+  applies the source's rows plus this one through the same code), `GET /api/directory/manual/lookup?target=&id=` (who
+  owns the object and its fields when a manual source does). `directory.import` is a new permission, granted to tenant
+  admins. An apply records `directory.import` (and for accounts `flatfile.upload`) in the same transaction; a refused
+  file records a failed `directory.import`. Both name the file's `sha256`; an applied one also lists the external ids
+  it added, changed and removed (up to 100 of each, `keys_truncated`).
+- **Forms.** `ObjectFormDrawer` (`features/directory/shared.tsx`; rules in `importModel.ts`) creates only in a manual
+  source and edits only objects one owns. For an object a connector owns it shows the source's fields read-only with
+  "Managed by <system>" and offers only what Tessera keeps: an owner (`PUT /api/ownership`, `ownership.manage`) for
+  entitlements and machine identities; people and accounts have no Tessera-owned attribute, so they are read-only.
+  The Preview badge is gone from import and from these forms; the machine identity registration is still a Preview.
 
 ### Verified help-desk resets
 
@@ -6198,14 +6258,17 @@ back a step and `Esc` to close. `/` focuses the top-bar search.
 
 | Screen | Calls | Notes |
 |---|---|---|
+| Account Disable / Enable (Directory → Accounts: bulk and the account panel) | `POST /api/accounts/{id}/disable`, `.../enable`, `POST /api/accounts/disable`, `.../enable` (bulk: `{ids, reason}`, 1 to 100 ids, answers `results` per id) | `identities.contain` (policy admin) and a fresh phishing-resistant sign-in, like identity Disable. Does not edit the account: it queues a provisioning operation (source `api`) through the connection's write path, and the account changes in Tessera only when the engine's re-read of the target confirms (a mismatch raises a finding and the status stays). Until then `GET /api/accounts` carries `pending: "disable"` or `"enable"` on the row (the key is absent otherwise) and the UI shows "disable pending". An account whose system has no connection with write-back on is refused per id with 409 `target_read_only`; Enable also needs a connector that can set an account active again (SCIM and the dev fake: an `update_account` of `active=true`; Okta and the others answer `target_read_only`). Other per-id errors: `not_found`, `invalid_state` (409: disable needs an active account, enable a disabled one), `operation_in_flight` (the opposite change is waiting; the same direction joins the operation in flight). Separation of duties as for identities: 403 `self_account_change_not_allowed` for an account of the identity the caller's Tessera user is linked to, 403 `actor_unlinked` for a user with no linked identity, and Enable answers 409 `identity_disabled` for an account of a disabled identity (enable the identity, which needs a second admin). Four eyes on re-enable (like Enable of an identity, #316): an account disabled through this route can be enabled only by a different person than the one who asked for the disable (two users linked to one identity count as one), otherwise 403 `four_eyes_required` (per id in the bulk form); the requester is recorded in `account_disable_requests` (one row per account, replaced by the next disable request), and an account with no record, such as one disabled by the target itself, has no such check. A disable the deletion guard holds answers `held`; asking again while it is held is not queued or held a second time: the same direction answers `pending` (no `op_id`) and the opposite answers 409 `operation_in_flight`, so releasing the hold queues one disable. Audited as `account.disable_requested` / `account.enable_requested` (one per id, refusals included) in the request's transaction, with the engine's `provision.*` events. |
 | Identity Disable / Enable (identity page, panel, bulk, palette) | `POST /api/identities/{id}/disable`, `.../enable`, `GET .../disables` | `identities.contain` and a fresh phishing-resistant sign-in. Disable runs the kill switch's containment (revoke sessions, tokens, OAuth grants at connected providers), then sets the active accounts and the identity to disabled in one audited transaction (`identity.disable`). A failed provider step is retried and reported. Tessera does not suspend the account inside the provider. Any Tessera user linked to the identity is signed out in the same transaction (sessions revoked with reason `identity_disabled`, counted in the event) and refused at sign-in, step-up and on every request while the identity is not active (disabled, terminated or merged: the check allows only `active`, #331). A leaver (any path that terminates the identity) revokes the linked users' sessions in the same transaction (reason `identity_terminated`); Enable cannot bring back a terminated identity, and its open disable record stays open. Disable is refused (403 `self_disable_not_allowed`, `identity.disable.refused`) for the identity linked to the caller's own user (#335). Enable (`identity.enable`) sets back only the accounts Disable disabled and that are still disabled. Enable is refused (403, `identity.enable.refused`) for a user linked to the identity (`self_enable_not_allowed`) and, when the identity is linked to a Tessera user, for the admin who disabled it (`four_eyes_required`: a second admin enables it). It cannot restore revoked sessions and grants, and says so. No Undo. |
 | My access > Request removal | `POST /api/removal-requests`, `GET ?scope=mine\|approvals\|pending\|all`, `.../{id}/approve\|deny\|cancel` | Shows in My requests and the approver's Inbox (the person's manager, a delegate, or `requests.decide`). Approval needs step-up and removes the grant (through `requests.Remove` when an approved request granted it, else a revoked grant with a tombstone). Just-in-time and role-held grants are refused. |
 | Request access drafts | `GET/POST /api/request-drafts`, `GET/PUT/DELETE .../{id}` | Private to the user, at most 50, checked for existence but never against policy. A draft never submits itself. |
 | Directory > Organizations | `GET /api/orgs`, `GET /api/orgs/{org_id}`, `GET|PUT /api/orgs/{org_id}/settings`, `GET|PUT /api/org-hierarchy-source` | The tree is derived: a root and one organization per department. Owners are assigned on the organization, else the active people at the top of a department's reporting lines who lead others in it. Policies and the hierarchy source are set on the page (see *Configurable settings*). No cost centers (the HR data has none). |
 | Home recent activity | `GET /api/activity` | The signed-in user's own audit events (action, target, outcome, time; no detail). "Your recent requests" reads real request lines. |
 
-**Preview features.** Some screens have no backend endpoint yet: reset password, generic
-object create / edit / import (accounts, machine identities, rotate secret) and most admin settings
+**Reset password** (identity page, panel, palette) opens the Help desk's verified flow: `/helpdesk?new=1&identity=<id>&kind=password` shows the New reset case dialog for that person. Nothing is reset until the case's verification (and, for a privileged identity, a second approver) is satisfied.
+
+**Preview features.** Some screens have no backend endpoint yet: machine identity
+registration, rotate secret and most admin settings
 (Export / import configuration; Identity rules, Branding & labels and Certificates are live, see "Certificates, branding and identity rules"). They run on typed mock data in `src/mocks/`, keep their state in the
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to
 `src/api.ts` that returns the same type and remove the badge.

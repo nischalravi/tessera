@@ -120,6 +120,44 @@ func avoidSelf(r *Resolver, subject, reviewer, lead *store.Identity) *store.Iden
 	return nil
 }
 
+// avoidImporter keeps an admin from reviewing, as their manager, the people that admin imported: a Directory
+// import names who it was by, and that admin could have put anyone in the manager column. When the manager the
+// review picked is a platform user the import was by (or another account of the same person), the item goes to
+// the type's fallback reviewer, else the security lead, else nobody (as avoidSelf). Only the manager is
+// replaced: a reviewer a review type chose by its own rules is left.
+func avoidImporter(c *store.TenantTx, r *Resolver, subject, reviewer, lead *store.Identity) (*store.Identity, error) {
+	if reviewer == nil || subject.ManagerID == nil || *subject.ManagerID != reviewer.ID {
+		return reviewer, nil
+	}
+	by, err := c.ImportedByOf(store.ImportPeople, subject.ExternalID)
+	if err != nil || by == "" {
+		return reviewer, err
+	}
+	users, err := c.PlatformUserIDsForIdentity(reviewer.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		same, err := c.SameActor(by, u.String())
+		if err != nil {
+			return nil, err
+		}
+		if !same {
+			continue
+		}
+		if r != nil {
+			if f := r.active(r.Settings.FallbackID); f != nil && f.ID != subject.ID && f.ID != reviewer.ID {
+				return f, nil
+			}
+		}
+		if lead != nil && lead.ID != subject.ID && lead.ID != reviewer.ID {
+			return lead, nil
+		}
+		return nil, nil
+	}
+	return reviewer, nil
+}
+
 type deptTarget struct {
 	dept string
 	null bool
@@ -308,6 +346,9 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 				reviewer = securityLead
 			}
 			reviewer = avoidSelf(scope.Resolver, ident, reviewer, securityLead)
+			if reviewer, err = avoidImporter(c, scope.Resolver, ident, reviewer, securityLead); err != nil {
+				return 0, err
+			}
 			d, null := deptKey(ident.Department)
 			deptN := deptSizes[deptK{d, null}]
 			peers := targetByDept[deptTarget{d, null, ag.Dst}]
@@ -363,7 +404,7 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 			items++
 		}
 	}
-	mTotal, mem, err := rv.build(now, people, securityLead)
+	mTotal, mem, err := rv.build(c, now, people, securityLead)
 	if err != nil {
 		return 0, err
 	}
