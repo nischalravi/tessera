@@ -46,6 +46,9 @@ type Request struct {
 	// SourceRef names the source whose own settings apply when it is not implied by Source and SourceID
 	// (a loader, a connection) or by ScopeSource.
 	SourceRef SourceRef
+	// Population, when set, is the size of the source: a percent limit is taken of it instead of the
+	// category's population (a small source is judged by its own size).
+	Population int
 	// Correlation groups the calls of one request, run or sync: items held under the same
 	// correlation join one hold. "" gives each call its own hold.
 	Correlation string
@@ -286,6 +289,9 @@ func Admit(tx *store.TenantTx, now time.Time, req Request) (*Decision, error) {
 	if pol.MaxPercent != nil {
 		if pop, err = tx.DeletionPopulation(req.Category); err != nil {
 			return nil, err
+		}
+		if req.Population > 0 {
+			pop = req.Population
 		}
 		if res.Overridden {
 			// the percent of what the source itself reported last time, when it has reported

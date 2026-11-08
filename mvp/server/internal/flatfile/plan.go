@@ -21,6 +21,17 @@ type Plan struct {
 	Removed   int
 	Unchanged int
 	Guard     *GuardPreview
+	// Claims (a people import) are the people whose email matches existing connector accounts nobody owns yet:
+	// the next sync correlates those accounts to the person, who then holds their access.
+	Claims []Claim
+}
+
+// Claim is one imported person and the uncorrelated accounts in other systems the next sync would correlate to them.
+type Claim struct {
+	Key      string   `json:"key"` // external id of the person
+	Email    string   `json:"email"`
+	Accounts int      `json:"accounts"`
+	Systems  []string `json:"systems"`
 }
 
 // GuardPreview is how the deletion guard would see the removals of a plan.

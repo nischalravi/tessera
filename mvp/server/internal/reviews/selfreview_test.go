@@ -227,3 +227,97 @@ func TestQADecideRefusesSelfAndUnlinked(t *testing.T) {
 		return nil
 	})
 }
+
+// Security review of #915: the admin who imported a person (or edited them through a manual source) never
+// reviews them as their manager: the item goes to the review type's fallback reviewer.
+func TestGenerateRoutesAwayFromTheImportingManager(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		importerIsMgr bool
+		secondLogin   bool // the manager signs in with a second account of the same person
+	}{
+		{"manager imported the person", true, false},
+		{"another account of the manager imported", true, true},
+		{"someone else imported", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := testkit.Demo(t)
+			var people map[int64]*store.Identity
+			var base []*store.ReviewItem
+			testkit.Read(t, db, func(c *store.TenantTx) error {
+				var err error
+				if people, _, err = c.IdentityMap(); err != nil {
+					return err
+				}
+				base, err = c.CampaignItems(1)
+				return err
+			})
+			var subject, manager int64
+			for _, it := range base {
+				p := people[it.IdentityID]
+				if p.Type == "human" && p.ManagerID != nil && it.ReviewerID != nil && *it.ReviewerID == *p.ManagerID && people[*p.ManagerID].Status == "active" {
+					subject, manager = it.IdentityID, *p.ManagerID
+					break
+				}
+			}
+			if subject == 0 {
+				t.Skip("no demo item is reviewed by its subject's manager")
+			}
+			var fallback int64
+			for id, p := range people {
+				if id != subject && id != manager && p.Status == "active" && p.Type == "human" {
+					fallback = id
+					break
+				}
+			}
+			by := linkUser(t, db, manager)
+			if tc.secondLogin {
+				by = linkUser(t, db, manager)
+			}
+			if !tc.importerIsMgr {
+				by = linkUser(t, db, fallback)
+			}
+			testkit.Write(t, db, func(c *store.TenantTx) error {
+				return c.PutImportRecord(&store.ImportRecord{System: "hr-sheet", Kind: store.ImportPeople, Key: people[subject].ExternalID,
+					Data: "{}", Hash: "h", ImportedBy: by.String(), ImportedAt: testkit.Now})
+			})
+			set := reviews.DefaultTypeSettings(reviews.TypeUserManager)
+			set.FallbackID = &fallback
+			testkit.Write(t, db, func(c *store.TenantTx) error {
+				r, err := reviews.NewResolver(c, set, people)
+				if err != nil {
+					return err
+				}
+				id, err := reviews.GenerateScopedCampaign(c, testkit.Now, "imp", 60, testkit.Policies(t), reviews.Scope{Resolver: r})
+				if err != nil {
+					return err
+				}
+				items, err := c.CampaignItems(id)
+				if err != nil {
+					return err
+				}
+				n := 0
+				for _, it := range items {
+					if it.IdentityID != subject {
+						continue
+					}
+					n++
+					got := int64(0)
+					if it.ReviewerID != nil {
+						got = *it.ReviewerID
+					}
+					if tc.importerIsMgr && got != fallback {
+						t.Errorf("item %d: reviewer %d, want the fallback %d (the manager %d imported the person)", it.ID, got, fallback, manager)
+					}
+					if !tc.importerIsMgr && got != manager {
+						t.Errorf("item %d: reviewer %d, want the manager %d", it.ID, got, manager)
+					}
+				}
+				if n == 0 {
+					t.Skip("the subject has no item in the regenerated campaign")
+				}
+				return nil
+			})
+		})
+	}
+}

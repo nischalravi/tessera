@@ -98,7 +98,11 @@ func (s *Server) putFlatMapping(r *http.Request, p *params) (int, any, error) {
 	}
 	if created {
 		// a new app may not take over a system another source already feeds
-		if err := flatSystemFree(c, sys); err != nil {
+		reserved, err := s.reservedSystems()
+		if err != nil {
+			return 0, nil, err
+		}
+		if err := flatSystemFree(c, sys, reserved); err != nil {
 			return 0, nil, err
 		}
 	}
@@ -138,8 +142,12 @@ func (s *Server) putFlatMapping(r *http.Request, p *params) (int, any, error) {
 	return status, v, nil
 }
 
-// flatSystemFree refuses a system a connection or an existing source owns.
-func flatSystemFree(c *store.TenantTx, system string) error {
+// flatSystemFree refuses a system a connection, a configured connector (reserved: TESSERA_CONNECTORS, which
+// writes without a connection row, maybe before its first sync) or an existing source owns.
+func flatSystemFree(c *store.TenantTx, system string, reserved map[string]bool) error {
+	if reserved[system] {
+		return errStatus(http.StatusConflict, "a connector already feeds the system "+system)
+	}
 	conns, err := c.Connections()
 	if err != nil {
 		return err

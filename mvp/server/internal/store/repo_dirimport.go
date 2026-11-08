@@ -46,6 +46,9 @@ var (
 	importRecordSystems = tq("dirimport_records.systems", `
 		SELECT r.system, r.kind, COUNT(*) FROM dirimport_records r WHERE r.tenant_id = @tenant
 		GROUP BY r.system, r.kind ORDER BY r.system, r.kind`)
+	importRecordBy = tq("dirimport_records.by", `
+		SELECT r.imported_by FROM dirimport_records r WHERE r.tenant_id = @tenant AND r.kind = @kind AND r.rec_key = @rec_key
+		ORDER BY r.imported_at DESC, r.system LIMIT 1`)
 	importRecordSource = tq("dirimport_records.source", `
 		SELECT r.system FROM dirimport_records r WHERE r.tenant_id = @tenant AND r.kind = @kind AND r.rec_key = @rec_key
 		ORDER BY r.system LIMIT 1`)
@@ -94,6 +97,21 @@ func (tx *TenantTx) ImportRecordSource(kind, key string) (string, error) {
 		err := s.Scan(&v)
 		return &v, err
 	}, importRecordSource, sql.Named("kind", kind), sql.Named("rec_key", key))
+	if err != nil || len(rows) == 0 {
+		return "", err
+	}
+	return *rows[0], nil
+}
+
+// ImportedByOf is who last imported or edited the object of this kind and external id in a manual source: the
+// platform user id of the admin (the display name for a row an older server wrote or a caller with no user), ""
+// if no manual source holds it.
+func (tx *TenantTx) ImportedByOf(kind, key string) (string, error) {
+	rows, err := collect(tx, func(s scanner) (*string, error) {
+		var v string
+		err := s.Scan(&v)
+		return &v, err
+	}, importRecordBy, sql.Named("kind", kind), sql.Named("rec_key", key))
 	if err != nil || len(rows) == 0 {
 		return "", err
 	}

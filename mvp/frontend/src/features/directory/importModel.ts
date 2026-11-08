@@ -61,6 +61,18 @@ export function guardNote(p: ImportPlan): string | null {
   return `${g.removals} removal${g.removals === 1 ? "" : "s"} within the deletion guard's limit${g.limit != null ? ` of ${g.limit}` : ""}; the guard decides when you apply.`;
 }
 
+/** What a people import would claim, in words, one line for the plan and the people behind it; null when nothing is claimed. */
+export function claimNote(p: ImportPlan): { summary: string; lines: string[] } | null {
+  const cs = p.claims ?? [];
+  if (cs.length === 0) return null;
+  const total = cs.reduce((n, c) => n + c.accounts, 0);
+  const lines = cs.map((c) => `${c.email} will claim ${c.accounts} existing account${c.accounts === 1 ? "" : "s"} (${c.systems.join(", ")})`);
+  return {
+    summary: `${cs.length} ${cs.length === 1 ? "person matches" : "people match"} ${total} existing account${total === 1 ? "" : "s"} in connected systems that nobody owns. The next sync of those systems will correlate them by email, and the person will hold their access. Check the emails before you apply.`,
+    lines,
+  };
+}
+
 /** The toast after an apply or a form save. */
 export function resultMessage(r: ImportResult, what: string): string {
   const p = r.plan;

@@ -11,7 +11,7 @@ import {
 import { mockObjects } from "../../mocks";
 import { OwnerForm } from "./owners";
 import {
-  FORM_FIELDS, FieldDef, KEY_FIELD, checkImportFile, expectedColumns, formMode, guardNote, initialValues, managedBy, ownerKindFor, planHeadline,
+  FORM_FIELDS, FieldDef, KEY_FIELD, checkImportFile, expectedColumns, formMode, claimNote, guardNote, initialValues, managedBy, ownerKindFor, planHeadline,
   resultMessage, slugifySource, toRecordFields,
 } from "./importModel";
 
@@ -146,6 +146,7 @@ export function ImportDrawer({ kind, label, file: initialFile, onClose, onDone }
 }
 
 function PlanView({ plan, note, headline }: { plan: ImportPlan; note: string | null; headline: string }) {
+  const claims = claimNote(plan);
   return (
     <div className="stack" aria-live="polite">
       <div className="stat-row">
@@ -157,6 +158,13 @@ function PlanView({ plan, note, headline }: { plan: ImportPlan; note: string | n
       </div>
       <Callout tone={plan.error_count ? "bad" : "ok"}>{headline}</Callout>
       {note && <Callout tone="warn">{note}</Callout>}
+      {claims && (
+        <Callout tone="warn">
+          {claims.summary}
+          <ul className="claims">{claims.lines.slice(0, 20).map((l) => <li key={l}>{l}</li>)}</ul>
+          {claims.lines.length > 20 && <span>…and {claims.lines.length - 20} more.</span>}
+        </Callout>
+      )}
       {plan.errors.length > 0 && (
         <div className="card flush">
           <div className="table-scroll">

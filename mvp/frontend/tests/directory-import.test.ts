@@ -111,6 +111,18 @@ test("a plan is put in words, with the deletion guard's view", () => {
   assert.match(m.guardNote(ok)!, /1 removal within the deletion guard's limit of 5/);
 });
 
+test("a plan lists the existing accounts each person would claim", () => {
+  assert.equal(m.claimNote(plan()), null);
+  assert.equal(m.claimNote(plan({ claims: [] })), null);
+  const n = m.claimNote(plan({ claims: [
+    { key: "a@t.example", email: "a@t.example", accounts: 2, systems: ["github", "okta"] },
+    { key: "b@t.example", email: "b@t.example", accounts: 1, systems: ["okta"] },
+  ] }))!;
+  assert.match(n.summary, /2 people match 3 existing accounts .* nobody owns.*correlate them by email/);
+  assert.deepEqual(n.lines, ["a@t.example will claim 2 existing accounts (github, okta)", "b@t.example will claim 1 existing account (okta)"]);
+  assert.match(m.claimNote(plan({ claims: [{ key: "a", email: "a@t.example", accounts: 1, systems: ["okta"] }] }))!.summary, /1 person matches 1 existing account /);
+});
+
 test("the message after an apply says what was held", () => {
   assert.equal(m.resultMessage({ plan: plan(), status: "applied" }, "People"), "People: 1 added, 1 changed, 1 removed");
   assert.match(m.resultMessage({ plan: plan({ added: 0, changed: 0, removed: 0 }), status: "applied" }, "People"), /no changes/);
