@@ -11,6 +11,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
+	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 )
@@ -322,5 +323,34 @@ func TestDirectoryImportAPI_RefusesAConfiguredConnectorsSystem(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFinishImport_HeldRestores(t *testing.T) {
+	s := &Server{}
+	cases := []struct {
+		name       string
+		res        flatfile.ImportOutcome
+		status     string
+		held       any
+		holdID     any
+		reactivate any
+	}{
+		{"nothing held", flatfile.ImportOutcome{Plan: &flatfile.Plan{}}, "applied", nil, nil, nil},
+		{"restores held", flatfile.ImportOutcome{Plan: &flatfile.Plan{}, HeldRestores: 3, RestoreHoldID: "h1"}, "partially_applied", 3, "h1", 3},
+		{"removals held", flatfile.ImportOutcome{Plan: &flatfile.Plan{Removed: 2}, Held: 2, HoldID: "h2"}, "held", 2, "h2", nil},
+		{"both held", flatfile.ImportOutcome{Plan: &flatfile.Plan{Removed: 2}, Held: 2, HoldID: "h2", HeldRestores: 3, RestoreHoldID: "h1"}, "held", 2, "h2", 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := s.finishImport(&tc.res, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := v.(statusBody).body.(map[string]any)
+			if body["status"] != tc.status || body["held"] != tc.held || body["hold_id"] != tc.holdID || body["held_reactivations"] != tc.reactivate {
+				t.Errorf("body = %+v", body)
+			}
+		})
 	}
 }

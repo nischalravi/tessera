@@ -233,6 +233,17 @@ func (s *Server) finishImport(res *flatfile.ImportOutcome, err error) (any, erro
 		body["applied"], body["held"], body["hold_id"] = res.Plan.Removed-res.Held, res.Held, res.HoldID
 		body["message"] = fmt.Sprintf("Removed %d of %d: %d held for approval", res.Plan.Removed-res.Held, res.Plan.Removed, res.Held)
 	}
+	if res.HeldRestores > 0 {
+		// restores of people the source ended wait for a second admin too; say so, with their own hold
+		body["held_reactivations"], body["reactivation_hold_id"] = res.HeldRestores, res.RestoreHoldID
+		note := fmt.Sprintf("%d restore(s) held for approval", res.HeldRestores)
+		if res.Held == 0 {
+			body["status"], body["held"], body["hold_id"] = "partially_applied", res.HeldRestores, res.RestoreHoldID
+			body["message"] = note
+		} else {
+			body["message"] = fmt.Sprintf("%v; %s", body["message"], note)
+		}
+	}
 	return statusBody{http.StatusCreated, body}, nil
 }
 
