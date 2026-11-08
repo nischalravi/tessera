@@ -305,9 +305,10 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 			if len(cfg.BaseDNs) == 0 {
 				bad("base_dns", "at least one base DN is required")
 			}
-			for _, dn := range append(slices.Clone(cfg.BaseDNs), cfg.ServiceAccountOUs...) {
+			// the entry is named by position, never echoed: a value typed here may hold a credential (issue #926)
+			for i, dn := range append(slices.Clone(cfg.BaseDNs), cfg.ServiceAccountOUs...) {
 				if len(dn) > 512 || !dnRE.MatchString(dn) {
-					bad("base_dns", "%q is not a distinguished name", dn)
+					bad("base_dns", "entry %d (base DNs, then service account OUs) is not a distinguished name", i+1)
 				}
 			}
 			text("user_filter", cfg.UserFilter, 1024)
@@ -385,7 +386,7 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 				bad("base_url", "%s", err)
 			}
 		} else if cfg.Preset != "" {
-			bad("preset", "unknown SCIM preset %q", cfg.Preset)
+			bad("preset", "not a known SCIM preset")
 		}
 		if t.ID == "salesforce" {
 			// the connector reads the org's base_url: the same host rule it opens with, refused on save
@@ -532,7 +533,7 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 	for g, members := range cfg.PrivilegedExpected {
 		text("privileged_expected", g, 256)
 		if len(members) > 1000 {
-			bad("privileged_expected", "%s: at most 1000 members", g)
+			bad("privileged_expected", "at most 1000 members per group")
 		}
 		for _, m := range members {
 			text("privileged_expected", m, 256)
@@ -541,9 +542,9 @@ func ValidateConnEnv(cfg ConnConfig, t *template.Resolved, connectorType, env st
 	if len(cfg.DemoFixedChecks) > 0 && !slices.ContainsFunc(t.ConnectorTypes, IsDemoType) {
 		bad("demo_fixed_checks", "only demo connections have simulated checks")
 	}
-	for _, id := range cfg.DemoFixedChecks {
+	for i, id := range cfg.DemoFixedChecks {
 		if _, ok := template.Checks[id]; !ok {
-			bad("demo_fixed_checks", "unknown check %q", id)
+			bad("demo_fixed_checks", "entry %d is not a known check", i+1)
 		}
 	}
 	return errs

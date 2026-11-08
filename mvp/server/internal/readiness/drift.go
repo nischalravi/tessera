@@ -777,7 +777,7 @@ func (s *Service) Tasks(c *store.TenantTx, now time.Time) ([]Task, error) {
 			continue
 		}
 		t := Task{ID: "connection/" + conn.ID + "/degraded", Kind: "connection", ConnectionID: conn.ID, ConnectionName: conn.Name,
-			Owner: conn.TechnicalOwner, Severity: "high", Title: conn.Name + " is degraded", Since: store.RT(rev.UpdatedAt),
+			Owner: MaskOwner(conn.TechnicalOwner), Severity: "high", Title: conn.Name + " is degraded", Since: store.RT(rev.UpdatedAt),
 			Reason: "write-back is stopped; reads continue", Href: "/admin/connections/" + conn.ID}
 		switch bl, err := c.Baseline(rev.ID); {
 		case err == nil && bl.DegradedReason != nil:

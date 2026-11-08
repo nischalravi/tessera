@@ -3,8 +3,10 @@ package readiness
 import (
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
@@ -102,6 +104,89 @@ func urlFieldPtrs(cfg *ConnConfig) map[string]*string {
 	return map[string]*string{"org_url": &cfg.OrgURL, "base_url": &cfg.BaseURL}
 }
 
+// textFieldPtrs returns the typed free-text fields of a config by their JSON name: values an admin types in, none of
+// them a URL by design (owners, a correlation key, a tenant host, a schedule). A URL with credentials pasted into one
+// is kept in clear all the same, so it is refused and masked like a URL under settings (issue #926). ca_bundle (a PEM)
+// and the structured rest and sql blocks have their own checks.
+func textFieldPtrs(cfg *ConnConfig) map[string]*string {
+	return map[string]*string{
+		"host": &cfg.Host, "bind_dn": &cfg.BindDN, "user_filter": &cfg.UserFilter, "group_filter": &cfg.GroupFilter,
+		"tenant_id": &cfg.TenantID, "cloud": &cfg.Cloud, "customer": &cfg.Customer, "domain": &cfg.Domain,
+		"admin_email": &cfg.AdminEmail, "preset": &cfg.Preset, "tenant_host": &cfg.TenantHost, "api_version": &cfg.APIVersion,
+		"interface": &cfg.Interface, "time_zone": &cfg.TimeZone, "correlation_key": &cfg.CorrelationKey,
+		"hr_id_attribute": &cfg.HRIDAttribute, "technical_owner": &cfg.TechnicalOwner, "business_owner": &cfg.BusinessOwner,
+		"sync_schedule": &cfg.SyncSchedule,
+	}
+}
+
+// textListPtrs returns the typed free-text list fields of a config by their JSON name (DNs, OUs, a write scope, check
+// ids): the same rule as textFieldPtrs, applied to each entry.
+func textListPtrs(cfg *ConnConfig) map[string]*[]string {
+	return map[string]*[]string{"base_dns": &cfg.BaseDNs, "service_account_ous": &cfg.ServiceAccountOUs,
+		"write_scope": &cfg.WriteScope, "demo_fixed_checks": &cfg.DemoFixedChecks}
+}
+
+// textURLStartRe finds where a URL may start inside free text: a "scheme://" (either slash direction) or an http(s),
+// ws(s) or ftp scheme in any separator form ("https:u:p@h"), the forms urlshape.Classify reads as naming a host.
+var textURLStartRe = regexp.MustCompile(`(?i)[a-z][a-z0-9+.\-]*:[/\\]{2}|\b(?:https?|wss?|ftp):`)
+
+// textTokenEnd ends a URL found inside free text: a space (tabs and line breaks are not, a lenient parser drops them)
+// or a quote or bracket a URL is commonly pasted between.
+func textTokenEnd(r rune) bool {
+	return (unicode.IsSpace(r) && r != '\t' && r != '\n' && r != '\r') || strings.ContainsRune("\"'<>`", r)
+}
+
+// textRisk reports whether a free-text value holds a URL with userinfo: the whole value read as a URL that names a
+// host, or any URL in it ("Ops team <https://u:p@h>", "see https:u:p@h"). A typed text field is never a URL by
+// design, so a URL anywhere in it is checked, not only one that starts the value.
+func textRisk(v string) bool {
+	if urlshape.HasAuthority(v) {
+		return urlRisk(v, false)
+	}
+	for _, loc := range textURLStartRe.FindAllStringIndex(v, -1) {
+		tok := v[loc[0]:]
+		if i := strings.IndexFunc(tok, textTokenEnd); i >= 0 {
+			tok = tok[:i]
+		}
+		if urlRisk(tok, false) {
+			return true
+		}
+	}
+	return false
+}
+
+// maskText is MaskURL for a free-text value: a value that reads as a URL naming a host is masked as such, and a
+// value holding a credentialed URL in longer text is masked whole. Anything else is returned unchanged.
+func maskText(v string) string {
+	if urlshape.HasAuthority(v) {
+		return MaskURL(v)
+	}
+	if textRisk(v) {
+		return URLMask
+	}
+	return v
+}
+
+// MaskText is maskText for values copied out of the config elsewhere (the connection's owners, issue #926).
+func MaskText(v string) string { return maskText(v) }
+
+// maskTextPtr returns p masked, and whether it was.
+func maskTextPtr(p *string) (*string, bool) {
+	if p == nil {
+		return nil, false
+	}
+	if m := maskText(*p); m != *p {
+		return &m, true
+	}
+	return p, false
+}
+
+// MaskOwner is MaskText for an optional value (a connection's technical or business owner).
+func MaskOwner(p *string) *string {
+	m, _ := maskTextPtr(p)
+	return m
+}
+
 // MaskedConfig returns cfg for a view: URL-valued fields that still carry credentials or query values are masked,
 // and the names of the fields that were are returned. cfg is not modified.
 func MaskedConfig(cfg ConnConfig) (ConnConfig, []string) {
@@ -109,6 +194,27 @@ func MaskedConfig(cfg ConnConfig) (ConnConfig, []string) {
 	for name, p := range urlFieldPtrs(&cfg) {
 		if m := MaskURL(*p); m != *p {
 			*p = m
+			masked = append(masked, name)
+		}
+	}
+	for name, p := range textFieldPtrs(&cfg) {
+		if m := maskText(*p); m != *p {
+			*p = m
+			masked = append(masked, name)
+		}
+	}
+	for name, p := range textListPtrs(&cfg) {
+		var cp []string
+		for i, v := range *p {
+			if m := maskText(v); m != v {
+				if cp == nil {
+					cp = slices.Clone(*p)
+				}
+				cp[i] = m
+			}
+		}
+		if cp != nil {
+			*p = cp
 			masked = append(masked, name)
 		}
 	}
@@ -139,6 +245,28 @@ func MaskConfigMap(m map[string]any) []string {
 			}
 		}
 	}
+	for name := range textFieldPtrs(&ConnConfig{}) {
+		if v, ok := m[name].(string); ok {
+			if mv := maskText(v); mv != v {
+				m[name], masked = mv, append(masked, name)
+			}
+		}
+	}
+	for name := range textListPtrs(&ConnConfig{}) {
+		if list, ok := m[name].([]any); ok {
+			hit := false
+			for i, x := range list {
+				if v, ok := x.(string); ok {
+					if mv := maskText(v); mv != v {
+						list[i], hit = mv, true
+					}
+				}
+			}
+			if hit {
+				masked = append(masked, name)
+			}
+		}
+	}
 	if st, ok := m["settings"].(map[string]any); ok {
 		for k, x := range st {
 			if v, ok := x.(string); ok && urlSetting(k, v) {
@@ -161,6 +289,23 @@ func keepMaskedURLs(cur, next *ConnConfig) {
 			*p = o
 		}
 	}
+	// free text: the mask of a stored value restores that value only, in the same field (and list position), so the
+	// round trip can keep a stored value but never move it or bring back one that was replaced
+	oldText := textFieldPtrs(cur)
+	for name, p := range textFieldPtrs(next) {
+		if o := *oldText[name]; *p != o && *p == maskText(o) {
+			*p = o
+		}
+	}
+	oldLists := textListPtrs(cur)
+	for name, p := range textListPtrs(next) {
+		olds := *oldLists[name]
+		for i, v := range *p {
+			if i < len(olds) && v != olds[i] && v == maskText(olds[i]) {
+				(*p)[i] = olds[i]
+			}
+		}
+	}
 	for k, v := range next.Settings {
 		if o, ok := cur.Settings[k]; ok && v != o && urlSetting(k, o) && v == MaskURL(o) {
 			next.Settings[k] = o
@@ -179,6 +324,32 @@ func urlCredentialError(cur, cfg ConnConfig) error {
 	if cfg.BaseURL != cur.BaseURL && urlRisk(cfg.BaseURL, true) {
 		bad = append(bad, FieldError{"base_url", "must not carry credentials, a query string or a fragment"})
 	}
+	curText := textFieldPtrs(&cur)
+	textNames := make([]string, 0, len(curText))
+	for name := range curText {
+		textNames = append(textNames, name)
+	}
+	slices.Sort(textNames)
+	nextText := textFieldPtrs(&cfg)
+	for _, name := range textNames {
+		if v := *nextText[name]; v != *curText[name] && textRisk(v) {
+			bad = append(bad, FieldError{name, "must not carry credentials"})
+		}
+	}
+	// list fields, attr_map and privileged_expected: an entry not stored as it is in the same field of cur is checked
+	curLists, nextLists := textListPtrs(&cur), textListPtrs(&cfg)
+	for _, name := range []string{"base_dns", "demo_fixed_checks", "service_account_ous", "write_scope"} {
+		old := *curLists[name]
+		if slices.ContainsFunc(*nextLists[name], func(v string) bool { return !slices.Contains(old, v) && textRisk(v) }) {
+			bad = append(bad, FieldError{name, "must not carry credentials"})
+		}
+	}
+	if attrMapRisk(cur, cfg) {
+		bad = append(bad, FieldError{"attr_map", "must not carry credentials"})
+	}
+	if privilegedRisk(cur, cfg) {
+		bad = append(bad, FieldError{"privileged_expected", "must not carry credentials"})
+	}
 	keys := make([]string, 0, len(cfg.Settings))
 	for k := range cfg.Settings {
 		keys = append(keys, k)
@@ -194,4 +365,26 @@ func urlCredentialError(cur, cfg ConnConfig) error {
 	}
 	return &Error{Status: http.StatusBadRequest, Code: CodeURLCredentialsRefused,
 		Msg: "a URL must not carry credentials (user:pass@) or, for base_url and org_url, a query string or fragment; the secret belongs in the credential", Fields: bad}
+}
+
+// attrMapRisk reports whether cfg's attr_map has an entry, not stored in cur, with a credentialed URL in a field.
+func attrMapRisk(cur, cfg ConnConfig) bool {
+	return slices.ContainsFunc(cfg.AttrMap, func(m AttrMapping) bool {
+		return !slices.Contains(cur.AttrMap, m) && (textRisk(m.LDAP) || textRisk(m.Target) || textRisk(m.Scope))
+	})
+}
+
+// privilegedRisk reports whether cfg's privileged_expected names, as a group or a member not stored in cur, a
+// credentialed URL.
+func privilegedRisk(cur, cfg ConnConfig) bool {
+	for g, members := range cfg.PrivilegedExpected {
+		old, had := cur.PrivilegedExpected[g]
+		if !had && textRisk(g) {
+			return true
+		}
+		if slices.ContainsFunc(members, func(m string) bool { return !slices.Contains(old, m) && textRisk(m) }) {
+			return true
+		}
+	}
+	return false
 }
