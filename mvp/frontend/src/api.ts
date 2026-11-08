@@ -2743,6 +2743,9 @@ export interface ImportResult {
   applied?: number;
   held?: number;
   hold_id?: string;
+  /** Restores of people the source ended that the deletion guard held, and the hold they wait in. */
+  held_reactivations?: number;
+  reactivation_hold_id?: string;
   message?: string;
   error?: string;
   detail?: string;

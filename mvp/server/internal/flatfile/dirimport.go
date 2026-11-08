@@ -88,6 +88,9 @@ type ImportOutcome struct {
 	Plan   *Plan
 	Held   int    // removals the deletion guard held
 	HoldID string // the hold they wait in
+
+	HeldRestores  int    // restores of people the source ended that the deletion guard held
+	RestoreHoldID string // the hold they wait in
 }
 
 // CanonicalMapping is the column mapping of a new manual source's accounts.
@@ -337,6 +340,7 @@ func ApplyImport(c *store.TenantTx, now time.Time, in ImportInput) (*ImportOutco
 		if out.Held, out.HoldID, err = p.apply(c, now); err != nil {
 			return nil, err
 		}
+		out.HeldRestores, out.RestoreHoldID = p.heldRestores, p.restoreHold
 	default:
 		p, err := prepareEntitlements(c, in)
 		if err != nil {
@@ -405,6 +409,9 @@ type dirPrep struct {
 	total int
 	prev  []*store.ImportRecord
 	delta Delta
+
+	heldRestores int    // set by reactivate: the restores the guard held
+	restoreHold  string // and the hold they wait in
 }
 
 func snapshotAsFlat(rows []*store.ImportRecord) []*store.FlatRecord {
@@ -990,6 +997,9 @@ func (d *dirPrep) reactivate(c *store.TenantTx, now time.Time) (map[string]bool,
 			return nil, err
 		}
 		heldBack[k.ExternalID] = true
+	}
+	if len(dec.Held) > 0 {
+		d.heldRestores, d.restoreHold = len(dec.Held), dec.HoldID
 	}
 	return heldBack, nil
 }
