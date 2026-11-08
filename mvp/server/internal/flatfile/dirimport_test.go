@@ -269,17 +269,93 @@ func TestImport_PeopleRemovalsAreOnlyThisSourcesAndGoThroughTheGuard(t *testing.
 	if st := e.identity("p02@t.example").Status; st == "active" {
 		t.Error("p02 is still active after the release")
 	}
-	// with the guard off the next removal applies at once and leaves the snapshot
+	// with the guard off the next removal applies at once; the ended people stay in the snapshot as terminated
 	e.setPolicy(deleteguard.CatIdentities, 100, deleteguard.ModeOff)
 	if out, _, err = e.imp(flatfile.TargetPeople, people(1)+"p09@t.example,Nine,Ops\n", true); err != nil || out.Held != 0 {
 		t.Fatalf("apply with the guard off = %+v, %v", out, err)
 	}
 	e.read(func(c *store.TenantTx) {
 		rows, _ := c.ImportRecords(dsys, store.ImportPeople)
-		if len(rows) != 2 {
-			t.Errorf("snapshot has %d rows, want 2", len(rows))
+		if len(rows) != 5 {
+			t.Errorf("snapshot has %d rows, want 5 (p00, the three ended, p09)", len(rows))
 		}
 	})
+}
+
+func TestImport_PeopleReturnTheHoldIDOfHeldRemovals(t *testing.T) {
+	e := newEnv(t)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(4), true); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := e.imp(flatfile.TargetPeople, people(1), true)
+	if err != nil || out.Held != 3 || out.HoldID == "" {
+		t.Fatalf("apply = %+v, %v; want 3 held and a hold id", out, err)
+	}
+	e.read(func(c *store.TenantTx) {
+		hs, _ := c.DeletionHolds("held", deleteguard.CatIdentities, 10, 0)
+		if len(hs) != 1 || hs[0].ID != out.HoldID {
+			t.Errorf("hold id %q, holds %+v", out.HoldID, hs)
+		}
+	})
+}
+
+func TestImport_PeopleDroppedByAnEarlierFileComeBack(t *testing.T) {
+	e := newEnv(t)
+	e.setPolicy(deleteguard.CatIdentities, 100, deleteguard.ModeOff)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(3), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.imp(flatfile.TargetPeople, people(1), true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.identity("p02@t.example").Status; st == "active" {
+		t.Fatalf("p02 is %s after being dropped", st)
+	}
+	// (A) the same source lists them again: not owned elsewhere, and they are active again
+	out, _, err := e.imp(flatfile.TargetPeople, people(3), true)
+	if err != nil || len(out.Plan.Errors) > 0 || out.Plan.Changed+out.Plan.Added != 2 {
+		t.Fatalf("re-add = %+v, %v", out.Plan, err)
+	}
+	for i := 0; i < 3; i++ {
+		if st := e.identity(fmt.Sprintf("p%02d@t.example", i)).Status; st != "active" {
+			t.Errorf("p%02d is %s after the re-add", i, st)
+		}
+	}
+}
+
+func TestImport_PeopleRestoredAfterAHeldRemovalIsReleased(t *testing.T) {
+	e := newEnv(t)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(4), true); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := e.imp(flatfile.TargetPeople, people(1), true)
+	if err != nil || out.Held != 3 {
+		t.Fatalf("apply = %+v, %v", out, err)
+	}
+	e.tx(func(c *store.TenantTx) error {
+		res, err := deleteguard.Release(c, e.now, out.HoldID, "approver", nil, deleteguard.Appliers{ingest.ItemIdentityStatus: ingest.ReleaseIdentity})
+		if err != nil || res.Released != 3 {
+			t.Fatalf("release = %+v, %v", res, err)
+		}
+		return nil
+	})
+	// (B) the original file lists them as active: the plan says so and the apply restores them
+	_, pl, _ := e.imp(flatfile.TargetPeople, people(4), false)
+	if pl.Changed != 3 || pl.Unchanged != 1 {
+		t.Fatalf("plan = %+v, want 3 changed", pl)
+	}
+	if _, _, err := e.imp(flatfile.TargetPeople, people(4), true); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if st := e.identity(fmt.Sprintf("p%02d@t.example", i)).Status; st != "active" {
+			t.Errorf("p%02d is %s after the re-import", i, st)
+		}
+	}
+	// and the next run of the same file has nothing to do
+	if _, pl, _ = e.imp(flatfile.TargetPeople, people(4), false); pl.Unchanged != 4 {
+		t.Errorf("plan after = %+v", pl)
+	}
 }
 
 func TestImport_EntitlementsAreGroupsOfTheManualSourceAndRetireThroughTheGuard(t *testing.T) {
@@ -689,4 +765,180 @@ func TestImport_PeopleRemovalsAreJudgedAgainstTheSourcesOwnSize(t *testing.T) {
 			t.Errorf("holds = %+v, %v: the hold is the source's own", hs, err)
 		}
 	})
+}
+
+// terminate ends a person the way an admin, a leaver plan or containment's leaver path does: outside the import.
+func (e *env) terminate(xid string) {
+	e.t.Helper()
+	e.now = e.now.Add(time.Minute)
+	e.tx(func(c *store.TenantTx) error {
+		i, err := c.IdentityByExternalID(xid)
+		if err != nil {
+			return err
+		}
+		return c.TerminateIdentity(i.ID, e.now)
+	})
+}
+
+func (e *env) reactivations() int {
+	n := 0
+	e.read(func(c *store.TenantTx) {
+		evs, err := c.AuditEvents(store.AuditFilter{Action: "directory.person_reactivated"})
+		if err != nil {
+			e.t.Fatal(err)
+		}
+		n = len(evs)
+	})
+	return n
+}
+
+func TestImport_PeopleAnImportNeverUndoesSomeoneElsesTermination(t *testing.T) {
+	e := newEnv(t)
+	e.setPolicy(deleteguard.CatIdentities, 100, deleteguard.ModeOff)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(3), true); err != nil {
+		t.Fatal(err)
+	}
+	// (1) an admin terminates p01 while the file still lists them: the same file again leaves them terminated
+	e.terminate("p01@t.example")
+	if _, _, err := e.imp(flatfile.TargetPeople, people(3), true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.identity("p01@t.example").Status; st != "terminated" {
+		t.Fatalf("p01 is %s after a re-import; an admin's termination must stand", st)
+	}
+	// (2) the file drops p01 and then lists them again: the source did not end them, so it does not restore them
+	if _, _, err := e.imp(flatfile.TargetPeople, people(1)+"p02@t.example,Person 02,Ops\n", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.imp(flatfile.TargetPeople, people(3), true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.identity("p01@t.example").Status; st != "terminated" {
+		t.Fatalf("p01 is %s after drop and re-add; an admin's termination must stand", st)
+	}
+	// (3) the source ends p02, a leaver plan ends them again later: the later end wins too
+	if _, _, err := e.imp(flatfile.TargetPeople, people(1), true); err != nil {
+		t.Fatal(err)
+	}
+	e.terminate("p02@t.example")
+	if _, _, err := e.imp(flatfile.TargetPeople, people(3), true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.identity("p02@t.example").Status; st != "terminated" {
+		t.Fatalf("p02 is %s; a termination after the source's must stand", st)
+	}
+	if n := e.reactivations(); n != 0 {
+		t.Errorf("%d reactivations audited, want 0", n)
+	}
+}
+
+func TestImport_PeopleAdminTerminationDuringAHeldRemovalStands(t *testing.T) {
+	e := newEnv(t)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(4), true); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := e.imp(flatfile.TargetPeople, people(1), true)
+	if err != nil || out.Held != 3 {
+		t.Fatalf("apply = %+v, %v", out, err)
+	}
+	// an admin ends p02 while the removal waits; the release then has nothing to do for p02
+	e.terminate("p02@t.example")
+	e.tx(func(c *store.TenantTx) error {
+		_, err := deleteguard.Release(c, e.now, out.HoldID, "approver", nil, deleteguard.Appliers{ingest.ItemIdentityStatus: ingest.ReleaseIdentity})
+		return err
+	})
+	if _, _, err := e.imp(flatfile.TargetPeople, people(4), true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.identity("p02@t.example").Status; st != "terminated" {
+		t.Errorf("p02 is %s; the admin's termination must stand", st)
+	}
+	for _, x := range []string{"p01@t.example", "p03@t.example"} {
+		if st := e.identity(x).Status; st != "active" {
+			t.Errorf("%s is %s; the source's own released removal is undone by its file", x, st)
+		}
+	}
+	if n := e.reactivations(); n != 2 {
+		t.Errorf("%d reactivations audited, want 2", n)
+	}
+}
+
+func TestImport_PeopleMassReactivationIsHeldByTheGuard(t *testing.T) {
+	e := newEnv(t)
+	e.setPolicy(deleteguard.CatIdentities, 100, deleteguard.ModeOff)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(4), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.imp(flatfile.TargetPeople, people(1), true); err != nil {
+		t.Fatal(err)
+	}
+	e.setPolicy(deleteguard.CatIdentities, 0, deleteguard.ModeHoldExcess)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(4), true); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < 4; i++ {
+		if st := e.identity(fmt.Sprintf("p%02d@t.example", i)).Status; st != "terminated" {
+			t.Fatalf("p%02d is %s; a batch over the limit must wait for a second admin", i, st)
+		}
+	}
+	e.read(func(c *store.TenantTx) {
+		rows, _ := c.ImportRecords(dsys, store.ImportPeople)
+		for _, r := range rows {
+			if r.Key != "p00@t.example" && flatfile.RecordFields(r.Data)["status"] != "terminated" {
+				t.Errorf("snapshot row %s says active while its restore waits", r.Key)
+			}
+		}
+	})
+	// an admin ends p03 again while the restore waits: the release leaves p03 alone
+	e.terminate("p03@t.example")
+	var hold string
+	e.read(func(c *store.TenantTx) {
+		hs, _ := c.DeletionHolds("held", deleteguard.CatIdentities, 10, 0)
+		if len(hs) != 1 {
+			t.Fatalf("holds %+v", hs)
+		}
+		hold = hs[0].ID
+	})
+	e.tx(func(c *store.TenantTx) error {
+		res, err := deleteguard.Release(c, e.now, hold, "approver", nil, deleteguard.Appliers{flatfile.ItemReactivatePerson: flatfile.ReleaseReactivate})
+		if err != nil || res.Released != 2 {
+			t.Fatalf("release = %+v, %v; want 2", res, err)
+		}
+		return nil
+	})
+	for x, want := range map[string]string{"p01@t.example": "active", "p02@t.example": "active", "p03@t.example": "terminated"} {
+		if st := e.identity(x).Status; st != want {
+			t.Errorf("%s is %s, want %s", x, st, want)
+		}
+	}
+	if n := e.reactivations(); n != 2 {
+		t.Errorf("%d reactivations audited, want 2", n)
+	}
+}
+
+func TestImport_PeopleEndNoteIsNeverAFieldOrAColumn(t *testing.T) {
+	e := newEnv(t)
+	e.setPolicy(deleteguard.CatIdentities, 100, deleteguard.ModeOff)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(2), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.imp(flatfile.TargetPeople, people(1), true); err != nil {
+		t.Fatal(err)
+	}
+	e.read(func(c *store.TenantTx) {
+		rows, _ := c.ImportRecords(dsys, store.ImportPeople)
+		for _, r := range rows {
+			if _, ok := flatfile.RecordFields(r.Data)["~ended_at"]; ok {
+				t.Errorf("the end note of %s is shown as a field", r.Key)
+			}
+		}
+	})
+	// a file cannot forge the note: an unknown column is not read
+	e.terminate("p00@t.example")
+	if _, _, err := e.imp(flatfile.TargetPeople, "email,name,department,~ended_at\np00@t.example,Person 00,Ops,x\np01@t.example,Person 01,Ops,x\n", true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.identity("p00@t.example").Status; st != "terminated" {
+		t.Errorf("p00 is %s", st)
+	}
 }

@@ -46,6 +46,8 @@ func (s identitySnap) identity(now time.Time) *store.Identity {
 type held struct {
 	identities map[string]bool
 	accounts   map[[2]string]bool
+	// identityHold is the hold the last source with held identities waits in ("" when nothing was held)
+	identityHold string
 }
 
 // sourceKeys groups the results by the connection they were read through: the result's own SourceID, or
@@ -215,6 +217,9 @@ func vetIdentities(c *store.TenantTx, now time.Time, ref deleteguard.SourceRef, 
 				return err
 			}
 			h.identities[s.ExternalID] = true
+		}
+		if len(d.Held) > 0 {
+			h.identityHold = d.HoldID
 		}
 	}
 	if len(sanity) == 0 {

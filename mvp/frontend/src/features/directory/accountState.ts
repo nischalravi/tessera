@@ -14,6 +14,10 @@ const REASONS: Record<string, string> = {
   not_found: "no longer exists",
   invalid_state: "is not in a state this applies to",
   operation_in_flight: "has the opposite change waiting",
+  self_account_change_not_allowed: "is your own account, which you cannot change",
+  four_eyes_required: "needs a second admin to approve the change",
+  identity_disabled: "belongs to a person who is disabled",
+  actor_unlinked: "cannot be changed because your sign-in is not linked to a person",
 };
 
 /** One sentence for a toast: how many were sent, and why the others were not. */
@@ -27,6 +31,6 @@ export function accountStateSummary(verb: "disable" | "enable", rs: AccountState
   const heldNote = held ? `, ${held} held for a second admin by the deletion guard` : "";
   if (!failed.length) return { text: head + heldNote + ".", ok: true };
   const f = failed[0];
-  const why = REASONS[f.error ?? ""] ?? f.detail ?? "was refused";
+  const why = (REASONS[f.error ?? ""] ?? f.detail ?? "was refused").replace(/\.+$/, "");
   return { text: `${head}${heldNote}. ${failed.length} not sent: ${name(f.id)} ${why}${failed.length > 1 ? ` (and ${failed.length - 1} more)` : ""}.`, ok: sent.length > 0 };
 }

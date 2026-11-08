@@ -190,6 +190,8 @@ type DiscoveryStats struct {
 	Agents, MCPFindings int
 	// HeldIdentities and HeldAccounts count the status changes the deletion guard held (not in Object()).
 	HeldIdentities, HeldAccounts int
+	// IdentityHoldID is the hold the held identities wait in (not in Object()).
+	IdentityHoldID string
 	// Pruned are the permission edges removed because a read that covered their scope no longer
 	// reported them (issue #577); the caller audits each. Not in Object().
 	Pruned     []PrunedEdge
@@ -255,6 +257,7 @@ func discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 		return st, err
 	}
 	st.HeldIdentities, st.HeldAccounts = len(hold.identities), len(hold.accounts)
+	st.IdentityHoldID = hold.identityHold
 	rules, _, err := idrules.Load(c)
 	if err != nil {
 		return st, err
