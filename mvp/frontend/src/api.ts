@@ -2731,7 +2731,11 @@ export interface ImportPlan {
   changes: { kind: string; change: "added" | "removed" | "changed"; label: string; detail?: string }[];
   changes_truncated: boolean;
   guard: ImportGuard | null;
+  /** People (a people import) whose email matches existing connector accounts nobody owns: the next sync correlates them. */
+  claims?: ImportClaim[];
 }
+/** One imported person and the uncorrelated accounts in other systems they would claim. */
+export interface ImportClaim { key: string; email: string; accounts: number; systems: string[] }
 export interface ImportResult {
   plan: ImportPlan;
   /** Absent when the file was refused (422, error "invalid_file"). */

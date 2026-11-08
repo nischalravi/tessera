@@ -4219,7 +4219,7 @@ to the account by a `direct_grant` edge. Agent delegations are left alone.
 - `PUT /api/flatfile/apps/{system}/mapping` `{name, owner, accounts{account_id, username, email,
   identity_id, status}, entitlements{account_id, entitlement, name, privileged}}` saves the column
   mapping (`flatfile.manage`: tenant admin; step-up). `system` is the app's permanent name
-  (`^[a-z0-9][a-z0-9_.-]{0,62}$`); one that a connection or another source already feeds is `409`.
+  (`^[a-z0-9][a-z0-9_.-]{0,62}$`); one that a connection, a configured connector (`TESSERA_CONNECTORS`) or another source already feeds is `409`.
   `GET /api/flatfile/apps` lists the mappings.
 - `POST /api/flatfile/apps/{system}/uploads?kind=accounts|entitlements&filename=` takes the CSV as the
   request body (`Content-Type: text/csv`, the one non-JSON body the API accepts, declared per route)
@@ -4282,6 +4282,22 @@ The Directory lists' **Bulk import** (people, accounts, entitlements) and the **
   grants kept for review). All three are vetted by the deletion guard (a feed's default is `hold_all`): held removals
   stay as they are and keep their snapshot row until a second admin releases the hold (appliers
   `ingest.ReleaseIdentity`, `flatfile.ReleaseDrop`, `flatfile.ReleaseRetire`).
+- **Claiming existing accounts.** A person's email can match accounts in connector systems that nobody owns yet; the
+  next sync correlates them to the person, who then holds their access. The plan of a people import lists, per added or
+  changed person, how many such accounts (active or not, other systems only, username or account id equal to the email)
+  they would claim and in which systems (`plan.claims`: `key, email, accounts, systems`); the UI shows it before *Apply*.
+  Nothing is listed when the tenant's correlation order (Admin > Identity rules) has no email key. The apply records the
+  admin's platform user id as `imported_by` of each row, and access-review routing (`reviews.avoidImporter`) never makes
+  that admin (or another account of the same person) the manager-reviewer of a person they imported or last edited: the
+  item goes to the review type's fallback reviewer, else the security lead. Rows an earlier server wrote hold the display
+  name and are not matched.
+- **Re-imports** keep what other admins changed: `Requestable` of an entitlement is set when it is created only (an
+  entitlement retired by a removal stays retired if the file lists it again; a catalog admin re-enables it), and a
+  person already terminated keeps their `terminated_at`.
+- **Deletion guard per source.** The people of a manual source are their own guard key (`SourceRef` kind `connection`, id
+  the source; hold correlation `ingest:identities:<source>`): removals are judged against the source's size
+  (`DiscoveryResult.Population`, a percent limit of it) and its feed against its own last good run (`FeedRecords`, the rows
+  the file lists, not the people it dropped), never against all the tenant's identities. The window is the guard's own.
 - **Limits.** 5 MiB, 10,000 rows, 64 columns, 256 characters a cell, UTF-8 with a header row; binary or non-UTF-8
   input is `not_utf8`. A cell that starts `= + - @` in an identifier column is refused; in a text column it is stored
   with a leading apostrophe. Every export neutralises such cells again (`toCsv`, `flatfile.Neutralize`). The request

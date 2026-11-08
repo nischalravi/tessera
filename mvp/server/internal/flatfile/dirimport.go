@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
+	"github.com/nischalravi/tessera/mvp/server/internal/idrules"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -64,9 +66,20 @@ type ImportInput struct {
 	Filename string
 	Raw      []byte
 	By       string
+	// ByUser is the platform user id of By, "" when the caller is no user.
+	ByUser string
 	// Reserved are the systems a configured connector writes to without a connection row (TESSERA_CONNECTORS):
 	// an import refuses them as it refuses a connection's system.
 	Reserved map[string]bool
+}
+
+// importer is who the snapshot names as the last to change a row: the admin's platform user id when known (review
+// routing compares it with a reviewer's accounts), else the display name.
+func (in ImportInput) importer() string {
+	if in.ByUser != "" {
+		return in.ByUser
+	}
+	return in.By
 }
 
 // ImportOutcome is what an applied import did.
@@ -465,7 +478,7 @@ func (d *dirPrep) store(c *store.TenantTx, now time.Time, keep map[string]bool) 
 	for _, r := range d.recs {
 		if touched[r.Key] {
 			if err := c.PutImportRecord(&store.ImportRecord{System: d.in.System, Kind: d.kind, Key: r.Key, Data: r.Data(), Hash: r.Hash,
-				ImportedBy: d.in.By, ImportedAt: now}); err != nil {
+				ImportedBy: d.in.importer(), ImportedAt: now}); err != nil {
 				return err
 			}
 		}
@@ -607,27 +620,95 @@ func peopleConflicts(c *store.TenantTx, d *dirPrep, rowOf map[string]int) []RowE
 
 func (d *dirPrep) plan(c *store.TenantTx) (*Plan, error) {
 	pl := d.basePlan()
+	if len(d.errs) == 0 && d.kind == store.ImportPeople {
+		var err error
+		if pl.Claims, err = d.claims(c); err != nil {
+			return nil, err
+		}
+	}
 	if len(d.errs) > 0 || pl.Removed == 0 {
 		return pl, nil
 	}
 	return pl, d.guard(c, pl)
 }
 
+// claims finds, per person the file adds or changes, the existing accounts in other systems that have no owner
+// and carry the person's email (as username or account id): ingest correlates an account to an identity by email
+// when the tenant's correlation order has it, so the next sync of that system hands the person those accounts.
+func (d *dirPrep) claims(c *store.TenantTx) ([]Claim, error) {
+	rules, _, err := idrules.Load(c)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Contains(rules.CorrelationOrder, idrules.KeyEmail) {
+		return nil, nil
+	}
+	touched := map[string]bool{}
+	for _, ch := range d.delta.Added {
+		touched[ch.Key] = true
+	}
+	for _, ch := range d.delta.Changed {
+		touched[ch.Key] = true
+	}
+	if len(touched) == 0 {
+		return nil, nil
+	}
+	accts, err := c.Accounts()
+	if err != nil {
+		return nil, err
+	}
+	byEmail := map[string]map[string]int{} // email -> system -> accounts
+	for _, a := range accts {
+		if a.IdentityID != nil || a.System == d.in.System {
+			continue
+		}
+		for _, k := range []string{strings.ToLower(a.Username), strings.ToLower(a.ExternalID)} {
+			if !strings.Contains(k, "@") {
+				continue
+			}
+			if byEmail[k] == nil {
+				byEmail[k] = map[string]int{}
+			}
+			byEmail[k][a.System]++
+			if k == strings.ToLower(a.Username) {
+				break // one account, one claim, though both fields carry the email
+			}
+		}
+	}
+	var out []Claim
+	for _, r := range d.recs {
+		sys := byEmail[r.Fields["email"]]
+		if !touched[r.Key] || len(sys) == 0 {
+			continue
+		}
+		cl := Claim{Key: r.Key, Email: r.Fields["email"]}
+		for s, n := range sys {
+			cl.Accounts += n
+			cl.Systems = append(cl.Systems, s)
+		}
+		sort.Strings(cl.Systems)
+		out = append(out, cl)
+	}
+	return out, nil
+}
+
 func (d *dirPrep) guard(c *store.TenantTx, pl *Plan) error {
 	switch d.kind {
 	case store.ImportPeople:
-		pop, err := c.DeletionPopulation(deleteguard.CatIdentities)
-		if err != nil {
-			return err
-		}
+		// the source's own size is the basis, as ingest judges it (SourceID and Population of apply)
+		pop := len(d.prev)
+		ref := deleteguard.SourceRef{Kind: deleteguard.SrcConnection, ID: d.in.System}
 		gone := 0
 		for _, r := range d.delta.Removed {
 			if i, err := c.IdentityByExternalID(r.Key); err == nil && i.Status == "active" {
 				gone++
 			}
 		}
-		// as ingest judges the feed of a result that names no connection: against the tenant's identities
-		sanity, err := deleteguard.CheckFeed(c, deleteguard.SourceRef{}, deleteguard.CatIdentities, pop, len(d.recs)+len(d.delta.Removed), "")
+		prev, err := deleteguard.PreviousCount(c, ref, deleteguard.CatIdentities, pop)
+		if err != nil {
+			return err
+		}
+		sanity, err := deleteguard.CheckFeed(c, ref, deleteguard.CatIdentities, prev, len(d.recs), "")
 		if err != nil {
 			return err
 		}
@@ -641,10 +722,20 @@ func (d *dirPrep) guard(c *store.TenantTx, pl *Plan) error {
 	}
 }
 
+// endedAt is when a person ended: the time already recorded for one who is terminated, else now. A re-import
+// of a terminated row does not move the date.
+func endedAt(c *store.TenantTx, xid string, now time.Time) time.Time {
+	if i, err := c.IdentityByExternalID(xid); err == nil && i.Status == "terminated" && i.TerminatedAt != nil {
+		return *i.TerminatedAt
+	}
+	return now
+}
+
 // apply writes the people through ingest.Import (identities, the manager reference, the deletion guard's
 // vetting of every person turned inactive) and updates the snapshot. It answers how many removals were held.
 func (d *dirPrep) apply(c *store.TenantTx, now time.Time) (int, error) {
-	res := &connectors.DiscoveryResult{System: d.in.System}
+	// the source is its own guard key: its removals and feed are judged against its size, not the tenant's
+	res := &connectors.DiscoveryResult{System: d.in.System, SourceID: d.in.System, Population: len(d.prev), FeedRecords: len(d.recs)}
 	for _, r := range d.recs {
 		f := r.Fields
 		rec := connectors.IdentityRecord{ExternalID: r.Key, Name: f["name"], Type: "human", Email: strp(f["email"]),
@@ -653,7 +744,7 @@ func (d *dirPrep) apply(c *store.TenantTx, now time.Time) (int, error) {
 			rec.Manager = &connectors.IdentityRef{Email: f["manager_email"]}
 		}
 		if f["status"] == "terminated" {
-			t := now
+			t := endedAt(c, r.Key, now)
 			rec.TerminatedAt = &t
 		}
 		res.Identities = append(res.Identities, rec)
@@ -664,7 +755,7 @@ func (d *dirPrep) apply(c *store.TenantTx, now time.Time) (int, error) {
 	}
 	for _, r := range d.delta.Removed {
 		f := fieldsOf(prevData[r.Key])
-		t := now
+		t := endedAt(c, r.Key, now)
 		res.Identities = append(res.Identities, connectors.IdentityRecord{ExternalID: r.Key, Name: f["name"], Type: "human",
 			Email: strp(f["email"]), Department: strp(f["department"]), Title: strp(f["title"]), Status: "terminated", TerminatedAt: &t})
 	}
@@ -828,8 +919,15 @@ func (d *dirPrep) applyEntitlements(c *store.TenantTx, now time.Time) (held int,
 	res := &connectors.DiscoveryResult{System: d.in.System}
 	for _, r := range d.recs {
 		f := r.Fields
+		// requestable is set when the entitlement is created only: a catalog admin may have changed it since
+		requestable := true
+		if g, err := c.GroupByXID(d.in.System, r.Key); err == nil {
+			requestable = g.Requestable
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return 0, "", err
+		}
 		res.Groups = append(res.Groups, connectors.GroupRecord{System: d.in.System, ExternalID: r.Key, Name: f["name"], Kind: f["kind"],
-			Privileged: f["privileged"] == "true", Requestable: true, Description: strp(f["description"])})
+			Privileged: f["privileged"] == "true", Requestable: requestable, Description: strp(f["description"])})
 	}
 	if _, err := ingest.Import(c, now, res); err != nil {
 		return 0, "", err
@@ -890,6 +988,7 @@ type RecordInput struct {
 	// Fields by canonical column name (AccountColumns, PeopleColumns, EntitlementColumns).
 	Fields map[string]string
 	By     string
+	ByUser string // see ImportInput
 	// Reserved: see ImportInput.
 	Reserved map[string]bool
 }
@@ -957,7 +1056,7 @@ func UpsertRecord(c *store.TenantTx, now time.Time, in RecordInput) (*ImportOutc
 		_ = w.Write(line)
 	}
 	w.Flush()
-	return ApplyImport(c, now, ImportInput{System: in.System, Name: in.Name, Target: in.Target, Filename: "form.csv", Raw: []byte(b.String()), By: in.By,
+	return ApplyImport(c, now, ImportInput{System: in.System, Name: in.Name, Target: in.Target, Filename: "form.csv", Raw: []byte(b.String()), By: in.By, ByUser: in.ByUser,
 		Reserved: in.Reserved})
 }
 

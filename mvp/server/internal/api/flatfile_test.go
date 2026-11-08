@@ -464,3 +464,24 @@ func TestFlatfileAPI_ACorrectedFeedWithdrawsHeldRemovals(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Security review of #915: a flat-file app may not be created on a system a configured connector writes to
+// (the test server's "tiny"), even before the connector's first sync has put data there.
+func TestFlatFileAPI_RefusesAConfiguredConnectorsSystem(t *testing.T) {
+	e := newFFEnv(t)
+	rec := e.json(e.admin, "PUT", "/api/flatfile/apps/tiny/mapping", ffMapping)
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "a connector already feeds the system tiny") {
+		t.Fatalf("PUT: %d %s, want 409", rec.Code, rec.Body)
+	}
+	if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
+		if _, err := c.FlatMapping("tiny"); err == nil {
+			t.Error("the refused request saved a mapping")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := e.json(e.admin, "PUT", "/api/flatfile/apps/hr-app/mapping", ffMapping); rec.Code != 201 {
+		t.Errorf("a free system: %d %s", rec.Code, rec.Body)
+	}
+}

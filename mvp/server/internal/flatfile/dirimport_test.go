@@ -562,3 +562,131 @@ func TestImport_AuditNamesTheFileAndTheKeys(t *testing.T) {
 		}
 	})
 }
+
+func TestImport_PlanReportsTheExistingAccountsAPersonWouldClaim(t *testing.T) {
+	e := newEnv(t)
+	e.tx(func(c *store.TenantTx) error {
+		for _, a := range []*store.Account{
+			{System: "okta", ExternalID: "o1", Username: "P00@t.example", Kind: "user", Status: "active"},
+			{System: "github", ExternalID: "g1", Username: "p00@t.example", Kind: "user", Status: "active"},
+			{System: "github", ExternalID: "g2", Username: "p01@t.example", Kind: "user", Status: "active"},
+			{System: "okta", ExternalID: "o2", Username: "p02-handle", Kind: "user", Status: "active"}, // no email: not matched
+		} {
+			if err := c.UpsertAccount(a); err != nil {
+				return err
+			}
+		}
+		// an account somebody owns is not claimed
+		ids, err := c.Identities()
+		if err != nil || len(ids) == 0 {
+			t.Fatalf("identities: %v", err)
+		}
+		a, err := c.AccountByXID("github", "g2")
+		if err != nil {
+			return err
+		}
+		a.IdentityID = &ids[0].ID
+		return c.UpsertAccount(a)
+	})
+	_, pl, err := e.imp(flatfile.TargetPeople, people(3), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []flatfile.Claim
+	for _, c := range pl.Claims {
+		if c.Key == "p00@t.example" || c.Key == "p01@t.example" || c.Key == "p02@t.example" {
+			got = append(got, c)
+		}
+	}
+	if len(got) != 1 || got[0].Key != "p00@t.example" || got[0].Accounts != 2 || strings.Join(got[0].Systems, ",") != "github,okta" {
+		t.Fatalf("claims = %+v", pl.Claims)
+	}
+	// nothing is written by the plan, and the same rows are not claims once the person exists unchanged
+	if out, _, err := e.imp(flatfile.TargetPeople, people(3), true); err != nil || out == nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if _, pl, _ = e.imp(flatfile.TargetPeople, people(3), false); len(pl.Claims) != 0 {
+		t.Errorf("unchanged people claim %+v", pl.Claims)
+	}
+}
+
+func TestImport_ReimportKeepsRequestableAndTheTerminationDate(t *testing.T) {
+	e := newEnv(t)
+	if _, _, err := e.imp(flatfile.TargetEntitlements, "name,external_id,description\nReaders,rd,one\nWriters,wr,one\n", true); err != nil {
+		t.Fatal(err)
+	}
+	e.tx(func(c *store.TenantTx) error { // a catalog admin takes Readers out of the catalog
+		g, err := c.GroupByXID(dsys, "rd")
+		if err != nil {
+			return err
+		}
+		g.Requestable = false
+		return c.UpsertGroup(g)
+	})
+	if _, _, err := e.imp(flatfile.TargetEntitlements, "name,external_id,description\nReaders,rd,two\nWriters,wr,one\nNew,nw,\n", true); err != nil {
+		t.Fatal(err)
+	}
+	e.read(func(c *store.TenantTx) {
+		if g, _ := c.GroupByXID(dsys, "rd"); g.Requestable || g.Description == nil || *g.Description != "two" {
+			t.Errorf("rd = %+v: the description follows the file, requestable stays as the admin set it", g)
+		}
+		if g, _ := c.GroupByXID(dsys, "nw"); !g.Requestable {
+			t.Error("a new entitlement is requestable")
+		}
+	})
+
+	csv := "email,name,department,status\nleaver@t.example,Leaver,Ops,terminated\nstay@t.example,Stay,Ops,active\n"
+	if _, _, err := e.imp(flatfile.TargetPeople, csv, true); err != nil {
+		t.Fatal(err)
+	}
+	first := e.identity("leaver@t.example").TerminatedAt
+	if first == nil {
+		t.Fatal("the terminated person has no termination date")
+	}
+	e.now = e.now.Add(48 * time.Hour)
+	if _, _, err := e.imp(flatfile.TargetPeople, strings.Replace(csv, "Ops,terminated", "Sales,terminated", 1), true); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.identity("leaver@t.example"); got.TerminatedAt == nil || !got.TerminatedAt.Equal(*first) || got.Department == nil || *got.Department != "Sales" {
+		t.Errorf("leaver = %+v, want the first date %v kept and the new department", got, first)
+	}
+}
+
+func TestImport_PeopleRemovalsAreJudgedAgainstTheSourcesOwnSize(t *testing.T) {
+	e := newEnv(t)
+	if out, _, err := e.imp(flatfile.TargetPeople, people(60), true); err != nil || out.Held != 0 {
+		t.Fatalf("seed: %+v %v", out, err)
+	}
+	e.tx(func(c *store.TenantTx) error { // other sources make the tenant's identities far more than this source's
+		res := &connectors.DiscoveryResult{System: "hr-other"}
+		for i := 0; i < 100; i++ {
+			res.Identities = append(res.Identities, connectors.IdentityRecord{ExternalID: fmt.Sprintf("o%03d@x.example", i), Name: "Other", Type: "human"})
+		}
+		_, err := ingest.Import(c, e.now, res)
+		return err
+	})
+	var tenantPop int
+	e.read(func(c *store.TenantTx) { tenantPop, _ = c.DeletionPopulation(deleteguard.CatIdentities) })
+	pct := 10.0
+	e.tx(func(c *store.TenantTx) error {
+		return deleteguard.Set(c, deleteguard.Policy{Category: deleteguard.CatIdentities, MaxPercent: &pct, WindowMinutes: 60, Mode: deleteguard.ModeHoldExcess}, nil, e.now)
+	})
+	// 10% of the source's 60 people is 6; of the tenant's identities it would be 16
+	if tenantPop < 150 {
+		t.Fatalf("the tenant has only %d identities: the test needs a population much larger than the source", tenantPop)
+	}
+	_, pl, err := e.imp(flatfile.TargetPeople, people(50), false)
+	if err != nil || pl.Guard == nil || pl.Guard.Active != 60 || pl.Guard.Limit == nil || *pl.Guard.Limit != 6 || !pl.Guard.WouldHold {
+		t.Fatalf("plan guard = %+v, %v", pl.Guard, err)
+	}
+	out, _, err := e.imp(flatfile.TargetPeople, people(50), true)
+	if err != nil || out.Held != 4 {
+		t.Fatalf("apply = %+v, %v: want 6 removed and 4 held under the source's own limit", out, err)
+	}
+	e.read(func(c *store.TenantTx) {
+		hs, err := c.DeletionHolds("held", deleteguard.CatIdentities, 10, 0)
+		if err != nil || len(hs) != 1 || hs[0].CorrelationID != "ingest:identities:"+dsys {
+			t.Errorf("holds = %+v, %v: the hold is the source's own", hs, err)
+		}
+	})
+}

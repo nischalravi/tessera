@@ -195,7 +195,7 @@ type pendingMembership struct {
 
 // build returns the units reviewed and the membership items to insert (the
 // rest are auto-certified).
-func (v *roleView) build(now time.Time, people map[int64]*store.Identity,
+func (v *roleView) build(c *store.TenantTx, now time.Time, people map[int64]*store.Identity,
 	securityLead *store.Identity) (total int, out []pendingMembership, err error) {
 	if v.scoped() { // every member of a scoped role is certified, with or without risky grants
 		for iid, ms := range v.members {
@@ -276,6 +276,9 @@ func (v *roleView) build(now time.Time, people map[int64]*store.Identity,
 			}
 		}
 		reviewer = avoidSelf(v.resolver, ident, reviewer, securityLead)
+		if reviewer, err = avoidImporter(c, v.resolver, ident, reviewer, securityLead); err != nil {
+			return 0, nil, err
+		}
 		var reviewerID *int64
 		if reviewer != nil {
 			reviewerID = &reviewer.ID

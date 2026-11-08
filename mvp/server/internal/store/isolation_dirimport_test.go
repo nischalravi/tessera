@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
@@ -42,6 +43,22 @@ func TestIsolation_DirimportReads(t *testing.T) {
 		}
 		if s, err := c.ImportRecordSource("people", "pat@x.example"); err != nil || s != "hr-sheet" {
 			t.Errorf("ImportRecordSource = %q, %v", s, err)
+		}
+		return nil
+	})
+	// who imported a person is read per tenant: B's row says "admin", A's later edit does not leak
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		return c.PutImportRecord(&store.ImportRecord{System: "hr-sheet", Kind: "people", Key: "pat@x.example", Data: "{}", Hash: "h2",
+			ImportedBy: "a-admin", ImportedAt: storetest.Now.Add(time.Hour)})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if by, err := c.ImportedByOf("people", "pat@x.example"); err != nil || by != "admin" {
+			t.Errorf("ImportedByOf = %q, %v, want B's own admin", by, err)
+		}
+		if by, err := c.ImportedByOf("people", "nobody@x.example"); err != nil || by != "" {
+			t.Errorf("ImportedByOf(unknown) = %q, %v", by, err)
 		}
 		return nil
 	})
@@ -94,5 +111,5 @@ func TestIsolation_DirimportWritesScoped(t *testing.T) {
 }
 
 func dirimportCovered() map[string]bool {
-	return map[string]bool{"PutImportRecord": true, "ImportRecords": true, "DeleteImportRecord": true, "ImportSources": true, "ImportRecordSource": true} // TestIsolation_Dirimport*
+	return map[string]bool{"PutImportRecord": true, "ImportRecords": true, "DeleteImportRecord": true, "ImportSources": true, "ImportRecordSource": true, "ImportedByOf": true} // TestIsolation_Dirimport*
 }

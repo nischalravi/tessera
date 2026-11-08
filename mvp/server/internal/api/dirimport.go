@@ -140,7 +140,7 @@ func (s *Server) readImport(r *http.Request, p *params) (flatfile.ImportInput, e
 	if err != nil {
 		return in, err
 	}
-	return flatfile.ImportInput{System: *system, Name: name, Target: *target, Filename: filename, Raw: raw, By: actor(r), Reserved: reserved}, nil
+	return flatfile.ImportInput{System: *system, Name: name, Target: *target, Filename: filename, Raw: raw, By: actor(r), ByUser: userID(r), Reserved: reserved}, nil
 }
 
 const (
@@ -162,12 +162,16 @@ type planView struct {
 	Changes          []flatfile.Change      `json:"changes"`
 	ChangesTruncated bool                   `json:"changes_truncated"`
 	Guard            *flatfile.GuardPreview `json:"guard"`
+	Claims           []flatfile.Claim       `json:"claims"`
 }
 
 func viewPlan(pl *flatfile.Plan) planView {
 	errs, chs := pl.Errors, pl.Changes
 	v := planView{System: pl.System, Target: pl.Kind, Rows: pl.RowsTotal, Added: pl.Added, Changed: pl.Changed, Removed: pl.Removed,
-		Unchanged: pl.Unchanged, ErrorCount: len(errs), Guard: pl.Guard}
+		Unchanged: pl.Unchanged, ErrorCount: len(errs), Guard: pl.Guard, Claims: pl.Claims}
+	if v.Claims == nil {
+		v.Claims = []flatfile.Claim{}
+	}
 	if v.ErrorsTruncated = len(errs) > maxPlanErrors; v.ErrorsTruncated {
 		errs = errs[:maxPlanErrors]
 	}
@@ -264,7 +268,7 @@ func (s *Server) putManualRecord(r *http.Request, _ *params) (int, any, error) {
 		return 0, nil, err
 	}
 	res, err := flatfile.UpsertRecord(store.TxFrom(r.Context()), s.clock(), flatfile.RecordInput{System: b.System, Name: strings.TrimSpace(b.Name),
-		Target: b.Target, Fields: b.Fields, By: actor(r), Reserved: reserved})
+		Target: b.Target, Fields: b.Fields, By: actor(r), ByUser: userID(r), Reserved: reserved})
 	out, err := s.finishImport(res, err)
 	if err != nil {
 		return 0, nil, err
@@ -353,4 +357,12 @@ func (s *Server) manualLookup(r *http.Request, p *params) (int, any, error) {
 	}
 	out["managed"], out["fields"] = true, flatfile.RecordFields(data)
 	return http.StatusOK, out, nil
+}
+
+// userID is the signed-in platform user's id, "" for a caller that is no user (an API client).
+func userID(r *http.Request) string {
+	if id := actorUser(r); id != nil {
+		return *id
+	}
+	return ""
 }
