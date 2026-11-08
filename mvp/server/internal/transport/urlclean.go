@@ -54,13 +54,28 @@ func suspicious(s string) bool {
 // cleanString returns the string to export and what happened to it. s is read as a lenient URL parser reads it
 // (urlshape.Classify): a URL written without "//" after the scheme, with backslash separators or with tabs and line
 // breaks in them is cleaned as its "scheme://" form, and a value with another scheme prefix, no authority and an
-// "@" ("user:pass@host") is left out.
+// "@" ("user:pass@host") is left out. A value that reads differently folded (urlshape.Fold: zero-width characters,
+// fullwidth "\uff1a" "\uff0f" "\uff20", issue #932) is left out whole unless its folded form would be kept as is.
 func cleanString(s string) (string, cleanVerdict) {
+	out, v := cleanRaw(s)
+	if f := urlshape.Fold(s); f != s && v != verdictExcluded {
+		if _, fv := cleanRaw(f); fv != verdictKeep {
+			// the folded value has something to strip: s's own cleaning is exported only if nothing is left to strip
+			// in its folded form (" https://u:p@h" cleans to "https://h")
+			if _, ov := cleanRaw(urlshape.Fold(out)); v != verdictCleaned || ov != verdictKeep {
+				return "", verdictExcluded
+			}
+		}
+	}
+	return out, v
+}
+
+func cleanRaw(s string) (string, cleanVerdict) {
 	switch canon, sh := urlshape.Classify(s); {
 	case sh == urlshape.Opaque && strings.Contains(canon, "@"):
 		return "", verdictExcluded
 	case sh == urlshape.Authority && canon != s:
-		out, v := cleanString(canon)
+		out, v := cleanRaw(canon)
 		if v == verdictKeep {
 			return s, verdictKeep // nothing to strip: exported as written
 		}
@@ -194,6 +209,7 @@ func overlayExportable(body string) bool {
 		}
 		return true
 	}
+	body = urlshape.Fold(body) // only scanned below, never exported folded (issue #932)
 	if textSecret.MatchString(body) || credPairRe.MatchString(body) || dsnSchemeRe.MatchString(body) || bearerRe.MatchString(body) {
 		return false
 	}

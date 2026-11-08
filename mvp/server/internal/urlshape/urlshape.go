@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Shape is how a value reads as a URL.
@@ -99,4 +101,38 @@ func slashes(s string) string {
 		end = len(s)
 	}
 	return strings.ReplaceAll(s[:end], `\`, "/") + s[end:]
+}
+
+// Fold returns v as a reader sees it, for detection only (issue #932): Unicode format characters (zero-width space
+// and joiners, bidi marks, soft hyphen, BOM) dropped, then NFKC, which reads compatibility forms as the ASCII
+// characters they render as: fullwidth "\uff1a" "\uff0f" "\uff20" "\uff3c" "\uff1f" "\uff03" "\uff0e" and
+// letters, small forms "\ufe55" "\ufe6b". The ideographic full stops IDNA reads as "." (U+3002, U+FF61) are read as
+// "." too. A credentialed URL written with any of them is still a credential to whoever reads the value, so the
+// refusal, the masks and the export cleaner look at Fold(v) as well as v. Never store or export the result.
+func Fold(v string) string {
+	if isASCII(v) {
+		return v
+	}
+	drop := func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}
+	s := strings.Map(drop, norm.NFKC.String(strings.Map(drop, v)))
+	return strings.Map(func(r rune) rune {
+		if r == '\u3002' || r == '\uff61' {
+			return '.'
+		}
+		return r
+	}, s)
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
