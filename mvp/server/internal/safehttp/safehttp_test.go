@@ -596,6 +596,25 @@ func TestNumericHostForms(t *testing.T) {
 	}
 }
 
+// TestNonASCIIHosts: a Unicode host, written so or percent-encoded, is refused
+// before any lookup without being echoed; its punycode form is a name.
+func TestNonASCIIHosts(t *testing.T) {
+	c := client(t, safehttp.Options{Env: config.Prod, Resolver: dns(map[string][][]string{
+		"xn--bcher-kva.example": {{"8.8.8.8"}}})})
+	for _, u := range []string{"https://b\u00fccher.example:1/", "https://h\u2215x.example:1/",
+		"https://h%E2%88%95x.example:1/", "https://\uff45xample.com:1/"} {
+		_, err := get(c, u)
+		if !errors.Is(err, safehttp.ErrURL) {
+			t.Errorf("%s: %v, want ErrURL", u, err)
+		} else if ue := (*url.Error)(nil); errors.As(err, &ue) && strings.Contains(ue.Err.Error(), "xample") {
+			t.Errorf("%s: error echoes the host: %v", u, err)
+		}
+	}
+	if _, err := get(c, "https://xn--bcher-kva.example:1/"); errors.Is(err, safehttp.ErrURL) {
+		t.Errorf("punycode host refused: %v", err)
+	}
+}
+
 // TestIPv6Zones: an IPv6 literal with a zone (%25 in a URL) is refused,
 // including the zoned forms of the dev loopback ::1 and of public addresses,
 // and a zoned address in a DNS answer is refused at the dial.

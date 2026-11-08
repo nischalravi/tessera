@@ -22,7 +22,7 @@ const URLMask = "masked"
 // CodeURLCredentialsRefused is the error code of a URL setting that carries credentials or a query string.
 const CodeURLCredentialsRefused = "url_credentials_refused"
 
-// CodeURLNonASCIIAuthority is the error code of a base_url or org_url whose scheme or authority is not ASCII.
+// CodeURLNonASCIIAuthority is the error code of a base_url, org_url or URL setting whose scheme or authority is not ASCII.
 const CodeURLNonASCIIAuthority = "url_non_ascii_authority"
 
 // urlSetting reports whether a settings entry holds a URL (urlshape.URLSetting: its key names one, or its value reads
@@ -410,7 +410,7 @@ func privilegedRisk(cur, cfg ConnConfig) bool {
 	return false
 }
 
-// urlASCIIError refuses a base_url or org_url, changed from cur, whose scheme or authority holds a non-ASCII
+// urlASCIIError refuses a base_url, org_url or URL-valued setting, changed from cur, whose scheme or authority holds a non-ASCII
 // character (urlshape.NonASCIIHead). The value is never echoed.
 func urlASCIIError(cur, cfg ConnConfig) error {
 	var bad []FieldError
@@ -419,6 +419,20 @@ func urlASCIIError(cur, cfg ConnConfig) error {
 	}
 	if cfg.BaseURL != cur.BaseURL && urlshape.NonASCIIHead(cfg.BaseURL) {
 		bad = append(bad, FieldError{"base_url", "scheme and host must be ASCII; give an international host name as punycode (xn--)"})
+	}
+	keys := make([]string, 0, len(cfg.Settings))
+	for k := range cfg.Settings {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		// a URL-valued setting (a token or SCIM endpoint, say) is fetched like base_url: the same rule, for a value
+		// that names a host as written or folded
+		v := cfg.Settings[k]
+		if v != cur.Settings[k] && urlSetting(k, v) && urlshape.NonASCIIHead(v) &&
+			(urlshape.HasAuthority(v) || urlshape.HasAuthority(urlshape.Fold(v))) {
+			bad = append(bad, FieldError{"settings." + k, "scheme and host must be ASCII; give an international host name as punycode (xn--)"})
+		}
 	}
 	if len(bad) == 0 {
 		return nil

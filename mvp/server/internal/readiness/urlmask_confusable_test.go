@@ -72,3 +72,39 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// URL-valued settings follow the same ASCII-authority rule; plain text settings and legitimate URLs do not trip it.
+func TestConfusableURLSettings(t *testing.T) {
+	for _, v := range []string{"https∶//h.example/token", "https://bücher.example/token", "https:̸//h.example",
+		"https://h%E2%88%95x.example/token", "httpsː//h.example", "https:ノノh.example"} {
+		cfg := ConnConfig{Settings: map[string]string{"token_url": v}}
+		err := urlCredentialError(ConnConfig{}, cfg)
+		e, ok := err.(*Error)
+		if !ok || e.Code != CodeURLNonASCIIAuthority || len(e.Fields) != 1 || e.Fields[0].Field != "settings.token_url" {
+			t.Errorf("token_url=%q: err = %v", v, err)
+			continue
+		}
+		if contains(e.Msg+e.Fields[0].Msg, v) {
+			t.Errorf("error echoes %q", v)
+		}
+		if err := urlCredentialError(cfg, cfg); err != nil {
+			t.Errorf("unchanged token_url=%q refused: %v", v, err)
+		}
+	}
+	// a combining mark between the colon and the slashes still hides no credential
+	cfg := ConnConfig{Settings: map[string]string{"token_url": "https:̸//u:p@h.example"}}
+	if err := urlCredentialError(ConnConfig{}, cfg); err == nil {
+		t.Error("combining-mark credential URL accepted")
+	}
+	for _, s := range []map[string]string{
+		{"token_url": "https://xn--bcher-kva.example/t"},
+		{"token_url": "https://[2001:db8::1]:8443/t"},
+		{"token_url": "https://h.example:8443/a@b/café"},
+		{"display_name": "Bücher GmbH"},
+		{"endpoint_note": "Büro"},
+	} {
+		if err := urlCredentialError(ConnConfig{}, ConnConfig{Settings: s}); err != nil {
+			t.Errorf("%v refused: %v", s, err)
+		}
+	}
+}

@@ -105,7 +105,8 @@ func slashes(s string) string {
 
 // Fold returns v as a reader sees it, for detection only (issue #932): Unicode format characters (zero-width space
 // and joiners, bidi marks, soft hyphen, BOM) dropped, then NFKC, which reads compatibility forms as the ASCII
-// characters they render as: fullwidth "\uff1a" "\uff0f" "\uff20" "\uff3c" "\uff1f" "\uff03" "\uff0e" and
+// characters they render as, then combining marks NFKC left uncomposed are dropped and the look-alikes in
+// confusables read as ":" and "/": fullwidth "\uff1a" "\uff0f" "\uff20" "\uff3c" "\uff1f" "\uff03" "\uff0e" and
 // letters, small forms "\ufe55" "\ufe6b". The ideographic full stops IDNA reads as "." (U+3002, U+FF61) are read as
 // "." too. A credentialed URL written with any of them is still a credential to whoever reads the value, so the
 // refusal, the masks and the export cleaner look at Fold(v) as well as v. Never store or export the result.
@@ -121,6 +122,10 @@ func Fold(v string) string {
 	}
 	s := strings.Map(drop, norm.NFKC.String(strings.Map(drop, v)))
 	return strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Mn, r) {
+			// a combining mark NFKC did not compose ("https:\u0338//"): the separator under it still reads as one
+			return -1
+		}
 		if r == '\u3002' || r == '\uff61' {
 			return '.'
 		}
@@ -131,21 +136,29 @@ func Fold(v string) string {
 	}, s)
 }
 
-// confusables are look-alikes of URL separators that NFKC leaves alone (fold_test.go checks each entry against NFKC,
-// so the table holds only what NFKC misses). Colon: ratio, modifier letter colon, Armenian full stop, Hebrew sof
-// pasuq, Syriac supralinear and sublinear colon, runic cross punctuation, Ethiopic colon, modifier letter triangular
-// colon (U+FE30 is not here: NFKC reads it as ".."). Slash: fraction slash, division slash, big solidus, box drawings
-// diagonal, vertical kana repeat mark upper half. No "@" look-alike survives NFKC unhandled (U+FF20 and U+FE6B are
-// NFKC forms). Detection only, like Fold.
+// confusables are look-alikes of URL separators that NFKC leaves alone: every entry of Unicode's confusables.txt
+// for ":" and "/" that NFKC does not already map (fold_test.go checks each entry against NFKC, so the table holds
+// only what NFKC misses; U+2F03 and U+FF89 reach U+4E3F and U+30CE through NFKC). Letters and signs are included
+// (modifier letter colons, visarga signs, katakana "no"): Fold is for detection only, and reading one as a separator
+// can only make a value look more like a credentialed URL, never less. No "@" look-alike survives NFKC (U+FF20 and
+// U+FE6B are NFKC forms).
 var confusables = map[rune]rune{
-	'\u2236': ':', '\ua789': ':', '\u0589': ':', '\u05c3': ':', '\u0703': ':', '\u0704': ':', '\u16ec': ':',
-	'\u1361': ':', '\u02f8': ':',
-	'\u2044': '/', '\u2215': '/', '\u29f8': '/', '\u2571': '/', '\u3033': '/',
+	// colon
+	'\u02d0': ':', '\u02f8': ':', '\u0589': ':', '\u05c3': ':', '\u0703': ':', '\u0704': ':', '\u0831': ':',
+	'\u0903': ':', '\u0a83': ':', '\u1361': ':', '\u1393': ':', '\u16ec': ':', '\u1803': ':', '\u1809': ':',
+	'\u205a': ':', '\u2236': ':', '\ua4fd': ':', '\ua789': ':', '\U00010aF5': ':', '\U0001015b': ':',
+	'\U00011002': ':', '\U00011082': ':', '\U00011182': ':', '\U000115be': ':', '\U000116ac': ':',
+	'\U00011838': ':', '\U0001123a': ':', '\U00011dd9': ':', '\U0001d108': ':',
+	// slash
+	'\u1735': '/', '\u2041': '/', '\u2044': '/', '\u2215': '/', '\u2571': '/', '\u27cb': '/', '\u29f8': '/',
+	'\u2cc6': '/', '\u2cc7': '/', '\u3033': '/', '\u30ce': '/', '\u31d2': '/', '\u31d3': '/', '\u4e3f': '/',
+	'\U0001d23a': '/',
 }
 
 // NonASCIIHead reports whether the scheme or authority of v holds a non-ASCII character: everything before the
 // first "/" or "\", and, when that starts "//", up to the next "/", "\", "?" or "#". A value without a "/" is
-// all head. International host names must be given as punycode, so a look-alike colon, slash or "@" in the head
+// all head. A percent-encoded non-ASCII byte in the head ("%E2%88%B6") counts as non-ASCII: parsers decode it in a
+// host. International host names must be given as punycode, so a look-alike colon, slash or "@" in the head
 // is refused rather than guessed at (issue #936).
 func NonASCIIHead(v string) bool {
 	s := strings.TrimSpace(v)
@@ -160,7 +173,22 @@ func NonASCIIHead(v string) bool {
 			}
 		}
 	}
-	return !isASCII(s[:end])
+	return !isASCII(s[:end]) || pctHigh(s[:end])
+}
+
+// pctHigh reports whether s holds a percent-encoded non-ASCII byte: net/url and WHATWG parsers decode "%E2%88%B6" in
+// a host to U+2236, so an ASCII-only head can still name a non-ASCII authority.
+func pctHigh(s string) bool {
+	for i := 0; i+2 < len(s); i++ {
+		if s[i] == '%' && strings.IndexByte("89abcdefABCDEF", s[i+1]) >= 0 && isHex(s[i+2]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isHex(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
 }
 
 func isASCII(s string) bool {

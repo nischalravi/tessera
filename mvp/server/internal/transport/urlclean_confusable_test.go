@@ -11,12 +11,14 @@ func TestCleanStringConfusableSeparators(t *testing.T) {
 			}
 		}
 	}
-	for _, s := range []string{"https:⁄⁄h.example", "https://u:p＠h.example", "https://h.example∕x@y"} {
+	for _, s := range []string{"https:⁄⁄h.example", "https://u:p＠h.example", "https://h.example∕x@y",
+		"https:\u0338//u:p@h.example", "https\u02d0//u:p@h.example", "https\u0903//h.example", "https:\u30ce\u30ceu:p@h.example"} {
 		if _, v := cleanString(s); v != verdictExcluded {
 			t.Errorf("cleanString(%q) = %v, want excluded", s, v)
 		}
 	}
-	for _, s := range []string{"https://api.example.com/v2", "https://xn--bcher-kva.example/x", "https://api.example.com/a@b"} {
+	for _, s := range []string{"https://api.example.com/v2", "https://xn--bcher-kva.example/x", "https://api.example.com/a@b",
+		"https://[2001:db8::1]:8443/x", "https://api.example.com/\u30ce\u30fc\u30c8"} {
 		if out, v := cleanString(s); v != verdictKeep || out != s {
 			t.Errorf("cleanString(%q) = %q, %v", s, out, v)
 		}

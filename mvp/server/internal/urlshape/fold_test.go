@@ -61,9 +61,32 @@ func TestNonASCIIHead(t *testing.T) {
 		"https:⁄/h":                        true,
 		"https://h∕x":                      true,
 		"\\\\bücher.example\\x":            true,
+		"https://h%E2%88%95x.example/":     true,
+		"https://h%e2%88%95x.example/":     true,
+		"https://[2001:db8::1]:8443/a%E2":  false,
+		"https://h.example:8443/a@b":       false,
+		"https:\u0338//u:p@h":              true,
+		"https\u202e://h":                  true,
 	} {
 		if got := NonASCIIHead(v); got != want {
 			t.Errorf("NonASCIIHead(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+// A combining mark under a separator does not hide it, and the look-alike letters of confusables.txt read as one.
+func TestFoldMarksAndLetters(t *testing.T) {
+	for v, want := range map[string]string{
+		"https:\u0338//u:p@h":          "https://u:p@h",
+		"https\u02d0//h":               "https://h",
+		"https\u0903//h":               "https://h",
+		"https:\u30ce\u30ceh":          "https://h",
+		"https:\u2f03\u2f03h":          "https://h",
+		"https:\uff89\uff89h":          "https://h",
+		"https\U0001d108\u27cb\u27cbh": "https://h",
+	} {
+		if got := Fold(v); got != want {
+			t.Errorf("Fold(%q) = %q, want %q", v, got, want)
 		}
 	}
 }

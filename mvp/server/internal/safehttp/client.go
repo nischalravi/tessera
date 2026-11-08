@@ -439,8 +439,8 @@ func checkURL(u *url.URL, o Options, configured ports) error {
 	return nil
 }
 
-// checkHost refuses host forms that are not a plain DNS name or a canonical
-// IP literal: an IPv6 zone (scoped, never a public endpoint), and names whose
+// checkHost refuses host forms that are not a plain ASCII DNS name or a
+// canonical IP literal: a non-ASCII name, an IPv6 zone (scoped, never a public endpoint), and names whose
 // last label is numeric, which inet_aton-style resolvers read as IPv4
 // (2130706433 and 0177.0.0.1 are 127.0.0.1; 0x7f.1 too).
 func checkHost(host string) error {
@@ -449,6 +449,14 @@ func checkHost(host string) error {
 			return fmt.Errorf("%w: %s has an IPv6 zone", ErrBlockedAddress, host)
 		}
 		return nil
+	}
+	for i := 0; i < len(host); i++ {
+		if host[i] >= 0x80 {
+			// a Unicode host (written so or percent-encoded) is mapped by IDNA before the lookup, so a look-alike
+			// separator or letter may name another host than the one checked: punycode only (issue #936). The
+			// host is not echoed.
+			return fmt.Errorf("%w: host must be ASCII; give an international name as punycode (xn--)", ErrURL)
+		}
 	}
 	if strings.ContainsAny(host, "%:[]") {
 		return fmt.Errorf("%w: invalid host %q", ErrURL, host)
