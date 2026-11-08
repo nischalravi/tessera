@@ -29,8 +29,16 @@ func urlSetting(k, v string) bool { return urlshape.URLSetting(k, v) }
 // urlRisk reports whether v carries userinfo, or (strict) a query string or fragment. v is read as a lenient URL
 // parser reads it (urlshape.Classify), so "https:u:p@h" and backslash or whitespace separators count as "https://".
 // strict also refuses an "@" in a value with any other scheme prefix ("u:p@host", "ldap:u:p@h"): whether such a
-// value names credentials depends on the reader.
+// value names credentials depends on the reader. v is also read folded (urlshape.Fold), so zero-width or fullwidth
+// separators ("https\u200b://", "https\uff1a//", "u:p\uff20h") do not hide a credential (issue #932).
 func urlRisk(v string, strict bool) bool {
+	if f := urlshape.Fold(v); f != v && rawURLRisk(f, strict) {
+		return true
+	}
+	return rawURLRisk(v, strict)
+}
+
+func rawURLRisk(v string, strict bool) bool {
 	canon, sh := urlshape.Classify(v)
 	if urlshape.Embedded(v) {
 		// a URL inside a longer value: refused as an unparseable value was before urlshape
@@ -56,6 +64,10 @@ func urlRisk(v string, strict bool) bool {
 // value with a scheme prefix, no authority and an "@" (urlRisk refuses it in base_url and org_url). v is read as
 // urlshape.Classify reads it; a masked value is shown in its "scheme://" form.
 func MaskURL(v string) string {
+	if f := urlshape.Fold(v); f != v && rawURLRisk(f, false) {
+		// a credential behind a zero-width or fullwidth separator (issue #932): nothing of it is shown
+		return URLMask
+	}
 	canon, sh := urlshape.Classify(v)
 	switch {
 	case sh == urlshape.Opaque && strings.Contains(canon, "@"),
@@ -140,6 +152,7 @@ func textTokenEnd(r rune) bool {
 // host, or any URL in it ("Ops team <https://u:p@h>", "see https:u:p@h"). A typed text field is never a URL by
 // design, so a URL anywhere in it is checked, not only one that starts the value.
 func textRisk(v string) bool {
+	v = urlshape.Fold(v) // zero-width and fullwidth separators (issue #932)
 	if urlshape.HasAuthority(v) {
 		return urlRisk(v, false)
 	}
@@ -159,6 +172,11 @@ func textRisk(v string) bool {
 // value holding a credentialed URL in longer text is masked whole. Anything else is returned unchanged.
 func maskText(v string) string {
 	if urlshape.HasAuthority(v) {
+		if strings.Count(urlshape.Fold(v), "@") > 1 && textRisk(v) {
+			// a second credentialed URL after the first ("https://a:b@h/ https://u:p@h2"): MaskURL masks only the
+			// userinfo net/url reads, so the value is masked whole
+			return URLMask
+		}
 		return MaskURL(v)
 	}
 	if textRisk(v) {

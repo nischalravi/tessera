@@ -873,9 +873,19 @@ func TestImport_PeopleMassReactivationIsHeldByTheGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.setPolicy(deleteguard.CatIdentities, 0, deleteguard.ModeHoldExcess)
-	if _, _, err := e.imp(flatfile.TargetPeople, people(4), true); err != nil {
+	held, _, err := e.imp(flatfile.TargetPeople, people(4), true)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if held.HeldRestores != 3 || held.RestoreHoldID == "" || held.Held != 0 {
+		t.Fatalf("outcome = %+v; want 3 held restores with a hold id and no held removals", held)
+	}
+	e.read(func(c *store.TenantTx) {
+		hs, _ := c.DeletionHolds("held", deleteguard.CatIdentities, 10, 0)
+		if len(hs) != 1 || hs[0].ID != held.RestoreHoldID {
+			t.Errorf("holds %+v; want the one the outcome names (%s)", hs, held.RestoreHoldID)
+		}
+	})
 	for i := 1; i < 4; i++ {
 		if st := e.identity(fmt.Sprintf("p%02d@t.example", i)).Status; st != "terminated" {
 			t.Fatalf("p%02d is %s; a batch over the limit must wait for a second admin", i, st)
