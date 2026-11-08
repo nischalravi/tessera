@@ -3,9 +3,10 @@ package readiness
 import (
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // URL-valued settings of a connection (issue #908). A URL carrying userinfo, or a query string or fragment on
@@ -19,49 +20,53 @@ const URLMask = "masked"
 // CodeURLCredentialsRefused is the error code of a URL setting that carries credentials or a query string.
 const CodeURLCredentialsRefused = "url_credentials_refused"
 
-var schemeRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.\-]*://`)
+// urlSetting reports whether a settings entry holds a URL (urlshape.URLSetting: its key names one, or its value reads
+// as a URL that names a host).
+func urlSetting(k, v string) bool { return urlshape.URLSetting(k, v) }
 
-// urlSetting reports whether a settings entry holds a URL: its key names one, or its value is an absolute URL.
-func urlSetting(k, v string) bool {
-	lk := strings.ToLower(k)
-	return strings.Contains(lk, "url") || strings.Contains(lk, "endpoint") || strings.Contains(lk, "uri") || schemeRe.MatchString(v)
-}
-
-// urlRisk reports whether v carries userinfo, or (strict) a query string or fragment.
+// urlRisk reports whether v carries userinfo, or (strict) a query string or fragment. v is read as a lenient URL
+// parser reads it (urlshape.Classify), so "https:u:p@h" and backslash or whitespace separators count as "https://".
+// strict also refuses an "@" in a value with any other scheme prefix ("u:p@host", "ldap:u:p@h"): whether such a
+// value names credentials depends on the reader.
 func urlRisk(v string, strict bool) bool {
-	if !hasAuthority(v) {
+	canon, sh := urlshape.Classify(v)
+	switch sh {
+	case urlshape.NotURL:
 		return false
+	case urlshape.Opaque:
+		return strict && strings.Contains(canon, "@")
 	}
-	u, err := url.Parse(v)
+	u, err := url.Parse(canon)
 	if err != nil {
-		return strings.ContainsAny(v, "@?#")
+		return strings.ContainsAny(canon, "@?#")
 	}
 	// strict: an "@" anywhere is refused, so a password holding "/", "?" or "#" (which net/url reads as the end of the
 	// authority) cannot slip through as a path, query or fragment
-	return u.User != nil || (strict && (u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsAny(v, "#@")))
-}
-
-// hasAuthority reports whether v may name a host with userinfo: it has a scheme separator or is scheme-relative.
-func hasAuthority(v string) bool {
-	return v != "" && (strings.Contains(v, "://") || strings.HasPrefix(strings.TrimSpace(v), "//"))
+	return u.User != nil || (strict && (u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsAny(canon, "#@")))
 }
 
 // MaskURL returns v with its userinfo, query values and fragment replaced by URLMask. A value with
-// none is returned unchanged. A value that cannot be parsed but may hold a credential is masked whole.
+// none is returned unchanged. A value that cannot be parsed but may hold a credential is masked whole, and so is a
+// value with a scheme prefix, no authority and an "@" (urlRisk refuses it in base_url and org_url). v is read as
+// urlshape.Classify reads it; a masked value is shown in its "scheme://" form.
 func MaskURL(v string) string {
-	if !hasAuthority(v) || !strings.ContainsAny(v, "@?#") {
+	canon, sh := urlshape.Classify(v)
+	switch {
+	case sh == urlshape.Opaque && strings.Contains(canon, "@"):
+		return URLMask
+	case sh != urlshape.Authority || !strings.ContainsAny(canon, "@?#"):
 		return v
 	}
-	u, err := url.Parse(v)
+	u, err := url.Parse(canon)
 	if err != nil {
 		return URLMask
 	}
-	if u.User == nil && strings.Contains(v, "@") {
+	if u.User == nil && strings.Contains(canon, "@") {
 		// an "@" net/url did not read as userinfo ("https://u:p/w@h", "https://u:1?w@h"): the value may still
 		// hold a password whose "/", "?" or "#" ended the authority early, so nothing of it is shown
 		return URLMask
 	}
-	if u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && !strings.Contains(v, "#") {
+	if u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && !strings.Contains(canon, "#") {
 		return v
 	}
 	if u.User != nil {
@@ -80,7 +85,7 @@ func MaskURL(v string) string {
 		u.RawQuery = strings.Join(pairs, "&")
 	}
 	u.ForceQuery, u.RawFragment = false, ""
-	if u.Fragment != "" || strings.Contains(v, "#") {
+	if u.Fragment != "" || strings.Contains(canon, "#") {
 		// masked, not dropped: the URL without its fragment is a value a client may send to clear it
 		u.Fragment = URLMask
 	}
