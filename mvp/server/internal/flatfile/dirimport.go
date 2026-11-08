@@ -333,7 +333,7 @@ func ApplyImport(c *store.TenantTx, now time.Time, in ImportInput) (*ImportOutco
 		if len(p.errs) > 0 {
 			return out, rejected(c, now, in, out.Plan)
 		}
-		if out.Held, err = p.apply(c, now); err != nil {
+		if out.Held, out.HoldID, err = p.apply(c, now); err != nil {
 			return nil, err
 		}
 	default:
@@ -441,12 +441,74 @@ func (d *dirPrep) finish(c *store.TenantTx) error {
 	if err != nil {
 		return err
 	}
+	if d.kind == store.ImportPeople {
+		if prev, err = reconcilePeople(c, prev); err != nil {
+			return err
+		}
+	}
 	d.prev = prev
 	if len(d.errs) == 0 {
 		d.delta = Diff(d.kind, snapshotAsFlat(prev), d.recs)
+		if d.kind == store.ImportPeople {
+			d.delta.Removed = stillActive(d.delta.Removed, prev)
+		}
 	}
 	sortErrors(d.errs)
 	return nil
+}
+
+// endedRecord is a people snapshot row turned to the state an applied removal leaves: the person is terminated.
+func endedRecord(r *store.ImportRecord) *store.ImportRecord {
+	f := fieldsOf(r.Data)
+	f["status"] = "terminated"
+	nr := newRecord(r.Key, f["email"], f)
+	out := *r
+	out.Data, out.Hash = nr.Data(), nr.Hash
+	return &out
+}
+
+// reconcilePeople makes the snapshot say what the directory says: a row still marked active whose person is
+// terminated (a removal the deletion guard held and a second admin has since released) is read as terminated,
+// so a file that lists the person active again restores them instead of reading as unchanged.
+func reconcilePeople(c *store.TenantTx, prev []*store.ImportRecord) ([]*store.ImportRecord, error) {
+	if len(prev) == 0 {
+		return prev, nil
+	}
+	all, err := c.Identities()
+	if err != nil {
+		return nil, err
+	}
+	ended := map[string]bool{}
+	for _, i := range all {
+		if i.Status == "terminated" {
+			ended[i.ExternalID] = true
+		}
+	}
+	out := make([]*store.ImportRecord, len(prev))
+	for n, r := range prev {
+		out[n] = r
+		if ended[r.Key] && fieldsOf(r.Data)["status"] != "terminated" {
+			out[n] = endedRecord(r)
+		}
+	}
+	return out, nil
+}
+
+// stillActive drops the removals of people the snapshot already has as terminated: there is nothing left to end.
+func stillActive(removed []Change, prev []*store.ImportRecord) []Change {
+	ended := map[string]bool{}
+	for _, r := range prev {
+		if fieldsOf(r.Data)["status"] == "terminated" {
+			ended[r.Key] = true
+		}
+	}
+	out := removed[:0:0]
+	for _, r := range removed {
+		if !ended[r.Key] {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (d *dirPrep) basePlan() *Plan {
@@ -463,6 +525,19 @@ func (d *dirPrep) store(c *store.TenantTx, now time.Time, keep map[string]bool) 
 	for _, r := range d.delta.Removed {
 		if keep[r.Key] {
 			continue // the guard held it: still this source's, and still to be removed
+		}
+		if d.kind == store.ImportPeople {
+			// the person stays this source's, now terminated: a later file that lists them again is no conflict
+			for _, p := range d.prev {
+				if p.Key == r.Key {
+					e := endedRecord(p)
+					e.ImportedBy, e.ImportedAt = d.in.importer(), now
+					if err := c.PutImportRecord(e); err != nil {
+						return err
+					}
+				}
+			}
+			continue
 		}
 		if err := c.DeleteImportRecord(d.in.System, d.kind, r.Key); err != nil {
 			return err
@@ -733,7 +808,7 @@ func endedAt(c *store.TenantTx, xid string, now time.Time) time.Time {
 
 // apply writes the people through ingest.Import (identities, the manager reference, the deletion guard's
 // vetting of every person turned inactive) and updates the snapshot. It answers how many removals were held.
-func (d *dirPrep) apply(c *store.TenantTx, now time.Time) (int, error) {
+func (d *dirPrep) apply(c *store.TenantTx, now time.Time) (held int, holdID string, err error) {
 	// the source is its own guard key: its removals and feed are judged against its size, not the tenant's
 	res := &connectors.DiscoveryResult{System: d.in.System, SourceID: d.in.System, Population: len(d.prev), FeedRecords: len(d.recs)}
 	for _, r := range d.recs {
@@ -759,17 +834,34 @@ func (d *dirPrep) apply(c *store.TenantTx, now time.Time) (int, error) {
 		res.Identities = append(res.Identities, connectors.IdentityRecord{ExternalID: r.Key, Name: f["name"], Type: "human",
 			Email: strp(f["email"]), Department: strp(f["department"]), Title: strp(f["title"]), Status: "terminated", TerminatedAt: &t})
 	}
-	if _, err := ingest.Import(c, now, res); err != nil {
-		return 0, err
+	// ingest keeps a terminated person terminated; a person this source ended and its file lists active again is
+	// taken back here (peopleConflicts already refused anyone another source owns)
+	ours := map[string]bool{}
+	for _, p := range d.prev {
+		ours[p.Key] = true
 	}
-	held, keep := 0, map[string]bool{}
+	for _, r := range d.recs {
+		if ours[r.Key] && r.Fields["status"] != "terminated" {
+			if err := c.ReactivateIdentity(r.Key); err != nil {
+				return 0, "", err
+			}
+		}
+	}
+	st, err := ingest.Import(c, now, res)
+	if err != nil {
+		return 0, "", err
+	}
+	keep := map[string]bool{}
 	for _, r := range d.delta.Removed {
 		if i, err := c.IdentityByExternalID(r.Key); err == nil && i.Status == "active" {
 			held++
 			keep[r.Key] = true
 		}
 	}
-	return held, d.store(c, now, keep)
+	if held > 0 {
+		holdID = st.IdentityHoldID
+	}
+	return held, holdID, d.store(c, now, keep)
 }
 
 // ---------------------------------------------------------------- entitlements

@@ -269,17 +269,93 @@ func TestImport_PeopleRemovalsAreOnlyThisSourcesAndGoThroughTheGuard(t *testing.
 	if st := e.identity("p02@t.example").Status; st == "active" {
 		t.Error("p02 is still active after the release")
 	}
-	// with the guard off the next removal applies at once and leaves the snapshot
+	// with the guard off the next removal applies at once; the ended people stay in the snapshot as terminated
 	e.setPolicy(deleteguard.CatIdentities, 100, deleteguard.ModeOff)
 	if out, _, err = e.imp(flatfile.TargetPeople, people(1)+"p09@t.example,Nine,Ops\n", true); err != nil || out.Held != 0 {
 		t.Fatalf("apply with the guard off = %+v, %v", out, err)
 	}
 	e.read(func(c *store.TenantTx) {
 		rows, _ := c.ImportRecords(dsys, store.ImportPeople)
-		if len(rows) != 2 {
-			t.Errorf("snapshot has %d rows, want 2", len(rows))
+		if len(rows) != 5 {
+			t.Errorf("snapshot has %d rows, want 5 (p00, the three ended, p09)", len(rows))
 		}
 	})
+}
+
+func TestImport_PeopleReturnTheHoldIDOfHeldRemovals(t *testing.T) {
+	e := newEnv(t)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(4), true); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := e.imp(flatfile.TargetPeople, people(1), true)
+	if err != nil || out.Held != 3 || out.HoldID == "" {
+		t.Fatalf("apply = %+v, %v; want 3 held and a hold id", out, err)
+	}
+	e.read(func(c *store.TenantTx) {
+		hs, _ := c.DeletionHolds("held", deleteguard.CatIdentities, 10, 0)
+		if len(hs) != 1 || hs[0].ID != out.HoldID {
+			t.Errorf("hold id %q, holds %+v", out.HoldID, hs)
+		}
+	})
+}
+
+func TestImport_PeopleDroppedByAnEarlierFileComeBack(t *testing.T) {
+	e := newEnv(t)
+	e.setPolicy(deleteguard.CatIdentities, 100, deleteguard.ModeOff)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(3), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.imp(flatfile.TargetPeople, people(1), true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.identity("p02@t.example").Status; st == "active" {
+		t.Fatalf("p02 is %s after being dropped", st)
+	}
+	// (A) the same source lists them again: not owned elsewhere, and they are active again
+	out, _, err := e.imp(flatfile.TargetPeople, people(3), true)
+	if err != nil || len(out.Plan.Errors) > 0 || out.Plan.Changed+out.Plan.Added != 2 {
+		t.Fatalf("re-add = %+v, %v", out.Plan, err)
+	}
+	for i := 0; i < 3; i++ {
+		if st := e.identity(fmt.Sprintf("p%02d@t.example", i)).Status; st != "active" {
+			t.Errorf("p%02d is %s after the re-add", i, st)
+		}
+	}
+}
+
+func TestImport_PeopleRestoredAfterAHeldRemovalIsReleased(t *testing.T) {
+	e := newEnv(t)
+	if _, _, err := e.imp(flatfile.TargetPeople, people(4), true); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := e.imp(flatfile.TargetPeople, people(1), true)
+	if err != nil || out.Held != 3 {
+		t.Fatalf("apply = %+v, %v", out, err)
+	}
+	e.tx(func(c *store.TenantTx) error {
+		res, err := deleteguard.Release(c, e.now, out.HoldID, "approver", nil, deleteguard.Appliers{ingest.ItemIdentityStatus: ingest.ReleaseIdentity})
+		if err != nil || res.Released != 3 {
+			t.Fatalf("release = %+v, %v", res, err)
+		}
+		return nil
+	})
+	// (B) the original file lists them as active: the plan says so and the apply restores them
+	_, pl, _ := e.imp(flatfile.TargetPeople, people(4), false)
+	if pl.Changed != 3 || pl.Unchanged != 1 {
+		t.Fatalf("plan = %+v, want 3 changed", pl)
+	}
+	if _, _, err := e.imp(flatfile.TargetPeople, people(4), true); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if st := e.identity(fmt.Sprintf("p%02d@t.example", i)).Status; st != "active" {
+			t.Errorf("p%02d is %s after the re-import", i, st)
+		}
+	}
+	// and the next run of the same file has nothing to do
+	if _, pl, _ = e.imp(flatfile.TargetPeople, people(4), false); pl.Unchanged != 4 {
+		t.Errorf("plan after = %+v", pl)
+	}
 }
 
 func TestImport_EntitlementsAreGroupsOfTheManualSourceAndRetireThroughTheGuard(t *testing.T) {
