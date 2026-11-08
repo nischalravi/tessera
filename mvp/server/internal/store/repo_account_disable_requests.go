@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Who asked for the last disable of an account through the account route (schema/0965_account_disable_requests.sql,
+// Who asked for the last disable of an account through the account route (schema/0966_account_disable_requests.sql,
 // issue #915): the four-eyes check of its re-enable reads it.
 
 // AccountDisableRequest is that record.

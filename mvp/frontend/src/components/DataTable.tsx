@@ -6,7 +6,7 @@ import { Loading } from "./Feedback";
 import { Menu, MenuEntry } from "./Menu";
 import { Command, CommandBar } from "./Page";
 import { useToast } from "./Toast";
-import { downloadCsv, parseCsv, toCsv } from "./csv";
+import { IMPORT_MAX_BYTES, downloadCsv, parseCsv, toCsv } from "./csv";
 import { store } from "../app/storage";
 
 export interface Column<T> {
@@ -61,7 +61,7 @@ export interface DataTableProps<T> {
   /** Accessible name for a row's checkbox. */
   rowLabel?: (r: T) => string;
   /** Called with parsed CSV rows. When absent, the Import button is hidden. */
-  onImport?: (rows: Record<string, string>[], fileName: string) => void;
+  onImport?: (rows: Record<string, string>[], fileName: string, file?: File) => void;
   empty?: ReactNode;
   toolbarExtra?: ReactNode;
   initialSort?: [string, 1 | -1];
@@ -137,12 +137,17 @@ export function DataTable<T>(p: DataTableProps<T>) {
 
   const onFile = async (f: File | undefined) => {
     if (!f || !p.onImport) return;
+    if (f.size > IMPORT_MAX_BYTES) {
+      toast(`${f.name} is larger than 5 MiB. Split it into smaller files.`, { kind: "error" });
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
     const rows = parseCsv(await f.text());
     if (!rows.length) {
       toast(`${f.name} has no data rows. The first line must be a header row.`, { kind: "error" });
       return;
     }
-    p.onImport(rows, f.name);
+    p.onImport(rows, f.name, f);
     if (fileRef.current) fileRef.current.value = "";
   };
 

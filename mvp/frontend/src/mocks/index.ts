@@ -41,14 +41,6 @@ function log(actor: string, action: string, target: string) {
   return [{ at: new Date().toISOString(), actor, action, target }, ...state.log].slice(0, 200);
 }
 
-// -------------------------------------------------------- identity ops
-export const mockIdentityOps = {
-  async importRows(kind: string, rows: number, actor: string) {
-    commit({ ...state, log: log(actor, `import.${kind}`, `${rows} rows`) });
-    return delay({ accepted: rows });
-  },
-};
-
 /** Create / edit / import for objects that have no write endpoint yet (accounts, orgs, machine identities...). */
 export const mockObjects = {
   async save(kind: string, name: string, actor: string, verb: "create" | "update" = "create") {

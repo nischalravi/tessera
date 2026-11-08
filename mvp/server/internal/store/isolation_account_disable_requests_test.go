@@ -9,7 +9,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 )
 
-// Who asked to disable an account through the account route (schema/0965_account_disable_requests.sql, issue #915) is
+// Who asked to disable an account through the account route (schema/0966_account_disable_requests.sql, issue #915) is
 // the tenant's own: B sees none of A's records, cannot file one against A's account (guard trigger; composite foreign
 // key in Postgres), and B's own record for the same external account is separate. Held deletion items are read per tenant.
 func TestIsolation_AccountDisableRequests(t *testing.T) {

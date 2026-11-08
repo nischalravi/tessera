@@ -646,6 +646,7 @@ func New(cfg Config) *Server {
 	s.registerAWSFederationRoutes()
 	s.registerSSFRoutes()
 	s.registerFlatfileRoutes()
+	s.registerDirectoryImportRoutes()
 	s.registerEvidenceRoutes()
 	s.registerReviewPopulationRoutes()
 	s.registerHelpdeskRoutes()
@@ -1342,11 +1343,15 @@ func (s *Server) recoverPanics(next http.Handler) http.Handler {
 
 func (s *Server) limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.ContentLength > s.cfg.MaxBodyBytes {
+		limit := s.cfg.MaxBodyBytes
+		if r.Method == http.MethodPost && dirImportPaths[r.URL.Path] && limit < dirImportBodyCap {
+			limit = dirImportBodyCap // a directory CSV import takes a file of several MiB
+		}
+		if r.ContentLength > limit {
 			writeJSON(w, http.StatusRequestEntityTooLarge, detail("Request body too large"))
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes)
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
 }

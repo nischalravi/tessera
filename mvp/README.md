@@ -4259,6 +4259,50 @@ to the account by a `direct_grant` edge. Agent delegations are left alone.
   from a sample file's first line), Upload CSV, upload history with a side panel of per-row errors and
   the delta, and the manual task list with Close.
 
+### Directory CSV import and create / edit forms (issue #915)
+
+The Directory lists' **Bulk import** (people, accounts, entitlements) and the **New / Edit** forms write through
+`internal/flatfile` (`dirimport.go`, `plan.go`; schema `0965_dirimport.sql`, Postgres `0973_dirimport.sql`). Rules:
+
+- **Manual source.** A file loads into a *manual source*: a system the admin names (`hr-sheet`, shown as "HR
+  spreadsheet"), never one a connector owns. A name a connection feeds, or a system that already holds data from another
+  source, is refused (409 `system_not_manual`); so is a system a configured connector (`TESSERA_CONNECTORS`) feeds,
+  on every call, even if a manual source of that name already exists. Accounts use the flat-file tables (mapping, upload history, manual
+  tasks; a new source gets the canonical mapping `account_id, username, email, identity_id, status`). People and
+  entitlements keep a snapshot in `dirimport_records` (kind `people` | `entitlements`).
+- **Targets.** `people` (columns `email, name` required; `external_id, department, title, manager_email, status`)
+  become identities; `accounts` become accounts correlated by `identity_id` then `email`; `entitlements` (`name`
+  required; `external_id, kind, privileged, description`) become catalog groups of the source. All go through
+  `ingest.Import`, so the resolver, authoritative-attribute rules and the deletion guard apply as for a connector.
+  A row naming a person another source already owns (same external id, or same email under another id) is refused
+  (`owned_by_other_source`, `email_in_use`); so is an entitlement whose group another feed wrote to the same system
+  (`owned_by_other_source`).
+- **Removals** reach only rows the same source imported before. A person missing from a later file is set to
+  terminated; an account is disabled and its import grants dropped; an entitlement is retired (no longer requestable,
+  grants kept for review). All three are vetted by the deletion guard (a feed's default is `hold_all`): held removals
+  stay as they are and keep their snapshot row until a second admin releases the hold (appliers
+  `ingest.ReleaseIdentity`, `flatfile.ReleaseDrop`, `flatfile.ReleaseRetire`).
+- **Limits.** 5 MiB, 10,000 rows, 64 columns, 256 characters a cell, UTF-8 with a header row; binary or non-UTF-8
+  input is `not_utf8`. A cell that starts `= + - @` in an identifier column is refused; in a text column it is stored
+  with a leading apostrophe. Every export neutralises such cells again (`toCsv`, `flatfile.Neutralize`). The request
+  cap of the two file routes is raised to the file limit; every other route keeps 1 MiB.
+- **Routes** (`internal/api/dirimport.go`): `GET /api/directory/imports/sources` (`graph.read`),
+  `POST /api/directory/imports/plan?target=&system=&name=&filename=` (the CSV as `text/csv`; `directory.import`; a dry run:
+  adds, changes, removals, every bad row up to 200, and the deletion guard's view; writes nothing),
+  `POST /api/directory/imports/apply` (same file; `directory.import` + step-up; 201, or 422 `invalid_file` with the
+  rows and nothing changed; `status` is `applied`, `partially_applied` or `held`),
+  `PUT /api/directory/manual/records` (`{target, system, name?, fields}`: the forms; `directory.import` + step-up; it
+  applies the source's rows plus this one through the same code), `GET /api/directory/manual/lookup?target=&id=` (who
+  owns the object and its fields when a manual source does). `directory.import` is a new permission, granted to tenant
+  admins. An apply records `directory.import` (and for accounts `flatfile.upload`) in the same transaction; a refused
+  file records a failed `directory.import`. Both name the file's `sha256`; an applied one also lists the external ids
+  it added, changed and removed (up to 100 of each, `keys_truncated`).
+- **Forms.** `ObjectFormDrawer` (`features/directory/shared.tsx`; rules in `importModel.ts`) creates only in a manual
+  source and edits only objects one owns. For an object a connector owns it shows the source's fields read-only with
+  "Managed by <system>" and offers only what Tessera keeps: an owner (`PUT /api/ownership`, `ownership.manage`) for
+  entitlements and machine identities; people and accounts have no Tessera-owned attribute, so they are read-only.
+  The Preview badge is gone from import and from these forms; the machine identity registration is still a Preview.
+
 ### Verified help-desk resets
 
 **Identity → Help desk** (`/helpdesk`, issue #108) resets a password or MFA only after the person
@@ -6207,8 +6251,8 @@ back a step and `Esc` to close. `/` focuses the top-bar search.
 
 **Reset password** (identity page, panel, palette) opens the Help desk's verified flow: `/helpdesk?new=1&identity=<id>&kind=password` shows the New reset case dialog for that person. Nothing is reset until the case's verification (and, for a privileged identity, a second approver) is satisfied.
 
-**Preview features.** Some screens have no backend endpoint yet: generic
-object create / edit / import (accounts, machine identities, rotate secret) and most admin settings
+**Preview features.** Some screens have no backend endpoint yet: machine identity
+registration, rotate secret and most admin settings
 (Export / import configuration; Identity rules, Branding & labels and Certificates are live, see "Certificates, branding and identity rules"). They run on typed mock data in `src/mocks/`, keep their state in the
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to
 `src/api.ts` that returns the same type and remove the badge.
