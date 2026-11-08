@@ -144,7 +144,7 @@ func (s *Service) View(c *store.TenantTx, connID string, now time.Time) (*Connec
 	}
 	v := &ConnectionView{ID: conn.ID, Name: conn.Name, ConnectorType: conn.ConnectorType, System: conn.System,
 		Role: conn.Role, Template: templateRef(cur), Simulated: IsDemoType(conn.ConnectorType), Health: conn.Health,
-		TechnicalOwner: conn.TechnicalOwner, BusinessOwner: conn.BusinessOwner, Progress: cur.Eval.Progress(),
+		TechnicalOwner: MaskOwner(conn.TechnicalOwner), BusinessOwner: MaskOwner(conn.BusinessOwner), Progress: cur.Eval.Progress(),
 		CreatedAt: store.RT(conn.CreatedAt), UpdatedAt: store.RT(conn.UpdatedAt)}
 	if conn.RetiredAt != nil {
 		at := store.RT(*conn.RetiredAt)

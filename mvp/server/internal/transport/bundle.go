@@ -234,6 +234,17 @@ func Collect(tx *store.TenantTx, rd *readiness.Service, now time.Time) (*Bundle,
 		}
 		clean, cleaned, left := cleanConfig(item.Config)
 		item.Config = clean
+		// the owners are copied out of the config onto the connection: the same cleaning applies (issue #926)
+		for _, f := range []struct {
+			name string
+			p    **string
+		}{{"technical_owner", &item.TechnicalOwner}, {"business_owner", &item.BusinessOwner}} {
+			n, c, x := cleanURLField(*f.p)
+			*f.p, cleaned = n, cleaned || c
+			if x && !slices.Contains(left, f.name) {
+				left = append(left, f.name)
+			}
+		}
 		if cleaned {
 			b.Excluded = append(b.Excluded, ExcludedRef{Section: "connections", Name: c.Name, Reason: "URL credentials, query and fragment in its configuration were left out: set them here if the connector needs them"})
 		}
