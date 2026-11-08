@@ -261,14 +261,15 @@ func (s *Server) deletionAppliers(r *http.Request) deleteguard.Appliers {
 	}
 	return deleteguard.Appliers{
 		// accounts and identities: provisioning, connector sync, imports, leavers
-		provision.ItemOp:          provision.ReleaseHeld,
-		ingest.ItemIdentityStatus: ingest.ReleaseIdentity,
-		ingest.ItemAccountStatus:  ingest.ReleaseAccount,
-		ingest.ItemEdgePrune:      ingest.ReleaseEdge,
-		flatfile.ItemDropAccount:  flatfile.ReleaseDrop,
-		jml.ItemLeaver:            jml.ReleaseLeaver,
-		jml.ItemAccountDisable:    jml.ReleaseAccountDisable,
-		model.ItemGroupDelete:     group, model.ItemGroupPurge: group, model.ItemGroupTree: group,
+		provision.ItemOp:               provision.ReleaseHeld,
+		ingest.ItemIdentityStatus:      ingest.ReleaseIdentity,
+		ingest.ItemAccountStatus:       ingest.ReleaseAccount,
+		ingest.ItemEdgePrune:           ingest.ReleaseEdge,
+		flatfile.ItemDropAccount:       flatfile.ReleaseDrop,
+		flatfile.ItemRetireEntitlement: flatfile.ReleaseRetire,
+		jml.ItemLeaver:                 jml.ReleaseLeaver,
+		jml.ItemAccountDisable:         jml.ReleaseAccountDisable,
+		model.ItemGroupDelete:          group, model.ItemGroupPurge: group, model.ItemGroupTree: group,
 		model.ItemFolder: func(tx *store.TenantTx, now time.Time, it *store.DeletionHoldItem) (string, string, error) {
 			return env(tx, now).ReleaseFolder(it)
 		},

@@ -37,6 +37,10 @@ type Input struct {
 	Filename string
 	Raw      []byte
 	By       string // who uploaded it: the actor of the audit events
+	// Limits bound the file; the zero value is the flat-file default.
+	Limits Limits
+	// Mapping, when set, is used instead of the saved one (Plan of a file for a source with no mapping yet).
+	Mapping *Mapping
 }
 
 // Result is what an upload did. An upload with any invalid row is rejected
@@ -49,27 +53,38 @@ type Result struct {
 	Confirmed []*store.FlatTask
 }
 
-// Apply imports one file for a disconnected app, in the caller's transaction:
-// it parses and validates the file with the app's mapping, computes the delta
-// against the last applied file of that kind, records the upload (and, for a
-// rejected one, each bad row), feeds the accounts and entitlements to the
-// graph through the normal ingest path (so they correlate, review and show in
-// SoD and orphan reports like any connector's), and confirms the manual tasks
-// the file shows done. Every step is audited in the same transaction.
-func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
+// prepared is a file read, validated and compared with the last applied one: everything Apply and Plan
+// know before they change anything.
+type prepared struct {
+	m                      *Mapping
+	up                     *store.FlatUpload
+	prevAccounts, prevEnts []*store.FlatRecord
+	recs                   []Record
+	errs                   []RowError
+	delta                  Delta
+	changes, cascade       []Change
+	accounts, ents         []Record // the snapshots as this upload leaves them
+}
+
+// prepare reads no more than the store's snapshots. With errs set the file is invalid and the rest is empty.
+func prepare(c *store.TenantTx, now time.Time, in Input) (*prepared, error) {
 	if in.Kind != KindAccounts && in.Kind != KindEntitlements {
 		return nil, &Error{"invalid_kind", "kind must be accounts or entitlements"}
 	}
-	ms, err := c.FlatMapping(in.System)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, ErrNoMapping
-	}
-	if err != nil {
-		return nil, err
-	}
-	m, err := FromStore(ms)
-	if err != nil {
-		return nil, err
+	ms := &store.FlatMapping{}
+	m := in.Mapping
+	if m == nil {
+		var err error
+		ms, err = c.FlatMapping(in.System)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrNoMapping
+		}
+		if err != nil {
+			return nil, err
+		}
+		if m, err = FromStore(ms); err != nil {
+			return nil, err
+		}
 	}
 	if in.Kind == KindEntitlements && m.Entitlements == nil {
 		return nil, &Error{"no_entitlement_mapping", "this app's mapping has no entitlement columns"}
@@ -81,62 +96,79 @@ func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
 	if up.Source == "" {
 		up.Source = SourceAPI
 	}
-	prevAccounts, err := c.FlatRecords(in.System, KindAccounts)
-	if err != nil {
+	p := &prepared{m: m, up: up}
+	var err error
+	if p.prevAccounts, err = c.FlatRecords(in.System, KindAccounts); err != nil {
 		return nil, err
 	}
-	prevEnts, err := c.FlatRecords(in.System, KindEntitlements)
-	if err != nil {
+	if p.prevEnts, err = c.FlatRecords(in.System, KindEntitlements); err != nil {
 		return nil, err
 	}
 
-	var recs []Record
-	tbl, errs := Parse(in.Raw)
+	tbl, errs := ParseWith(in.Raw, in.Limits)
 	if tbl != nil {
 		up.RowsTotal = tbl.Total
 		if in.Kind == KindAccounts {
-			recs, errs = m.AccountRecords(tbl)
+			p.recs, errs = m.AccountRecords(tbl)
 		} else {
-			known := make(map[string]bool, len(prevAccounts))
-			for _, a := range prevAccounts {
+			known := make(map[string]bool, len(p.prevAccounts))
+			for _, a := range p.prevAccounts {
 				known[a.Key] = true
 			}
-			recs, errs = m.EntitlementRecords(tbl, known)
+			p.recs, errs = m.EntitlementRecords(tbl, known)
 		}
 	}
-	if len(errs) > 0 {
-		return reject(c, now, up, errs)
+	if p.errs = errs; len(errs) > 0 {
+		return p, nil
 	}
 
-	prev := prevAccounts
+	prev := p.prevAccounts
 	if in.Kind == KindEntitlements {
-		prev = prevEnts
+		prev = p.prevEnts
 	}
-	delta := Diff(in.Kind, prev, recs)
-	changes := delta.All()
+	p.delta = Diff(in.Kind, prev, p.recs)
+	p.changes = p.delta.All()
 
 	// Records of the snapshots as this upload leaves them.
-	accounts, ents := decode(KindAccounts, prevAccounts), decode(KindEntitlements, prevEnts)
-	var cascade []Change
+	p.accounts, p.ents = decode(KindAccounts, p.prevAccounts), decode(KindEntitlements, p.prevEnts)
 	if in.Kind == KindAccounts {
-		accounts = recs
+		p.accounts = p.recs
 		gone := map[string]bool{}
-		for _, r := range delta.Removed {
+		for _, r := range p.delta.Removed {
 			gone[r.Key] = true
 		}
-		kept := ents[:0:0]
-		for _, e := range ents {
+		kept := p.ents[:0:0]
+		for _, e := range p.ents {
 			if a, _ := SplitEntitlementKey(e.Key); gone[a] {
-				cascade = append(cascade, Change{Kind: KindEntitlements, Type: Removed, Key: e.Key, Label: e.Label})
+				p.cascade = append(p.cascade, Change{Kind: KindEntitlements, Type: Removed, Key: e.Key, Label: e.Label})
 				continue
 			}
 			kept = append(kept, e)
 		}
-		ents = kept
-		changes = append(changes, cascade...)
+		p.ents = kept
+		p.changes = append(p.changes, p.cascade...)
 	} else {
-		ents = recs
+		p.ents = p.recs
 	}
+	return p, nil
+}
+
+// Apply imports one file for a disconnected app, in the caller's transaction:
+// it parses and validates the file with the app's mapping, computes the delta
+// against the last applied file of that kind, records the upload (and, for a
+// rejected one, each bad row), feeds the accounts and entitlements to the
+// graph through the normal ingest path (so they correlate, review and show in
+// SoD and orphan reports like any connector's), and confirms the manual tasks
+// the file shows done. Every step is audited in the same transaction.
+func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
+	p, err := prepare(c, now, in)
+	if err != nil {
+		return nil, err
+	}
+	if len(p.errs) > 0 {
+		return reject(c, now, p.up, p.errs)
+	}
+	up, m, delta, changes, cascade, accounts, ents, recs := p.up, p.m, p.delta, p.changes, p.cascade, p.accounts, p.ents, p.recs
 
 	// Manual tasks the new snapshots show done.
 	open, err := c.OpenFlatTasks(in.System)

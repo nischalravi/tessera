@@ -1,5 +1,8 @@
 /** Minimal RFC 4180 CSV helpers for list Import / Export. */
 
+/** The largest file a list import takes (the server refuses more). */
+export const IMPORT_MAX_BYTES = 5 * 1024 * 1024;
+
 export function toCsv(header: string[], rows: (string | number | null | undefined)[][]): string {
   const esc = (v: string | number | null | undefined) => {
     let s = v === null || v === undefined ? "" : String(v);
