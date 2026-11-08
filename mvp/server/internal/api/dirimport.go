@@ -239,6 +239,10 @@ func (s *Server) finishImport(res *flatfile.ImportOutcome, err error) (any, erro
 		note := fmt.Sprintf("%d restore(s) held for approval", res.HeldRestores)
 		if res.Held == 0 {
 			body["status"], body["held"], body["hold_id"] = "partially_applied", res.HeldRestores, res.RestoreHoldID
+			if res.Plan.Added == 0 && res.Plan.Removed == 0 && res.Plan.Changed <= res.HeldRestores {
+				// every change in the file was a restore the guard held: nothing applied
+				body["status"] = "held"
+			}
 			body["message"] = note
 		} else {
 			body["message"] = fmt.Sprintf("%v; %s", body["message"], note)

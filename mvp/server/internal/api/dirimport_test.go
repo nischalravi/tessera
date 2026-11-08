@@ -337,7 +337,9 @@ func TestFinishImport_HeldRestores(t *testing.T) {
 		reactivate any
 	}{
 		{"nothing held", flatfile.ImportOutcome{Plan: &flatfile.Plan{}}, "applied", nil, nil, nil},
-		{"restores held", flatfile.ImportOutcome{Plan: &flatfile.Plan{}, HeldRestores: 3, RestoreHoldID: "h1"}, "partially_applied", 3, "h1", 3},
+		{"only restores held", flatfile.ImportOutcome{Plan: &flatfile.Plan{Changed: 3}, HeldRestores: 3, RestoreHoldID: "h1"}, "held", 3, "h1", 3},
+		{"restores held, other changes applied", flatfile.ImportOutcome{Plan: &flatfile.Plan{Added: 1, Changed: 3}, HeldRestores: 3, RestoreHoldID: "h1"}, "partially_applied", 3, "h1", 3},
+		{"restores held, removals applied", flatfile.ImportOutcome{Plan: &flatfile.Plan{Changed: 3, Removed: 1}, HeldRestores: 3, RestoreHoldID: "h1"}, "partially_applied", 3, "h1", 3},
 		{"removals held", flatfile.ImportOutcome{Plan: &flatfile.Plan{Removed: 2}, Held: 2, HoldID: "h2"}, "held", 2, "h2", nil},
 		{"both held", flatfile.ImportOutcome{Plan: &flatfile.Plan{Removed: 2}, Held: 2, HoldID: "h2", HeldRestores: 3, RestoreHoldID: "h1"}, "held", 2, "h2", 3},
 	}

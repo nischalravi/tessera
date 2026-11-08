@@ -128,6 +128,12 @@ test("the message after an apply says what was held", () => {
   assert.match(m.resultMessage({ plan: plan({ added: 0, changed: 0, removed: 0 }), status: "applied" }, "People"), /no changes/);
   assert.match(m.resultMessage({ plan: plan(), status: "held", held: 1 }, "People"), /All 1 removals are held for approval/);
   assert.match(m.resultMessage({ plan: plan(), status: "partially_applied", message: "Removed 1 of 3: 2 held for approval" }, "People"), /Removed 1 of 3/);
+  assert.equal(m.resultMessage({ plan: plan({ added: 0, changed: 3, removed: 0 }), status: "held", held: 3, held_reactivations: 3 }, "People"),
+    "People: 3 restores are held for approval in the deletion holds.");
+  assert.equal(m.resultMessage({ plan: plan({ added: 0, changed: 3, removed: 2 }), status: "held", held: 2, held_reactivations: 1 }, "People"),
+    "People: 0 added, 2 changed. All 2 removals are held for approval. 1 restore is held for approval in the deletion holds.");
+  assert.equal(m.resultMessage({ plan: plan(), status: "partially_applied", message: "Removed 1 of 3: 2 held for approval; 1 restore(s) held for approval", held_reactivations: 1 }, "People"),
+    "People: Removed 1 of 3: 2 held for approval; 1 restore(s) held for approval");
 });
 
 test("a form creates, edits a manual object, or shows a connector's object read-only", () => {

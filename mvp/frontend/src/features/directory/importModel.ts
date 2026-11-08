@@ -77,7 +77,9 @@ export function claimNote(p: ImportPlan): { summary: string; lines: string[] } |
 export function resultMessage(r: ImportResult, what: string): string {
   const p = r.plan;
   const restores = r.held_reactivations ? ` ${r.held_reactivations} restore${r.held_reactivations === 1 ? " is" : "s are"} held for approval in the deletion holds.` : "";
-  if (r.status === "held") return `${what}: ${p.added} added, ${p.changed} changed. All ${r.held} removals are held for approval.${restores}`;
+  if (r.status === "held" && !p.removed) return `${what}:${restores || " all changes are held for approval."}`;
+  // a held restore is counted in the plan's changes but did not apply
+  if (r.status === "held") return `${what}: ${p.added} added, ${Math.max(0, p.changed - (r.held_reactivations ?? 0))} changed. All ${r.held} removals are held for approval.${restores}`;
   if (r.status === "partially_applied") return `${what}: ${r.message ?? "some removals are held for approval"}${r.message?.includes("restore") ? "" : restores}`;
   const bits = [p.added && `${p.added} added`, p.changed && `${p.changed} changed`, p.removed && `${p.removed} removed`].filter(Boolean);
   return `${what}: ${bits.length ? bits.join(", ") : "no changes"}`;
