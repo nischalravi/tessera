@@ -33,6 +33,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // Service holds the readiness configuration. Its methods take a *store.TenantTx;
@@ -739,15 +740,17 @@ var endpointFields = []struct {
 	{"settings.tenant_id", func(c ConnConfig) string { return c.Settings["tenant_id"] }},
 }
 
-// isEndpointSetting reports whether a settings key says where a connector connects or sends its credential:
-// a name with host, url or endpoint in it, or one ending in port. It is the one definition used both by
-// Endpoints (approvals) and by endpointChanged (credential drop), so the two cannot drift.
-func isEndpointSetting(k string) bool {
-	return strings.Contains(k, "host") || strings.Contains(k, "url") || strings.Contains(k, "endpoint") || strings.HasSuffix(k, "port")
+// isEndpointSetting reports whether a settings entry says where a connector connects or sends its credential: a
+// URL-valued setting (urlshape.URLSetting, the classifier URL refusal, masking and the export also use), or a key
+// with host in it or ending in port, in any case. It is the one definition used both by Endpoints (approvals) and by
+// endpointChanged (credential drop), so the two cannot drift.
+func isEndpointSetting(k, v string) bool {
+	lk := strings.ToLower(k)
+	return urlshape.URLSetting(k, v) || strings.Contains(lk, "host") || strings.HasSuffix(lk, "port")
 }
 
 // endpointChanged names the endpoint fields an edit changes (names only, for the audit event): the fixed
-// endpointFields plus every settings key isEndpointSetting accepts, in either config.
+// endpointFields plus every setting isEndpointSetting accepts, in either config.
 func endpointChanged(a, b ConnConfig) []string {
 	var out []string
 	for _, f := range endpointFields {
@@ -757,8 +760,8 @@ func endpointChanged(a, b ConnConfig) []string {
 	}
 	var keys []string
 	for _, m := range []map[string]string{a.Settings, b.Settings} {
-		for k := range m {
-			if isEndpointSetting(k) && !slices.Contains(keys, k) {
+		for k, v := range m {
+			if isEndpointSetting(k, v) && !slices.Contains(keys, k) {
 				keys = append(keys, k)
 			}
 		}
@@ -1295,7 +1298,7 @@ func (c ConnConfig) Endpoints() []string {
 	add("cloud", c.Cloud)
 	for k, v := range c.Settings {
 		// the port is part of where the credential goes: a host with another port is another service
-		if isEndpointSetting(k) {
+		if isEndpointSetting(k, v) {
 			add("settings."+k, v)
 		}
 	}

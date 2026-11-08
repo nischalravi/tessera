@@ -92,3 +92,24 @@ func TestConnectionURLCredentialsRefused(t *testing.T) {
 	check(c.json("PATCH", "/api/connections/"+o+"/config", `{"org_url":"https://u:secretpw@a.okta.com"}`, http.StatusBadRequest))
 	c.json("PATCH", "/api/connections/"+o+"/config", `{"org_url":"https://a.okta.com"}`, http.StatusOK)
 }
+
+// Issue #921: the same refusal holds for a URL written without "//" after the scheme or with backslash separators.
+func TestConnectionURLCredentialsRefused_SchemeShapes(t *testing.T) {
+	t.Parallel()
+	c := newRD(t, func(cfg *Config) { cfg.Env = "dev" })
+	for _, body := range []string{
+		`{"name":"Okta","connector_type":"okta","config":{"org_url":"https:u:secretpw@a.okta.com"}}`,
+		`{"name":"Okta","connector_type":"okta","config":{"org_url":"https:\\\\u:secretpw@a.okta.com"}}`,
+		`{"name":"SCIM","connector_type":"scim_app","config":{"base_url":"https:u:secretpw@s.example.com"}}`,
+	} {
+		v := c.json("POST", "/api/connections", body, http.StatusBadRequest)
+		if b, _ := json.Marshal(v); v["error"] != "url_credentials_refused" || strings.Contains(string(b), "secretpw") {
+			t.Fatalf("POST %s: %s", body, b)
+		}
+	}
+	o := c.json("POST", "/api/connections", `{"name":"Okta","connector_type":"okta"}`, http.StatusCreated)["id"].(string)
+	v := c.json("PATCH", "/api/connections/"+o+"/config", `{"org_url":"https:/u:secretpw@a.okta.com"}`, http.StatusBadRequest)
+	if b, _ := json.Marshal(v); v["error"] != "url_credentials_refused" || strings.Contains(string(b), "secretpw") {
+		t.Fatalf("PATCH: %s", b)
+	}
+}
