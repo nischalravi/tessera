@@ -124,8 +124,43 @@ func Fold(v string) string {
 		if r == '\u3002' || r == '\uff61' {
 			return '.'
 		}
+		if a, ok := confusables[r]; ok {
+			return a
+		}
 		return r
 	}, s)
+}
+
+// confusables are look-alikes of URL separators that NFKC leaves alone (fold_test.go checks each entry against NFKC,
+// so the table holds only what NFKC misses). Colon: ratio, modifier letter colon, Armenian full stop, Hebrew sof
+// pasuq, Syriac supralinear and sublinear colon, runic cross punctuation, Ethiopic colon, modifier letter triangular
+// colon (U+FE30 is not here: NFKC reads it as ".."). Slash: fraction slash, division slash, big solidus, box drawings
+// diagonal, vertical kana repeat mark upper half. No "@" look-alike survives NFKC unhandled (U+FF20 and U+FE6B are
+// NFKC forms). Detection only, like Fold.
+var confusables = map[rune]rune{
+	'\u2236': ':', '\ua789': ':', '\u0589': ':', '\u05c3': ':', '\u0703': ':', '\u0704': ':', '\u16ec': ':',
+	'\u1361': ':', '\u02f8': ':',
+	'\u2044': '/', '\u2215': '/', '\u29f8': '/', '\u2571': '/', '\u3033': '/',
+}
+
+// NonASCIIHead reports whether the scheme or authority of v holds a non-ASCII character: everything before the
+// first "/" or "\", and, when that starts "//", up to the next "/", "\", "?" or "#". A value without a "/" is
+// all head. International host names must be given as punycode, so a look-alike colon, slash or "@" in the head
+// is refused rather than guessed at (issue #936).
+func NonASCIIHead(v string) bool {
+	s := strings.TrimSpace(v)
+	end := len(s)
+	if i := strings.IndexAny(s, `/\`); i >= 0 {
+		end = i
+		if i+1 < len(s) && isSlash(s[i+1]) {
+			if j := strings.IndexAny(s[i+2:], `/\?#`); j >= 0 {
+				end = i + 2 + j
+			} else {
+				end = len(s)
+			}
+		}
+	}
+	return !isASCII(s[:end])
 }
 
 func isASCII(s string) bool {

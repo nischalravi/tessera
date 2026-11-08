@@ -22,6 +22,9 @@ const URLMask = "masked"
 // CodeURLCredentialsRefused is the error code of a URL setting that carries credentials or a query string.
 const CodeURLCredentialsRefused = "url_credentials_refused"
 
+// CodeURLNonASCIIAuthority is the error code of a base_url or org_url whose scheme or authority is not ASCII.
+const CodeURLNonASCIIAuthority = "url_non_ascii_authority"
+
 // urlSetting reports whether a settings entry holds a URL (urlshape.URLSetting: its key names one, or its value reads
 // as a URL that names a host).
 func urlSetting(k, v string) bool { return urlshape.URLSetting(k, v) }
@@ -379,7 +382,7 @@ func urlCredentialError(cur, cfg ConnConfig) error {
 		}
 	}
 	if len(bad) == 0 {
-		return nil
+		return urlASCIIError(cur, cfg) // after the credential checks: a credentialed look-alike URL is reported as that
 	}
 	return &Error{Status: http.StatusBadRequest, Code: CodeURLCredentialsRefused,
 		Msg: "a URL must not carry credentials (user:pass@) or, for base_url and org_url, a query string or fragment; the secret belongs in the credential", Fields: bad}
@@ -405,4 +408,21 @@ func privilegedRisk(cur, cfg ConnConfig) bool {
 		}
 	}
 	return false
+}
+
+// urlASCIIError refuses a base_url or org_url, changed from cur, whose scheme or authority holds a non-ASCII
+// character (urlshape.NonASCIIHead). The value is never echoed.
+func urlASCIIError(cur, cfg ConnConfig) error {
+	var bad []FieldError
+	if cfg.OrgURL != cur.OrgURL && urlshape.NonASCIIHead(cfg.OrgURL) {
+		bad = append(bad, FieldError{"org_url", "scheme and host must be ASCII; give an international host name as punycode (xn--)"})
+	}
+	if cfg.BaseURL != cur.BaseURL && urlshape.NonASCIIHead(cfg.BaseURL) {
+		bad = append(bad, FieldError{"base_url", "scheme and host must be ASCII; give an international host name as punycode (xn--)"})
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return &Error{Status: http.StatusBadRequest, Code: CodeURLNonASCIIAuthority,
+		Msg: "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)", Fields: bad}
 }
