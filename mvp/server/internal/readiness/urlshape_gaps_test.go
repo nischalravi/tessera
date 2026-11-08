@@ -123,3 +123,40 @@ func TestEndpointSetting_SharedClassifier(t *testing.T) {
 		t.Errorf("a plain setting moved the endpoint: %v", got)
 	}
 }
+
+// A credentialed URL behind a Unicode space (which Go's TrimSpace drops before net/url reads it) or inside a longer
+// value was refused and masked before urlshape; it still is.
+func TestURLCredentialError_EmbeddedAndUnicodeSpace(t *testing.T) {
+	for _, v := range []string{
+		"\u00a0https://u:pwSECRET@a.okta.com",
+		"\u3000https:u:pwSECRET@a.okta.com",
+		"x https://u:pwSECRET@a.okta.com",
+		"Server=x;Url=https://u:pwSECRET@h.example",
+	} {
+		for name, cfg := range map[string]ConnConfig{
+			"org_url":          {OrgURL: v},
+			"settings.api_url": {Settings: map[string]string{"api_url": v}},
+		} {
+			var e *Error
+			if err := urlCredentialError(ConnConfig{}, cfg); !errors.As(err, &e) || e.Code != CodeURLCredentialsRefused {
+				t.Errorf("%s=%q: got %v, want refused", name, v, err)
+			}
+		}
+		if got := MaskURL(v); strings.Contains(got, "SECRET") {
+			t.Errorf("MaskURL(%q) = %q, want masked", v, got)
+		}
+		cur := ConnConfig{OrgURL: v, Settings: map[string]string{"api_url": v}}
+		next := ConnConfig{OrgURL: MaskURL(v), Settings: map[string]string{"api_url": MaskURL(v)}}
+		if keepMaskedURLs(&cur, &next); next.OrgURL != v || next.Settings["api_url"] != v {
+			t.Errorf("round trip of %q lost the stored value", v)
+		}
+	}
+	for _, v := range []string{"see https://a.okta.com/docs", "\u00a0https://a.okta.com"} {
+		if urlRisk(v, true) {
+			t.Errorf("urlRisk(%q) refused a value with no credential, query or fragment", v)
+		}
+	}
+	if urlRisk("/cb?next=https://a.example", false) {
+		t.Error("a relative URL setting with an embedded URL in its query is not a credential")
+	}
+}

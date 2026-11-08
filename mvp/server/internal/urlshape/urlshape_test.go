@@ -25,6 +25,8 @@ func TestClassify(t *testing.T) {
 		{"mailto:a@b", "mailto:a@b", Opaque},
 		{"a.okta.com:443", "a.okta.com:443", Opaque},
 		{"u:p@a.okta.com", "u:p@a.okta.com", Opaque},
+		{"\u00a0https://u:p@h\u3000", "https://u:p@h", Authority},
+		{"\u2003https:u:p@h", "https://u:p@h", Authority},
 	} {
 		canon, sh := Classify(c.in)
 		if canon != c.canon || sh != c.sh {
@@ -44,5 +46,13 @@ func TestURLSetting(t *testing.T) {
 	}
 	if !URLSetting("feed", "https:h.example") || URLSetting("feed", "plain") || URLSetting("contact", "mailto:a@b") {
 		t.Error("value-based classification is wrong")
+	}
+}
+
+func TestEmbedded(t *testing.T) {
+	for v, want := range map[string]bool{"x https://u:p@h": true, "note: https://h": true, "https://h": false, "\u00a0https://h": false, "h": false} {
+		if Embedded(v) != want {
+			t.Errorf("Embedded(%q) != %v", v, want)
+		}
 	}
 }

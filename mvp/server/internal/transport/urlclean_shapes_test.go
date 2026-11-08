@@ -19,6 +19,7 @@ func TestCleanString_SchemeShapes(t *testing.T) {
 		{`https:\/u:pwSECRET@a.okta.com\v2`, "https://a.okta.com/v2", verdictCleaned},
 		{"https:\t//u:pwSECRET@a.okta.com", "https://a.okta.com", verdictCleaned},
 		{" https:/\n/u:pwSECRET@a.okta.com ", "https://a.okta.com", verdictCleaned},
+		{"\u00a0https://u:pwSECRET@a.okta.com", "https://a.okta.com", verdictCleaned},
 		{`\\u:pwSECRET@a.okta.com`, "", verdictExcluded},
 		{"u:pwSECRET@a.okta.com", "", verdictExcluded},
 		{"ldap:u:pwSECRET@h.example", "", verdictExcluded},

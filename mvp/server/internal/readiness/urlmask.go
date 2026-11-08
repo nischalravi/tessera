@@ -30,6 +30,10 @@ func urlSetting(k, v string) bool { return urlshape.URLSetting(k, v) }
 // value names credentials depends on the reader.
 func urlRisk(v string, strict bool) bool {
 	canon, sh := urlshape.Classify(v)
+	if urlshape.Embedded(v) {
+		// a URL inside a longer value: refused as an unparseable value was before urlshape
+		return strings.Contains(canon, "@") || (strict && strings.ContainsAny(canon, "?#"))
+	}
 	switch sh {
 	case urlshape.NotURL:
 		return false
@@ -52,7 +56,8 @@ func urlRisk(v string, strict bool) bool {
 func MaskURL(v string) string {
 	canon, sh := urlshape.Classify(v)
 	switch {
-	case sh == urlshape.Opaque && strings.Contains(canon, "@"):
+	case sh == urlshape.Opaque && strings.Contains(canon, "@"),
+		urlshape.Embedded(v) && strings.ContainsAny(canon, "@?#"):
 		return URLMask
 	case sh != urlshape.Authority || !strings.ContainsAny(canon, "@?#"):
 		return v

@@ -13,6 +13,7 @@ package urlshape
 import (
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // Shape is how a value reads as a URL.
@@ -33,11 +34,14 @@ var schemeRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.\-]*:`)
 // special are the schemes for which WHATWG parsers ignore the number and direction of the slashes after "scheme:".
 var special = map[string]bool{"http": true, "https": true, "ws": true, "wss": true, "ftp": true}
 
-// Classify returns v as a lenient URL parser reads it and its shape. For an Authority value the result is in
+// Classify returns v as a lenient URL parser reads it and its shape. Surrounding Unicode spaces are dropped as well,
+// as Go's strings.TrimSpace does. For an Authority value the result is in
 // "scheme://…" (or "//…") form with a lower-case scheme, and "\" read as "/" before any query or fragment where
 // the parser does so. A NotURL value is returned unchanged; an Opaque one trimmed of what the parser ignores.
 func Classify(v string) (string, Shape) {
-	s := strings.TrimFunc(v, func(r rune) bool { return r <= 0x20 })
+	// Unicode spaces too: Go readers (connsync.ParseBaseURL, the SCIM probe) TrimSpace a value before parsing it, so
+	// "\u00a0https://u:p@h" is "https://u:p@h" to them.
+	s := strings.TrimFunc(v, func(r rune) bool { return r <= 0x20 || unicode.IsSpace(r) })
 	s = strings.Map(func(r rune) rune {
 		if r == '\t' || r == '\n' || r == '\r' {
 			return -1
@@ -77,6 +81,13 @@ func URLKey(k string) bool {
 // names a host.
 func URLSetting(k, v string) bool {
 	return URLKey(k) || HasAuthority(v)
+}
+
+// Embedded reports whether v, read as anything but a URL that names a host, still holds a "scheme://" URL ("note:
+// https://u:p@h"): no parser reads v as that URL, but a credential in it is kept in clear all the same.
+func Embedded(v string) bool {
+	_, sh := Classify(v)
+	return sh != Authority && strings.Contains(v, "://")
 }
 
 func isSlash(c byte) bool { return c == '/' || c == '\\' }
