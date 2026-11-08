@@ -18,6 +18,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
 
 // Directory CSV import (issue #915). A file for the Directory lists is loaded into a manual source: a
@@ -457,7 +458,17 @@ func (d *dirPrep) finish(c *store.TenantTx) error {
 	return nil
 }
 
+// endedKey is the snapshot's private note of when this source ended a person: the terminated_at it applied, or
+// asked the deletion guard for. It is not a column (no file or form can set it), fieldsOf leaves it out and the
+// row hash never covers it. A terminated person is taken back by this source only while their terminated_at is
+// still this value: an admin's termination, a leaver plan or any later end writes another time and wins.
+const endedKey = "~ended_at"
+
+// ItemReactivatePerson is the kind of a held restore of a person this source ended and its file lists active again.
+const ItemReactivatePerson = "person_reactivate"
+
 // endedRecord is a people snapshot row turned to the state an applied removal leaves: the person is terminated.
+// The row carries no end note; the caller stamps one when this source did the ending.
 func endedRecord(r *store.ImportRecord) *store.ImportRecord {
 	f := fieldsOf(r.Data)
 	f["status"] = "terminated"
@@ -467,9 +478,44 @@ func endedRecord(r *store.ImportRecord) *store.ImportRecord {
 	return &out
 }
 
-// reconcilePeople makes the snapshot say what the directory says: a row still marked active whose person is
-// terminated (a removal the deletion guard held and a second admin has since released) is read as terminated,
-// so a file that lists the person active again restores them instead of reading as unchanged.
+// endedNote is the end note of a snapshot row, "" when it has none.
+func endedNote(data string) string {
+	m := map[string]string{}
+	_ = json.Unmarshal([]byte(data), &m)
+	return m[endedKey]
+}
+
+// withEndedNote is r with its end note set to at ("" removes it); the hash is left alone.
+func withEndedNote(r *store.ImportRecord, at string) *store.ImportRecord {
+	m := map[string]string{}
+	_ = json.Unmarshal([]byte(r.Data), &m)
+	if at == "" {
+		delete(m, endedKey)
+	} else {
+		m[endedKey] = at
+	}
+	b, _ := json.Marshal(m)
+	out := *r
+	out.Data = string(b)
+	return &out
+}
+
+// endedBySource says whether i's termination is the one this source's snapshot row records: i is terminated and
+// its terminated_at is the time the source applied or asked for. Anything else (an admin, a leaver plan, the
+// sponsor, another source, a second termination after a rehire) ended the person, and an import never undoes it.
+func endedBySource(row *store.ImportRecord, i *store.Identity) bool {
+	if row == nil || i == nil || i.Status != "terminated" || i.TerminatedAt == nil {
+		return false
+	}
+	note := endedNote(row.Data)
+	return note != "" && note == timeutil.DB(*i.TerminatedAt)
+}
+
+// reconcilePeople makes the snapshot say what the directory says for the people this source ended: a row still
+// marked active whose person was ended by this source (a removal the deletion guard held and a second admin has
+// since released) is read as terminated, so a file that lists the person active again restores them instead of
+// reading as unchanged. A person someone else terminated keeps their row as it is: the import does not take
+// the termination as its own.
 func reconcilePeople(c *store.TenantTx, prev []*store.ImportRecord) ([]*store.ImportRecord, error) {
 	if len(prev) == 0 {
 		return prev, nil
@@ -478,17 +524,15 @@ func reconcilePeople(c *store.TenantTx, prev []*store.ImportRecord) ([]*store.Im
 	if err != nil {
 		return nil, err
 	}
-	ended := map[string]bool{}
+	byXID := map[string]*store.Identity{}
 	for _, i := range all {
-		if i.Status == "terminated" {
-			ended[i.ExternalID] = true
-		}
+		byXID[i.ExternalID] = i
 	}
 	out := make([]*store.ImportRecord, len(prev))
 	for n, r := range prev {
 		out[n] = r
-		if ended[r.Key] && fieldsOf(r.Data)["status"] != "terminated" {
-			out[n] = endedRecord(r)
+		if fieldsOf(r.Data)["status"] != "terminated" && endedBySource(r, byXID[r.Key]) {
+			out[n] = withEndedNote(endedRecord(r), endedNote(r.Data))
 		}
 	}
 	return out, nil
@@ -521,7 +565,9 @@ func (d *dirPrep) basePlan() *Plan {
 	return pl
 }
 
-func (d *dirPrep) store(c *store.TenantTx, now time.Time, keep map[string]bool) error {
+// store writes the snapshot. keep are removals the guard held (their rows stay); heldBack are restores the guard
+// held (their rows stay terminated, with their end note, until the hold is released or the file asks again).
+func (d *dirPrep) store(c *store.TenantTx, now time.Time, keep, heldBack map[string]bool) error {
 	for _, r := range d.delta.Removed {
 		if keep[r.Key] {
 			continue // the guard held it: still this source's, and still to be removed
@@ -551,7 +597,7 @@ func (d *dirPrep) store(c *store.TenantTx, now time.Time, keep map[string]bool) 
 		touched[r.Key] = true
 	}
 	for _, r := range d.recs {
-		if touched[r.Key] {
+		if touched[r.Key] && !heldBack[r.Key] {
 			if err := c.PutImportRecord(&store.ImportRecord{System: d.in.System, Kind: d.kind, Key: r.Key, Data: r.Data(), Hash: r.Hash,
 				ImportedBy: d.in.importer(), ImportedAt: now}); err != nil {
 				return err
@@ -564,6 +610,7 @@ func (d *dirPrep) store(c *store.TenantTx, now time.Time, keep map[string]bool) 
 func fieldsOf(data string) map[string]string {
 	m := map[string]string{}
 	_ = json.Unmarshal([]byte(data), &m) // an unreadable old row is an empty one
+	delete(m, endedKey)
 	return m
 }
 
@@ -834,18 +881,22 @@ func (d *dirPrep) apply(c *store.TenantTx, now time.Time) (held int, holdID stri
 		res.Identities = append(res.Identities, connectors.IdentityRecord{ExternalID: r.Key, Name: f["name"], Type: "human",
 			Email: strp(f["email"]), Department: strp(f["department"]), Title: strp(f["title"]), Status: "terminated", TerminatedAt: &t})
 	}
-	// ingest keeps a terminated person terminated; a person this source ended and its file lists active again is
-	// taken back here (peopleConflicts already refused anyone another source owns)
-	ours := map[string]bool{}
-	for _, p := range d.prev {
-		ours[p.Key] = true
-	}
-	for _, r := range d.recs {
-		if ours[r.Key] && r.Fields["status"] != "terminated" {
-			if err := c.ReactivateIdentity(r.Key); err != nil {
+	// who is active before the import: an end note is only for a person this import itself ends
+	wasActive := map[string]bool{}
+	for _, rec := range res.Identities {
+		if rec.Status == "terminated" {
+			if i, err := c.IdentityByExternalID(rec.ExternalID); err == nil && i.Status == "active" {
+				wasActive[rec.ExternalID] = true
+			} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 				return 0, "", err
 			}
 		}
+	}
+	// ingest keeps a terminated person terminated; a person this source ended and its file lists active again is
+	// taken back here, through the deletion guard (peopleConflicts already refused anyone another source owns)
+	heldBack, err := d.reactivate(c, now)
+	if err != nil {
+		return 0, "", err
 	}
 	st, err := ingest.Import(c, now, res)
 	if err != nil {
@@ -861,7 +912,156 @@ func (d *dirPrep) apply(c *store.TenantTx, now time.Time) (held int, holdID stri
 	if held > 0 {
 		holdID = st.IdentityHoldID
 	}
-	return held, holdID, d.store(c, now, keep)
+	if err := d.store(c, now, keep, heldBack); err != nil {
+		return 0, "", err
+	}
+	// the end notes: the terminated_at this import applied, or asked the guard for when it held the end
+	notes := map[string]string{}
+	for _, rec := range res.Identities {
+		if rec.Status != "terminated" || !wasActive[rec.ExternalID] {
+			continue
+		}
+		i, err := c.IdentityByExternalID(rec.ExternalID)
+		if err != nil {
+			return 0, "", err
+		}
+		switch {
+		case i.Status == "terminated" && i.TerminatedAt != nil:
+			notes[rec.ExternalID] = timeutil.DB(*i.TerminatedAt)
+		case i.Status == "active" && rec.TerminatedAt != nil:
+			notes[rec.ExternalID] = timeutil.DB(*rec.TerminatedAt)
+		}
+	}
+	return held, holdID, d.stampEnded(c, notes)
+}
+
+// reactivate takes back the people this source ended and its file lists active again. Only a termination the
+// source's snapshot records as its own is undone (endedBySource); the deletion guard vets the batch as it vets
+// removals, so a file cannot restore people in bulk without a second admin. It answers the people held.
+func (d *dirPrep) reactivate(c *store.TenantTx, now time.Time) (map[string]bool, error) {
+	prevBy := map[string]*store.ImportRecord{}
+	for _, p := range d.prev {
+		prevBy[p.Key] = p
+	}
+	var items []deleteguard.Item
+	for _, r := range d.recs {
+		row, ok := prevBy[r.Key]
+		if !ok || r.Fields["status"] == "terminated" {
+			continue
+		}
+		i, err := c.IdentityByExternalID(r.Key)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !endedBySource(row, i) {
+			continue
+		}
+		ref, err := json.Marshal(reactivateRef{System: d.in.System, ExternalID: r.Key, EndedAt: endedNote(row.Data)})
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, deleteguard.Item{Kind: ItemReactivatePerson, Ref: string(ref),
+			Label: fmt.Sprintf("%s (%s) made active again by an import of %s", i.Name, r.Key, d.in.System)})
+	}
+	heldBack := map[string]bool{}
+	if len(items) == 0 {
+		return heldBack, nil
+	}
+	dec, err := deleteguard.AdmitWith(c, now, deleteguard.Request{Category: deleteguard.CatIdentities, Source: deleteguard.SourceConnector,
+		SourceID: d.in.System, Correlation: "dirimport:reactivate:" + d.in.System, Population: len(d.prev), Items: items})
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range dec.Applied {
+		var k reactivateRef
+		if err := json.Unmarshal([]byte(it.Ref), &k); err != nil {
+			return nil, err
+		}
+		if err := reactivatePerson(c, now, d.in.By, k, ""); err != nil {
+			return nil, err
+		}
+	}
+	for _, it := range dec.Held {
+		var k reactivateRef
+		if err := json.Unmarshal([]byte(it.Ref), &k); err != nil {
+			return nil, err
+		}
+		heldBack[k.ExternalID] = true
+	}
+	return heldBack, nil
+}
+
+// reactivateRef is a held restore: the source, the person and the end note the restore undoes.
+type reactivateRef struct {
+	System     string `json:"system"`
+	ExternalID string `json:"external_id"`
+	EndedAt    string `json:"ended_at"`
+}
+
+// reactivatePerson makes the person active again and records it in the audit ledger.
+func reactivatePerson(c *store.TenantTx, now time.Time, by string, k reactivateRef, holdID string) error {
+	if err := c.ReactivateIdentity(k.ExternalID); err != nil {
+		return err
+	}
+	detail := ojson.Object{{Key: "system", Value: k.System}, {Key: "external_id", Value: k.ExternalID}, {Key: "ended_at", Value: k.EndedAt}}
+	if holdID != "" {
+		detail = append(detail, ojson.KV{Key: "hold_id", Value: holdID})
+	}
+	_, err := c.RecordAudit(store.AuditRecord{At: now, Action: "directory.person_reactivated", LegacyActor: by,
+		TargetType: "identity", TargetID: k.ExternalID, Detail: detail})
+	return err
+}
+
+// ReleaseReactivate applies a held restore if the person is still terminated by the same end of the same source.
+func ReleaseReactivate(c *store.TenantTx, now time.Time, it *store.DeletionHoldItem) (outcome, note string, err error) {
+	var k reactivateRef
+	if err := json.Unmarshal([]byte(it.Ref), &k); err != nil {
+		return "", "", fmt.Errorf("flatfile: bad held restore: %w", err)
+	}
+	i, err := c.IdentityByExternalID(k.ExternalID)
+	if errors.Is(err, store.ErrNotFound) {
+		return deleteguard.ItemGone, "the person no longer exists", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if i.Status != "terminated" {
+		return deleteguard.ItemGone, "the person is already " + i.Status, nil
+	}
+	if i.TerminatedAt == nil || timeutil.DB(*i.TerminatedAt) != k.EndedAt {
+		return deleteguard.ItemGone, "the person was terminated again since, not by this source", nil
+	}
+	if src, err := c.ImportRecordSource(store.ImportPeople, k.ExternalID); err != nil {
+		return "", "", err
+	} else if src != k.System {
+		return deleteguard.ItemGone, "the person is no longer in this source", nil
+	}
+	if err := reactivatePerson(c, now, "deletion_guard", k, it.HoldID); err != nil {
+		return "", "", err
+	}
+	return deleteguard.ItemReleased, "", nil
+}
+
+// stampEnded writes the end notes onto the snapshot rows of the people this import ended.
+func (d *dirPrep) stampEnded(c *store.TenantTx, notes map[string]string) error {
+	if len(notes) == 0 {
+		return nil
+	}
+	rows, err := c.ImportRecords(d.in.System, d.kind)
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if at, ok := notes[r.Key]; ok && endedNote(r.Data) != at {
+			if err := c.PutImportRecord(withEndedNote(r, at)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------- entitlements
@@ -1067,7 +1267,7 @@ func (d *dirPrep) applyEntitlements(c *store.TenantTx, now time.Time) (held int,
 		}
 		held, holdID = len(dec.Held), dec.HoldID
 	}
-	return held, holdID, d.store(c, now, keep)
+	return held, holdID, d.store(c, now, keep, nil)
 }
 
 // ---------------------------------------------------------------- one record (the create and edit forms)

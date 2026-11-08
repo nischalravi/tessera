@@ -267,6 +267,7 @@ func (s *Server) deletionAppliers(r *http.Request) deleteguard.Appliers {
 		ingest.ItemEdgePrune:           ingest.ReleaseEdge,
 		flatfile.ItemDropAccount:       flatfile.ReleaseDrop,
 		flatfile.ItemRetireEntitlement: flatfile.ReleaseRetire,
+		flatfile.ItemReactivatePerson:  flatfile.ReleaseReactivate,
 		jml.ItemLeaver:                 jml.ReleaseLeaver,
 		jml.ItemAccountDisable:         jml.ReleaseAccountDisable,
 		model.ItemGroupDelete:          group, model.ItemGroupPurge: group, model.ItemGroupTree: group,
