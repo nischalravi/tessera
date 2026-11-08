@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/deleteguard"
@@ -70,4 +71,26 @@ func ReleaseHeld(tx *store.TenantTx, now time.Time, it *store.DeletionHoldItem) 
 		return "", "", err
 	}
 	return deleteguard.ItemReleased, "", nil
+}
+
+// HeldKeys lists the idempotency keys, starting with prefix (a literal), of the operations the deletion guard holds
+// and nobody has released or discarded yet. Such an operation is not in flight (nothing is queued) but its intent is
+// pending: asking again must not hold a second copy.
+func HeldKeys(tx *store.TenantTx, prefix string) ([]string, error) {
+	// heldOp marshals the change without field tags, so the key is stored as "Key":"<key>"
+	refs, err := tx.HeldDeletionItemRefs(ItemOp, `"Key":"`+prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		var h heldOp
+		if err := json.Unmarshal([]byte(ref), &h); err != nil {
+			return nil, fmt.Errorf("provision: bad held operation: %w", err)
+		}
+		if strings.HasPrefix(h.Change.Key, prefix) {
+			out = append(out, h.Change.Key)
+		}
+	}
+	return out, nil
 }

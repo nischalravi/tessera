@@ -148,6 +148,19 @@ func (s *Server) accountState(r *http.Request, ids []int64, reason string, enabl
 			pending[id], pendingOp[id] = dir, op.ID
 		}
 	}
+	// a disable the deletion guard holds is not in flight, but asking again must not hold a second copy
+	// (releasing both would queue two disables): it counts as pending for its account and direction
+	held, err := provision.HeldKeys(c, accountStateKeyPrefix)
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range held {
+		if id, dir, ok := parseAccountStateKey(k); ok {
+			if _, busy := pending[id]; !busy {
+				pending[id], pendingOp[id] = dir, ""
+			}
+		}
+	}
 	// the caller's platform user, for the separation-of-duties checks (nil for a non-user principal)
 	var me *store.PlatformUser
 	if pr := principal(r); pr != nil && pr.UserID != nil {
@@ -157,7 +170,7 @@ func (s *Server) accountState(r *http.Request, ids []int64, reason string, enabl
 	}
 	out := make([]accountStateResult, 0, len(ids))
 	for _, id := range ids {
-		res, err := s.accountStateFor(c, now, me, id, verb, want, enable, pending, pendingOp)
+		res, err := s.accountStateFor(c, now, me, actor(r), id, verb, want, enable, pending, pendingOp)
 		if err != nil {
 			return nil, err
 		}
@@ -188,9 +201,12 @@ const (
 	// refuseIdentityDisabled: the account's identity is disabled; only Enable of the identity, with its four-eyes
 	// check, gives its accounts back.
 	refuseIdentityDisabled = "identity_disabled"
+	// refuseFourEyes: the caller asked for the disable this enable would undo (like Enable of an identity, #316);
+	// another admin must re-enable the account.
+	refuseFourEyes = containment.RefuseFourEyes
 )
 
-func (s *Server) accountStateFor(c *store.TenantTx, now time.Time, me *store.PlatformUser, id int64, verb, want string, enable bool,
+func (s *Server) accountStateFor(c *store.TenantTx, now time.Time, me *store.PlatformUser, by string, id int64, verb, want string, enable bool,
 	pending map[int64]string, pendingOp map[int64]string) (accountStateResult, error) {
 	a, err := c.Account(id)
 	if errors.Is(err, store.ErrNotFound) {
@@ -222,13 +238,25 @@ func (s *Server) accountStateFor(c *store.TenantTx, now time.Time, me *store.Pla
 	}
 	if dir, ok := pending[id]; ok {
 		if (dir == "enable") == enable {
-			return accountStateResult{ID: id, Status: "pending", OpID: pendingOp[id]}, nil
+			res := accountStateResult{ID: id, Status: "pending", OpID: pendingOp[id]}
+			if res.OpID == "" {
+				res.Detail = "held by the deletion guard until another admin releases it"
+			}
+			return res, nil
 		}
 		return refuse(id, http.StatusConflict, "operation_in_flight", "an account "+dir+" is already waiting for the target"), nil
 	}
 	if a.Status != want {
 		return refuse(id, http.StatusConflict, "invalid_state", "only a"+map[bool]string{false: "n active", true: " disabled"}[enable]+
 			" account can be "+verb+"d (it is "+a.Status+")"), nil
+	}
+	if enable {
+		if refusal, err := accountEnableRefusal(c, me, by, id); err != nil {
+			return accountStateResult{}, err
+		} else if refusal {
+			return refuse(id, http.StatusForbidden, refuseFourEyes,
+				"another admin must re-enable this account: you asked for the disable"), nil
+		}
 	}
 	t, err := provision.Route(c, a.System)
 	if err != nil {
@@ -259,10 +287,38 @@ func (s *Server) accountStateFor(c *store.TenantTx, now time.Time, me *store.Pla
 		}
 		return accountStateResult{}, err
 	}
+	if !enable {
+		var byUser *string
+		if me != nil {
+			u := me.ID.String()
+			byUser = &u
+		}
+		if err := c.RecordAccountDisableRequest(id, by, byUser, now); err != nil {
+			return accountStateResult{}, err
+		}
+	}
 	if op.Status == provision.Held {
 		return accountStateResult{ID: id, Status: "held"}, nil
 	}
 	return accountStateResult{ID: id, Status: "queued", OpID: op.ID}, nil
+}
+
+// accountEnableRefusal reports whether the caller asked for the disable (through the account route) that this enable
+// would undo. Users are compared as in Enable of an identity: two users linked to one identity are one person (#425);
+// a request without a recorded user, or a caller that is not a user, falls back to the actor name. An account with no
+// record (disabled with its identity, or by the target itself) has no one to be different from.
+func accountEnableRefusal(c *store.TenantTx, me *store.PlatformUser, by string, id int64) (bool, error) {
+	d, err := c.AccountDisableRequest(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if d.RequestedByUser != nil && me != nil {
+		return c.SameActor(*d.RequestedByUser, me.ID.String())
+	}
+	return d.RequestedByUser == nil && d.RequestedBy == by, nil
 }
 
 // parseAccountStateKey reads "account-state:<id>:<direction>:<n>".

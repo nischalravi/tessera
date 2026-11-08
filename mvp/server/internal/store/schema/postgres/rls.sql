@@ -2628,6 +2628,13 @@ CREATE POLICY tenant_isolation ON dirimport_records
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE account_disable_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE account_disable_requests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON account_disable_requests;
+CREATE POLICY tenant_isolation ON account_disable_requests
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 -- Privileges of the application role, re-applied after every migration (from 0900_roles.sql, #605).
 DO $roles$
 BEGIN
