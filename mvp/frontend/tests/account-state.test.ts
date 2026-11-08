@@ -60,3 +60,13 @@ test("the summary names what was sent and why the rest was not", () => {
   assert.match(none.text, /cannot set an account active again/);
   assert.match(model.accountStateSummary("disable", [{ id: 1, status: "held" }]).text, /held for a second admin/);
 });
+
+test("the new refusals have their own wording and a toast never ends in two periods", () => {
+  for (const code of ["self_account_change_not_allowed", "four_eyes_required", "identity_disabled", "actor_unlinked"]) {
+    const s = model.accountStateSummary("disable", [{ id: 1, status: "error", error: code }], () => "acct");
+    assert.doesNotMatch(s.text, /was refused/, code);
+    assert.doesNotMatch(s.text, /\.\.$/, code);
+  }
+  const dotted = model.accountStateSummary("enable", [{ id: 2, status: "error", error: "x", detail: "refused by the target." }], () => "acct");
+  assert.doesNotMatch(dotted.text, /\.\./);
+});

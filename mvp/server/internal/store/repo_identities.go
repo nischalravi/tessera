@@ -45,6 +45,11 @@ var (
 			AND ((@email <> '' AND lower(trim(i.email)) = lower(@email))
 				OR (@external_id <> '' AND i.external_id = @external_id))
 		ORDER BY i.id LIMIT 1`)
+	// Only a terminated person: the upsert keeps a terminated one terminated (UAT #134), so an import that
+	// takes back a person it ended itself says so here.
+	identitiesReactivate = tq("identities.reactivate", `
+		UPDATE identities SET status = 'active', terminated_at = NULL
+		WHERE tenant_id = @tenant AND external_id = @external_id AND status = 'terminated'`)
 	identitiesOwnedBy = tq("identities.owned_by", `
 		SELECT `+identityCols+` FROM identities i WHERE i.tenant_id = @tenant AND i.owner_id = @owner_id ORDER BY i.id`)
 	identitiesManagedBy = tq("identities.managed_by", `
@@ -176,6 +181,13 @@ func (tx *TenantTx) IdentityMap() (map[int64]*Identity, []*Identity, error) {
 		m[i.ID] = i
 	}
 	return m, all, nil
+}
+
+// ReactivateIdentity makes a terminated identity active again (an explicit act: UpsertIdentity never does).
+// Any other status is left alone.
+func (tx *TenantTx) ReactivateIdentity(externalID string) error {
+	_, err := tx.exec(identitiesReactivate, sql.Named("external_id", externalID))
+	return err
 }
 
 // UpsertIdentity inserts an identity or updates the connector-owned fields of

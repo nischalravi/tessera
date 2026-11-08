@@ -286,6 +286,7 @@ var mutations = map[string]func(c *store.TenantTx, a, b map[string]int64) error{
 	"SetIdentityManager": func(c *store.TenantTx, a, _ map[string]int64) error {
 		return c.SetIdentityManager(a["alice"], nil)
 	},
+	"ReactivateIdentity": func(c *store.TenantTx, _, _ map[string]int64) error { return c.ReactivateIdentity("alice") },
 	"TerminateIdentity": func(c *store.TenantTx, a, _ map[string]int64) error {
 		return c.TerminateIdentity(a["alice"], storetest.Now)
 	},

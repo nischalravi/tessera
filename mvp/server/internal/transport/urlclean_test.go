@@ -2,6 +2,7 @@ package transport
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -205,4 +206,33 @@ func mustConnID(t *testing.T, tx *store.TenantTx, name string) string {
 	}
 	t.Fatalf("no connection %q", name)
 	return ""
+}
+
+// Issue #926: the owners are copied out of the config onto the connection; a credentialed URL stored in one before
+// the refusal is cleaned or left out of the bundle like the same value in the config.
+func TestExport_OwnersAreCleaned(t *testing.T) {
+	e := newEnv(t)
+	write(t, e.src, func(tx *store.TenantTx) error {
+		b, err := e.rd.Create(tx, readiness.CreateInput{Name: "Corp AD", ConnectorType: "demo-ad", System: "corp-ad",
+			Config: json.RawMessage(`{"host":"dc01.corp.example"}`)}, "admin", t0)
+		if err != nil {
+			return err
+		}
+		return tx.UpdateConnectionOwners(b.Conn.ID, str("https://u:pwSECRET1@h.example"), str("Ops <https://u:pwSECRET2@h.example>"), t0)
+	})
+	b := e.bundleOf(t)
+	raw, _ := json.Marshal(b)
+	if strings.Contains(string(raw), "SECRET") {
+		t.Fatalf("the bundle carries an owner's credential: %s", raw)
+	}
+	if len(b.Connections) != 1 || b.Connections[0].TechnicalOwner == nil || *b.Connections[0].TechnicalOwner != "https://h.example" || b.Connections[0].BusinessOwner != nil {
+		t.Errorf("owners %+v", b.Connections)
+	}
+	found := false
+	for _, x := range b.Excluded {
+		found = found || (x.Name == "Corp AD" && slices.Contains(x.Fields, "business_owner"))
+	}
+	if !found {
+		t.Errorf("business_owner not listed as left out: %+v", b.Excluded)
+	}
 }
