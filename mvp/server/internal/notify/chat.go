@@ -20,6 +20,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // The tenant's chat workspace (Admin > Notifications, schema/0761_tenant_chat_webhook.sql): a Slack or Microsoft Teams
@@ -60,12 +61,19 @@ type ChatEnv struct {
 	AnyHost bool
 }
 
+// CodeURLNonASCIIAuthority is the error code of a webhook URL whose scheme or host is not ASCII (as in readiness).
+const CodeURLNonASCIIAuthority = "url_non_ascii_authority"
+
 // ChatAAD binds a tenant's sealed webhook URL to the tenant, table and column.
 func ChatAAD(t tenancy.ID) []byte { return seal.AAD(t, "tenant_chat_webhook", "webhook_sealed") }
 
 // CheckWebhookURL validates a webhook URL for a provider and returns its host.
 func (e ChatEnv) CheckWebhookURL(provider, raw string) (string, error) {
 	refuse := func(code, msg string) (string, error) { return "", cfgerr.Refuse(422, code, "%s", msg) }
+	if urlshape.NonASCIIHead(raw) {
+		// a look-alike host could pass the provider suffix check (".webhook.office.com") or name another host once decoded
+		return refuse(CodeURLNonASCIIAuthority, "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)")
+	}
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" || len(raw) > 2000 || u.User != nil || u.Fragment != "" {
 		return refuse("invalid_webhook", "the webhook is an absolute https URL without credentials")

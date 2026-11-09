@@ -56,6 +56,8 @@ func ssfError(err error) error {
 	switch {
 	case errors.Is(err, ssf.ErrNoSuchTransmitter):
 		return &readiness.Error{Status: http.StatusNotFound, Code: "not_found", Msg: "no such transmitter"}
+	case errors.As(err, &ce) && ce.Code != "":
+		return badRequest(ce.Code, ce.Msg)
 	case errors.As(err, &ce):
 		return badRequest("invalid_transmitter", ce.Msg)
 	}

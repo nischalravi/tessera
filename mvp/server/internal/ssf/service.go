@@ -19,6 +19,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // Service receives, processes and manages SSF streams. HTTP and Sealer are
@@ -52,14 +53,21 @@ func (s *Service) now() time.Time {
 }
 
 // ConfigError is a caller error in a transmitter's configuration.
-type ConfigError struct{ Msg string }
+type ConfigError struct {
+	Msg string
+	// Code, when set, is the API error code (else the API's generic one).
+	Code string
+}
 
 func (e *ConfigError) Error() string { return e.Msg }
 
-func bad(format string, a ...any) error { return &ConfigError{fmt.Sprintf(format, a...)} }
+// CodeURLNonASCIIAuthority is the error code of a transmitter URL whose scheme or host is not ASCII (as in readiness).
+const CodeURLNonASCIIAuthority = "url_non_ascii_authority"
+
+func bad(format string, a ...any) error { return &ConfigError{Msg: fmt.Sprintf(format, a...)} }
 
 // ErrNoSuchTransmitter: no such transmitter in this tenant.
-var ErrNoSuchTransmitter = &ConfigError{"no such transmitter"}
+var ErrNoSuchTransmitter = &ConfigError{Msg: "no such transmitter"}
 
 // ---------------------------------------------------------------- input
 
@@ -95,6 +103,9 @@ var systemRE = regexp.MustCompile(`^[a-z][a-z0-9_]{1,39}$`)
 func checkURL(name, raw string) error {
 	if raw == "" {
 		return nil
+	}
+	if urlshape.NonASCIIHead(raw) {
+		return &ConfigError{Code: CodeURLNonASCIIAuthority, Msg: name + ": scheme and host must be ASCII; give an international host name as punycode (xn--)"}
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") || len(raw) > 512 {

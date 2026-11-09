@@ -13,7 +13,7 @@ import (
 )
 
 // ErrNoVerification: the transmitter has no verification endpoint.
-var ErrNoVerification = &ConfigError{"this transmitter has no verification endpoint: set verification_url, or discover it"}
+var ErrNoVerification = &ConfigError{Msg: "this transmitter has no verification endpoint: set verification_url, or discover it"}
 
 // RequestVerification asks the transmitter to send a verification event
 // (SSF 1.0 section 8.1.4.2): it POSTs a random state to the verification
@@ -51,7 +51,7 @@ func (s *Service) RequestVerification(ctx context.Context, db *store.DB, tenant 
 	}
 	if err != nil {
 		s.noteError(ctx, db, tenant, tr.ID, "verification request failed: "+err.Error())
-		return &ConfigError{"the verification request failed: " + err.Error()}
+		return &ConfigError{Msg: "the verification request failed: " + err.Error()}
 	}
 	return db.InTenant(ctx, tenant, func(c *store.TenantTx) error {
 		now := s.now()

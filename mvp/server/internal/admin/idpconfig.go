@@ -16,6 +16,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/samlsp"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // IdPConfig is the full, secret-free configuration of an IdP connection
@@ -233,6 +234,8 @@ func (f *IdPConfig) NeedsClientSecret() bool { return f.Protocol == "oidc" || f.
 func checkIssuer(prod bool, profile, issuer string, bad func(string, ...any)) {
 	iss, err := url.Parse(issuer)
 	switch {
+	case urlshape.NonASCIIHead(issuer):
+		bad("issuer: scheme and host must be ASCII; give an international host name as punycode (xn--)")
 	case issuer == "" || err != nil || iss.Host == "":
 		bad("issuer must be an absolute URL")
 	case prod && iss.Scheme != "https":
@@ -251,6 +254,8 @@ func checkIssuer(prod bool, profile, issuer string, bad func(string, ...any)) {
 func checkEndpoint(prod bool, name, v string, bad func(string, ...any)) {
 	u, err := url.Parse(v)
 	switch {
+	case urlshape.NonASCIIHead(v):
+		bad("%s: scheme and host must be ASCII; give an international host name as punycode (xn--)", name)
 	case err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http"):
 		bad("%s must be an absolute URL", name)
 	case prod && u.Scheme != "https":
@@ -328,6 +333,8 @@ func (f *IdPConfig) checkOAuth2(prod bool, bad func(string, ...any)) {
 		}
 		u, err := url.Parse(v)
 		switch {
+		case urlshape.NonASCIIHead(v):
+			bad("%s: scheme and host must be ASCII; give an international host name as punycode (xn--)", name)
 		case err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http"):
 			bad("%s must be an absolute URL", name)
 		case prod && u.Scheme != "https":
@@ -351,6 +358,8 @@ func (f *IdPConfig) checkOAuth2(prod bool, bad func(string, ...any)) {
 func (f *IdPConfig) checkCAS(prod bool, bad func(string, ...any)) {
 	u, err := url.Parse(f.CASServerURL)
 	switch {
+	case urlshape.NonASCIIHead(f.CASServerURL):
+		bad("cas_server_url: scheme and host must be ASCII; give an international host name as punycode (xn--)")
 	case f.CASServerURL == "" || err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http"):
 		bad("cas_server_url must be an absolute URL (the CAS server base, e.g. https://cas.example.edu/cas)")
 	case prod && u.Scheme != "https":
@@ -383,6 +392,8 @@ func (f *IdPConfig) checkWSFed(prod bool, bad func(string, ...any)) {
 	}
 	u, err := url.Parse(f.WSFedEndpoint)
 	switch {
+	case urlshape.NonASCIIHead(f.WSFedEndpoint):
+		bad("wsfed_endpoint: scheme and host must be ASCII; give an international host name as punycode (xn--)")
 	case f.WSFedEndpoint == "" || err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http"):
 		bad("wsfed_endpoint must be an absolute URL (the passive endpoint)")
 	case prod && u.Scheme != "https":
@@ -417,6 +428,8 @@ func (f *IdPConfig) checkSAML(prod bool, bad func(string, ...any)) {
 	}
 	sso, err := url.Parse(f.IdPSSOURL)
 	switch {
+	case urlshape.NonASCIIHead(f.IdPSSOURL):
+		bad("idp_sso_url: scheme and host must be ASCII; give an international host name as punycode (xn--)")
 	case f.IdPSSOURL == "" || err != nil || sso.Host == "":
 		bad("idp_sso_url must be an absolute URL")
 	case prod && sso.Scheme != "https":

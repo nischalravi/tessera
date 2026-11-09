@@ -191,7 +191,9 @@ func (c Config) Validate(rt connsync.Runtime) error {
 	if c.System != "" && !systemRE.MatchString(c.System) {
 		bad("system must be a short lower-case name")
 	}
-	if _, err := netip.ParseAddr(c.Host); err != nil && !hostRE.MatchString(c.Host) {
+	if strings.IndexFunc(c.Host, func(r rune) bool { return r > '~' }) >= 0 {
+		bad("host must be ASCII; give an international host name as punycode (xn--)")
+	} else if _, err := netip.ParseAddr(c.Host); err != nil && !hostRE.MatchString(c.Host) {
 		bad("host must be a host name or IP address without scheme, port or path")
 	} else if safehttp.IsMetadataHost(c.Host) {
 		bad("host must not be a cloud metadata service")

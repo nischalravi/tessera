@@ -23,6 +23,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // Streamer is the system actor of what the delivery loop audits.
@@ -57,6 +58,9 @@ type Error struct {
 }
 
 func (e *Error) Error() string { return e.Code + ": " + e.Msg }
+
+// CodeURLNonASCIIAuthority is the error code of a sink target whose scheme or host is not ASCII (as in readiness).
+const CodeURLNonASCIIAuthority = "url_non_ascii_authority"
 
 func refuse(status int, code, format string, args ...any) error {
 	return &Error{Status: status, Code: code, Msg: fmt.Sprintf(format, args...)}
@@ -361,6 +365,9 @@ func (s *SinkSpec) check(dev bool) error {
 	}
 	switch s.Kind {
 	case "webhook":
+		if urlshape.NonASCIIHead(s.Target) {
+			return refuse(422, CodeURLNonASCIIAuthority, "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)")
+		}
 		u, err := url.Parse(s.Target)
 		if err != nil || u.Host == "" || u.User != nil || len(s.Target) > 2000 {
 			return refuse(422, "invalid_target", "the webhook URL must be an absolute https URL without credentials")
@@ -376,6 +383,9 @@ func (s *SinkSpec) check(dev bool) error {
 		}
 		s.CAPEM, s.Region, s.AccessKeyID = "", "", ""
 	case "s3":
+		if urlshape.NonASCIIHead(s.Target) {
+			return refuse(422, CodeURLNonASCIIAuthority, "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)")
+		}
 		u, err := url.Parse(s.Target)
 		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(s.Target) > 2000 {
 			return refuse(422, "invalid_target", "the bucket URL must be an absolute https URL (with an optional key prefix) without credentials or a query")
@@ -394,6 +404,9 @@ func (s *SinkSpec) check(dev bool) error {
 		}
 		s.Flavor, s.CAPEM = "", ""
 	case "syslog":
+		if urlshape.NonASCIIHead(s.Target) {
+			return refuse(422, CodeURLNonASCIIAuthority, "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)")
+		}
 		host, port, err := net.SplitHostPort(s.Target)
 		if err != nil {
 			host, port = s.Target, DefaultSyslogPort
