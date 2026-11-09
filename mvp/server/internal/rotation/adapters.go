@@ -2,6 +2,7 @@ package rotation
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // AdapterTypes lists the types a tenant can register; "fake" only where
@@ -80,12 +82,20 @@ type AdapterInput struct {
 	Credential map[string]string `json:"credential"`
 }
 
+// CodeURLNonASCIIAuthority is the error code of an endpoint whose scheme or host is not ASCII (as in readiness).
+const CodeURLNonASCIIAuthority = "url_non_ascii_authority"
+
+var errNonASCIIHost = errors.New("non-ASCII host")
+
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
 
 // validateEndpoint accepts an http(s) base URL without user info, query or
 // fragment; plain http only outside prod (safehttp still limits it to dev
 // loopback at call time).
 func validateEndpoint(field, raw, env string) error {
+	if urlshape.NonASCIIHead(raw) {
+		return fmt.Errorf("%w: %s: scheme and host must be ASCII; give an international host name as punycode (xn--)", errNonASCIIHost, field)
+	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("%s must be an http(s) URL without credentials, query or fragment", field)

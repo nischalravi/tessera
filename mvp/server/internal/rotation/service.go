@@ -122,6 +122,9 @@ func (s *Service) PutAdapter(tx *store.TenantTx, in AdapterInput, actor string, 
 		return nil, false, invalid("invalid_type", "type must be one of %s", strings.Join(AdapterTypes(s.AllowFake), ", "))
 	}
 	cfg, err := cleanConfig(in.Type, in.Config, s.Env)
+	if errors.Is(err, errNonASCIIHost) {
+		return nil, false, invalid(CodeURLNonASCIIAuthority, "%s", strings.TrimPrefix(err.Error(), errNonASCIIHost.Error()+": "))
+	}
 	if err != nil {
 		return nil, false, invalid("invalid_config", "%v", err)
 	}
