@@ -342,6 +342,10 @@ type SinkSpec struct {
 	// NoTarget: ImportSink checks Target (the origin a bundle carried) but stores no target, so the sink
 	// stays disabled until a person sets one. Not used by the API.
 	NoTarget bool
+	// keepsTarget is set by an update whose target is the stored one and that does not enable a disabled sink: a sink saved
+	// before the ASCII-host rule (#939) can then still be disabled or renamed; the rule applies to every target that is new
+	// or changed, and to enabling one (#943).
+	keepsTarget bool
 	// Start, on creation: "now" (the current head, the default) or "beginning" (replay the whole ledger).
 	Start string
 }
@@ -365,7 +369,7 @@ func (s *SinkSpec) check(dev bool) error {
 	}
 	switch s.Kind {
 	case "webhook":
-		if urlshape.NonASCIIHead(s.Target) {
+		if !s.keepsTarget && urlshape.NonASCIIHead(s.Target) {
 			return refuse(422, CodeURLNonASCIIAuthority, "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)")
 		}
 		u, err := url.Parse(s.Target)
@@ -383,7 +387,7 @@ func (s *SinkSpec) check(dev bool) error {
 		}
 		s.CAPEM, s.Region, s.AccessKeyID = "", "", ""
 	case "s3":
-		if urlshape.NonASCIIHead(s.Target) {
+		if !s.keepsTarget && urlshape.NonASCIIHead(s.Target) {
 			return refuse(422, CodeURLNonASCIIAuthority, "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)")
 		}
 		u, err := url.Parse(s.Target)
@@ -404,7 +408,7 @@ func (s *SinkSpec) check(dev bool) error {
 		}
 		s.Flavor, s.CAPEM = "", ""
 	case "syslog":
-		if urlshape.NonASCIIHead(s.Target) {
+		if !s.keepsTarget && urlshape.NonASCIIHead(s.Target) {
 			return refuse(422, CodeURLNonASCIIAuthority, "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)")
 		}
 		host, port, err := net.SplitHostPort(s.Target)
@@ -589,6 +593,8 @@ func updateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, 
 	if s.Kind != k.Kind {
 		return nil, refuse(422, "invalid_kind", "a sink's kind cannot change")
 	}
+	// Enabling a disabled sink is a new use of its target: the host can never be dialed, so the rule applies again.
+	s.keepsTarget = s.Target == k.Target && (k.Enabled || !s.Enabled)
 	if err := s.check(dev); err != nil {
 		return nil, err
 	}
