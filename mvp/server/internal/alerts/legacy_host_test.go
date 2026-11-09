@@ -36,13 +36,21 @@ func TestUpdateChannel_LegacyNonASCIITarget(t *testing.T) {
 			return err
 		})
 	}
+	if err := update(alerts.ChannelSpec{Name: "Hook", Target: legacy, MinSeverity: "low", Enabled: true}); err != nil {
+		t.Errorf("rename an enabled channel with the stored legacy target: %v", err)
+	}
 	if err := update(alerts.ChannelSpec{Name: "Hook", Target: legacy, MinSeverity: "low", Enabled: false}); err != nil {
 		t.Errorf("disable with the stored legacy target: %v", err)
 	}
 	if err := update(alerts.ChannelSpec{Name: "Renamed", Target: legacy, MinSeverity: "high", Enabled: false}); err != nil {
 		t.Errorf("rename with the stored legacy target: %v", err)
 	}
-	for _, target := range []string{"https://bücher.example/other", "https://exämple.com/x", "https://h%E2%88%B6x.example/x"} {
+	// enabling the disabled legacy channel is refused: its host can never be dialed
+	var ee *alerts.Error
+	if err := update(alerts.ChannelSpec{Name: "Renamed", Target: legacy, MinSeverity: "high", Enabled: true}); !errors.As(err, &ee) || ee.Code != alerts.CodeURLNonASCIIAuthority {
+		t.Errorf("enable with the stored legacy target: %v", err)
+	}
+	for _, target := range []string{"https://BÜCHER.example/legacy", "https://bücher.example:443/legacy", "https://bücher.example/other", "https://exämple.com/x", "https://h%E2%88%B6x.example/x"} {
 		var e *alerts.Error
 		if err := update(alerts.ChannelSpec{Name: "Hook", Target: target, MinSeverity: "low", Enabled: false}); !errors.As(err, &e) || e.Code != alerts.CodeURLNonASCIIAuthority {
 			t.Errorf("a changed non-ASCII target %q: %v", target, err)

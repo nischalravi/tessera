@@ -26,13 +26,21 @@ func TestUpdateSink_LegacyNonASCIITarget(t *testing.T) {
 	spec := func(name, target string, enabled bool) siem.SinkSpec {
 		return siem.SinkSpec{Name: name, Kind: "webhook", Format: siem.FormatJSON, Flavor: siem.FlavorJSON, Target: target, Enabled: enabled}
 	}
+	if _, err := w.update(k.ID, spec("Hook", legacy, true)); err != nil {
+		t.Errorf("rename an enabled sink with the stored legacy target: %v", err)
+	}
 	if _, err := w.update(k.ID, spec("Hook", legacy, false)); err != nil {
 		t.Errorf("disable with the stored legacy target: %v", err)
 	}
 	if _, err := w.update(k.ID, spec("Renamed", legacy, false)); err != nil {
 		t.Errorf("rename with the stored legacy target: %v", err)
 	}
-	for _, target := range []string{"https://bücher.example/other", "https://exämple.com/x", "https://h%E2%88%B6x.example/x"} {
+	// enabling the disabled legacy sink is refused: its host can never be dialed
+	var ee *siem.Error
+	if _, err := w.update(k.ID, spec("Renamed", legacy, true)); !errors.As(err, &ee) || ee.Code != siem.CodeURLNonASCIIAuthority {
+		t.Errorf("enable with the stored legacy target: %v", err)
+	}
+	for _, target := range []string{"https://BÜCHER.example/legacy", "https://bücher.example:443/legacy", "https://bücher.example/other", "https://exämple.com/x", "https://h%E2%88%B6x.example/x"} {
 		var e *siem.Error
 		if _, err := w.update(k.ID, spec("Hook", target, false)); !errors.As(err, &e) || e.Code != siem.CodeURLNonASCIIAuthority {
 			t.Errorf("a changed non-ASCII target %q: %v", target, err)
