@@ -38,7 +38,7 @@ func TestValidate_RefusesNonASCIIHosts(t *testing.T) {
 				t.Errorf("%s %s: %v", c.name, h, err)
 			}
 		}
-		for _, h := range []string{"mq.example.com", "xn--exmple-cua.com", "mq.example.com:5671"} {
+		for _, h := range []string{"mq.example.com", "xn--exmple-cua.com", "mq.example.com:5671", "[2001:db8::1]:5671"} {
 			if err := Validate(c.kind, c.cfg(h), c.cr, false); err != nil && strings.Contains(err.Error(), "must be ASCII") {
 				t.Errorf("%s %s was refused as non-ASCII: %v", c.name, h, err)
 			}
