@@ -59,6 +59,10 @@ func suspicious(s string) bool {
 func cleanString(s string) (string, cleanVerdict) {
 	out, v := cleanRaw(s)
 	if f := urlshape.Fold(s); f != s && v != verdictExcluded {
+		if urlshape.NonASCIIHead(s) && !urlshape.NonASCIIHead(f) && urlshape.HasAuthority(f) {
+			// a look-alike separator or host that only reads as a URL folded (issue #936): left out
+			return "", verdictExcluded
+		}
 		if _, fv := cleanRaw(f); fv != verdictKeep {
 			// the folded value has something to strip: s's own cleaning is exported only if nothing is left to strip
 			// in its folded form (" https://u:p@h" cleans to "https://h")
