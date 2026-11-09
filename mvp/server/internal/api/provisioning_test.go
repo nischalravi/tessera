@@ -260,6 +260,28 @@ func TestProvisioning_TargetRefusesMetadataBaseURL(t *testing.T) {
 	h.target(`{"kind":"scim","base_url":"https://scim.example/scim/v2","token":"tok"}`, 200)
 }
 
+// A target whose base URL has a non-ASCII host, written or percent-encoded, is refused at create and update with
+// url_non_ascii_authority, for every URL kind; ASCII, punycode, IPv6 and host:port forms are saved (#939).
+func TestProvisioning_TargetRefusesNonASCIIBaseURL(t *testing.T) {
+	h := newProvHarness(t, fake.Options{})
+	for _, base := range []string{"https://scim.exämple.com/scim/v2", "https://scim.%C3%A4.example/scim/v2", "https://scim.example%E2%88%B6@evil.test/scim/v2"} {
+		for _, kind := range []string{"scim", "okta", "rest"} {
+			body := fmt.Sprintf(`{"kind":%q,"base_url":%q,"token":"tok"}`, kind, base)
+			if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, body); rec.Code != http.StatusBadRequest ||
+				!strings.Contains(rec.Body.String(), "url_non_ascii_authority") || strings.Contains(rec.Body.String(), "evil.test") {
+				t.Errorf("%s %s: status %d: %s", kind, base, rec.Code, rec.Body)
+			}
+		}
+	}
+	for _, base := range []string{"https://scim.example/scim/v2", "https://xn--scim-bn.example:8443/scim/v2", "https://[2001:db8::1]:8443/scim/v2"} {
+		h.target(fmt.Sprintf(`{"kind":"scim","base_url":%q,"token":"tok"}`, base), 200)
+	}
+	// an update to a non-ASCII host is refused too
+	if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, `{"kind":"scim","base_url":"https://scim.exämple.com/scim/v2","token":"tok"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("update: %d %s", rec.Code, rec.Body)
+	}
+}
+
 func (h *provHarness) auditDetail() string {
 	var b strings.Builder
 	for _, e := range ledger(h.t, h.st.DB, h.st.Tenant) {

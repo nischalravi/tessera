@@ -35,6 +35,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // Closed-loop provisioning (issue #103). The routes configure the target
@@ -317,6 +318,11 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	var st provision.Settings
 	switch in.Kind {
 	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle, provision.KindREST, provision.KindSalesforce, provision.KindServiceNow, provision.KindAtlassian:
+		if urlshape.NonASCIIHead(in.BaseURL) {
+			return st, &readiness.Error{Status: http.StatusBadRequest, Code: readiness.CodeURLNonASCIIAuthority,
+				Msg:    "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)",
+				Fields: []readiness.FieldError{{Field: "base_url", Msg: "scheme and host must be ASCII; give an international host name as punycode (xn--)"}}}
+		}
 		if s.cfg.Env == "prod" && !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://") {
 			return st, badRequest("invalid_base_url", "base_url must be https")
 		}

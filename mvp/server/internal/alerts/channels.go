@@ -15,7 +15,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
+
+// CodeURLNonASCIIAuthority is the error code of a webhook URL whose scheme or host is not ASCII (as in readiness).
+const CodeURLNonASCIIAuthority = "url_non_ascii_authority"
 
 // MaxRecipients caps an email channel's addresses.
 const MaxRecipients = 20
@@ -74,6 +78,9 @@ func (s *ChannelSpec) check(dev bool) error {
 		}
 		s.Target = strings.Join(rs, ", ")
 	case "webhook":
+		if urlshape.NonASCIIHead(s.Target) {
+			return refuse(400, CodeURLNonASCIIAuthority, "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)")
+		}
 		u, err := url.Parse(s.Target)
 		if err != nil || u.Host == "" || u.User != nil || len(s.Target) > 2000 {
 			return refuse(422, "invalid_target", "the webhook URL must be an absolute https URL without credentials")
