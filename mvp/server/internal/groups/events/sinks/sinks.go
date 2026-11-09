@@ -32,6 +32,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // Kinds of sink.
@@ -261,6 +262,9 @@ func Validate(kind string, c Config, cr Credentials, allowInsecure bool) error {
 		if err := only(map[string]bool{"url": true, "exchange": true, "routing_key": true, "username": true, "password": true}); err != nil {
 			return err
 		}
+		if urlshape.NonASCIIHead(c.URL) {
+			return bad("url", "scheme and host must be ASCII; give an international host name as punycode (xn--)")
+		}
 		u, err := url.Parse(c.URL)
 		if err != nil || u.Host == "" || u.Hostname() == "" {
 			return bad("url", "must be an amqps://host[:port]/vhost URL")
@@ -331,6 +335,9 @@ func Validate(kind string, c Config, cr Credentials, allowInsecure bool) error {
 }
 
 func httpsURL(field, raw string, allowInsecure bool) error {
+	if urlshape.NonASCIIHead(raw) {
+		return bad(field, "scheme and host must be ASCII; give an international host name as punycode (xn--)")
+	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
 		return bad(field, "must be an https URL")

@@ -16,6 +16,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // Error is a caller error (an unknown connection, a bad credential).
@@ -129,6 +130,9 @@ func (s *Service) PutCredential(c *store.TenantTx, connectionID string, in Crede
 		return &Error{"org (the GitHub organization) is required"}
 	}
 	if in.BaseURL != "" {
+		if urlshape.NonASCIIHead(in.BaseURL) {
+			return &Error{"base_url: scheme and host must be ASCII; give an international host name as punycode (xn--)"}
+		}
 		u, err := url.Parse(in.BaseURL)
 		if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") || len(in.BaseURL) > 512 {
 			return &Error{"base_url must be an https URL"}

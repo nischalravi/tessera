@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // doHTTP sends req through the safehttp client of the deps and returns the
@@ -39,6 +40,9 @@ func doHTTP(c *http.Client, req *http.Request) (int, []byte, error) {
 // fragment. The scheme rules (https only, plain http to loopback in dev) are
 // the safehttp client's, applied on every request and redirect.
 func httpURL(field, raw string, allowQuery bool) (*url.URL, error) {
+	if urlshape.NonASCIIHead(raw) {
+		return nil, cfgErr("%s: scheme and host must be ASCII; give an international host name as punycode (xn--)", field)
+	}
 	u, err := url.Parse(raw)
 	switch {
 	case raw == "" || len(raw) > 512:
