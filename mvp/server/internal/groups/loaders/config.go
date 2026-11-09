@@ -16,6 +16,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/naming"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 func invalid(code, format string, args ...any) error {
@@ -348,6 +349,9 @@ func checkSCIMFilter(name, f string) error {
 }
 
 func checkHTTPURL(name, raw string) error {
+	if urlshape.NonASCIIHead(raw) {
+		return fmt.Errorf("%s: scheme and host must be ASCII; give an international host name as punycode (xn--)", name)
+	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(raw) > 2048 {
 		return fmt.Errorf("%s is an https URL without credentials, query or fragment", name)
@@ -411,6 +415,9 @@ type LDAPEndpoint struct {
 
 // ParseLDAPURL checks an ldap:// or ldaps:// URL (scheme, host and port only).
 func ParseLDAPURL(raw string) (LDAPEndpoint, error) {
+	if urlshape.NonASCIIHead(raw) {
+		return LDAPEndpoint{}, errors.New("url: scheme and host must be ASCII; give an international host name as punycode (xn--)")
+	}
 	u, err := url.Parse(raw)
 	if err != nil || len(raw) > 512 || u.Hostname() == "" || (u.Scheme != "ldaps" && u.Scheme != "ldap") ||
 		u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
@@ -573,6 +580,9 @@ func (c *CSVConfig) validate() error {
 		}
 	}
 	if c.URL != "" {
+		if urlshape.NonASCIIHead(c.URL) {
+			return errors.New("url: scheme and host must be ASCII; give an international host name as punycode (xn--)")
+		}
 		u, err := url.Parse(c.URL)
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || len(c.URL) > 2048 {
 			return errors.New("url is an https URL without credentials")

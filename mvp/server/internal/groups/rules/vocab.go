@@ -31,6 +31,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // Triggers: the event types a rule can react to.
@@ -464,6 +465,9 @@ func (s *Spec) validatePrivilege() error {
 func checkURL(raw string) error {
 	if err := checkText("url", raw, maxURL, true); err != nil {
 		return err
+	}
+	if urlshape.NonASCIIHead(raw) {
+		return invalid("url_non_ascii_authority", "url: scheme and host must be ASCII; give an international host name as punycode (xn--)")
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Fragment != "" {
