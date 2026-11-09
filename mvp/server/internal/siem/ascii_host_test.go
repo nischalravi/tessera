@@ -26,7 +26,7 @@ func TestSinkCheck_NonASCIIHost(t *testing.T) {
 	}
 	for kind, ts := range cases {
 		for _, target := range ts {
-			if e := run(kind, target); e == nil || e.Code != CodeURLNonASCIIAuthority || e.Status != 400 {
+			if e := run(kind, target); e == nil || e.Code != CodeURLNonASCIIAuthority || e.Status != 422 {
 				t.Errorf("%s %s: %v", kind, target, e)
 			}
 		}

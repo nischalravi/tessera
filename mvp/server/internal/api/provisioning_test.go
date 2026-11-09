@@ -267,7 +267,7 @@ func TestProvisioning_TargetRefusesNonASCIIBaseURL(t *testing.T) {
 	for _, base := range []string{"https://scim.exämple.com/scim/v2", "https://scim.%C3%A4.example/scim/v2", "https://scim.example%E2%88%B6@evil.test/scim/v2"} {
 		for _, kind := range []string{"scim", "okta", "rest"} {
 			body := fmt.Sprintf(`{"kind":%q,"base_url":%q,"token":"tok"}`, kind, base)
-			if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, body); rec.Code != http.StatusBadRequest ||
+			if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, body); rec.Code != http.StatusUnprocessableEntity ||
 				!strings.Contains(rec.Body.String(), "url_non_ascii_authority") || strings.Contains(rec.Body.String(), "evil.test") {
 				t.Errorf("%s %s: status %d: %s", kind, base, rec.Code, rec.Body)
 			}
@@ -277,7 +277,7 @@ func TestProvisioning_TargetRefusesNonASCIIBaseURL(t *testing.T) {
 		h.target(fmt.Sprintf(`{"kind":"scim","base_url":%q,"token":"tok"}`, base), 200)
 	}
 	// an update to a non-ASCII host is refused too
-	if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, `{"kind":"scim","base_url":"https://scim.exämple.com/scim/v2","token":"tok"}`); rec.Code != http.StatusBadRequest {
+	if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, `{"kind":"scim","base_url":"https://scim.exämple.com/scim/v2","token":"tok"}`); rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("update: %d %s", rec.Code, rec.Body)
 	}
 }
@@ -939,6 +939,22 @@ func TestProvisioning_SalesforceTargetConfig(t *testing.T) {
 	}
 	if body, _ := json.Marshal(v); strings.Contains(string(body), "PRIVATE") || strings.Contains(string(body), "3MVG9") {
 		t.Error("the response carries the credential")
+	}
+}
+
+// An ldap or sql target whose host is not ASCII is refused with 422 url_non_ascii_authority, naming the field and
+// not the value (#939).
+func TestProvisioning_TargetRefusesNonASCIIHost(t *testing.T) {
+	h := newProvHarness(t, fake.Options{})
+	for field, body := range map[string]string{
+		"ldap.host": `{"kind":"ldap","token":"pw","ldap":{"host":"ldap.acmé.example","bind_dn":"cn=svc,dc=acme,dc=example","write_scope":["ou=People,dc=acme,dc=example"]}}`,
+		"sql.host":  `{"kind":"sql","token":"pw","sql":{"engine":"postgres","host":"db.exämple.com","database":"app","username":"u","mode":"native"}}`,
+	} {
+		rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, body)
+		if b := rec.Body.String(); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(b, "url_non_ascii_authority") ||
+			!strings.Contains(b, field) || strings.Contains(b, "xample") {
+			t.Errorf("%s: %d %s", field, rec.Code, b)
+		}
 	}
 }
 

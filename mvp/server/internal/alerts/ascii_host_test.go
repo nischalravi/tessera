@@ -24,7 +24,7 @@ func TestWebhookCheck_NonASCIIHost(t *testing.T) {
 		if got != refused {
 			t.Errorf("%s: err %v, refused %v want %v", target, err, got, refused)
 		}
-		if got && (e.Status != 400 || len(e.Msg) == 0) {
+		if got && (e.Status != 422 || len(e.Msg) == 0) {
 			t.Errorf("%s: %+v", target, e)
 		}
 	}

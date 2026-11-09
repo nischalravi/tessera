@@ -314,14 +314,20 @@ type targetInput struct {
 
 var awsRoleNameRE = regexp.MustCompile(`^[A-Za-z0-9_+=,.@-]{1,64}$`)
 
+// nonASCIIHost refuses a target URL or host whose scheme or host is not ASCII (urlshape.NonASCIIHead), as readiness
+// does for a connection; the value is never echoed.
+func nonASCIIHost(field string) error {
+	const msg = "scheme and host must be ASCII; give an international host name as punycode (xn--)"
+	return &readiness.Error{Status: http.StatusUnprocessableEntity, Code: readiness.CodeURLNonASCIIAuthority,
+		Msg: "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)", Fields: []readiness.FieldError{{Field: field, Msg: msg}}}
+}
+
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	var st provision.Settings
 	switch in.Kind {
 	case provision.KindSCIM, provision.KindOkta, provision.KindCyberArk, provision.KindDelinea, provision.KindBeyondTrust, provision.KindSAP, provision.KindOracle, provision.KindREST, provision.KindSalesforce, provision.KindServiceNow, provision.KindAtlassian:
 		if urlshape.NonASCIIHead(in.BaseURL) {
-			return st, &readiness.Error{Status: http.StatusBadRequest, Code: readiness.CodeURLNonASCIIAuthority,
-				Msg:    "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)",
-				Fields: []readiness.FieldError{{Field: "base_url", Msg: "scheme and host must be ASCII; give an international host name as punycode (xn--)"}}}
+			return st, nonASCIIHost("base_url")
 		}
 		if s.cfg.Env == "prod" && !strings.HasPrefix(strings.ToLower(in.BaseURL), "https://") {
 			return st, badRequest("invalid_base_url", "base_url must be https")
@@ -343,6 +349,9 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		// credential in it) so the origin check that keeps a stored password from moving still works
 		if in.SQL == nil {
 			return st, badRequest("invalid_sql", "sql (the database settings) is required for a sql target")
+		}
+		if urlshape.NonASCIIHead(in.SQL.Host) {
+			return st, nonASCIIHost("sql.host")
 		}
 		rt := connsync.Runtime{Env: config.Prod} // only dev may disable TLS; "test" gets the production rules
 		if s.cfg.Env == config.Dev {
@@ -367,6 +376,9 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 		}
 		cfg := *in.LDAP
 		cfg.Flavor = in.Kind
+		if urlshape.NonASCIIHead(cfg.Host) {
+			return st, nonASCIIHost("ldap.host")
+		}
 		if cfg.AllowTier0 && s.cfg.Env != config.Dev {
 			return st, badRequest("invalid_ldap", "allow_tier0 is a dev-only setting; production targets never change privileged accounts or groups")
 		}

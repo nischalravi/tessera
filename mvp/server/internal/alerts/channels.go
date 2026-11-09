@@ -79,7 +79,7 @@ func (s *ChannelSpec) check(dev bool) error {
 		s.Target = strings.Join(rs, ", ")
 	case "webhook":
 		if urlshape.NonASCIIHead(s.Target) {
-			return refuse(400, CodeURLNonASCIIAuthority, "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)")
+			return refuse(422, CodeURLNonASCIIAuthority, "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)")
 		}
 		u, err := url.Parse(s.Target)
 		if err != nil || u.Host == "" || u.User != nil || len(s.Target) > 2000 {

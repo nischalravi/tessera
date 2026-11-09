@@ -107,6 +107,9 @@ func (c *Config) Validate() error {
 	if c.Host == "" || len(c.Host) > 253 || strings.ContainsAny(c.Host, "/@ \t\r\n:") {
 		return bad("host must be a host name")
 	}
+	if strings.IndexFunc(c.Host, func(r rune) bool { return r > '~' }) >= 0 || strings.Contains(c.Host, "%") {
+		return bad("host must be ASCII; give an international host name as punycode (xn--)")
+	}
 	if safehttp.IsMetadataHost(c.Host) {
 		return bad("host must not be a cloud metadata service")
 	}
