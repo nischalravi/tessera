@@ -36,6 +36,11 @@ type ChannelSpec struct {
 	// Secret is a signing secret the caller chose (a webhook only): a configuration proposal (issue #719) cannot read the
 	// one the server would generate, so it brings its own. Empty: the server generates one when it makes or rotates it.
 	Secret string
+
+	// keepsTarget is set by an update whose target is the stored one and that does not enable a disabled row: a row saved
+	// before the ASCII-host rule (#939) can then still be disabled or renamed; the rule applies to every target that is new
+	// or changed, and to enabling one (#943).
+	keepsTarget bool
 }
 
 // MinSigningSecret and MaxSigningSecret bound a caller-chosen webhook signing secret.
@@ -78,7 +83,7 @@ func (s *ChannelSpec) check(dev bool) error {
 		}
 		s.Target = strings.Join(rs, ", ")
 	case "webhook":
-		if urlshape.NonASCIIHead(s.Target) {
+		if !s.keepsTarget && urlshape.NonASCIIHead(s.Target) {
 			return refuse(422, CodeURLNonASCIIAuthority, "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)")
 		}
 		u, err := url.Parse(s.Target)
@@ -184,6 +189,8 @@ func prepareUpdate(tx *store.TenantTx, id string, s ChannelSpec, dev bool) (*sto
 	if s.Kind != c.Kind {
 		return nil, s, "", "", refuse(422, "invalid_kind", "a channel's kind cannot change")
 	}
+	// Enabling a disabled row is a new use of its target: the host can never be dialed, so the rule applies again.
+	s.keepsTarget = s.Target == c.Target && (c.Enabled || !s.Enabled)
 	if err := s.check(dev); err != nil {
 		return nil, s, "", "", err
 	}

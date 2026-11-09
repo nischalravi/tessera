@@ -17,6 +17,7 @@ import (
 	"github.com/go-ldap/ldap/v3"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
+	"github.com/nischalravi/tessera/mvp/server/internal/urlshape"
 )
 
 // The LDAP and Active Directory targets (design §9.2). Groups are
@@ -75,6 +76,9 @@ func parseLDAPConfig(typ string, c *Compiled, deps Deps) (ldapCfg, error) {
 	var cfg ldapCfg
 	if err := strictJSON(c.Target, &cfg); err != nil {
 		return cfg, cfgErr("target: %v", err)
+	}
+	if urlshape.NonASCIIHead(cfg.URL) {
+		return cfg, cfgErr("target.url: scheme and host must be ASCII; give an international host name as punycode (xn--)")
 	}
 	u, err := url.Parse(cfg.URL)
 	switch {

@@ -133,6 +133,9 @@ func TestPutCredentialValidation(t *testing.T) {
 		{"metadata address with dots", okta, containment.CredentialInput{Token: "t", BaseURL: "https://169.254.169.254../x"}, "metadata service"},
 		{"metadata name", okta, containment.CredentialInput{Token: "t", BaseURL: "https://METADATA.GOOGLE.INTERNAL."}, "metadata service"},
 		{"metadata IPv6", okta, containment.CredentialInput{Token: "t", BaseURL: "https://[fd00:ec2::254]:443"}, "metadata service"},
+		{"non-ASCII host", okta, containment.CredentialInput{Token: "t", BaseURL: "https://exämple.okta.com"}, "scheme and host must be ASCII"},
+		{"percent-encoded non-ASCII host", okta, containment.CredentialInput{Token: "t", BaseURL: "https://h%E2%88%B6x.okta.com"}, "scheme and host must be ASCII"},
+		{"look-alike colon after the scheme", okta, containment.CredentialInput{Token: "t", BaseURL: "https\u2236//x.okta.com"}, "scheme and host must be ASCII"},
 	}
 	for _, tc := range cases {
 		err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
