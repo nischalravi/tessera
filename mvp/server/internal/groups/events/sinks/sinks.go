@@ -208,6 +208,32 @@ const maxField = 2048
 // Validate checks a sink's configuration and credentials. allowInsecure (dev)
 // permits plain amqp:// and non-TLS Kafka; everywhere else TLS is required.
 func Validate(kind string, c Config, cr Credentials, allowInsecure bool) error {
+	return validate(kind, c, cr, allowInsecure, nil)
+}
+
+// keptURLs are the URL settings of a stored configuration that an update leaves byte-identical and that does not enable
+// a disabled sink: a sink saved before the ASCII-host rule (#944) can then still be disabled or renamed; every new or
+// changed URL, and enabling the sink, gets the full check (#953).
+type keptURLs struct{ Endpoint, QueueURL, URL string }
+
+func keepURLs(stored, now Config) *keptURLs {
+	k := &keptURLs{}
+	if stored.Endpoint == now.Endpoint {
+		k.Endpoint = stored.Endpoint
+	}
+	if stored.QueueURL == now.QueueURL {
+		k.QueueURL = stored.QueueURL
+	}
+	if stored.URL == now.URL {
+		k.URL = stored.URL
+	}
+	return k
+}
+
+// kept reports whether raw is a stored URL the update leaves alone (nil: none is).
+func (k *keptURLs) kept(raw, stored string) bool { return k != nil && raw != "" && raw == stored }
+
+func validate(kind string, c Config, cr Credentials, allowInsecure bool, keep *keptURLs) error {
 	for name, v := range map[string]string{"region": c.Region, "endpoint": c.Endpoint, "queue_url": c.QueueURL, "topic_arn": c.TopicARN,
 		"url": c.URL, "exchange": c.Exchange, "routing_key": c.RoutingKey, "topic": c.Topic, "sasl": c.SASL, "access_key_id": cr.AccessKeyID,
 		"secret_access_key": cr.SecretAccessKey, "session_token": cr.SessionToken, "username": cr.Username, "password": cr.Password} {
@@ -242,12 +268,12 @@ func Validate(kind string, c Config, cr Credentials, allowInsecure bool) error {
 			return bad("region", "must be an AWS region such as eu-west-1")
 		}
 		if c.Endpoint != "" {
-			if err := httpsURL("endpoint", c.Endpoint, allowInsecure); err != nil {
+			if err := httpsURL("endpoint", c.Endpoint, allowInsecure, keep != nil && keep.kept(c.Endpoint, keep.Endpoint)); err != nil {
 				return err
 			}
 		}
 		if kind == KindSQS {
-			if err := httpsURL("queue_url", c.QueueURL, allowInsecure); err != nil {
+			if err := httpsURL("queue_url", c.QueueURL, allowInsecure, keep != nil && keep.kept(c.QueueURL, keep.QueueURL)); err != nil {
 				return err
 			}
 		} else if m := topicARNRE.FindStringSubmatch(c.TopicARN); m == nil {
@@ -262,7 +288,7 @@ func Validate(kind string, c Config, cr Credentials, allowInsecure bool) error {
 		if err := only(map[string]bool{"url": true, "exchange": true, "routing_key": true, "username": true, "password": true}); err != nil {
 			return err
 		}
-		if urlshape.NonASCIIHead(c.URL) {
+		if !(keep != nil && keep.kept(c.URL, keep.URL)) && urlshape.NonASCIIHead(c.URL) {
 			return bad("url", "scheme and host must be ASCII; give an international host name as punycode (xn--)")
 		}
 		u, err := url.Parse(c.URL)
@@ -334,8 +360,8 @@ func Validate(kind string, c Config, cr Credentials, allowInsecure bool) error {
 	return nil
 }
 
-func httpsURL(field, raw string, allowInsecure bool) error {
-	if urlshape.NonASCIIHead(raw) {
+func httpsURL(field, raw string, allowInsecure, keepsHost bool) error {
+	if !keepsHost && urlshape.NonASCIIHead(raw) {
 		return bad(field, "scheme and host must be ASCII; give an international host name as punycode (xn--)")
 	}
 	u, err := url.Parse(raw)

@@ -192,6 +192,33 @@ func strictDecode(raw json.RawMessage, v any) error {
 // canonical form (the fields in declaration order, defaults not filled). A
 // connector_groups loader needs a connection: hasConnection says it has one.
 func ValidateConfig(typ string, raw json.RawMessage, hasConnection bool) (json.RawMessage, error) {
+	return validateConfig(typ, raw, hasConnection, nil)
+}
+
+// keptURLs are the URLs of a stored config that an update leaves byte-identical: a loader saved before the ASCII-host
+// rule (#944) can then still be paused or renamed; the rule applies to every URL that is new or changed, and to enabling
+// the loader (#953).
+// Keyed by setting: a stored value only counts for the setting it was stored under.
+type keptURLs map[string]string
+
+func (k keptURLs) has(field, u string) bool { return u != "" && k[field] == u }
+
+// storedURLs reads the URL settings (url, base_url, token_url) of a stored config.
+func storedURLs(config string) keptURLs {
+	var m map[string]any
+	if json.Unmarshal([]byte(config), &m) != nil {
+		return nil
+	}
+	out := keptURLs{}
+	for _, key := range []string{"url", "base_url", "token_url"} {
+		if v, ok := m[key].(string); ok {
+			out[key] = v
+		}
+	}
+	return out
+}
+
+func validateConfig(typ string, raw json.RawMessage, hasConnection bool, keep keptURLs) (json.RawMessage, error) {
 	if len(raw) == 0 || len(raw) > MaxConfigBytes {
 		return nil, invalid("invalid_config", "config is required and at most %d bytes", MaxConfigBytes)
 	}
@@ -207,7 +234,7 @@ func ValidateConfig(typ string, raw json.RawMessage, hasConnection bool) (json.R
 	case TypeCSV:
 		c := &CSVConfig{}
 		if err = strictDecode(raw, c); err == nil {
-			err = c.validate()
+			err = c.validate(keep)
 		}
 		v = c
 	case TypeConnectorGroups:
@@ -235,13 +262,13 @@ func ValidateConfig(typ string, raw json.RawMessage, hasConnection bool) (json.R
 	case TypeSCIM:
 		c := &SCIMConfig{}
 		if err = strictDecode(raw, c); err == nil {
-			err = c.validate()
+			err = c.validate(keep)
 		}
 		v = c
 	case TypeLDAPSimple, TypeLDAPGroupList:
 		c := &LDAPConfig{}
 		if err = strictDecode(raw, c); err == nil {
-			err = c.validate(typ)
+			err = c.validate(typ, keep)
 		}
 		v = c
 	case TypeRecent:
@@ -348,8 +375,8 @@ func checkSCIMFilter(name, f string) error {
 	return nil
 }
 
-func checkHTTPURL(name, raw string) error {
-	if urlshape.NonASCIIHead(raw) {
+func checkHTTPURL(name, raw string, keep bool) error {
+	if !keep && urlshape.NonASCIIHead(raw) {
 		return fmt.Errorf("%s: scheme and host must be ASCII; give an international host name as punycode (xn--)", name)
 	}
 	u, err := url.Parse(raw)
@@ -362,8 +389,8 @@ func checkHTTPURL(name, raw string) error {
 	return nil
 }
 
-func (c *SCIMConfig) validate() error {
-	if err := checkHTTPURL("base_url", c.BaseURL); err != nil {
+func (c *SCIMConfig) validate(keep keptURLs) error {
+	if err := checkHTTPURL("base_url", c.BaseURL, keep.has("base_url", c.BaseURL)); err != nil {
 		return err
 	}
 	switch c.Auth {
@@ -372,7 +399,7 @@ func (c *SCIMConfig) validate() error {
 			return errors.New("token_url, client_id and scope are for auth client_credentials")
 		}
 	case "client_credentials":
-		if err := checkHTTPURL("token_url", c.TokenURL); err != nil {
+		if err := checkHTTPURL("token_url", c.TokenURL, keep.has("token_url", c.TokenURL)); err != nil {
 			return err
 		}
 		if c.ClientID == "" || len(c.ClientID) > 256 || len(c.Scope) > 256 {
@@ -414,8 +441,10 @@ type LDAPEndpoint struct {
 }
 
 // ParseLDAPURL checks an ldap:// or ldaps:// URL (scheme, host and port only).
-func ParseLDAPURL(raw string) (LDAPEndpoint, error) {
-	if urlshape.NonASCIIHead(raw) {
+func ParseLDAPURL(raw string) (LDAPEndpoint, error) { return parseLDAPURL(raw, false) }
+
+func parseLDAPURL(raw string, keep bool) (LDAPEndpoint, error) {
+	if !keep && urlshape.NonASCIIHead(raw) {
 		return LDAPEndpoint{}, errors.New("url: scheme and host must be ASCII; give an international host name as punycode (xn--)")
 	}
 	u, err := url.Parse(raw)
@@ -443,8 +472,8 @@ func ParseLDAPURL(raw string) (LDAPEndpoint, error) {
 	return LDAPEndpoint{Host: u.Hostname(), Port: port}, nil
 }
 
-func (c *LDAPConfig) validate(typ string) error {
-	if _, err := ParseLDAPURL(c.URL); err != nil {
+func (c *LDAPConfig) validate(typ string, keep keptURLs) error {
+	if _, err := parseLDAPURL(c.URL, keep.has("url", c.URL)); err != nil {
 		return err
 	}
 	if err := ldapdir.ValidDN(c.BindDN); err != nil {
@@ -549,7 +578,7 @@ func CheckSecret(typ string, config json.RawMessage, secret string, prod bool) e
 	return nil
 }
 
-func (c *CSVConfig) validate() error {
+func (c *CSVConfig) validate(keep keptURLs) error {
 	switch {
 	case (c.Path == "") == (c.URL == ""):
 		return errors.New("name exactly one of path and url")
@@ -580,7 +609,7 @@ func (c *CSVConfig) validate() error {
 		}
 	}
 	if c.URL != "" {
-		if urlshape.NonASCIIHead(c.URL) {
+		if !keep.has("url", c.URL) && urlshape.NonASCIIHead(c.URL) {
 			return errors.New("url: scheme and host must be ASCII; give an international host name as punycode (xn--)")
 		}
 		u, err := url.Parse(c.URL)

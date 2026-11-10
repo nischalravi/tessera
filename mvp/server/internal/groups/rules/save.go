@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -228,6 +229,11 @@ func Update(e Env, id string, spec Spec, rotate bool) (*View, string, error) {
 	}
 	if err := e.owner(&spec); err != nil {
 		return nil, "", err
+	}
+	// Enabling a disabled rule is a new use of its URL: the host can never be dialed, so the rule applies again.
+	var stored Params
+	if r.Action == ActWebhook && json.Unmarshal([]byte(r.Params), &stored) == nil {
+		spec.keepsURL = spec.Action == ActWebhook && spec.Params.URL == stored.URL && (r.Enabled || !spec.Enabled)
 	}
 	if err := e.checkSave(&spec); err != nil {
 		return nil, "", err
