@@ -126,6 +126,11 @@ type Spec struct {
 	Action     string
 	Params     Params
 	Enabled    bool
+
+	// keepsURL is set by an update whose webhook URL is the stored one and that does not enable a disabled rule: a rule
+	// saved before the ASCII-host rule (#944) can then still be disabled or renamed; every new or changed URL, and
+	// enabling the rule, gets the full check (#953).
+	keepsURL bool
 }
 
 var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -374,7 +379,7 @@ func (s *Spec) validateAction() error {
 		}
 		want.Subject, want.Message, want.ToIdentity = p.Subject, p.Message, p.ToIdentity
 	case ActWebhook:
-		if err := checkURL(p.URL); err != nil {
+		if err := checkURL(p.URL, s.keepsURL); err != nil {
 			return err
 		}
 		if p.Veto && s.Trigger != TrigDirectAdded {
@@ -462,11 +467,11 @@ func (s *Spec) validatePrivilege() error {
 
 // checkURL checks a webhook URL's shape. The outbound call itself is guarded
 // by internal/safehttp (scheme, destination address, redirects).
-func checkURL(raw string) error {
+func checkURL(raw string, keepsURL bool) error {
 	if err := checkText("url", raw, maxURL, true); err != nil {
 		return err
 	}
-	if urlshape.NonASCIIHead(raw) {
+	if !keepsURL && urlshape.NonASCIIHead(raw) {
 		return invalid("url_non_ascii_authority", "url: scheme and host must be ASCII; give an international host name as punycode (xn--)")
 	}
 	u, err := url.Parse(raw)

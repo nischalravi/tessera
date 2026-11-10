@@ -224,10 +224,14 @@ var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _.:-]{0,99}$`)
 
 // ValidateConfig checks a target configuration without touching the network.
 func (s *Service) ValidateConfig(typ string, config json.RawMessage, sec map[string]string) error {
+	return s.validateConfig(typ, config, sec, nil)
+}
+
+func (s *Service) validateConfig(typ string, config json.RawMessage, sec map[string]string, keep []string) error {
 	if !slices.Contains(TargetTypes(), typ) {
 		return cfgErr("target_type must be one of %v", TargetTypes())
 	}
-	c, err := ParseCommonFor(typ, config)
+	c, err := parseCommonFor(typ, config, keep)
 	if err != nil {
 		return err
 	}
@@ -407,7 +411,7 @@ func (s *Service) Update(tx *store.TenantTx, now time.Time, actor, id string, in
 	if in.Version != p.Version {
 		return nil, store.ErrVersionConflict
 	}
-	oldMode := p.Mode
+	oldMode, oldConfig := p.Mode, p.Config
 	if in.Name != nil {
 		p.Name = *in.Name
 	}
@@ -454,7 +458,12 @@ func (s *Service) Update(tx *store.TenantTx, now time.Time, actor, id string, in
 	for k, v := range in.Secret {
 		sec[k] = v
 	}
-	if err := s.ValidateConfig(p.TargetType, p.Config, sec); err != nil {
+	// Taking a paused provisioner out of pause is a new use of its URLs: the host can never be dialed, so the rule applies again.
+	var keep []string
+	if oldMode != store.ProvModePaused || p.Mode == store.ProvModePaused {
+		keep = storedTargetURLs(oldConfig)
+	}
+	if err := s.validateConfig(p.TargetType, p.Config, sec, keep); err != nil {
 		return nil, err
 	}
 	for _, k := range secretRequired[p.TargetType] {

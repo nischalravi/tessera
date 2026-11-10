@@ -40,7 +40,12 @@ func doHTTP(c *http.Client, req *http.Request) (int, []byte, error) {
 // fragment. The scheme rules (https only, plain http to loopback in dev) are
 // the safehttp client's, applied on every request and redirect.
 func httpURL(field, raw string, allowQuery bool) (*url.URL, error) {
-	if urlshape.NonASCIIHead(raw) {
+	return httpURLKeep(field, raw, allowQuery, false)
+}
+
+// httpURLKeep is httpURL; keeps skips the ASCII-host rule for a stored URL an update leaves alone (#953).
+func httpURLKeep(field, raw string, allowQuery, keeps bool) (*url.URL, error) {
+	if !keeps && urlshape.NonASCIIHead(raw) {
 		return nil, cfgErr("%s: scheme and host must be ASCII; give an international host name as punycode (xn--)", field)
 	}
 	u, err := url.Parse(raw)

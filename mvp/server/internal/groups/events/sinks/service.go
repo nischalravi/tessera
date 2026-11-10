@@ -105,8 +105,8 @@ func checkName(name string) error {
 	return nil
 }
 
-func (s *Service) validate(kind string, c Config, cr Credentials, types []string) error {
-	if err := Validate(kind, c, cr, s.AllowInsecure); err != nil {
+func (s *Service) validate(kind string, c Config, cr Credentials, types []string, keep *keptURLs) error {
+	if err := validate(kind, c, cr, s.AllowInsecure, keep); err != nil {
 		var ve *ValidationError
 		if errors.As(err, &ve) {
 			return invalid("invalid_"+ve.Field, "%s", ve.Msg)
@@ -156,7 +156,7 @@ func (s *Service) Create(tx *store.TenantTx, in CreateInput, actor string, now t
 	if in.From != "" && in.From != "now" && in.From != "start" {
 		return nil, invalid("invalid_from", "from is now or start")
 	}
-	if err := s.validate(in.Kind, in.Config, in.Creds, in.EventTypes); err != nil {
+	if err := s.validate(in.Kind, in.Config, in.Creds, in.EventTypes, nil); err != nil {
 		return nil, err
 	}
 	taken, n, err := nameTaken(tx, in.Name, "")
@@ -220,6 +220,7 @@ func (s *Service) Update(tx *store.TenantTx, id string, in UpdateInput, actor st
 	if err != nil && in.Creds == nil {
 		return nil, err
 	}
+	stored, wasEnabled := spec.Config, k.Enabled
 	changed := []any{}
 	if in.Name != nil {
 		if err := checkName(*in.Name); err != nil {
@@ -251,7 +252,12 @@ func (s *Service) Update(tx *store.TenantTx, id string, in UpdateInput, actor st
 		spec.Creds = *in.Creds
 		changed = append(changed, "credentials")
 	}
-	if err := s.validate(k.Kind, spec.Config, spec.Creds, k.EventTypes); err != nil {
+	// Enabling a disabled sink is a new use of its URLs: the host can never be dialed, so the rule applies again.
+	var keep *keptURLs
+	if wasEnabled || !k.Enabled {
+		keep = keepURLs(stored, spec.Config)
+	}
+	if err := s.validate(k.Kind, spec.Config, spec.Creds, k.EventTypes, keep); err != nil {
 		return nil, err
 	}
 	if in.Config != nil {

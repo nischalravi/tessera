@@ -58,7 +58,7 @@ func parseSCIMConfig(c *Compiled) (scimCfg, error) {
 	if !ok {
 		return cfg, cfgErr("target.profile must be generic, aws_identity_center or github_emu")
 	}
-	if _, err := httpURL("target.base_url", cfg.BaseURL, false); err != nil {
+	if _, err := httpURLKeep("target.base_url", cfg.BaseURL, false, c.keeps(cfg.BaseURL)); err != nil {
 		return cfg, err
 	}
 	if cfg.PageSize == 0 {

@@ -41,11 +41,11 @@ func parseWebhookConfig(c *Compiled) (webhookCfg, error) {
 	}
 	// no query string: the endpoint is shown back by the API, and a token in it
 	// would be a credential in plain configuration; the signature is the credential
-	if _, err := httpURL("target.url", cfg.URL, false); err != nil {
+	if _, err := httpURLKeep("target.url", cfg.URL, false, c.keeps(cfg.URL)); err != nil {
 		return cfg, err
 	}
 	if cfg.ReadURL != "" {
-		if _, err := httpURL("target.read_url", cfg.ReadURL, false); err != nil {
+		if _, err := httpURLKeep("target.read_url", cfg.ReadURL, false, c.keeps(cfg.ReadURL)); err != nil {
 			return cfg, err
 		}
 	}
