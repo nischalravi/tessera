@@ -135,23 +135,24 @@ type Compiled struct {
 	// keep: the target URLs of the stored configuration that an update leaves byte-identical and that does not
 	// re-enable a paused provisioner. One saved before the ASCII-host rule (#944) can then still be paused or
 	// renamed; every new or changed URL, and re-enabling it, gets the full check (#953).
-	keep []string
+	keep map[string]string
 }
 
-func (c *Compiled) keeps(raw string) bool { return raw != "" && slices.Contains(c.keep, raw) }
+// keeps reports whether raw is the value stored under the same target setting (a value only counts for its own setting).
+func (c *Compiled) keeps(field, raw string) bool { return raw != "" && c.keep[field] == raw }
 
 // storedTargetURLs lists the URL settings of a stored target configuration.
-func storedTargetURLs(config json.RawMessage) []string {
+func storedTargetURLs(config json.RawMessage) map[string]string {
 	var cc struct {
 		Target map[string]any `json:"target"`
 	}
 	if json.Unmarshal(config, &cc) != nil {
 		return nil
 	}
-	var out []string
+	out := map[string]string{}
 	for _, k := range []string{"url", "base_url", "read_url"} {
 		if v, ok := cc.Target[k].(string); ok {
-			out = append(out, v)
+			out[k] = v
 		}
 	}
 	return out
@@ -207,7 +208,7 @@ func ParseCommon(raw []byte) (*Compiled, error) {
 // fields are already escaped.
 func ParseCommonFor(typ string, raw []byte) (*Compiled, error) { return parseCommonFor(typ, raw, nil) }
 
-func parseCommonFor(typ string, raw []byte, keep []string) (*Compiled, error) {
+func parseCommonFor(typ string, raw []byte, keep map[string]string) (*Compiled, error) {
 	c, err := ParseCommon(raw)
 	if err != nil || (typ != TypeLDAP && typ != TypeAD) {
 		if c != nil {

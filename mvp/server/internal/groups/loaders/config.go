@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -199,9 +198,10 @@ func ValidateConfig(typ string, raw json.RawMessage, hasConnection bool) (json.R
 // keptURLs are the URLs of a stored config that an update leaves byte-identical: a loader saved before the ASCII-host
 // rule (#944) can then still be paused or renamed; the rule applies to every URL that is new or changed, and to enabling
 // the loader (#953).
-type keptURLs []string
+// Keyed by setting: a stored value only counts for the setting it was stored under.
+type keptURLs map[string]string
 
-func (k keptURLs) has(u string) bool { return u != "" && slices.Contains(k, u) }
+func (k keptURLs) has(field, u string) bool { return u != "" && k[field] == u }
 
 // storedURLs reads the URL settings (url, base_url, token_url) of a stored config.
 func storedURLs(config string) keptURLs {
@@ -209,10 +209,10 @@ func storedURLs(config string) keptURLs {
 	if json.Unmarshal([]byte(config), &m) != nil {
 		return nil
 	}
-	var out keptURLs
+	out := keptURLs{}
 	for _, key := range []string{"url", "base_url", "token_url"} {
 		if v, ok := m[key].(string); ok {
-			out = append(out, v)
+			out[key] = v
 		}
 	}
 	return out
@@ -390,7 +390,7 @@ func checkHTTPURL(name, raw string, keep bool) error {
 }
 
 func (c *SCIMConfig) validate(keep keptURLs) error {
-	if err := checkHTTPURL("base_url", c.BaseURL, keep.has(c.BaseURL)); err != nil {
+	if err := checkHTTPURL("base_url", c.BaseURL, keep.has("base_url", c.BaseURL)); err != nil {
 		return err
 	}
 	switch c.Auth {
@@ -399,7 +399,7 @@ func (c *SCIMConfig) validate(keep keptURLs) error {
 			return errors.New("token_url, client_id and scope are for auth client_credentials")
 		}
 	case "client_credentials":
-		if err := checkHTTPURL("token_url", c.TokenURL, keep.has(c.TokenURL)); err != nil {
+		if err := checkHTTPURL("token_url", c.TokenURL, keep.has("token_url", c.TokenURL)); err != nil {
 			return err
 		}
 		if c.ClientID == "" || len(c.ClientID) > 256 || len(c.Scope) > 256 {
@@ -473,7 +473,7 @@ func parseLDAPURL(raw string, keep bool) (LDAPEndpoint, error) {
 }
 
 func (c *LDAPConfig) validate(typ string, keep keptURLs) error {
-	if _, err := parseLDAPURL(c.URL, keep.has(c.URL)); err != nil {
+	if _, err := parseLDAPURL(c.URL, keep.has("url", c.URL)); err != nil {
 		return err
 	}
 	if err := ldapdir.ValidDN(c.BindDN); err != nil {
@@ -609,7 +609,7 @@ func (c *CSVConfig) validate(keep keptURLs) error {
 		}
 	}
 	if c.URL != "" {
-		if !keep.has(c.URL) && urlshape.NonASCIIHead(c.URL) {
+		if !keep.has("url", c.URL) && urlshape.NonASCIIHead(c.URL) {
 			return errors.New("url: scheme and host must be ASCII; give an international host name as punycode (xn--)")
 		}
 		u, err := url.Parse(c.URL)

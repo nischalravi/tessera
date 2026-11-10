@@ -77,7 +77,7 @@ func parseLDAPConfig(typ string, c *Compiled, deps Deps) (ldapCfg, error) {
 	if err := strictJSON(c.Target, &cfg); err != nil {
 		return cfg, cfgErr("target: %v", err)
 	}
-	if !c.keeps(cfg.URL) && urlshape.NonASCIIHead(cfg.URL) {
+	if !c.keeps("url", cfg.URL) && urlshape.NonASCIIHead(cfg.URL) {
 		return cfg, cfgErr("target.url: scheme and host must be ASCII; give an international host name as punycode (xn--)")
 	}
 	u, err := url.Parse(cfg.URL)

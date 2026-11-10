@@ -227,7 +227,7 @@ func (s *Service) ValidateConfig(typ string, config json.RawMessage, sec map[str
 	return s.validateConfig(typ, config, sec, nil)
 }
 
-func (s *Service) validateConfig(typ string, config json.RawMessage, sec map[string]string, keep []string) error {
+func (s *Service) validateConfig(typ string, config json.RawMessage, sec map[string]string, keep map[string]string) error {
 	if !slices.Contains(TargetTypes(), typ) {
 		return cfgErr("target_type must be one of %v", TargetTypes())
 	}
@@ -459,7 +459,7 @@ func (s *Service) Update(tx *store.TenantTx, now time.Time, actor, id string, in
 		sec[k] = v
 	}
 	// Taking a paused provisioner out of pause is a new use of its URLs: the host can never be dialed, so the rule applies again.
-	var keep []string
+	var keep map[string]string
 	if oldMode != store.ProvModePaused || p.Mode == store.ProvModePaused {
 		keep = storedTargetURLs(oldConfig)
 	}
