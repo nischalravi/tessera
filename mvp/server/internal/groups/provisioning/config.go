@@ -132,6 +132,30 @@ type Compiled struct {
 	// dnShape is the attribute types of the member_ref DN rendered with
 	// placeholder values, one slice per RDN; nil when that is not a DN.
 	dnShape [][]string
+	// keep: the target URLs of the stored configuration that an update leaves byte-identical and that does not
+	// re-enable a paused provisioner. One saved before the ASCII-host rule (#944) can then still be paused or
+	// renamed; every new or changed URL, and re-enabling it, gets the full check (#953).
+	keep map[string]string
+}
+
+// keeps reports whether raw is the value stored under the same target setting (a value only counts for its own setting).
+func (c *Compiled) keeps(field, raw string) bool { return raw != "" && c.keep[field] == raw }
+
+// storedTargetURLs lists the URL settings of a stored target configuration.
+func storedTargetURLs(config json.RawMessage) map[string]string {
+	var cc struct {
+		Target map[string]any `json:"target"`
+	}
+	if json.Unmarshal(config, &cc) != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, k := range []string{"url", "base_url", "read_url"} {
+		if v, ok := cc.Target[k].(string); ok {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // MaxAttrs bounds the attributes of a group.
@@ -182,11 +206,17 @@ func ParseCommon(raw []byte) (*Compiled, error) {
 // substitutions are DN-escaped (an unreadable target config counts as DN-valued,
 // failing closed). ldapEscape in member_ref is then the identity, as the
 // fields are already escaped.
-func ParseCommonFor(typ string, raw []byte) (*Compiled, error) {
+func ParseCommonFor(typ string, raw []byte) (*Compiled, error) { return parseCommonFor(typ, raw, nil) }
+
+func parseCommonFor(typ string, raw []byte, keep map[string]string) (*Compiled, error) {
 	c, err := ParseCommon(raw)
 	if err != nil || (typ != TypeLDAP && typ != TypeAD) {
+		if c != nil {
+			c.keep = keep
+		}
 		return c, err
 	}
+	c.keep = keep
 	c.dnMember = true
 	if cfg, perr := parseLDAPConfig(typ, c, Deps{AllowPlainLDAP: true}); perr == nil {
 		c.dnMember = strings.EqualFold(cfg.MemberAttr, "member") || strings.EqualFold(cfg.MemberAttr, "uniqueMember")

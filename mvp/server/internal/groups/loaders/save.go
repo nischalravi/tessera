@@ -100,7 +100,12 @@ func Validate(tx *store.TenantTx, spec Spec, existing *store.GrpLoader) (*store.
 		c := spec.ConnectionID
 		l.ConnectionID = &c
 	}
-	cfg, err := ValidateConfig(spec.Type, spec.Config, l.ConnectionID != nil)
+	// A stored URL left byte-identical by an update that does not enable a disabled loader keeps its pre-#944 pass.
+	var keep keptURLs
+	if existing != nil && (existing.Status != store.LoaderDisabled || spec.Status != store.LoaderEnabled) {
+		keep = storedURLs(existing.Config)
+	}
+	cfg, err := validateConfig(spec.Type, spec.Config, l.ConnectionID != nil, keep)
 	if err != nil {
 		return nil, err
 	}
