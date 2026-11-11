@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Outlet, useNavigate, useSearchParams } from "react-router-dom";
 import { Ban, ClipboardCheck, KeyRound, Plus, RotateCcw, ShoppingCart, UserCheck, Users } from "lucide-react";
 import { AccountRow, AffiliationSummaryRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, OrgRow, ResourceRow, api, fmtDay, relTime, useAIAgents, useApi, LifecycleList, orgsPath } from "../../api";
@@ -17,7 +17,7 @@ import { BulkOwnerDrawer } from "./owners";
 import { ViewToggle } from "./groups/ViewToggle";
 import { useAccountActions } from "./accountActions";
 import { accountStatusLabel } from "./accountState";
-import { ImportDrawer, ObjectFormDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
+import { ImportDrawer, ObjectFormDrawer, opts, uniq } from "./shared";
 import { HierarchySourceCard } from "./orgSettings";
 import { AFFILIATION_LABEL, STATE_LABEL as PERSON_STATE_LABEL } from "./affiliationModel";
 
@@ -26,6 +26,8 @@ export function DirectoryLayout() {
   return <Outlet />;
 }
 
+/** Registering a machine identity is a service-account request: owners are mandatory and the workflow approves it. */
+const REGISTER_PATH = "/access/request/service-account";
 const IDENTITY: [string] = ["Identity"];
 const plural = (n: number | undefined | null, one: string, many = `${one}s`) => (n == null ? null : `${n.toLocaleString()} ${n === 1 ? one : many}`);
 
@@ -57,7 +59,7 @@ function useImport() {
   };
 }
 
-const newCmd = (label: string, onClick: () => void, preview?: boolean): Command => ({ label, icon: <Plus size={16} />, onClick, title: preview ? "Preview: saved in this browser only" : undefined });
+const newCmd = (label: string, onClick: () => void): Command => ({ label, icon: <Plus size={16} />, onClick });
 
 // ------------------------------------------------------------------ people
 const TEAMS = ["backend", "frontend", "platform", "data", "security", "finance", "sales", "support", "people", "exec"];
@@ -206,8 +208,9 @@ export function Machine() {
   const [selected, setSelected] = useSelected();
   const acts = useIdentityActions();
   const toast = useToast();
-  const [newOpen, setNew] = useDrawerParam("new");
-  const { data: people } = useApi<IdentityRow[]>("/identities?type=human&status=active");
+  const nav = useNavigate();
+  const newOpen = params.get("new") === "1"; // a deep link from the command palette
+  useEffect(() => { if (newOpen) nav(REGISTER_PATH, { replace: true }); }, [newOpen, nav]);
   const agents = (data ?? []).filter((x) => x.type === "ai_agent");
   const { can } = useSession();
   const [assign, setAssign] = useState<NhiRow[] | null>(null);
@@ -269,7 +272,7 @@ export function Machine() {
           { id: "source", label: "Source", options: opts(uniq((agentRows ?? []).map((a) => a.source))).map((o) => ({ ...o, label: sourceLabel(o.value) })), get: (r) => agentOf.get(r.id)?.source },
           { id: "sponsor", label: "Sponsor", options: [["active", "Active"], ["inactive", "Inactive"], ["none", "No sponsor"]].map(([value, label]) => ({ value, label })), get: (r) => agentOf.get(r.id)?.sponsor_status },
         ]}
-        commands={[newCmd("Register", () => setNew(true), true)]}
+        commands={[newCmd("Register", () => nav(REGISTER_PATH))]}
         onRefresh={reload}
         bulkActions={[
           ...(can("ownership.manage") ? [{ label: "Assign owner", icon: <UserCheck size={16} />, run: (rs: NhiRow[]) => setAssign(rs) }] : []),
@@ -297,21 +300,6 @@ export function Machine() {
       {selected && tab === "inventory" && <IdentityPanel id={selected} onClose={() => setSelected(null)} />}
       {rotate && <PlanDrawer title={rotate.title} secretIds={rotate.ids} onClose={() => { setRotate(null); reload(); }} />}
       {assign && <BulkOwnerDrawer objects={assign.map((r) => ({ kind: "identity", key: String(r.id), label: r.name }))} onClose={() => setAssign(null)} onDone={reload} />}
-      {newOpen && (
-        <PreviewFormDrawer
-          title="Register a machine identity"
-          kind="machine_identity"
-          onClose={() => setNew(false)}
-          note="Every machine identity needs a human owner. Tessera alerts when the owner leaves or the secret is older than 90 days."
-          fields={[
-            { id: "name", label: "Name", required: true, placeholder: "e.g. billing-sync-bot" },
-            { id: "type", label: "Type", required: true, options: ["Service account", "API key", "AI agent", "Integration user"] },
-            { id: "owner", label: "Owner", required: true, options: (people ?? []).map((p) => p.name).sort() },
-            { id: "system", label: "System", options: ["aws", "github", "okta", "snowflake", "workday"] },
-            { id: "purpose", label: "Purpose", textarea: true, placeholder: "What it does and why it needs access" },
-          ]}
-        />
-      )}
     </Page>
   );
 }

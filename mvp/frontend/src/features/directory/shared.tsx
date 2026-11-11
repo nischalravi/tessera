@@ -1,14 +1,12 @@
 /** Drawers shared by the Directory lists: CSV import into a manual source, and the create / edit form. */
 import { FormEvent, Fragment, ReactNode, useEffect, useRef, useState } from "react";
 import { FileUp } from "lucide-react";
-import { usePersona } from "../../app/persona";
 import { useSession } from "../../app/auth";
-import { Button, Callout, Chip, Drawer, PreviewBadge, useToast } from "../../components";
+import { Button, Callout, Chip, Drawer, useToast } from "../../components";
 import {
   ImportPlan, ImportSources, ImportTarget, ManualLookup, OwnershipList, applyDirectoryImport, manualLookupPath, ownedObject, ownershipPath,
   planDirectoryImport, putManualRecord, useApi,
 } from "../../api";
-import { mockObjects } from "../../mocks";
 import { OwnerForm } from "./owners";
 import {
   FORM_FIELDS, FieldDef, KEY_FIELD, checkImportFile, expectedColumns, formMode, claimNote, guardNote, initialValues, managedBy, ownerKindFor, planHeadline,
@@ -320,61 +318,6 @@ export function ObjectFormDrawer({ title, target, id, known, source: sourceHint,
           </label>
         ))}
         {err && <Callout tone="bad">{err}</Callout>}
-      </form>
-    </Drawer>
-  );
-}
-
-/**
- * Create / edit form for objects without a write endpoint (the machine identity registration). It validates and
- * records the change in this browser (Preview) so the flow can be tried end to end.
- */
-export function PreviewFormDrawer({ title, kind, fields, initial, verb = "create", onClose, note }: {
-  title: string;
-  kind: string;
-  fields: FieldDef[];
-  initial?: Record<string, string>;
-  verb?: "create" | "update";
-  onClose: () => void;
-  note?: ReactNode;
-}) {
-  const { actor } = usePersona();
-  const toast = useToast();
-  const [v, setV] = useState<Record<string, string>>(() => Object.fromEntries(fields.map((f) => [f.id, initial?.[f.id] ?? ""])));
-  const [busy, setBusy] = useState(false);
-  const invalid = fields.some((f) => f.required && !v[f.id]?.trim());
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (invalid) return;
-    setBusy(true);
-    const name = v[fields[0].id];
-    await mockObjects.save(kind, name, actor, verb);
-    setBusy(false);
-    toast(`${name} ${verb === "create" ? "created" : "saved"} (preview)`);
-    onClose();
-  };
-  return (
-    <Drawer title={title} sub={<PreviewBadge />} onClose={onClose}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" form="preview-form" variant="primary" disabled={invalid || busy}>{verb === "create" ? "Create" : "Save changes"}</Button></>}
-    >
-      <form id="preview-form" className="stack" onSubmit={submit}>
-        {note && <Callout tone="neutral">{note}</Callout>}
-        {fields.map((f, i) => (
-          <label key={f.id} className="field">
-            <span>{f.label}{f.required && <span className="faint"> (required)</span>}</span>
-            {f.options ? (
-              <select className="input" value={v[f.id]} onChange={(e) => setV({ ...v, [f.id]: e.target.value })} data-autofocus={i === 0 || undefined}>
-                <option value="">Select…</option>
-                {f.options.map((o) => <option key={o}>{o}</option>)}
-              </select>
-            ) : f.textarea ? (
-              <textarea className="input" value={v[f.id]} placeholder={f.placeholder} onChange={(e) => setV({ ...v, [f.id]: e.target.value })} />
-            ) : (
-              <input className="input" value={v[f.id]} placeholder={f.placeholder} onChange={(e) => setV({ ...v, [f.id]: e.target.value })} data-autofocus={i === 0 || undefined} />
-            )}
-            {f.hint && <span className="hint">{f.hint}</span>}
-          </label>
-        ))}
       </form>
     </Drawer>
   );
