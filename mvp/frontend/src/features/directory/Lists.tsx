@@ -17,6 +17,7 @@ import { BulkOwnerDrawer } from "./owners";
 import { ViewToggle } from "./groups/ViewToggle";
 import { useAccountActions } from "./accountActions";
 import { accountStatusLabel } from "./accountState";
+import { REGISTER_PATH, canRegister, registerRedirect } from "./registerModel";
 import { ImportDrawer, ObjectFormDrawer, opts, uniq } from "./shared";
 import { HierarchySourceCard } from "./orgSettings";
 import { AFFILIATION_LABEL, STATE_LABEL as PERSON_STATE_LABEL } from "./affiliationModel";
@@ -26,8 +27,6 @@ export function DirectoryLayout() {
   return <Outlet />;
 }
 
-/** Registering a machine identity is a service-account request: owners are mandatory and the workflow approves it. */
-const REGISTER_PATH = "/access/request/service-account";
 const IDENTITY: [string] = ["Identity"];
 const plural = (n: number | undefined | null, one: string, many = `${one}s`) => (n == null ? null : `${n.toLocaleString()} ${n === 1 ? one : many}`);
 
@@ -209,10 +208,10 @@ export function Machine() {
   const acts = useIdentityActions();
   const toast = useToast();
   const nav = useNavigate();
-  const newOpen = params.get("new") === "1"; // a deep link from the command palette
-  useEffect(() => { if (newOpen) nav(REGISTER_PATH, { replace: true }); }, [newOpen, nav]);
-  const agents = (data ?? []).filter((x) => x.type === "ai_agent");
   const { can } = useSession();
+  const to = registerRedirect(params.toString(), can); // a deep link from the command palette
+  useEffect(() => { if (to) nav(to, { replace: true }); }, [to, nav]);
+  const agents = (data ?? []).filter((x) => x.type === "ai_agent");
   const [assign, setAssign] = useState<NhiRow[] | null>(null);
   const [showAgents, setShowAgents] = useState(false);
   const [rotate, setRotate] = useState<{ title: string; ids: number[] } | null>(null);
@@ -272,7 +271,7 @@ export function Machine() {
           { id: "source", label: "Source", options: opts(uniq((agentRows ?? []).map((a) => a.source))).map((o) => ({ ...o, label: sourceLabel(o.value) })), get: (r) => agentOf.get(r.id)?.source },
           { id: "sponsor", label: "Sponsor", options: [["active", "Active"], ["inactive", "Inactive"], ["none", "No sponsor"]].map(([value, label]) => ({ value, label })), get: (r) => agentOf.get(r.id)?.sponsor_status },
         ]}
-        commands={[newCmd("Register", () => nav(REGISTER_PATH))]}
+        commands={canRegister(can) ? [newCmd("Register", () => nav(REGISTER_PATH))] : []}
         onRefresh={reload}
         bulkActions={[
           ...(can("ownership.manage") ? [{ label: "Assign owner", icon: <UserCheck size={16} />, run: (rs: NhiRow[]) => setAssign(rs) }] : []),

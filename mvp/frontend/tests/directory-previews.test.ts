@@ -14,7 +14,7 @@ test("entitlement panel roles section is backed by the roles API, not a Preview"
 test("machine identity registration uses the service-account request flow, not a preview mock", () => {
   const read = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
   const lists = read("../src/features/directory/Lists.tsx");
-  assert.match(lists, /REGISTER_PATH = "\/access\/request\/service-account"/);
+  assert.match(lists, /from ".\/registerModel"/);
   assert.doesNotMatch(lists, /PreviewFormDrawer/);
   const shared = read("../src/features/directory/shared.tsx");
   assert.doesNotMatch(shared, /PreviewFormDrawer|mockObjects|PreviewBadge|\(preview\)/);
