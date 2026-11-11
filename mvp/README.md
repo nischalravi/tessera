@@ -4317,7 +4317,10 @@ The Directory lists' **Bulk import** (people, accounts, entitlements) and the **
   source and edits only objects one owns. For an object a connector owns it shows the source's fields read-only with
   "Managed by <system>" and offers only what Tessera keeps: an owner (`PUT /api/ownership`, `ownership.manage`) for
   entitlements and machine identities; people and accounts have no Tessera-owned attribute, so they are read-only.
-  The Preview badge is gone from import and from these forms; the machine identity registration is still a Preview.
+  The Preview badge is gone from import and from these forms. **Register** on Directory → Machine identities opens the
+  service-account request form (`/access/request/service-account`, `POST /api/service-account-requests`, kind `create`):
+  owners are mandatory and the request workflow approves it, so there is no direct-create route and no Preview mock left
+  in the Directory (the browser-side `mockObjects` store and its Admin log are removed; issue #915).
 
 ### Verified help-desk resets
 

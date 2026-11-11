@@ -8,7 +8,7 @@ import { fuzzy } from "../../app/fuzzy";
 import { Badge, Button, Callout, DataTable, EmptyState, Page, PreviewBadge, useToast } from "../../components";
 import { EmailDelivery } from "../notifications/EmailDelivery";
 import { NotificationsAdminPanel } from "../notifications/Notifications";
-import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../mocks";
+import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection } from "../../mocks";
 import { BrandingAdmin } from "./BrandingAdmin";
 import { ContractorFeeds } from "./ContractorFeeds";
 import { Certificates } from "./Certificates";
@@ -79,7 +79,6 @@ function AuditLog() {
   const [report, setReport] = useState<AuditVerifyReport | null>(null);
   const [verifying, setVerifying] = useState(false);
   const toast = useToast();
-  const mock = useMockState();
   const verify = async () => {
     setVerifying(true);
     try {
@@ -152,20 +151,6 @@ function AuditLog() {
         ]}
       />
       {open && <AuditEventPanel event={open} onClose={() => setOpen(null)} />}
-      {mock.log.length > 0 && (
-        <div className="card flush">
-          <div className="card-h"><h2 className="row tight">Preview actions in this browser <PreviewBadge /></h2><span className="xs faint tnum">{mock.log.length}</span></div>
-          <div className="table-scroll" style={{ maxHeight: 300 }}>
-            <table>
-              <tbody>
-                {mock.log.slice(0, 50).map((l, i) => (
-                  <tr key={i}><td className="small nowrap">{fmtDate(l.at.replace("Z", ""))}</td><td className="small">{l.actor}</td><td><code className="small">{l.action}</code></td><td className="small">{l.target}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
