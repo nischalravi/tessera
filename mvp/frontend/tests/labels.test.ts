@@ -64,7 +64,7 @@ test("the preferences carry the tenant's labels, and the language is the fallbac
 test("label and identity-rules calls", async () => {
   await api.labelsApi.save({ version: 2, default_language: "fr-FR", email_logo: true, labels: { group: "équipe" } });
   assert.deepEqual(calls.at(-1), { url: "/api/admin/labels", method: "PUT", body: { version: 2, default_language: "fr-FR", email_logo: true, labels: { group: "équipe" } } });
-  const body = { version: 1, correlation_order: ["email"], authoritative: { title: "workday" }, dormant_service_days: 45, dormant_ai_agent_days: 10 };
+  const body = { version: 1, correlation_order: ["email"], authoritative: { title: "workday" }, dormant_service_days: 45, dormant_ai_agent_days: 10, dormant_people_days: 120 };
   await api.identityRulesApi.save(body);
   assert.deepEqual(calls.at(-1), { url: "/api/admin/identity-rules", method: "PUT", body });
 });

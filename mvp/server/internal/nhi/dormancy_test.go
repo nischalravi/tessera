@@ -38,7 +38,7 @@ func TestInventoryDormancyIsPerIdentityType(t *testing.T) {
 		t.Helper()
 		if err := f.DB.InTenant(ctx, f.A.ID, func(c *store.TenantTx) error {
 			return c.PutIdentityRules(&store.IdentityRulesRow{CorrelationOrder: `["external_id","email"]`, Authoritative: `{}`,
-				DormantServiceDays: service, DormantAIAgentDays: agent, UpdatedBy: "test"}, storetest.Now)
+				DormantServiceDays: service, DormantAIAgentDays: agent, DormantPeopleDays: 90, UpdatedBy: "test"}, storetest.Now)
 		}); err != nil {
 			t.Fatal(err)
 		}

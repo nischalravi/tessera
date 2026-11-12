@@ -14,6 +14,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/governed"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/restgen"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/sqldb"
+	"github.com/nischalravi/tessera/mvp/server/internal/idrules"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/checks"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
@@ -34,13 +35,23 @@ var hrItems = map[string]string{"ad": "ad.key.employeeid", "ldap": "ldap.key.hr_
 	"pam": "base.correlation.rule", "erp": "base.correlation.rule", "agentcore": "base.correlation.rule", "servicenow": "base.correlation.rule", "atlassian": "base.correlation.rule", "mcp": "base.correlation.rule", "bedrock": "base.correlation.rule",
 	"vertex": "base.correlation.rule", "foundry": "base.correlation.rule", "copilot": "base.correlation.rule", "agentforce": "base.correlation.rule"}
 
+// staleDays is the stricter of the connection's stale_days (0 when unset) and the tenant's people threshold.
+func staleDays(conn, tenant int) int {
+	if conn > 0 && conn < tenant {
+		return conn
+	}
+	return tenant
+}
+
 // meta describes a revision for reconciliation.
-func meta(b *Bundle, now time.Time) reconcile.Meta {
+// peopleDays is the tenant's dormancy threshold for people (Admin > Identity rules); the stricter of it and the
+// connection's own stale_days is the account staleness threshold (RF-07).
+func meta(b *Bundle, now time.Time, peopleDays int) reconcile.Meta {
 	m := reconcile.Meta{ConnectionID: b.Conn.ID, System: b.Conn.System, SystemName: b.Template.DisplayName,
 		TemplateID: b.Template.ID, Inventory: b.Template.Inventory, Role: b.Conn.Role, CorrelationKey: b.Config.CorrelationKey,
 		HRAttribute: b.Config.HRIDAttribute, HRItem: hrItems[b.Template.ID],
 		RequiredAttrs: b.Template.RequiredAttributes["user"], RecommendedAttrs: b.Template.RecommendedAttributes["user"],
-		Thresholds: b.Template.Thresholds, Privileged: b.Config.PrivilegedExpected, StaleDays: b.Config.StaleDays, Now: now}
+		Thresholds: b.Template.Thresholds, Privileged: b.Config.PrivilegedExpected, StaleDays: staleDays(b.Config.StaleDays, peopleDays), Now: now}
 	if m.Role == "authoritative" {
 		m.HRItem = ""
 	}
@@ -340,7 +351,11 @@ type DryRunCounts struct {
 
 func (s *Service) reconcileRun(c *store.TenantTx, b *Bundle, run *store.CheckRun, res *connectors.DiscoveryResult, actor string,
 	now time.Time, stage StageFunc) error {
-	m := meta(b, now)
+	rules, _, err := idrules.Load(c)
+	if err != nil {
+		return err
+	}
+	m := meta(b, now, rules.DormantPeopleDays)
 	attrs := slices.Concat(m.RequiredAttrs, m.RecommendedAttrs, []string{m.CorrelationKey, m.HRAttribute})
 	prepared := reconcile.PrepareDiscovery(b.Template.ID, res, attrs)
 	if err := stage(c, run.ID, b.Conn.System, prepared); err != nil {
@@ -661,7 +676,11 @@ func (s *Service) AcceptFinding(c *store.TenantTx, connID, findingID, reason str
 	if err != nil {
 		return nil, err
 	}
-	snap, err := reconcile.LoadSnapshot(c, f.RunID, meta(b, now))
+	rules, _, err := idrules.Load(c)
+	if err != nil {
+		return nil, err
+	}
+	snap, err := reconcile.LoadSnapshot(c, f.RunID, meta(b, now, rules.DormantPeopleDays))
 	if err != nil {
 		return nil, err
 	}

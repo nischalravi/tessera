@@ -16,7 +16,7 @@ func setRules(t *testing.T, f *storetest.Fixture, order, auth string) {
 	t.Helper()
 	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
 		return c.PutIdentityRules(&store.IdentityRulesRow{CorrelationOrder: order, Authoritative: auth, DormantServiceDays: 30,
-			DormantAIAgentDays: 30, UpdatedBy: "test"}, storetest.Now)
+			DormantAIAgentDays: 30, DormantPeopleDays: 90, UpdatedBy: "test"}, storetest.Now)
 	}); err != nil {
 		t.Fatal(err)
 	}

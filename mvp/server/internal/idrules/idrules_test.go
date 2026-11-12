@@ -35,6 +35,9 @@ func TestCheck(t *testing.T) {
 		{"malformed system", ok(func(r *idrules.Rules) { r.Authoritative = map[string]string{"title": "x; DROP"} }), "invalid_source"},
 		{"service days 0", ok(func(r *idrules.Rules) { r.DormantServiceDays = 0 }), "invalid_dormancy"},
 		{"agent days too long", ok(func(r *idrules.Rules) { r.DormantAIAgentDays = 3651 }), "invalid_dormancy"},
+		{"people days 0", ok(func(r *idrules.Rules) { r.DormantPeopleDays = 0 }), "invalid_dormancy"},
+		{"people days too long", ok(func(r *idrules.Rules) { r.DormantPeopleDays = 3651 }), "invalid_dormancy"},
+		{"people bounds", ok(func(r *idrules.Rules) { r.DormantPeopleDays = 3650 }), ""},
 		{"bounds", ok(func(r *idrules.Rules) { r.DormantServiceDays, r.DormantAIAgentDays = 1, 3650 }), ""},
 	}
 	for _, tc := range cases {
@@ -57,7 +60,7 @@ func TestSaveVersionsAndAudits(t *testing.T) {
 	now := storetest.Now
 	if err := f.DB.InTenant(ctx, f.A.ID, func(c *store.TenantTx) error {
 		r, v, err := idrules.Load(c)
-		if err != nil || v != 0 || r.DormantServiceDays != 30 || len(r.CorrelationOrder) != 2 {
+		if err != nil || v != 0 || r.DormantServiceDays != 30 || r.DormantPeopleDays != 90 || len(r.CorrelationOrder) != 2 {
 			t.Fatalf("defaults = %+v v%d %v", r, v, err)
 		}
 		r.DormantServiceDays = 90
