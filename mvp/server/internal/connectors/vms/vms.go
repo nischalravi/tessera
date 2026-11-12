@@ -15,8 +15,8 @@
 // point them at its own integration, and the first real tenant should confirm
 // the field names (see mvp/README.md, "Contractors (VMS)").
 //
-// SFTP drops are not read here: there is no SFTP client in the module's
-// dependencies. A drop lands as a CSV upload (the same parser) until one is added.
+// A CSV source can also be an SFTP drop (issue #961, sftp.go): the same parser reads a file
+// from an SFTP server with a pinned host key and a sealed password or key.
 package vms
 
 import (
@@ -53,6 +53,8 @@ type Settings struct {
 	DateFormat string `json:"date_format,omitempty"`
 	// CSVPath is the path under the base URL a CSV source is fetched from.
 	CSVPath string `json:"csv_path,omitempty"`
+	// SFTP makes a CSV source read its file from an SFTP server instead of HTTPS (sftp.go).
+	SFTP *SFTPSettings `json:"sftp,omitempty"`
 }
 
 var fieldPathRE = regexp.MustCompile(`^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){0,5}$`)
@@ -64,6 +66,17 @@ func (s *Settings) Validate(vendor string) error {
 	for name, p := range map[string]string{"workers_path": s.WorkersPath, "token_path": s.TokenPath, "csv_path": s.CSVPath} {
 		if p != "" && (!pathRE.MatchString(p) || strings.Contains(p, "..") || strings.Contains(p, "//")) {
 			return fmt.Errorf("%s must be an absolute path of plain characters", name)
+		}
+	}
+	if s.SFTP != nil {
+		if vendor != store.VmsCSV {
+			return errors.New("sftp applies to CSV sources only")
+		}
+		if s.CSVPath != "" {
+			return errors.New("sftp and csv_path are two ways to fetch the file: set one")
+		}
+		if err := s.SFTP.Validate(); err != nil {
+			return err
 		}
 	}
 	if s.PageSize < 0 || s.PageSize > 1000 {

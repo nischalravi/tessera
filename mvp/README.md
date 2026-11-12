@@ -3155,6 +3155,23 @@ and the review queue are shared.
   Every call goes through `internal/safehttp`; a paging link must stay on the configured host; the credential
   (`client_id:client_secret`, or a bearer token for a fetched CSV) is sealed under the KEK, bound to its row,
   write-only, and a change of base URL needs a new one.
+- **SFTP drops (issue #961).** A `csv` feed can read its file from an SFTP server instead:
+  `settings.sftp = {host, port?, path, username, host_key, auth}` with no `base_url` and no `csv_path`. `path` is the
+  absolute path of a `.csv` file (plain characters, no `.` or `..`); `host_key` is **required** (a `SHA256:` fingerprint
+  or a public key line): a different key is refused before sign-in and there is no trust on first use; `auth` is
+  `password` or `key`, and the source's credential is that password or an unencrypted SSH private key, sealed under
+  the KEK bound to its row and never returned, logged or put in an error. A change of host, port, user name, auth
+  or host key needs a new credential. The dial is `unixssh.Connector.SFTP`, so it goes through the safehttp address
+  policy (no loopback, private, link-local or metadata target in prod; only the configured port) and only the `sftp`
+  subsystem runs. Only that file is read: its directory must equal its real path on the server and the file must be a
+  regular file, not a link; more than 8 MiB, non-UTF-8 content or a file without the feed's columns is refused.
+  It is read on the hourly `vms_sync` like an HTTPS feed (and by "Read now"), through the same intake. Each sync's
+  `vms.sync` audit event carries `file_sha256` and `file_bytes` (also in the sync report), and the source's
+  create/update events carry the non-secret SFTP settings. Same routes and permissions as an HTTPS feed
+  (connections.manage to save, lifecycle.manage to read now). No schema change: the settings live in the source's
+  `settings` JSON and the credential in `credential_enc`. Tests use an in-process SFTP server:
+  `go test -race ./internal/connectors/vms ./internal/vms`, `go test -race -run VmsSFTP ./internal/api`.
+  Settings > Admin > Contractor feeds > New feed > CSV file > "SFTP drop".
 - **API.** `GET|POST /api/vms/sources`, `PUT|DELETE /api/vms/sources/{id}` (connections.read|manage),
   `POST /api/vms/sync {source_id?}` and `POST /api/vms/sources/{id}/import` (`lifecycle.manage`, because they
   create and end people), `GET /api/vms/records`. Queue job `vms_sync` runs hourly per tenant (a tenant with
@@ -3165,8 +3182,7 @@ and the review queue are shared.
   documented in `fieldglass.go` and `beeline.go` and exercised by the in-process fake
   (`internal/connectors/vms/vmsfake`: paging, 401, 429 with Retry-After, 5xx, malformed JSON, an off-host next
   link, a looping page, a wrong token type); the endpoint paths are settings. The first real tenant should
-  confirm the field names and the OAuth token path. **SFTP** drops are not read: there is no SFTP client in
-  the module's dependencies, so a drop is uploaded as CSV for now.
+  confirm the field names and the OAuth token path.
 
 ### Privileged-access vaults (CyberArk, Delinea, BeyondTrust; issue #304)
 

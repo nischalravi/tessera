@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -556,7 +557,7 @@ func TestNoInsecureHostKeyOutsideTests(t *testing.T) {
 		}
 		src := string(b)
 		for _, bad := range []string{"InsecureIgnoreHostKey", "Password(", "KeyboardInteractive", "os/exec", "fmt.Sprintf(\"getent", "http.DefaultClient"} {
-			if strings.Contains(src, bad) {
+			if strings.Contains(src, bad) && !(bad == "Password(" && f == "sftpauth.go") { // sftpauth.go: SFTP only, see Read
 				t.Errorf("%s contains %s", f, bad)
 			}
 		}
@@ -576,5 +577,21 @@ func TestNoInsecureHostKeyOutsideTests(t *testing.T) {
 				t.Errorf("run is given something other than a constant: %s", strings.TrimSpace(line))
 			}
 		}
+	}
+}
+
+func TestPasswordLoginNeverRunsCommands(t *testing.T) {
+	dialed := false
+	dial := func(context.Context, string, string) (net.Conn, error) { dialed = true; return nil, errors.New("no") }
+	c, err := New(Config{Host: "h.example", Username: "feeds", HostKey: "SHA256:" + strings.Repeat("A", 43),
+		Password: connsync.NewSecret("pw")}, connsync.Runtime{}, dial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Read(context.Background()); err == nil || dialed || strings.Contains(err.Error(), "pw") {
+		t.Fatalf("Read = %v, dialed = %v", err, dialed)
+	}
+	if _, err := New(Config{Host: "h.example", Username: "feeds", HostKey: "SHA256:" + strings.Repeat("A", 43)}, connsync.Runtime{}, dial); err == nil {
+		t.Fatal("a connector with neither key nor password was built")
 	}
 }

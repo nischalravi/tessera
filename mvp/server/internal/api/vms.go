@@ -31,7 +31,11 @@ import (
 //	POST   /api/vms/sources/{source_id}/import    the CSV as the body (a CSV source)
 //	GET    /api/vms/records?limit=                the newest contractor records and what became of each
 //
-// vendor is fieldglass, beeline or csv. The credential is write-only: sealed
+// vendor is fieldglass, beeline or csv. A csv feed is uploaded, fetched over HTTPS (base_url and
+// settings.csv_path) or read from an SFTP server (settings.sftp: host, port, path, username, a
+// required pinned host_key and auth, "password" or "key"; issue #961). The credential of an SFTP
+// feed is that password or an unencrypted private key. It is sealed like the others, and a change
+// of server, login or host key needs a new one. The credential is write-only: sealed
 // under the KEK, bound to the source, never returned. An edit that moves the
 // base URL needs a new one. A record becomes an intake event of channel vms;
 // every contractor needs a sponsor (a record without one is held in review and
@@ -164,8 +168,18 @@ func (s *Server) validateVmsSource(in *vmsSourceInput, vendor string) error {
 	if err := in.Settings.Validate(vendor); err != nil {
 		return badRequest("invalid_settings", err.Error())
 	}
-	if vendor == store.VmsCSV && (in.BaseURL == "") != (in.Settings.CSVPath == "") {
+	if vendor == store.VmsCSV && in.Settings.SFTP == nil && (in.BaseURL == "") != (in.Settings.CSVPath == "") {
 		return badRequest("invalid_settings", "base_url and csv_path go together: set both to fetch a file, neither to upload it")
+	}
+	if sf := in.Settings.SFTP; sf != nil {
+		if in.BaseURL != "" {
+			return badRequest("invalid_settings", "an SFTP feed has no base_url")
+		}
+		if in.Credential != "" {
+			if err := sf.CheckCredential(in.Credential); err != nil {
+				return badRequest("invalid_credential", err.Error())
+			}
+		}
 	}
 	if in.Credential != "" && vendor != store.VmsCSV {
 		if _, _, err := feed.ParseCredential(in.Credential); err != nil {
@@ -200,6 +214,9 @@ func (s *Server) createVmsSource(_ http.ResponseWriter, r *http.Request, _ *para
 	if err := s.validateVmsSource(&in, in.Vendor); err != nil {
 		return nil, err
 	}
+	if in.Settings.SFTP != nil && in.Credential == "" {
+		return nil, badRequest("credential_required", "an SFTP feed needs its password or private key")
+	}
 	if in.Vendor != store.VmsCSV && in.Credential == "" {
 		return nil, badRequest("credential_required", "a Fieldglass or Beeline feed needs its client id and secret (client_id:client_secret)")
 	}
@@ -223,8 +240,8 @@ func (s *Server) createVmsSource(_ http.ResponseWriter, r *http.Request, _ *para
 	if err := c.InsertVmsSource(v, now); err != nil {
 		return nil, s.vmsErr(err)
 	}
-	if err := c.Audit(now, actor(r), "vms.source_created", ojson.Object{{Key: "source_id", Value: v.ID},
-		{Key: "vendor", Value: v.Vendor}, {Key: "origin", Value: targetOrigin(v.BaseURL)}, {Key: "credential", Value: credentialState(v)}}); err != nil {
+	if err := c.Audit(now, actor(r), "vms.source_created", withSFTP(ojson.Object{{Key: "source_id", Value: v.ID},
+		{Key: "vendor", Value: v.Vendor}, {Key: "origin", Value: targetOrigin(v.BaseURL)}, {Key: "credential", Value: credentialState(v)}}, in.Settings.SFTP)); err != nil {
 		return nil, err
 	}
 	saved, err := c.VmsSource(v.ID)
@@ -232,6 +249,15 @@ func (s *Server) createVmsSource(_ http.ResponseWriter, r *http.Request, _ *para
 		return nil, err
 	}
 	return statusBody{http.StatusCreated, viewVmsSource(saved)}, nil
+}
+
+// withSFTP adds the non-secret part of an SFTP feed's settings for the audit event.
+func withSFTP(d ojson.Object, sf *feed.SFTPSettings) ojson.Object {
+	if sf == nil {
+		return d
+	}
+	return append(d, ojson.KV{Key: "sftp_host", Value: sf.Host}, ojson.KV{Key: "sftp_port", Value: sf.Port}, ojson.KV{Key: "sftp_path", Value: sf.Path},
+		ojson.KV{Key: "sftp_user", Value: sf.Username}, ojson.KV{Key: "sftp_auth", Value: sf.Auth}, ojson.KV{Key: "sftp_host_key", Value: strings.TrimSpace(sf.HostKey)})
 }
 
 func credentialState(v *store.VmsSource) string {
@@ -274,7 +300,9 @@ func (s *Server) updateVmsSource(_ http.ResponseWriter, r *http.Request, p *para
 	}
 	// The sealed credential is bound to the row, not to the destination, so a
 	// stored one must never follow the feed to another origin (as for targets, #315).
-	moved := targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL)
+	var oldSet feed.Settings
+	_ = json.Unmarshal([]byte(old.Settings), &oldSet)
+	moved := targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL) || !oldSet.SFTP.SameServer(in.Settings.SFTP)
 	credential := credentialState(old)
 	switch {
 	case in.Credential != "":
@@ -289,7 +317,7 @@ func (s *Server) updateVmsSource(_ http.ResponseWriter, r *http.Request, p *para
 		}
 	case moved && len(old.CredentialEnc) > 0:
 		return nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "credential_required",
-			Msg: "changing the base URL needs a new credential; the stored one does not move with it"}
+			Msg: "changing the base URL or the SFTP server, login or host key needs a new credential; the stored one does not move with it"}
 	case old.Vendor != store.VmsCSV && len(old.CredentialEnc) == 0:
 		return nil, badRequest("credential_required", "a Fieldglass or Beeline feed needs its client id and secret")
 	}
@@ -299,9 +327,9 @@ func (s *Server) updateVmsSource(_ http.ResponseWriter, r *http.Request, p *para
 		}
 		return nil, s.vmsErr(err)
 	}
-	if err := c.Audit(now, actor(r), "vms.source_updated", ojson.Object{{Key: "source_id", Value: id},
+	if err := c.Audit(now, actor(r), "vms.source_updated", withSFTP(ojson.Object{{Key: "source_id", Value: id},
 		{Key: "vendor", Value: v.Vendor}, {Key: "origin", Value: targetOrigin(v.BaseURL)}, {Key: "status", Value: v.Status},
-		{Key: "credential", Value: credential}}); err != nil {
+		{Key: "credential", Value: credential}}, in.Settings.SFTP)); err != nil {
 		return nil, err
 	}
 	saved, err := c.VmsSource(id)

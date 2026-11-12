@@ -1,7 +1,7 @@
 import { SourceDeletionGuard } from "./SourceDeletionGuard";
 import { ChangeEvent, FormEvent, useRef, useState } from "react";
 import { Plus, RefreshCw, Upload, UserPlus } from "lucide-react";
-import { VMS_OUTCOME, VMS_REASON, VmsRecord, VmsReport, VmsSettings, VmsSource, VmsVendor, relTime, useApi, vmsApi } from "../../api";
+import { VMS_OUTCOME, VMS_REASON, VmsRecord, VmsReport, VmsSettings, VmsSftp, VmsSource, VmsVendor, relTime, useApi, vmsApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { Badge, Button, Callout, Drawer, EmptyState, Loading, useConfirm, useToast } from "../../components";
 
@@ -90,7 +90,7 @@ export function ContractorFeeds() {
                   <tr key={s.id}>
                     <td>
                       <b>{s.name}</b> <Badge tone="outline">{VENDOR[s.vendor]}</Badge> {s.status === "paused" && <Badge tone="warning">Paused</Badge>}
-                      <div className="xs faint truncate">{s.base_url || "Uploaded file"}</div>
+                      <div className="xs faint truncate">{s.base_url || (s.settings.sftp ? `sftp://${s.settings.sftp.username}@${s.settings.sftp.host}:${s.settings.sftp.port || 22}${s.settings.sftp.path}` : "Uploaded file")}</div>
                     </td>
                     <td className="small">
                       {s.last_sync_at ? relTime(s.last_sync_at) : <span className="faint">Never</span>}
@@ -100,8 +100,8 @@ export function ContractorFeeds() {
                       {s.last_result === "failed" ? <span className="xs" title={s.last_error ?? ""}>{s.last_error}</span> : Object.keys(s.last_counts).length === 0 ? <span className="faint">—</span> : Object.entries(s.last_counts).map(([k, n]) => `${n} ${(VMS_OUTCOME[k]?.label ?? k).toLowerCase()}`).join(", ")}
                     </td>
                     <td className="actions-cell">
-                      {run && s.vendor === "csv" && !s.base_url && <Button size="sm" icon={<Upload size={14} />} disabled={busy !== null} onClick={() => { setUploadFor(s); setTimeout(() => file.current?.click(), 0); }}>Upload CSV</Button>}
-                      {run && (s.vendor !== "csv" || s.base_url) && <Button size="sm" icon={<RefreshCw size={14} />} disabled={busy !== null || s.status === "paused"} onClick={() => sync(s)}>{busy === s.id ? "Reading…" : "Read now"}</Button>}{" "}
+                      {run && s.vendor === "csv" && !s.base_url && !s.settings.sftp && <Button size="sm" icon={<Upload size={14} />} disabled={busy !== null} onClick={() => { setUploadFor(s); setTimeout(() => file.current?.click(), 0); }}>Upload CSV</Button>}
+                      {run && (s.vendor !== "csv" || s.base_url || s.settings.sftp) && <Button size="sm" icon={<RefreshCw size={14} />} disabled={busy !== null || s.status === "paused"} onClick={() => sync(s)}>{busy === s.id ? "Reading…" : "Read now"}</Button>}{" "}
                       {manage && <><Button size="sm" variant="ghost" onClick={() => setEdit(s)}>Edit</Button>{" "}<Button size="sm" variant="ghost" onClick={() => remove(s)}>Remove</Button></>}
                     </td>
                   </tr>
@@ -150,11 +150,15 @@ function FeedForm({ source, onClose, onSaved }: { source: VmsSource | null; onCl
   const [f, setF] = useState({
     vendor: (s?.vendor ?? "fieldglass") as VmsVendor, name: s?.name ?? "", baseUrl: s?.base_url ?? "", credential: "",
     status: s?.status ?? "active", workersPath: s?.settings.workers_path ?? "", csvPath: s?.settings.csv_path ?? "",
-    dateFormat: s?.settings.date_format ?? "", mapping: s?.settings.mapping ? JSON.stringify(s.settings.mapping, null, 1) : "",
+    dateFormat: s?.settings.date_format ?? "",
+    viaSftp: !!s?.settings.sftp, sftpHost: s?.settings.sftp?.host ?? "", sftpPort: s?.settings.sftp?.port ? String(s.settings.sftp.port) : "",
+    sftpPath: s?.settings.sftp?.path ?? "", sftpUser: s?.settings.sftp?.username ?? "", sftpHostKey: s?.settings.sftp?.host_key ?? "",
+    sftpAuth: (s?.settings.sftp?.auth ?? "password") as VmsSftp["auth"], mapping: s?.settings.mapping ? JSON.stringify(s.settings.mapping, null, 1) : "",
   });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const rest = f.vendor !== "csv";
+  const sftp = !rest && f.viaSftp;
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -162,8 +166,13 @@ function FeedForm({ source, onClose, onSaved }: { source: VmsSource | null; onCl
     try {
       const settings: VmsSettings = {};
       if (rest && f.workersPath.trim()) settings.workers_path = f.workersPath.trim();
+      if (sftp) {
+        const port = f.sftpPort.trim();
+        if (port && !/^\d+$/.test(port)) throw new Error("The port is a number between 1 and 65535.");
+        settings.sftp = { host: f.sftpHost.trim(), ...(port ? { port: Number(port) } : {}), path: f.sftpPath.trim(), username: f.sftpUser.trim(), host_key: f.sftpHostKey.trim(), auth: f.sftpAuth };
+      }
       if (!rest) {
-        if (f.csvPath.trim()) settings.csv_path = f.csvPath.trim();
+        if (!sftp && f.csvPath.trim()) settings.csv_path = f.csvPath.trim();
         if (f.dateFormat.trim()) settings.date_format = f.dateFormat.trim();
       }
       if (f.mapping.trim()) {
@@ -173,7 +182,7 @@ function FeedForm({ source, onClose, onSaved }: { source: VmsSource | null; onCl
           throw new Error(rest ? "The field mapping must be a JSON object, for example {\"sponsor_email\": \"custom_fields.sponsor\"}." : "The column mapping must be a JSON object, for example {\"worker_id\": \"Contractor No\"}.");
         }
       }
-      const body = { name: f.name.trim(), base_url: f.baseUrl.trim(), settings, status: f.status, ...(f.credential ? { credential: f.credential } : {}) };
+      const body = { name: f.name.trim(), base_url: sftp ? "" : f.baseUrl.trim(), settings, status: f.status, ...(f.credential ? { credential: f.credential } : {}) };
       const saved = s ? await vmsApi.update(s.id, body) : await vmsApi.create({ ...body, vendor: f.vendor });
       toast(`${saved.name} saved`);
       onSaved();
@@ -194,12 +203,46 @@ function FeedForm({ source, onClose, onSaved }: { source: VmsSource | null; onCl
           </label>
         )}
         <label className="field">Name<input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={100} placeholder="e.g. Fieldglass EU" /></label>
-        <label className="field">{rest ? "Base URL (https)" : "Base URL to fetch from (optional)"}
-          <input className="input" value={f.baseUrl} onChange={(e) => setF({ ...f, baseUrl: e.target.value })} required={rest} placeholder={rest ? "https://yourcompany.fieldglass.net" : "Leave empty to upload files instead"} />
-        </label>
-        <label className="field">{rest ? "Client id and secret (client_id:client_secret)" : "Bearer token (optional)"}
-          <input className="input" type="password" autoComplete="off" value={f.credential} onChange={(e) => setF({ ...f, credential: e.target.value })} required={rest && !s?.has_credential} placeholder={s?.has_credential ? "Keep the stored credential" : ""} />
-        </label>
+        {!rest && (
+          <label className="field">How the file arrives
+            <select className="input" value={f.viaSftp ? "sftp" : "file"} onChange={(e) => setF({ ...f, viaSftp: e.target.value === "sftp" })}>
+              <option value="file">Upload it, or fetch it over HTTPS</option>
+              <option value="sftp">SFTP drop</option>
+            </select>
+          </label>
+        )}
+        {sftp ? (
+          <>
+            <label className="field">SFTP host<input className="input" value={f.sftpHost} onChange={(e) => setF({ ...f, sftpHost: e.target.value })} required placeholder="sftp.agency.example" /></label>
+            <label className="field">Port (optional, default 22)<input className="input" inputMode="numeric" value={f.sftpPort} onChange={(e) => setF({ ...f, sftpPort: e.target.value })} placeholder="22" /></label>
+            <label className="field">File path<input className="input" value={f.sftpPath} onChange={(e) => setF({ ...f, sftpPath: e.target.value })} required placeholder="/drop/contractors.csv" /></label>
+            <label className="field">User name<input className="input" value={f.sftpUser} onChange={(e) => setF({ ...f, sftpUser: e.target.value })} required autoComplete="off" /></label>
+            <label className="field">Pinned host key
+              <textarea className="input" rows={2} value={f.sftpHostKey} onChange={(e) => setF({ ...f, sftpHostKey: e.target.value })} required placeholder="SHA256:… or ssh-ed25519 AAAA…" />
+            </label>
+            <p className="xs faint">Required. Tessera refuses a server whose host key differs and never trusts one on first use. Get it with <code>ssh-keyscan</code> and <code>ssh-keygen -lf</code>, from the agency.</p>
+            <label className="field">Sign in with
+              <select className="input" value={f.sftpAuth} onChange={(e) => setF({ ...f, sftpAuth: e.target.value as VmsSftp["auth"] })}>
+                <option value="password">A password</option>
+                <option value="key">A private key (no passphrase)</option>
+              </select>
+            </label>
+            <label className="field">{f.sftpAuth === "key" ? "Private key (PEM or OpenSSH)" : "Password"}
+              {f.sftpAuth === "key"
+                ? <textarea className="input" rows={4} autoComplete="off" spellCheck={false} value={f.credential} onChange={(e) => setF({ ...f, credential: e.target.value })} required={!s?.has_credential} placeholder={s?.has_credential ? "Keep the stored credential" : ""} />
+                : <input className="input" type="password" autoComplete="off" value={f.credential} onChange={(e) => setF({ ...f, credential: e.target.value })} required={!s?.has_credential} placeholder={s?.has_credential ? "Keep the stored credential" : ""} />}
+            </label>
+          </>
+        ) : (
+          <>
+            <label className="field">{rest ? "Base URL (https)" : "Base URL to fetch from (optional)"}
+              <input className="input" value={f.baseUrl} onChange={(e) => setF({ ...f, baseUrl: e.target.value })} required={rest} placeholder={rest ? "https://yourcompany.fieldglass.net" : "Leave empty to upload files instead"} />
+            </label>
+            <label className="field">{rest ? "Client id and secret (client_id:client_secret)" : "Bearer token (optional)"}
+              <input className="input" type="password" autoComplete="off" value={f.credential} onChange={(e) => setF({ ...f, credential: e.target.value })} required={rest && !s?.has_credential} placeholder={s?.has_credential ? "Keep the stored credential" : ""} />
+            </label>
+          </>
+        )}
         {rest ? (
           <>
             <label className="field">Listing path (optional)
@@ -212,7 +255,7 @@ function FeedForm({ source, onClose, onSaved }: { source: VmsSource | null; onCl
           </>
         ) : (
           <>
-            <label className="field">File path under the base URL (with a base URL)<input className="input" value={f.csvPath} onChange={(e) => setF({ ...f, csvPath: e.target.value })} placeholder="/feeds/contractors.csv" /></label>
+            {!sftp && <label className="field">File path under the base URL (with a base URL)<input className="input" value={f.csvPath} onChange={(e) => setF({ ...f, csvPath: e.target.value })} placeholder="/feeds/contractors.csv" /></label>}
             <label className="field">Date format (optional, Go layout)<input className="input" value={f.dateFormat} onChange={(e) => setF({ ...f, dateFormat: e.target.value })} placeholder="2006-01-02" /></label>
             <label className="field">Column mapping (optional JSON)
               <textarea className="input" rows={4} value={f.mapping} onChange={(e) => setF({ ...f, mapping: e.target.value })} placeholder={'{"worker_id": "Contractor No", "end_date": "Finish"}'} />
@@ -221,7 +264,7 @@ function FeedForm({ source, onClose, onSaved }: { source: VmsSource | null; onCl
           </>
         )}
         <label className="row tight small"><input type="checkbox" checked={f.status === "active"} onChange={(e) => setF({ ...f, status: e.target.checked ? "active" : "paused" })} /> Active (read on the hourly schedule)</label>
-        <p className="small muted">Credentials are encrypted at rest and never shown again. Private and loopback addresses are refused. A change of base URL needs a new credential.</p>
+        <p className="small muted">Credentials are encrypted at rest and never shown again. Private and loopback addresses are refused. A change of base URL, or of an SFTP server, user name or host key, needs a new credential.</p>
         {error && <Callout tone="bad">{error}</Callout>}
         <div className="row"><Button type="submit" variant="primary" disabled={busy}>{busy ? "Saving…" : "Save"}</Button><Button onClick={onClose}>Cancel</Button></div>
       </form>

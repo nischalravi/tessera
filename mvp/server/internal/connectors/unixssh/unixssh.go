@@ -105,6 +105,9 @@ type Config struct {
 	HostKey string
 	// Key is the private key (PEM or OpenSSH format, not passphrase protected).
 	Key connsync.Secret
+	// Password signs in with a password instead of Key. Only the SFTP contractor feed sets it
+	// (issue #961); the connection settings of the Unix connector have no such field.
+	Password connsync.Secret
 	// UseSudo reads the sudoers files through `sudo -n`.
 	UseSudo bool
 }
@@ -134,7 +137,7 @@ func ValidateHost(h string) error {
 // Connector implements connectors.Connector.
 type Connector struct {
 	cfg    Config
-	signer ssh.Signer
+	signer ssh.Signer // nil when the login is by password
 	pin    pin
 	dial   safehttp.DialFunc
 	host   string // lower case, the qualifier of every external id
@@ -156,8 +159,12 @@ func New(cfg Config, rt connsync.Runtime, dial safehttp.DialFunc) (*Connector, e
 	if err != nil {
 		return nil, err
 	}
-	signer, err := ssh.ParsePrivateKey([]byte(cfg.Key.Reveal()))
-	if err != nil { // never include err: it can quote the key's header
+	var signer ssh.Signer
+	if cfg.Key.Empty() && !cfg.Password.Empty() {
+		if len(cfg.Password.Reveal()) > 1024 {
+			return nil, connsync.CredentialFormat("unixssh: the password is too long")
+		}
+	} else if signer, err = ssh.ParsePrivateKey([]byte(cfg.Key.Reveal())); err != nil { // never include err: it can quote the key's header
 		return nil, connsync.CredentialFormat("unixssh: the credential must be an unencrypted SSH private key (PEM or OpenSSH)")
 	}
 	if dial == nil {
@@ -272,9 +279,13 @@ func (c *Connector) open(ctx context.Context) (*session, error) {
 		return nil, fmt.Errorf("unixssh: cannot connect to %s: %w", addr, err)
 	}
 	mismatch := false
+	auth := c.passwordAuth()
+	if c.signer != nil {
+		auth = ssh.PublicKeys(c.signer)
+	}
 	conf := &ssh.ClientConfig{
 		User: c.cfg.Username,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(c.signer)},
+		Auth: []ssh.AuthMethod{auth},
 		HostKeyCallback: func(_ string, _ net.Addr, k ssh.PublicKey) error {
 			if c.pin.matches(k) {
 				return nil
@@ -396,6 +407,9 @@ type Snapshot struct {
 
 // Read runs the fixed commands and parses their output.
 func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
+	if c.signer == nil { // a password login is for the SFTP feed only: commands run with a key
+		return nil, errors.New("unixssh: commands run with a private key, not a password")
+	}
 	s, err := c.open(ctx)
 	if err != nil {
 		return nil, err

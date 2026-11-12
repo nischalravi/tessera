@@ -213,3 +213,9 @@ Changed with issue #587 (complete OpenAPI document): `159` `GET /docs` and `160`
 point the Swagger UI and ReDoc at `/api/openapi.json`, the document of every registered route, instead
 of `/openapi.json` (the original core-route document, which is still served unchanged). Only the spec URL
 inside the page body differs.
+
+## Issue #961 (SFTP contractor feeds)
+
+No fixture was changed. The new `settings.sftp` member of a contractor feed and the `file_sha256` and
+`file_bytes` members of a sync report are `omitempty`: a response for a feed that is not an SFTP drop is
+byte-identical to before.
