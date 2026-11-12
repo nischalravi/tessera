@@ -33,7 +33,7 @@ func TestIdentityRulesAPI(t *testing.T) {
 	if v.GroupNaming.MaxSegment != naming.MaxExtension || v.GroupNaming.Separator != ":" || !v.GroupNaming.CaseInsensitive {
 		t.Errorf("group naming: %+v", v.GroupNaming)
 	}
-	if len(v.Dormancy) != 2 || v.Dormancy[0].Days != 30 || v.Dormancy[1].Days != 30 || len(v.NotConfigurable) == 0 || len(v.Correlation.Proposals) == 0 ||
+	if len(v.Dormancy) != 3 || v.Dormancy[0].Days != 30 || v.Dormancy[1].Days != 30 || v.Dormancy[2].Days != 90 || v.Rules.DormantPeopleDays != 90 || len(v.NotConfigurable) == 0 || len(v.Correlation.Proposals) == 0 ||
 		v.Rules.Version != 0 || v.Rules.CanManage || len(v.Rules.CorrelationOrder) != 2 || v.Rules.CorrelationOrder[0] != "external_id" {
 		t.Errorf("dormancy, correlation or the not-configurable list: %+v", v)
 	}
@@ -65,7 +65,7 @@ func TestIdentityRulesPUT(t *testing.T) {
 	viewer := signIn(t, f.DB, f.B.ID, authtest.User{Email: "v@b.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, now)
 	stale := signIn(t, f.DB, f.B.ID, authtest.User{Email: "stale@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}},
 		authtest.Ctx{AAL: 2, Phr: true, AuthTime: now.Add(-20 * time.Minute)}, now)
-	body := `{"version":0,"correlation_order":["email","external_id"],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10}`
+	body := `{"version":0,"correlation_order":["email","external_id"],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10,"dormant_people_days":60}`
 
 	if rec := reqDo(h, viewer, "PUT", "/api/admin/identity-rules", body); rec.Code != 403 {
 		t.Errorf("viewer PUT: %d", rec.Code)
@@ -78,19 +78,22 @@ func TestIdentityRulesPUT(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil || rec.Code != 200 {
 		t.Fatalf("PUT: %d %s", rec.Code, rec.Body)
 	}
-	if v.Rules.Version != 1 || v.Rules.CorrelationOrder[0] != "email" || v.Rules.DormantServiceDays != 45 || v.Dormancy[0].Days != 45 || v.Dormancy[1].Days != 10 || !v.Rules.CanManage {
+	if v.Rules.Version != 1 || v.Rules.CorrelationOrder[0] != "email" || v.Rules.DormantServiceDays != 45 || v.Dormancy[0].Days != 45 || v.Dormancy[1].Days != 10 || v.Dormancy[2].Days != 60 || v.Rules.DormantPeopleDays != 60 || !v.Rules.CanManage {
 		t.Errorf("after PUT: %+v", v.Rules)
 	}
 	for name, tc := range map[string]struct {
 		body string
 		code int
 	}{
-		"stale version":  {`{"version":0,"correlation_order":["email"],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10}`, 409},
-		"no keys":        {`{"version":1,"correlation_order":[],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10}`, 422},
-		"unknown source": {`{"version":1,"correlation_order":["email"],"authoritative":{"title":"nowhere"},"dormant_service_days":45,"dormant_ai_agent_days":10}`, 422},
-		"bad attribute":  {`{"version":1,"correlation_order":["email"],"authoritative":{"salary":"okta"},"dormant_service_days":45,"dormant_ai_agent_days":10}`, 422},
-		"zero days":      {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":0,"dormant_ai_agent_days":10}`, 422},
-		"unknown field":  {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":5,"dormant_ai_agent_days":10,"x":1}`, 422},
+		"stale version":   {`{"version":0,"correlation_order":["email"],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10,"dormant_people_days":60}`, 409},
+		"no keys":         {`{"version":1,"correlation_order":[],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10,"dormant_people_days":60}`, 422},
+		"unknown source":  {`{"version":1,"correlation_order":["email"],"authoritative":{"title":"nowhere"},"dormant_service_days":45,"dormant_ai_agent_days":10,"dormant_people_days":60}`, 422},
+		"bad attribute":   {`{"version":1,"correlation_order":["email"],"authoritative":{"salary":"okta"},"dormant_service_days":45,"dormant_ai_agent_days":10,"dormant_people_days":60}`, 422},
+		"zero days":       {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":0,"dormant_ai_agent_days":10,"dormant_people_days":60}`, 422},
+		"people zero":     {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10,"dormant_people_days":0}`, 422},
+		"people missing":  {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10}`, 422},
+		"people too long": {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10,"dormant_people_days":3651}`, 422},
+		"unknown field":   {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":5,"dormant_ai_agent_days":10,"dormant_people_days":60,"x":1}`, 422},
 	} {
 		if rec := reqDo(h, policy, "PUT", "/api/admin/identity-rules", tc.body); rec.Code != tc.code {
 			t.Errorf("%s: %d %s, want %d", name, rec.Code, rec.Body, tc.code)
@@ -106,7 +109,7 @@ func TestIdentityRulesPUT(t *testing.T) {
 	viewerA := signIn(t, f.DB, f.A.ID, authtest.User{Email: "v@a.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, now)
 	rec = reqDo(h, viewerA, "GET", "/api/admin/identity-rules", "")
 	var a identityRulesView
-	if err := json.Unmarshal(rec.Body.Bytes(), &a); err != nil || a.Rules.Version != 0 || a.Rules.DormantServiceDays != 30 || a.Rules.CorrelationOrder[0] != "external_id" {
+	if err := json.Unmarshal(rec.Body.Bytes(), &a); err != nil || a.Rules.Version != 0 || a.Rules.DormantServiceDays != 30 || a.Rules.DormantPeopleDays != 90 || a.Rules.CorrelationOrder[0] != "external_id" {
 		t.Errorf("tenant A sees B's rules: %+v", a.Rules)
 	}
 }

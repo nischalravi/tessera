@@ -5,6 +5,7 @@ import { IdentityRules as Rules, identityRulesApi, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { Badge, Button, Callout, Loading, useToast } from "../../components";
 import { errText } from "./common";
+import { daysOk, parseDays } from "./identityRulesDays";
 
 // the editor is the one the Identity matches page uses; load it only for a person who may change settings
 const MatchingSettingsForm = lazy(async () => ({ default: (await import("../directory/IdentityMatches")).MatchingSettingsForm }));
@@ -14,7 +15,7 @@ const ATTR_LABEL: Record<string, string> = { name: "Name", email: "Email address
 
 /**
  * The rules the tenant tunes: the order the connector resolver correlates a reference to a person, the authoritative
- * system of each person attribute, and the dormancy days of service identities and AI agents. The server checks every
+ * system of each person attribute, and the dormancy days of service identities, AI agents and people. The server checks every
  * value again and refuses an unknown system or a stale version.
  */
 function RulesEditor({ data, onSaved }: { data: Rules; onSaved: () => void }) {
@@ -24,6 +25,7 @@ function RulesEditor({ data, onSaved }: { data: Rules; onSaved: () => void }) {
   const [auth, setAuth] = useState(r.authoritative);
   const [svc, setSvc] = useState(String(r.dormant_service_days));
   const [agent, setAgent] = useState(String(r.dormant_ai_agent_days));
+  const [people, setPeople] = useState(String(r.dormant_people_days));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -31,16 +33,17 @@ function RulesEditor({ data, onSaved }: { data: Rules; onSaved: () => void }) {
     setAuth(r.authoritative);
     setSvc(String(r.dormant_service_days));
     setAgent(String(r.dormant_ai_agent_days));
+    setPeople(String(r.dormant_people_days));
   }, [r.version]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const can = r.can_manage;
-  const days = (v: string) => (/^\d+$/.test(v.trim()) ? Number(v) : NaN);
-  const daysOk = (n: number) => n >= r.min_days && n <= r.max_days;
-  const problem = order.length === 0 ? "Keep at least one correlation key." : !daysOk(days(svc)) || !daysOk(days(agent)) ? `Dormancy is ${r.min_days} to ${r.max_days} days.` : null;
+  const days = parseDays;
+  const inRange = (n: number) => daysOk(n, r.min_days, r.max_days);
+  const problem = order.length === 0 ? "Keep at least one correlation key." : !inRange(days(svc)) || !inRange(days(agent)) || !inRange(days(people)) ? `Dormancy is ${r.min_days} to ${r.max_days} days.` : null;
   const unused = r.correlation_keys.filter((k) => !order.includes(k));
   const move = (i: number, d: number) => setOrder((o) => { const n = [...o]; [n[i], n[i + d]] = [n[i + d], n[i]]; return n; });
   const changed = JSON.stringify(order) !== JSON.stringify(r.correlation_order) || JSON.stringify(auth) !== JSON.stringify(r.authoritative) ||
-    days(svc) !== r.dormant_service_days || days(agent) !== r.dormant_ai_agent_days;
+    days(svc) !== r.dormant_service_days || days(agent) !== r.dormant_ai_agent_days || days(people) !== r.dormant_people_days;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -48,7 +51,7 @@ function RulesEditor({ data, onSaved }: { data: Rules; onSaved: () => void }) {
     setBusy(true);
     setErr(null);
     try {
-      await identityRulesApi.save({ version: r.version, correlation_order: order, authoritative: auth, dormant_service_days: days(svc), dormant_ai_agent_days: days(agent) });
+      await identityRulesApi.save({ version: r.version, correlation_order: order, authoritative: auth, dormant_service_days: days(svc), dormant_ai_agent_days: days(agent), dormant_people_days: days(people) });
       toast("Identity rules saved");
       onSaved();
     } catch (x) {
@@ -104,13 +107,16 @@ function RulesEditor({ data, onSaved }: { data: Rules; onSaved: () => void }) {
 
       <fieldset className="stack-sm" style={{ border: 0, padding: 0, margin: 0 }} disabled={!can}>
         <legend><h3>Dormancy</h3></legend>
-        <p className="small muted" style={{ margin: 0 }}>A machine identity unused for this many days is flagged dormant in the machine-identity inventory and counts in its risk score. {data.not_configurable.join(" ")}</p>
+        <p className="small muted" style={{ margin: 0 }}>A machine identity unused for this many days is flagged dormant in the machine-identity inventory and counts in its risk score. An enabled account of a person with no sign-in for the people threshold is reported stale in connection readiness; a connection's own stale-days setting applies too, and the shorter of the two wins. {data.not_configurable.join(" ")}</p>
         <div className="grid g2">
           <label className="field">Service identities (days)
-            <input className="input" inputMode="numeric" value={svc} onChange={(e) => setSvc(e.target.value)} aria-invalid={!daysOk(days(svc))} style={{ maxWidth: 140 }} />
+            <input className="input" inputMode="numeric" value={svc} onChange={(e) => setSvc(e.target.value)} aria-invalid={!inRange(days(svc))} style={{ maxWidth: 140 }} />
           </label>
           <label className="field">AI agents (days)
-            <input className="input" inputMode="numeric" value={agent} onChange={(e) => setAgent(e.target.value)} aria-invalid={!daysOk(days(agent))} style={{ maxWidth: 140 }} />
+            <input className="input" inputMode="numeric" value={agent} onChange={(e) => setAgent(e.target.value)} aria-invalid={!inRange(days(agent))} style={{ maxWidth: 140 }} />
+          </label>
+          <label className="field">People (days since last sign-in)
+            <input className="input" inputMode="numeric" value={people} onChange={(e) => setPeople(e.target.value)} aria-invalid={!inRange(days(people))} style={{ maxWidth: 140 }} />
           </label>
         </div>
       </fieldset>

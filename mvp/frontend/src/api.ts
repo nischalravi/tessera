@@ -4185,6 +4185,7 @@ export interface IdentityRules {
     authoritative: Record<string, string>;
     dormant_service_days: number;
     dormant_ai_agent_days: number;
+    dormant_people_days: number;
     correlation_keys: string[];
     attributes: string[];
     systems: string[];
@@ -4193,7 +4194,7 @@ export interface IdentityRules {
   };
   not_configurable: string[];
 }
-export type IdentityRulesInput = Pick<IdentityRules["rules"], "version" | "correlation_order" | "authoritative" | "dormant_service_days" | "dormant_ai_agent_days">;
+export type IdentityRulesInput = Pick<IdentityRules["rules"], "version" | "correlation_order" | "authoritative" | "dormant_service_days" | "dormant_ai_agent_days" | "dormant_people_days">;
 export const identityRulesApi = {
   save: (b: IdentityRulesInput) => api<IdentityRules>("/admin/identity-rules", b, "PUT"),
 };

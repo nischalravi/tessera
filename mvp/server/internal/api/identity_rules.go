@@ -17,16 +17,15 @@ import (
 //
 // It reports, and does not duplicate, three engines: the matching and correlation rules (internal/identity/match,
 // internal/correlation) with the tenant's settings, the group naming rules (internal/groups/naming) and the
-// dormancy thresholds of machine identities (internal/nhi). The matching settings are changed through
+// dormancy thresholds of machine identities (internal/nhi) and people (internal/reconcile RF-07). The matching settings are changed through
 // PUT /api/admin/matching (identity.matching.configure, step-up), which already exists.
 //
-//	PUT /api/admin/identity-rules   {version, correlation_order, authoritative, dormant_service_days, dormant_ai_agent_days}
+//	PUT /api/admin/identity-rules   {version, correlation_order, authoritative, dormant_service_days, dormant_ai_agent_days, dormant_people_days}
 //
 // The PUT sets what the engines read through internal/idrules: the order the connector resolver correlates a
 // reference to a person (external ID, email), the authoritative system per person attribute (a different system's
-// value for a person already known is ignored) and the dormancy threshold per machine identity type. It needs
-// matching.configure and a fresh phishing-resistant sign-in, and is audited with the old values. People have no
-// usage-based dormancy engine yet and are listed in "not_configurable".
+// value for a person already known is ignored) and the dormancy threshold per machine identity type and for people. It needs
+// matching.configure and a fresh phishing-resistant sign-in, and is audited with the old values.
 
 func (s *Server) registerIdentityRulesRoutes() {
 	s.handle(http.MethodGet, "/api/admin/identity-rules", read, need(auth.PermGraphRead), s.identityRules)
@@ -115,9 +114,10 @@ func (s *Server) identityRules(_ http.ResponseWriter, r *http.Request, _ *params
 	v.Rules = idRulesView{Rules: rules, Version: ver, CanManage: s.can(r, auth.PermMatchingConfigure), CorrelationKeys: idrules.CorrelationKeys,
 		Attributes: idrules.Attributes, Systems: systems, MinDays: idrules.MinDormantDays, MaxDays: idrules.MaxDormantDays}
 	const effect = "Flagged dormant in the machine-identity inventory and counted in its risk score."
-	v.Dormancy = []dormancyRule{{"service", "Service identities", rules.DormantServiceDays, effect}, {"ai_agent", "AI agents", rules.DormantAIAgentDays, effect}}
+	v.Dormancy = []dormancyRule{{"service", "Service identities", rules.DormantServiceDays, effect}, {"ai_agent", "AI agents", rules.DormantAIAgentDays, effect},
+		{"person", "People", rules.DormantPeopleDays, "Enabled accounts with no sign-in for this long are reported stale (RF-07) in connection readiness and counted as dormant in the deployment KPIs."}}
 	v.NotConfigurable = []string{
-		"Dormancy of people: there is no usage-based dormancy for people yet; leavers follow the HR feed.",
+		"Leavers: a person who left is offboarded from the HR feed, not by dormancy.",
 	}
 	return v, nil
 }

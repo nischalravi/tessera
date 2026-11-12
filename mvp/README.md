@@ -1259,7 +1259,11 @@ engines read through `internal/idrules` (schema `0766_identity_rules.sql`):
   a sync from another system reports a person already known, the stored value of that attribute is kept; the authoritative
   system's value is taken; a person not yet known takes the first source's. An unknown system is 422 `unknown_source`.
 * `dormant_service_days`, `dormant_ai_agent_days` (1 to 3650, default 30): how long a service identity or an AI agent may go
-  unused before the machine-identity inventory (`internal/nhi`) flags it dormant. People have no usage-based dormancy yet.
+  unused before the machine-identity inventory (`internal/nhi`) flags it dormant.
+* `dormant_people_days` (1 to 3650, default 90, required in the PUT): how long an enabled account may go without a sign-in
+  before reconciliation reports it stale (finding RF-07 in connection readiness, the `dormant` deployment KPI). A connection's
+  own `stale_days` still applies; the shorter of the two wins, so the tenant threshold tightens a connection but never
+  loosens it. Existing SQLite databases get the column on start (`store.upgradeIdentityRules`), Postgres from migration 0975.
 
 ### Alerts
 
