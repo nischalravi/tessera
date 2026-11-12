@@ -125,6 +125,9 @@ func TestIsolation_AlertWrites(t *testing.T) {
 		if err := c.SaveAlertDelivery(&store.AlertDelivery{ID: a.delivery, Status: "sent", NextAttemptAt: now}); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("SaveAlertDelivery(A's) = %v", err)
 		}
+		if err := c.DeleteAlertChannel(a.channel); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("DeleteAlertChannel(A's) = %v", err)
+		}
 		return nil
 	})
 	if after := storetest.Dump(t, f.DB, f.A.ID); after != before {
@@ -205,7 +208,7 @@ func alertsCovered() map[string]bool {
 	out := map[string]bool{}
 	for _, k := range []string{"AlertRuleSettings", "PutAlertRuleSetting", "Alerts", "Alert", "LiveAlert", "LiveAlertsOfRule",
 		"AlertCounts", "InsertAlert", "BumpAlert", "SaveAlertState", "AlertChannels", "AlertChannel", "InsertAlertChannel",
-		"UpdateAlertChannel", "InsertAlertDelivery", "DueAlertDeliveries", "AlertDeliveries", "AlertDelivery",
+		"UpdateAlertChannel", "DeleteAlertChannel", "InsertAlertDelivery", "DueAlertDeliveries", "AlertDeliveries", "AlertDelivery",
 		"SaveAlertDelivery", "AlertCursor", "SetAlertCursor", "FailedAuditAnchors"} {
 		out[k] = true // TestIsolation_AlertReads, _AlertWrites, _AlertCrossReferencesRefused
 	}

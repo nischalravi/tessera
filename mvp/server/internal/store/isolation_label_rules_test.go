@@ -62,7 +62,7 @@ func TestIsolation_IdentityRules(t *testing.T) {
 		t.Helper()
 		if err := f.DB.InTenant(ctx, tn.ID, func(c *store.TenantTx) error {
 			return c.PutIdentityRules(&store.IdentityRulesRow{CorrelationOrder: `["email"]`, Authoritative: auth, DormantServiceDays: svc,
-				DormantAIAgentDays: 45, UpdatedBy: by}, storetest.Now)
+				DormantAIAgentDays: 45, DormantPeopleDays: svc * 3, UpdatedBy: by}, storetest.Now)
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -78,23 +78,25 @@ func TestIsolation_IdentityRules(t *testing.T) {
 	put(f.B, 21, `{}`, "admin b")
 	inA(t, f, func(c *store.TenantTx) error {
 		r, err := c.IdentityRules()
-		if err != nil || r.DormantServiceDays != 10 || r.Version != 1 || r.UpdatedBy != "admin a" || r.Authoritative != `{"title":"workday"}` {
+		if err != nil || r.DormantServiceDays != 10 || r.DormantPeopleDays != 30 || r.Version != 1 || r.UpdatedBy != "admin a" || r.Authoritative != `{"title":"workday"}` {
 			t.Errorf("A's rules changed by B's saves: %+v %v", r, err)
 		}
 		return nil
 	})
 	inB(t, f, func(c *store.TenantTx) error {
 		r, err := c.IdentityRules()
-		if err != nil || r.DormantServiceDays != 21 || r.DormantAIAgentDays != 45 || r.Version != 2 {
+		if err != nil || r.DormantServiceDays != 21 || r.DormantAIAgentDays != 45 || r.DormantPeopleDays != 63 || r.Version != 2 {
 			t.Errorf("B's rules: %+v %v", r, err)
 		}
 		return nil
 	})
 	for name, row := range map[string]store.IdentityRulesRow{
-		"zero days":    {CorrelationOrder: `[]`, Authoritative: `{}`, DormantServiceDays: 0, DormantAIAgentDays: 30},
-		"huge days":    {CorrelationOrder: `[]`, Authoritative: `{}`, DormantServiceDays: 30, DormantAIAgentDays: 4000},
-		"not json":     {CorrelationOrder: `x`, Authoritative: `{}`, DormantServiceDays: 30, DormantAIAgentDays: 30},
-		"not json too": {CorrelationOrder: `[]`, Authoritative: `x`, DormantServiceDays: 30, DormantAIAgentDays: 30},
+		"zero days":    {CorrelationOrder: `[]`, Authoritative: `{}`, DormantServiceDays: 0, DormantAIAgentDays: 30, DormantPeopleDays: 90},
+		"huge days":    {CorrelationOrder: `[]`, Authoritative: `{}`, DormantServiceDays: 30, DormantAIAgentDays: 4000, DormantPeopleDays: 90},
+		"people zero":  {CorrelationOrder: `[]`, Authoritative: `{}`, DormantServiceDays: 30, DormantAIAgentDays: 30, DormantPeopleDays: 0},
+		"people huge":  {CorrelationOrder: `[]`, Authoritative: `{}`, DormantServiceDays: 30, DormantAIAgentDays: 30, DormantPeopleDays: 4000},
+		"not json":     {CorrelationOrder: `x`, Authoritative: `{}`, DormantServiceDays: 30, DormantAIAgentDays: 30, DormantPeopleDays: 90},
+		"not json too": {CorrelationOrder: `[]`, Authoritative: `x`, DormantServiceDays: 30, DormantAIAgentDays: 30, DormantPeopleDays: 90},
 	} {
 		row.UpdatedBy = "x"
 		if err := f.DB.InTenant(ctx, f.A.ID, func(c *store.TenantTx) error { return c.PutIdentityRules(&row, storetest.Now) }); err == nil {

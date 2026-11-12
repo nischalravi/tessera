@@ -307,6 +307,16 @@ export function takePendingAction(now = Date.now()): PendingAction | null {
   return a;
 }
 
+/** What a DELETE route answers (issue #963). */
+export interface DeleteResult { deleted: true; id: string }
+
+const DELETE_LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
+  [/^\/connections\/([^/]+)$/, (m) => `Delete connection ${m[1]}`],
+  [/^\/siem\/sinks\/([^/]+)$/, (m) => `Delete SIEM sink ${m[1]}`],
+  [/^\/alerts\/channels\/([^/]+)$/, (m) => `Delete alert channel ${m[1]}`],
+  [/^\/groups\/loaders\/([^/]+)$/, (m) => `Delete group loader ${m[1]}`],
+];
+
 const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/jit\/requests\/(\d+)\/approve$/, (m) => `Approve JIT request #${m[1]}`],
   [/^\/reviews\/items\/(\d+)\/decision$/, (m) => `Record the review decision on item #${m[1]}`],
@@ -327,7 +337,7 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
 
 /** A plain-language name for an API action, shown before resuming it. */
 export function actionLabel(method: string, path: string): string {
-  for (const [re, f] of LABELS) {
+  for (const [re, f] of [...(method === "DELETE" ? DELETE_LABELS : []), ...LABELS]) {
     const m = path.match(re);
     if (m) return f(m);
   }
@@ -3671,6 +3681,8 @@ export const readiness = {
     api<Finding>(`/connections/${id}/findings/${findingId}/accept`, expires_at ? { reason, expires_at } : { reason }),
   activate: (id: string) => api<Connection>(`/connections/${id}/activate`, {}),
   retire: (id: string) => api<Connection>(`/connections/${id}/retire`, { confirm: true }),
+  /** Delete a retired connection. 409 while it owns synced objects, has pending operations or a running job. */
+  remove: (id: string) => api<DeleteResult>(`/connections/${encodeURIComponent(id)}`, undefined, "DELETE"),
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
@@ -4185,6 +4197,7 @@ export interface IdentityRules {
     authoritative: Record<string, string>;
     dormant_service_days: number;
     dormant_ai_agent_days: number;
+    dormant_people_days: number;
     correlation_keys: string[];
     attributes: string[];
     systems: string[];
@@ -4193,7 +4206,7 @@ export interface IdentityRules {
   };
   not_configurable: string[];
 }
-export type IdentityRulesInput = Pick<IdentityRules["rules"], "version" | "correlation_order" | "authoritative" | "dormant_service_days" | "dormant_ai_agent_days">;
+export type IdentityRulesInput = Pick<IdentityRules["rules"], "version" | "correlation_order" | "authoritative" | "dormant_service_days" | "dormant_ai_agent_days" | "dormant_people_days">;
 export const identityRulesApi = {
   save: (b: IdentityRulesInput) => api<IdentityRules>("/admin/identity-rules", b, "PUT"),
 };
@@ -4203,6 +4216,8 @@ export const siemApi = {
   update: (id: string, body: SiemSinkInput) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}`, body, "PUT"),
   rewind: (id: string, seq: number) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}/rewind`, { seq }),
   test: (id: string) => api<{ ok: boolean; error?: string }>(`/siem/sinks/${encodeURIComponent(id)}/test`, {}),
+  /** Delete a disabled sink with its sealed token (409 sink_enabled while it is on). */
+  remove: (id: string) => api<DeleteResult>(`/siem/sinks/${encodeURIComponent(id)}`, undefined, "DELETE"),
 };
 
 // ---- Contractor (VMS) feeds (issue #304)
@@ -4211,7 +4226,10 @@ export type VmsVendor = "fieldglass" | "beeline" | "csv";
 export interface VmsSettings {
   workers_path?: string; token_path?: string; page_size?: number;
   mapping?: Record<string, string>; date_format?: string; csv_path?: string;
+  sftp?: VmsSftp;
 }
+/** An SFTP drop (issue #961). The credential (password or private key) is write-only and sealed. */
+export interface VmsSftp { host: string; port?: number; path: string; username: string; host_key: string; auth: "password" | "key"; }
 export interface VmsSource {
   id: string; vendor: VmsVendor; name: string; base_url: string; settings: VmsSettings; has_credential: boolean;
   status: "active" | "paused"; last_sync_at: string | null; last_result: "ok" | "failed" | null; last_error: string | null;
@@ -4226,7 +4244,7 @@ export interface VmsRecord {
 }
 export interface VmsReport {
   source_id: string; name: string; vendor: VmsVendor; status: "ok" | "failed" | "skipped"; records: number;
-  applied: Record<string, number>; failed: number; error?: string;
+  applied: Record<string, number>; failed: number; error?: string; file_sha256?: string; file_bytes?: number;
 }
 export const vmsApi = {
   sourcesPath: "/vms/sources",
@@ -4374,6 +4392,8 @@ export const alertsApi = {
   createChannel: (body: AlertChannelInput) => api<AlertChannel>("/alerts/channels", body),
   updateChannel: (id: string, body: AlertChannelInput) => api<AlertChannel>(`/alerts/channels/${encodeURIComponent(id)}`, body, "PUT"),
   testChannel: (id: string) => api<{ ok: boolean; error?: string }>(`/alerts/channels/${encodeURIComponent(id)}/test`, {}),
+  /** Delete a disabled channel with its sealed secret (409 channel_enabled while it is on). */
+  deleteChannel: (id: string) => api<DeleteResult>(`/alerts/channels/${encodeURIComponent(id)}`, undefined, "DELETE"),
 };
 
 /** Severity → badge tone. */
@@ -4611,7 +4631,7 @@ export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
   | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
   | "groups.loader.save" | "retention.update" | "deletion_guard.update" | "siem.sink.filter"
-  | "siem.sink.target" | "alerts.rule.loosen" | "breach.item.attest" | "provisioning.write_back.enable" | "config.proposal";
+  | "siem.sink.target" | "siem.sink.disable" | "siem.sink.delete" | "alerts.rule.loosen" | "breach.item.attest" | "provisioning.write_back.enable" | "config.proposal";
 
 export interface AdminPersonRef { id: string; display_name: string }
 
@@ -5257,6 +5277,8 @@ export const groupLoaders = {
   approve: (id: string, runId: string) => api<LoaderRun>(`/groups/loaders/${gid(id)}/runs/${gid(runId)}/approve`, {}),
   reject: (id: string, runId: string) => api<LoaderRun>(`/groups/loaders/${gid(id)}/runs/${gid(runId)}/reject`, {}),
   unresolved: (id: string, o: { limit?: number; offset?: number } = {}) => api<GrpList<LoaderUnresolved> & { total: number }>(`/groups/loaders/${gid(id)}/unresolved${qs({ limit: 50, ...o })}`),
+  /** Delete a disabled loader with its runs and credential (409 loader_not_disabled, loader_has_groups). */
+  remove: (id: string) => api<DeleteResult>(`/groups/loaders/${gid(id)}`, undefined, "DELETE"),
   tasks: () => api<GrpList<LoaderTask>>(`/groups/loader-tasks${qs({ limit: 200 })}`),
 };
 

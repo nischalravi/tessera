@@ -689,6 +689,48 @@ func Rewind(tx *store.TenantTx, id string, seq int64, by Actor, now time.Time) (
 		{Key: "from_seq", Value: from}, {Key: "to_seq", Value: seq}})
 }
 
+// DisableSink turns a sink off after two admins approved it (siem.sink.disable): a disabled sink sends nothing, so
+// the SOC stops receiving the audit feed. The cursor is kept, so enabling it again resumes where it stopped. The
+// change is audited as siem.sink.disabled with the change id; the request and its approval reached the sink while
+// it was still enabled.
+func DisableSink(tx *store.TenantTx, id, changeID string, now time.Time) (*store.SiemSink, error) {
+	k, err := tx.SiemSink(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, refuse(404, "sink_not_found", "sink not found")
+	} else if err != nil {
+		return nil, err
+	}
+	if !k.Enabled {
+		return nil, refuse(409, "sink_disabled", "the sink is already disabled")
+	}
+	k.Enabled, k.UpdatedAt = false, now
+	if err := tx.UpdateSiemSink(k); err != nil {
+		return nil, err
+	}
+	_, err = audit.Record(tx.Context(), tx, "siem.sink.disabled", ojson.Object{{Key: "sink_id", Value: k.ID},
+		{Key: "name", Value: k.Name}, {Key: "cursor_seq", Value: k.CursorSeq}, {Key: "change_id", Value: changeID}},
+		audit.At(now), audit.Target("admin_change", changeID))
+	return k, err
+}
+
+// DeleteSink removes a sink, its dead letters and its sealed token after two admins approved it (siem.sink.delete),
+// and records siem.sink.deleted with the change id in the same transaction. Deleting a sink ends its audit export
+// for good, so it takes the same two admins as narrowing what it receives; the sink may still be enabled.
+func DeleteSink(tx *store.TenantTx, id, changeID string, now time.Time) error {
+	k, err := tx.SiemSink(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return refuse(404, "sink_not_found", "sink not found")
+	} else if err != nil {
+		return err
+	}
+	if err := tx.DeleteSiemSink(id); err != nil {
+		return err
+	}
+	_, err = audit.Record(tx.Context(), tx, "siem.sink.deleted", append(sinkAudit(k, false), ojson.KV{Key: "change_id", Value: changeID}),
+		audit.At(now), audit.Target("admin_change", changeID))
+	return err
+}
+
 // TestSink sends one synthetic event to a sink now, outside any transaction.
 func (s *Service) TestSink(ctx context.Context, t tenancy.ID, slug string, k *store.SiemSink) error {
 	snd, err := s.sender(t, k, slug)

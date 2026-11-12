@@ -309,3 +309,29 @@ func Update(e SaveEnv, id string, version *int64, spec Spec, secret *string) (*s
 	return l, e.audit("groups.loader.updated", l, ojson.Object{{Key: "old_name", Value: old.Name},
 		{Key: "has_secret", Value: len(l.SecretEnc) > 0}})
 }
+
+// Delete removes a disabled loader with its runs, unresolved subjects and sealed credential, and records
+// groups.loader.deleted in the same transaction. An enabled or held loader is refused (409 loader_not_disabled), and so is one
+// that still manages groups (409 loader_has_groups): its groups would keep a loader that no longer exists.
+func Delete(e SaveEnv, id string) error {
+	l, err := e.Tx.GrpLoader(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return notFound("no such loader")
+	} else if err != nil {
+		return err
+	}
+	if l.Status != store.LoaderDisabled {
+		return conflict("loader_not_disabled", "disable the loader before deleting it")
+	}
+	gs, err := e.Tx.GrpGroupsOfLoader(id)
+	if err != nil {
+		return err
+	}
+	if len(gs) > 0 {
+		return conflict("loader_has_groups", "the loader still manages %d group(s); move or delete them first", len(gs))
+	}
+	if err := e.Tx.DeleteGrpLoader(id); err != nil {
+		return err
+	}
+	return e.audit("groups.loader.deleted", l, ojson.Object{{Key: "had_secret", Value: len(l.SecretEnc) > 0}})
+}

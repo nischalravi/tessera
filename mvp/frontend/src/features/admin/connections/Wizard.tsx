@@ -595,6 +595,11 @@ function ActivateStep({ conn }: { conn: Connection }) {
     const r = await run("retire", () => readiness.retire(conn.id), () => `${conn.name} retired`);
     if (r) nav("/admin/connections");
   };
+  const remove = async () => {
+    if ((await confirm({ title: `Delete ${conn.name}?`, body: "The connection, its revisions, readiness evidence and sealed credentials are deleted. Objects it synced are not deleted, and the delete is refused while any remain, or while operations or a sync are in flight. This cannot be undone.", confirmLabel: "Delete connection", danger: true, typeToConfirm: conn.name })) === null) return;
+    const r = await run("delete", () => readiness.remove(conn.id), () => `${conn.name} deleted`);
+    if (r) nav("/admin/connections");
+  };
   return (
     <div className="stack">
       {conn.state === "active" || conn.state === "degraded" ? (
@@ -620,7 +625,9 @@ function ActivateStep({ conn }: { conn: Connection }) {
         </div>
       )}
       <div className="row" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-        <Button variant="danger" size="sm" icon={<Trash2 size={13} />} disabled={busy === "retire"} onClick={retire}>Retire connection</Button>
+        {conn.retired_at
+          ? <Button variant="danger" size="sm" icon={<Trash2 size={13} />} disabled={busy === "delete"} onClick={remove}>Delete connection</Button>
+          : <Button variant="danger" size="sm" icon={<Trash2 size={13} />} disabled={busy === "retire"} onClick={retire}>Retire connection</Button>}
       </div>
     </div>
   );

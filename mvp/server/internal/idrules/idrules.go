@@ -29,11 +29,13 @@ var CorrelationKeys = []string{KeyExternalID, KeyEmail}
 // Attributes are the person attributes a tenant can give an authoritative source.
 var Attributes = []string{"name", "email", "department", "title"}
 
-// Dormancy limits (days) and the default, the machine-identity threshold of internal/nhi.
+// Dormancy limits (days) and the defaults: 30 for the machine-identity threshold of internal/nhi, 90 for people (the
+// reconciliation stale-account rule RF-07, PCI DSS v4 8.2.6).
 const (
-	DefaultDormantDays = 30
-	MinDormantDays     = 1
-	MaxDormantDays     = 3650
+	DefaultDormantDays       = 30
+	DefaultDormantPeopleDays = 90
+	MinDormantDays           = 1
+	MaxDormantDays           = 3650
 )
 
 // Rules are a tenant's identity rules.
@@ -42,12 +44,14 @@ type Rules struct {
 	Authoritative      map[string]string `json:"authoritative"`
 	DormantServiceDays int               `json:"dormant_service_days"`
 	DormantAIAgentDays int               `json:"dormant_ai_agent_days"`
+	DormantPeopleDays  int               `json:"dormant_people_days"`
 }
 
 // Defaults are the rules of a tenant that saved none.
 func Defaults() Rules {
 	return Rules{CorrelationOrder: slices.Clone(CorrelationKeys), Authoritative: map[string]string{},
-		DormantServiceDays: DefaultDormantDays, DormantAIAgentDays: DefaultDormantDays}
+		DormantServiceDays: DefaultDormantDays, DormantAIAgentDays: DefaultDormantDays,
+		DormantPeopleDays: DefaultDormantPeopleDays}
 }
 
 // DormantDays is the threshold for an identity type ("service" or "ai_agent"; anything else gets the default).
@@ -66,7 +70,8 @@ func Load(tx *store.TenantTx) (Rules, int, error) {
 	} else if err != nil {
 		return Rules{}, 0, err
 	}
-	r := Rules{DormantServiceDays: row.DormantServiceDays, DormantAIAgentDays: row.DormantAIAgentDays}
+	r := Rules{DormantServiceDays: row.DormantServiceDays, DormantAIAgentDays: row.DormantAIAgentDays,
+		DormantPeopleDays: row.DormantPeopleDays}
 	if err := json.Unmarshal([]byte(row.CorrelationOrder), &r.CorrelationOrder); err != nil {
 		return Rules{}, 0, fmt.Errorf("idrules: stored correlation order: %w", err)
 	}
@@ -119,7 +124,8 @@ func (r Rules) Check(systems []string) error {
 			return cfgerr.Refuse(422, "unknown_source", "%q is not the system of a connection of this tenant", sys)
 		}
 	}
-	for name, d := range map[string]int{"dormant_service_days": r.DormantServiceDays, "dormant_ai_agent_days": r.DormantAIAgentDays} {
+	for name, d := range map[string]int{"dormant_service_days": r.DormantServiceDays, "dormant_ai_agent_days": r.DormantAIAgentDays,
+		"dormant_people_days": r.DormantPeopleDays} {
 		if d < MinDormantDays || d > MaxDormantDays {
 			return cfgerr.Refuse(422, "invalid_dormancy", "%s is %d to %d days", name, MinDormantDays, MaxDormantDays)
 		}
@@ -135,7 +141,8 @@ func detail(r Rules) ojson.Object {
 		}
 	}
 	return ojson.Object{{Key: "correlation_order", Value: r.CorrelationOrder}, {Key: "authoritative", Value: auth},
-		{Key: "dormant_service_days", Value: r.DormantServiceDays}, {Key: "dormant_ai_agent_days", Value: r.DormantAIAgentDays}}
+		{Key: "dormant_service_days", Value: r.DormantServiceDays}, {Key: "dormant_ai_agent_days", Value: r.DormantAIAgentDays},
+		{Key: "dormant_people_days", Value: r.DormantPeopleDays}}
 }
 
 // Save replaces the tenant's rules. ver is the version the caller read (0 for the defaults); a different current version
@@ -161,7 +168,7 @@ func Save(tx *store.TenantTx, r Rules, ver int, by string, now time.Time) (Rules
 	order, _ := json.Marshal(r.CorrelationOrder)
 	auth, _ := json.Marshal(r.Authoritative)
 	row := &store.IdentityRulesRow{CorrelationOrder: string(order), Authoritative: string(auth), DormantServiceDays: r.DormantServiceDays,
-		DormantAIAgentDays: r.DormantAIAgentDays, UpdatedBy: by}
+		DormantAIAgentDays: r.DormantAIAgentDays, DormantPeopleDays: r.DormantPeopleDays, UpdatedBy: by}
 	if err := tx.PutIdentityRules(row, now); err != nil {
 		return Rules{}, 0, err
 	}

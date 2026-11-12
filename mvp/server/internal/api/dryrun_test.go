@@ -410,3 +410,34 @@ func TestWalkthrough_ADToActive(t *testing.T) {
 		t.Errorf("edit after activation: %v %v %v", p["new_revision"], conn["state"], conn["update_in_progress"])
 	}
 }
+
+// The tenant's people dormancy threshold (Admin > Identity rules) is the one the stale-account finding RF-07 uses,
+// together with the connection's own stale_days (here 3650): the stricter of the two applies. The demo AD has accounts
+// quiet for 120 to 200 days and the rest signed in within days.
+func TestDryRun_StaleAccountsUseThePeopleThreshold(t *testing.T) {
+	t.Parallel()
+	c := newRD(t)
+	ad := c.adValidated()
+	c.json("PATCH", "/api/connections/"+ad+"/config", `{"stale_days":3650}`, http.StatusOK)
+	count := func() float64 {
+		t.Helper()
+		dr := c.json("POST", "/api/connections/"+ad+"/dry-run", "", http.StatusAccepted)
+		if f := finding(dr, "RF-07"); f != nil {
+			return f["count"].(float64)
+		}
+		return 0
+	}
+	set := func(version int, days int) {
+		t.Helper()
+		c.json("PUT", "/api/admin/identity-rules", fmt.Sprintf(`{"version":%d,"correlation_order":["external_id","email"],"authoritative":{},`+
+			`"dormant_service_days":30,"dormant_ai_agent_days":30,"dormant_people_days":%d}`, version, days), http.StatusOK)
+	}
+	// accounts that never signed in are found whatever the threshold
+	def := count()
+	set(0, 3650)
+	loose := count()
+	set(1, 60)
+	if tight := count(); !(loose < def && def <= tight) {
+		t.Errorf("RF-07 found %v accounts at 90 days, %v at 3650 and %v at 60: a longer threshold finds fewer", def, loose, tight)
+	}
+}

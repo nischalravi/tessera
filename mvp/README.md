@@ -347,7 +347,16 @@ the revision get `403 two_person_rule`; the requester cancels and anyone else re
 `POST .../activation/reject`; `GET .../activation` shows the latest request. The gate itself
 (blocker `activation.approval`) refuses a write-enabled revision that has no approval, so no other
 caller can skip the second person. This request table stands in for the `connection.activate`
-admin-change type until Phase 0's admin-change workflow (PR12) lands. Non-demo connector types are
+admin-change type until Phase 0's admin-change workflow (PR12) lands.
+
+**Deleting a connection (issue #963):** `DELETE /api/connections/{id}` (`connections.manage` + step-up) removes
+a **retired** connection with its revisions, readiness evidence, provisioning rows and sealed credentials, and
+audits `connection.deleted` in the same transaction. It answers 409 with a code while something still depends on
+it: `connection_not_retired`, `connection_has_synced_objects` (accounts, groups, resources or permissions of its
+system: they are never cascade-deleted, so the deletion guard is not bypassed), `connection_has_pending_ops`
+(provisioning operations or agent jobs in flight), `connection_syncing` (a job running) and `connection_in_use`
+(a group loader, group provisioner or SSF transmitter names it). Its certificates stay as retired evidence without
+their key, and job history stays, unlinked. The UI offers it on the Activate step of a retired connection. Non-demo connector types are
 no longer refused with `phase0_required`: the gate alone decides (simulated evidence never
 satisfies it).
 
@@ -899,14 +908,14 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET /api/connectors/sync-status` · `PUT /api/connectors/sync-schedule` (see "Durable job queue") · `GET|POST /api/ssf/transmitters` · `GET|PUT|DELETE /api/ssf/transmitters/{id}` · `POST /api/ssf/transmitters/{id}/verify` ·
 `GET /api/ssf/events` · `POST /public/t/{slug}/ssf/{transmitter_id}/events` (SSF push, see "Shared Signals receiver") ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
-`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it; **moving to another origin is a two-admin change** `siem.sink.target` (issue #520), see Log streaming; omitted fields keep their value, `include_http` included) · `POST /api/siem/sinks/{id}/rewind {seq}` (step-up, issue #520) ·
+`GET|POST /api/siem/sinks` · `DELETE /api/siem/sinks/{id}` (step-up; always 409 `two_admin_change_required` with `change_type` `siem.sink.delete`: deleting a sink is a two-admin change, see Log streaming; issue #963) · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it; **moving to another origin is a two-admin change** `siem.sink.target` (issue #520), see Log streaming; omitted fields keep their value, `include_http` included) · `POST /api/siem/sinks/{id}/rewind {seq}` (step-up, issue #520) ·
 `POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` (a sink's `kind` is `syslog`, `webhook` or `s3`; `event_filter`, `region` and `access_key_id` are in the body and the view; narrowing `event_filter` is refused with 409 `two_admin_change_required`, see "Event filter") ·
 `GET|POST /api/admin/certificates` · `POST /api/admin/certificates/generate {connection_id}` · `POST /api/admin/certificates/{id}/promote|retire` ·
 `GET|PUT /api/admin/branding` · `GET /api/auth/branding?tenant=` · `GET /api/auth/branding/logo?tenant=` (the last two are public, see "Certificates, branding and identity rules") ·
 `GET|PUT /api/admin/identity-rules` · `GET|PUT /api/admin/labels` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` (step-up; loosening a security rule is a two-admin `alerts.rule.loosen` change, issue #521) ·
-`GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
+`GET|POST /api/alerts/channels` · `DELETE /api/alerts/channels/{id}` (step-up; 409 `channel_enabled` until the channel is disabled; removes its deliveries and sealed secret; audit `alert.channel.deleted`, issue #963) · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
 `GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
 `POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
@@ -1142,6 +1151,7 @@ The pull export (`/api/audit/export`) stays available.
     - Requests are signed with AWS Signature Version 4 (stdlib, checked against the AWS documentation vector) and go through `internal/safehttp`. Give the key `s3:PutObject` on the prefix only.
 - **Event filter (issue #498):** a sink can receive only some audit actions. `event_filter` is a list of actions (`grant.revoke`) or prefixes ending in `.*` (`auth.*`), `*` for all, empty for everything. A sink still needs `include_http` for `http.request`. Filtered-out events advance the cursor, but **Behind** still counts them (it is the distance to the ledger head). **Narrowing is a two-admin change (issue #511):** `PUT /api/siem/sinks/{id}` refuses a narrower filter (from empty or `*` to a list, or dropping an entry) with 409 `two_admin_change_required`; submit an admin change request `POST /api/admin/change-requests {"type":"siem.sink.filter","payload":{"sink_id","event_filter"}}` and a different admin approves it. Widening or clearing stays single-admin. Some actions reach every sink whatever its filter says: `siem.*`, `audit.*`, `admin.change.*`, `auth.break_glass*`, `breakglass.*`, `auth.step_up.*`, `auth.role.*`, `stepup.*` and `deletion_guard.*`, so a sink always learns that its own configuration changed (`siem.sink.filter_changed` records the old and new filter).
 - **Retargeting and `include_http` (issue #520):** `PUT /api/siem/sinks/{id}` is a partial update: an omitted field keeps its value (a rename no longer turns `include_http` off). Turning `include_http` from true to false drops every `http.request` event, so like a narrowing filter it is refused with 409 `two_admin_change_required` and goes through `siem.sink.filter` (payload `{sink_id, event_filter?, include_http?}`, at least one). Moving a sink to another **origin** (scheme, host, port; syslog host:port) is refused the same way and needs an admin change request `{"type":"siem.sink.target","payload":{"sink_id","target"}}` approved by a different admin. The request and its approval (`admin.change.*`) reach the old destination while it is still the target. Applying it clears the sealed token (it never follows a sink to another origin), disables the sink and audits `siem.sink.retargeted` (`previous_origin`, `origin`, `change_id`); an admin then `PUT`s the new token with `enabled: true`. `POST /api/siem/sinks/{id}/rewind` needs a step-up like the other sink writes.
+- **Disabling and deleting (issue #963):** either stops the sink's audit export, so each is a two-admin change like a narrowing filter. `PUT /api/siem/sinks/{id}` with `enabled: false` on an enabled sink, and `DELETE /api/siem/sinks/{id}`, answer 409 `two_admin_change_required` (`change_type` `siem.sink.disable` or `siem.sink.delete`); submit `POST /api/admin/change-requests {"type":"siem.sink.disable"|"siem.sink.delete","payload":{"sink_id"}}` and a different admin approves it. The request and its approval reach the sink while it is still enabled. Applying a disable keeps the cursor and audits `siem.sink.disabled`; applying a delete (enabled or not) removes the sink, its dead letters and its sealed token and audits `siem.sink.deleted`, each with the `change_id`, in the applying transaction. Enabling a sink stays single-admin.
 - **Formats:**
   - `json` is the export record. It carries `hash` and `prev_hash`, so the SIEM can recompute the chain.
   - `ocsf` is OCSF 1.3: Authentication (3002) for sign-in and sign-out, Account Change (3001) for role grants and revokes and user disables, and API Activity (6003) for everything else.
@@ -1259,7 +1269,11 @@ engines read through `internal/idrules` (schema `0766_identity_rules.sql`):
   a sync from another system reports a person already known, the stored value of that attribute is kept; the authoritative
   system's value is taken; a person not yet known takes the first source's. An unknown system is 422 `unknown_source`.
 * `dormant_service_days`, `dormant_ai_agent_days` (1 to 3650, default 30): how long a service identity or an AI agent may go
-  unused before the machine-identity inventory (`internal/nhi`) flags it dormant. People have no usage-based dormancy yet.
+  unused before the machine-identity inventory (`internal/nhi`) flags it dormant.
+* `dormant_people_days` (1 to 3650, default 90; a PUT that omits it keeps the stored value, and a present out-of-range value is 422 `invalid_dormancy`): how long an enabled account may go without a sign-in
+  before reconciliation reports it stale (finding RF-07 in connection readiness, the `dormant` deployment KPI). A connection's
+  own `stale_days` still applies; the shorter of the two wins, so the tenant threshold tightens a connection but never
+  loosens it. Existing SQLite databases get the column on start (`store.upgradeIdentityRules`), Postgres from migration 0975.
 
 ### Alerts
 
@@ -3155,7 +3169,24 @@ and the review queue are shared.
   Every call goes through `internal/safehttp`; a paging link must stay on the configured host; the credential
   (`client_id:client_secret`, or a bearer token for a fetched CSV) is sealed under the KEK, bound to its row,
   write-only, and a change of base URL needs a new one.
-- **API.** `GET|POST /api/vms/sources`, `PUT|DELETE /api/vms/sources/{id}` (connections.read|manage),
+- **SFTP drops (issue #961).** A `csv` feed can read its file from an SFTP server instead:
+  `settings.sftp = {host, port?, path, username, host_key, auth}` with no `base_url` and no `csv_path`. `path` is the
+  absolute path of a `.csv` file (plain characters, no `.` or `..`); `host_key` is **required** (a `SHA256:` fingerprint
+  or a public key line): a different key is refused before sign-in and there is no trust on first use; `auth` is
+  `password` or `key`, and the source's credential is that password or an unencrypted SSH private key, sealed under
+  the KEK bound to its row and never returned, logged or put in an error. A change of host, port, user name, auth
+  or host key needs a new credential. The dial is `unixssh.Connector.SFTP`, so it goes through the safehttp address
+  policy (no loopback, private, link-local or metadata target in prod; only the configured port) and only the `sftp`
+  subsystem runs. Only that file is read: its directory must equal its real path on the server and the file must be a
+  regular file, not a link; more than 8 MiB, non-UTF-8 content or a file without the feed's columns is refused.
+  It is read on the hourly `vms_sync` like an HTTPS feed (and by "Read now"), through the same intake. Each sync's
+  `vms.sync` audit event carries `file_sha256` and `file_bytes` (also in the sync report), and the source's
+  create/update events carry the non-secret SFTP settings. Same routes and permissions as an HTTPS feed
+  (connections.manage with step-up to save, lifecycle.manage to read now). No schema change: the settings live in the source's
+  `settings` JSON and the credential in `credential_enc`. Tests use an in-process SFTP server:
+  `go test -race ./internal/connectors/vms ./internal/vms`, `go test -race -run VmsSFTP ./internal/api`.
+  Settings > Admin > Contractor feeds > New feed > CSV file > "SFTP drop".
+- **API.** `GET|POST /api/vms/sources`, `PUT|DELETE /api/vms/sources/{id}` (connections.read|manage; creating, changing and deleting a feed also need step-up, as for connection credentials),
   `POST /api/vms/sync {source_id?}` and `POST /api/vms/sources/{id}/import` (`lifecycle.manage`, because they
   create and end people), `GET /api/vms/records`. Queue job `vms_sync` runs hourly per tenant (a tenant with
   nothing to read leaves no run). Audit events: `vms.source_created|updated|removed`, `vms.sync`,
@@ -3165,8 +3196,7 @@ and the review queue are shared.
   documented in `fieldglass.go` and `beeline.go` and exercised by the in-process fake
   (`internal/connectors/vms/vmsfake`: paging, 401, 429 with Retry-After, 5xx, malformed JSON, an off-host next
   link, a looping page, a wrong token type); the endpoint paths are settings. The first real tenant should
-  confirm the field names and the OAuth token path. **SFTP** drops are not read: there is no SFTP client in
-  the module's dependencies, so a drop is uploaded as CSV for now.
+  confirm the field names and the OAuth token path.
 
 ### Privileged-access vaults (CyberArk, Delinea, BeyondTrust; issue #304)
 
@@ -3685,7 +3715,7 @@ writes:                                        # request templates; see below
   `max_response_bytes` per response (also bounded by the server's outbound client), `max_pages` and `max_records`
   per listing (a listing cut short marks the result `Partial`, so the deletion guard holds every removal).
   All calls go through `internal/safehttp`.
-- Connection URL settings (`org_url`, `base_url`, URL-type `settings`) are refused with `400 url_credentials_refused` when they carry userinfo (`user:pass@`) or, for `base_url`/`org_url`, a query string or fragment (create, `PATCH .../config`, connection proposals). A value stored earlier is shown masked (`masked` in place of the credential, query values and fragment; the whole value when it cannot be split safely) in connection and change-request views, with `masked_fields` naming it; sending the masked value back unchanged keeps the stored one. A value is read as browsers read it (`internal/urlshape`, shared by refusal, masking, the credential drop and the config export): `https:` followed by any mix of `/` and `\` (or none), tabs and line breaks in it and a leading `\\` count as `https://`, and `base_url`/`org_url` also refuse an `@` in a value with any other scheme prefix. A URL-valued setting (key with `url`, `uri` or `endpoint`, any case, or a value that names a host) is an endpoint: changing it drops the stored credential. The free-text fields of the config (`technical_owner`, `business_owner`, `correlation_key`, `hr_id_attribute`, `customer`, `domain`, `tenant_host`, `sync_schedule`, `host`, `bind_dn`, the filters and a few more; `internal/readiness/urlmask.go` `textFieldPtrs`) get the same refusal and masking when a value reads as a URL that names a host or holds one with credentials anywhere in its text (`Ops <https://u:p@h>`, masked whole); so do the list fields (`base_dns`, `service_account_ous`, `write_scope`, `demo_fixed_checks`, entry by entry), and `attr_map` and `privileged_expected` are refused. The owners copied onto the connection are masked in its view and tasks and cleaned in the config export, and field errors never echo a typed value (issue #926). `base_url`, `org_url` and URL-type `settings` must also have an ASCII scheme and host (everything before the first `/` after `//`; a percent-encoded non-ASCII byte there counts as non-ASCII): a look-alike colon, slash or `@` there is refused with `400 url_non_ascii_authority` (the value is not echoed; `internal/safehttp` also refuses a non-ASCII host on every outbound call), so give an international host name as punycode (`xn--`); non-ASCII characters in the path are unaffected, and `@` stays allowed in a `base_url` path where it is today. Detection also reads such look-alikes as the ASCII they resemble (`urlshape.Fold`), so a stored credentialed value written with them is masked and left out of the config export (issue #936).
+- Connection URL settings (`org_url`, `base_url`, URL-type `settings`) are refused with `400 url_credentials_refused` when they carry userinfo (`user:pass@`) or, for `base_url`/`org_url`, a query string or fragment (create, `PATCH .../config`, connection proposals). A value stored earlier is shown masked (`masked` in place of the credential, query values and fragment; the whole value when it cannot be split safely) in connection and change-request views, with `masked_fields` naming it; sending the masked value back unchanged keeps the stored one. A value is read as browsers read it (`internal/urlshape`, shared by refusal, masking, the credential drop and the config export): `https:` followed by any mix of `/` and `\` (or none), tabs and line breaks in it and a leading `\\` count as `https://`, and `base_url`/`org_url` also refuse an `@` in a value with any other scheme prefix. A URL-valued setting (key with `url`, `uri` or `endpoint`, any case, or a value that names a host) is an endpoint: changing it drops the stored credential. The free-text fields of the config (`technical_owner`, `business_owner`, `correlation_key`, `hr_id_attribute`, `customer`, `domain`, `tenant_host`, `sync_schedule`, `host`, `bind_dn`, the filters and a few more; `internal/readiness/urlmask.go` `textFieldPtrs`) get the same refusal and masking when a value reads as a URL that names a host or holds one with credentials anywhere in its text (`Ops <https://u:p@h>`, masked whole); so do the list fields (`base_dns`, `service_account_ous`, `write_scope`, `demo_fixed_checks`, entry by entry), and `attr_map` and `privileged_expected` are refused on save; a value of either stored earlier is shown masked on read (`masked_fields` names the field; a `privileged_expected` group name that masks is merged with the others that mask to the same text), and the masked view sent back unchanged keeps the stored value (issue #962). The owners copied onto the connection are masked in its view and tasks and cleaned in the config export, and field errors never echo a typed value (issue #926). `base_url`, `org_url` and URL-type `settings` must also have an ASCII scheme and host (everything before the first `/` after `//`; a percent-encoded non-ASCII byte there counts as non-ASCII): a look-alike colon, slash or `@` there is refused with `400 url_non_ascii_authority` (the value is not echoed; `internal/safehttp` also refuses a non-ASCII host on every outbound call), so give an international host name as punycode (`xn--`); non-ASCII characters in the path are unaffected, and `@` stays allowed in a `base_url` path where it is today. Detection also reads such look-alikes as the ASCII they resemble (`urlshape.Fold`), so a stored credentialed value written with them is masked and left out of the config export (issue #936).
 - **Validation on save** names every bad field (`rest.users.fields.id`, `writes.lookup`, ...). A connection's
   `PATCH /api/connections/{id}/config` takes `"rest"` as an object or as a string of YAML/JSON text, and the server
   applies the environment's URL policy (https only in prod). `POST /api/connections` runs the same checks on the
@@ -5236,8 +5266,10 @@ LDAPS and StartTLS, no bind without TLS, bind refused), `internal/store` (`TestC
 - Routes: `GET|POST /api/groups/loaders`, `GET|PATCH /api/groups/loaders/{id}`,
   `POST .../{id}/run` (`{kind: full|incremental|preview}`; a failed run answers `502
   loader_run_failed` with the run), `GET .../{id}/runs[/{run_id}]`, `POST .../runs/{run_id}/approve`
-  and `/reject`, `GET .../{id}/unresolved`, `GET /api/groups/loader-tasks`. There is no delete: turn a
-  loader off. Audit events `groups.loader.created|updated`, `groups.loader.run.applied|held|failed|
+  and `/reject`, `GET .../{id}/unresolved`, `GET /api/groups/loader-tasks`, `DELETE .../{id}` (issue #963:
+  `groups.loader.admin` + step-up + `stem_admin` on the folder; 409 `loader_not_disabled` until it is turned off,
+  409 `loader_has_groups` while it still manages groups; removes its runs, unresolved people and sealed
+  credential). Audit events `groups.loader.created|updated|deleted`, `groups.loader.run.applied|held|failed|
   previewed|approved|rejected`.
 - Migration note: `admin_change_requests.type` gained `groups.loader.save` in `0008_admin_changes.sql`
   (a database created before this change must be reseeded).
@@ -7740,3 +7772,5 @@ logs why. `GET /api/policies` and `GET /api/violations` keep their shape (parity
 approximate, unsupported or conditional is reported but never blocks (`policy.Blocking`). `separation_of_duties` stays a SoD risk
 and a `subjects.condition` stays YAML. Tests: `go test ./internal/policy -run 'Cedar|Overlay|Invariant'` (`TestCedarPortMatchesYAML`
 and the generated-graph test check each YAML policy and its port give identical violations) and `-fuzz FuzzParseInvariants`.
+
+Group provisioner LDAP and AD targets: the optional TLS `target.server_name` must be a bare ASCII host name (or IPv4 address): no scheme, user info, port or path, and punycode for an international name (issue #962). The error names the field and does not echo the value. A provisioner stored earlier keeps a byte-identical `server_name` editable (pause, rename, resend the same config), but a changed value, or taking it out of pause, gets the full check, as for the target URLs (issue #953).

@@ -63,6 +63,32 @@ type ldapCfg struct {
 	ServerName string `json:"server_name"`
 }
 
+// serverNameRE is a TLS server name: an ASCII host name or IPv4 address, nothing else.
+var serverNameRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+
+// checkServerName refuses a TLS server_name that is not a bare ASCII host name (#962): a scheme, user info, port or
+// path, or a non-ASCII character. Empty is allowed (the URL host is used). The value is never echoed.
+func checkServerName(field, v string) error {
+	switch {
+	case v == "":
+		return nil
+	case urlshape.NonASCIIHead(v) || !isASCII(v):
+		return cfgErr("%s: must be ASCII; give an international host name as punycode (xn--)", field)
+	case !serverNameRE.MatchString(v):
+		return cfgErr("%s: must be a host name only, without a scheme, user info, port or path", field)
+	}
+	return nil
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
 var (
 	ldapClassRE   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]{0,62}$`)
 	protectedAttr = []string{"objectclass", "cn", "member", "uniquemember", "memberuid", "samaccountname", "grouptype",
@@ -90,6 +116,11 @@ func parseLDAPConfig(typ string, c *Compiled, deps Deps) (ldapCfg, error) {
 		return cfg, cfgErr("target.url must be only a scheme, host and port")
 	case safehttp.IsMetadataHost(u.Hostname()):
 		return cfg, cfgErr("target.url must not point at a cloud metadata service")
+	}
+	if !c.keeps("server_name", cfg.ServerName) {
+		if err := checkServerName("target.server_name", cfg.ServerName); err != nil {
+			return cfg, err
+		}
 	}
 	if cfg.Security == "" {
 		cfg.Security = "starttls"

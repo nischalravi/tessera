@@ -29,6 +29,7 @@ import (
 //	GET  /api/alerts/channels                         delivery channels (targets redacted)
 //	POST /api/alerts/channels                         add a channel (webhooks: the secret is shown once)
 //	PUT  /api/alerts/channels/{channel_id}            change a channel
+//	DELETE /api/alerts/channels/{channel_id}          delete a disabled channel (step-up; 409 channel_enabled while enabled)
 //	POST /api/alerts/channels/{channel_id}/test       send a test message now
 //	GET  /api/alerts/{alert_id}                       one alert with its deliveries
 //	POST /api/alerts/{alert_id}/acknowledge|resolve|assign
@@ -45,6 +46,7 @@ func (s *Server) registerAlertRoutes() {
 	s.handle(http.MethodGet, "/api/alerts/channels", read, configure, s.listAlertChannels)
 	s.handle(http.MethodPost, "/api/alerts/channels", write, configureStepUp, s.createAlertChannel)
 	s.handle(http.MethodPut, "/api/alerts/channels/{channel_id}", write, configureStepUp, s.updateAlertChannel)
+	s.handle(http.MethodDelete, "/api/alerts/channels/{channel_id}", write, configureStepUp, s.deleteAlertChannel)
 	s.handle(http.MethodPost, "/api/alerts/channels/{channel_id}/test", phased, configure, s.rd(s.testAlertChannel))
 	s.handle(http.MethodGet, "/api/alerts/{alert_id}", read, readA, s.getAlert)
 	s.handle(http.MethodPost, "/api/alerts/{alert_id}/acknowledge", write, manage, s.alertAction("acknowledge"))
@@ -452,6 +454,17 @@ func (s *Server) updateAlertChannel(_ http.ResponseWriter, r *http.Request, p *p
 		return nil, alertErr(err)
 	}
 	return s.channelViewOf(c, secret), nil
+}
+
+func (s *Server) deleteAlertChannel(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	by, err := alertActor(r)
+	if err != nil {
+		return nil, err
+	}
+	if err := alerts.DeleteChannel(store.TxFrom(r.Context()), p.path["channel_id"], by, s.clock().UTC()); err != nil {
+		return nil, alertErr(err)
+	}
+	return map[string]any{"deleted": true, "id": p.path["channel_id"]}, nil
 }
 
 // testAlertChannel sends a test message outside any transaction, then

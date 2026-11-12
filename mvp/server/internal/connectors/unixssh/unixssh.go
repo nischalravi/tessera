@@ -105,6 +105,9 @@ type Config struct {
 	HostKey string
 	// Key is the private key (PEM or OpenSSH format, not passphrase protected).
 	Key connsync.Secret
+	// Password signs in with a password instead of Key. Only the SFTP contractor feed sets it
+	// (issue #961); the connection settings of the Unix connector have no such field.
+	Password connsync.Secret
 	// UseSudo reads the sudoers files through `sudo -n`.
 	UseSudo bool
 }
@@ -134,7 +137,7 @@ func ValidateHost(h string) error {
 // Connector implements connectors.Connector.
 type Connector struct {
 	cfg    Config
-	signer ssh.Signer
+	signer ssh.Signer // nil when the login is by password
 	pin    pin
 	dial   safehttp.DialFunc
 	host   string // lower case, the qualifier of every external id
@@ -156,8 +159,12 @@ func New(cfg Config, rt connsync.Runtime, dial safehttp.DialFunc) (*Connector, e
 	if err != nil {
 		return nil, err
 	}
-	signer, err := ssh.ParsePrivateKey([]byte(cfg.Key.Reveal()))
-	if err != nil { // never include err: it can quote the key's header
+	var signer ssh.Signer
+	if cfg.Key.Empty() && !cfg.Password.Empty() {
+		if len(cfg.Password.Reveal()) > 1024 {
+			return nil, connsync.CredentialFormat("unixssh: the password is too long")
+		}
+	} else if signer, err = ssh.ParsePrivateKey([]byte(cfg.Key.Reveal())); err != nil { // never include err: it can quote the key's header
 		return nil, connsync.CredentialFormat("unixssh: the credential must be an unencrypted SSH private key (PEM or OpenSSH)")
 	}
 	if dial == nil {
@@ -222,6 +229,9 @@ func (p pin) matches(k ssh.PublicKey) bool {
 	return ssh.FingerprintSHA256(k) == p.fingerprint
 }
 
+// ErrPasswordCommand: a connector that signs in with a password runs no command (SFTP only).
+var ErrPasswordCommand = errors.New("unixssh: commands run with a private key, not a password")
+
 // ErrSFTP: the SFTP subsystem could not be started on the host.
 var ErrSFTP = errors.New("unixssh: the SFTP session failed")
 
@@ -260,8 +270,12 @@ func (c *Connector) SFTP(ctx context.Context) (*SFTPConn, error) {
 	return &SFTPConn{Client: sc, cl: s.cl, stop: context.AfterFunc(ctx, func() { _ = s.cl.Close() })}, nil
 }
 
-// session is one authenticated connection.
-type session struct{ cl *ssh.Client }
+// session is one authenticated connection. keyAuth is true when it signed in with a private key:
+// only such a session runs commands (a password sign-in is for the SFTP subsystem only).
+type session struct {
+	cl      *ssh.Client
+	keyAuth bool
+}
 
 // open dials through the guarded dialer, verifies the host key against the pin and signs in with the
 // key. The handshake has its own deadline.
@@ -272,9 +286,15 @@ func (c *Connector) open(ctx context.Context) (*session, error) {
 		return nil, fmt.Errorf("unixssh: cannot connect to %s: %w", addr, err)
 	}
 	mismatch := false
+	var auth ssh.AuthMethod
+	if c.signer != nil {
+		auth = ssh.PublicKeys(c.signer)
+	} else {
+		auth = c.passwordAuth()
+	}
 	conf := &ssh.ClientConfig{
 		User: c.cfg.Username,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(c.signer)},
+		Auth: []ssh.AuthMethod{auth},
 		HostKeyCallback: func(_ string, _ net.Addr, k ssh.PublicKey) error {
 			if c.pin.matches(k) {
 				return nil
@@ -309,7 +329,7 @@ func (c *Connector) open(ctx context.Context) (*session, error) {
 		return nil, fmt.Errorf("unixssh: handshake with %s failed", addr)
 	}
 	_ = conn.SetDeadline(time.Time{})
-	return &session{cl: ssh.NewClient(sc, chans, reqs)}, nil
+	return &session{cl: ssh.NewClient(sc, chans, reqs), keyAuth: c.signer != nil}, nil
 }
 
 // allowedHostKeyAlgorithms are the host key algorithms offered: SHA-2 RSA, ECDSA and Ed25519. ssh-rsa
@@ -354,6 +374,9 @@ func (l *limitBuf) Write(p []byte) (int, error) {
 // run executes one of the fixed commands. A non-zero exit status is returned as *ssh.ExitError with
 // whatever the command wrote.
 func (s *session) run(ctx context.Context, cmd string, max int) ([]byte, error) {
+	if !s.keyAuth {
+		return nil, ErrPasswordCommand
+	}
 	sn, err := s.cl.NewSession()
 	if err != nil {
 		return nil, errors.New("unixssh: cannot open a session")
@@ -396,6 +419,9 @@ type Snapshot struct {
 
 // Read runs the fixed commands and parses their output.
 func (c *Connector) Read(ctx context.Context) (*Snapshot, error) {
+	if c.signer == nil { // a password login is for the SFTP feed only: commands run with a key
+		return nil, ErrPasswordCommand
+	}
 	s, err := c.open(ctx)
 	if err != nil {
 		return nil, err

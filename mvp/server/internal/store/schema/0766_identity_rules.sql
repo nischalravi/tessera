@@ -8,7 +8,10 @@
 -- ({"department": "workday"}): when a different system reports a person already
 -- known, the stored value of that attribute is kept. dormant_service_days and
 -- dormant_ai_agent_days are how long a service identity or an AI agent may go
--- unused before the machine-identity inventory flags it dormant.
+-- unused before the machine-identity inventory flags it dormant. dormant_people_days is
+-- how long an enabled account may go without a sign-in before reconciliation (RF-07)
+-- reports it stale; databases created before it get the column from
+-- store.upgradeIdentityRules.
 --
 -- Tenant-owned like 0001_tenancy.sql.
 CREATE TABLE IF NOT EXISTS identity_rules (
@@ -17,6 +20,7 @@ CREATE TABLE IF NOT EXISTS identity_rules (
   authoritative TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(authoritative)),
   dormant_service_days INTEGER NOT NULL DEFAULT 30 CHECK (dormant_service_days BETWEEN 1 AND 3650),
   dormant_ai_agent_days INTEGER NOT NULL DEFAULT 30 CHECK (dormant_ai_agent_days BETWEEN 1 AND 3650),
+  dormant_people_days INTEGER NOT NULL DEFAULT 90 CHECK (dormant_people_days BETWEEN 1 AND 3650),
   version INTEGER NOT NULL DEFAULT 1,
   updated_by TEXT NOT NULL,
   updated_at TEXT NOT NULL

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -256,6 +257,13 @@ var readinessMutations = map[string]func(c *store.TenantTx, a, b refs) error{
 	"SetConnectionLive": func(c *store.TenantTx, _, b refs) error {
 		return c.SetConnectionLive(b["connection"], nil, "degraded", storetest.Now)
 	},
+	"DeleteConnection": func(c *store.TenantTx, _, b refs) error {
+		// A's tenant has no such connection: nothing is deleted and the answer is ErrNotFound
+		if err := c.DeleteConnection(b["connection:ad"], storetest.Now); !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("DeleteConnection(B's) = %v, want ErrNotFound", err)
+		}
+		return nil
+	},
 	"MarkConnectionRetired": func(c *store.TenantTx, _, b refs) error {
 		return c.MarkConnectionRetired(b["connection:ad"], storetest.Now)
 	},
@@ -478,8 +486,31 @@ func readinessCovered() map[string]bool {
 	// Covered by TestIsolation_ReadinessInsertWrongTenantRejected and
 	// TestIsolation_ReadinessCountsOnlyOwnRows.
 	out["InsertConnection"], out["RunningDryRuns"] = true, true
+	out["ConnectionUsage"] = true        // TestIsolation_ConnectionUsage
 	for k := range activationCovered() { // TestIsolation_ReadinessTables
 		out[k] = true
 	}
 	return out
+}
+
+// ConnectionUsage counts only the tenant's own pending work: B's connection id seen from A has none.
+func TestIsolation_ConnectionUsage(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	ad := f.B.Refs["connection:ad"]
+	inB(t, f, func(c *store.TenantTx) error {
+		return c.InsertProvOp(&store.ProvOp{ID: "op-b", ConnectionID: ad, Kind: "disable_account", TargetRef: "x", Payload: "{}",
+			Source: "test", IdempotencyKey: "k-b", RequestedBy: "t"}, storetest.Now)
+	})
+	inB(t, f, func(c *store.TenantTx) error {
+		if u, err := c.ConnectionUsage(ad, "no-such-system"); err != nil || u.PendingOps != 1 {
+			t.Errorf("B's own usage = %+v, %v; want 1 pending op", u, err)
+		}
+		return nil
+	})
+	inA(t, f, func(c *store.TenantTx) error {
+		if u, err := c.ConnectionUsage(ad, "no-such-system"); err != nil || u.Objects()+u.PendingOps+u.RunningJobs+u.Referenced() != 0 {
+			t.Errorf("A sees %+v, %v of B's connection", u, err)
+		}
+		return nil
+	})
 }

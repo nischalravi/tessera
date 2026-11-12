@@ -82,6 +82,9 @@ var (
 	siemDeadLettersInsert = tq("siem_dead_letters.insert", `
 		INSERT INTO siem_dead_letters (id, tenant_id, sink_id, from_seq, to_seq, events, error, created_at)
 		VALUES (@id, @tenant, @sink_id, @from_seq, @to_seq, @events, @error, @created_at)`)
+	siemSinksDelete             = tq("siem_sinks.delete", `DELETE FROM siem_sinks WHERE tenant_id = @tenant AND id = @id`)
+	siemDeadLettersDeleteBySink = tq("siem_dead_letters.delete_by_sink", `
+		DELETE FROM siem_dead_letters WHERE tenant_id = @tenant AND sink_id = @id`)
 	siemPendingCount = tq("audit_events.count_pending", `
 		SELECT count(e.id) FROM audit_events e WHERE e.tenant_id = @tenant AND e.seq > @seq
 			AND (@http = 1 OR e.action <> 'http.request')`)
@@ -186,6 +189,14 @@ func (tx *TenantTx) DeadLetterSiemBatch(d *SiemDeadLetter) error {
 // SetSiemCursor moves a sink's cursor (replay from an earlier seq, or skip ahead).
 func (tx *TenantTx) SetSiemCursor(id string, seq int64, at time.Time) error {
 	return tx.execOne(siemSinksSetCursor, sql.Named("id", id), sql.Named("seq", seq), sql.Named("at", T(at)))
+}
+
+// DeleteSiemSink removes a sink with its dead letters; its sealed token lives in the row. ErrNotFound if absent.
+func (tx *TenantTx) DeleteSiemSink(id string) error {
+	if _, err := tx.exec(siemDeadLettersDeleteBySink, sql.Named("id", id)); err != nil {
+		return err
+	}
+	return tx.execOne(siemSinksDelete, sql.Named("id", id))
 }
 
 // SiemDeadLetters lists a sink's latest dead letters.

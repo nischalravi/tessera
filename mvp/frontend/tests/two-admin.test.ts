@@ -80,3 +80,12 @@ test("pause checks", () => {
   assert.equal(t.pauseProblem("x".repeat(501), "6") !== null, true);
   assert.equal(t.pauseProblem("maintenance window", "6"), null);
 });
+
+test("turning a SIEM sink off or deleting it maps to its two-admin request", () => {
+  for (const type of ["siem.sink.disable", "siem.sink.delete"] as const) {
+    const e = new api.ApiError("x", 409, { error: "two_admin_change_required", change_type: type });
+    assert.equal(t.twoAdminType(e), type);
+    assert.ok(t.TWO_ADMIN_TITLE[type].includes("second admin"));
+  }
+  assert.deepEqual(t.siemSinkPayload("s1"), { sink_id: "s1" });
+});

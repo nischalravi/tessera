@@ -288,6 +288,7 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 			`","config":{"path":"a.csv","group":"x","subject_column":"id"}}`, "stem_admin"},
 		{"GET", "/api/groups/loaders/{id}", "/api/groups/loaders/" + ld, "", "stem_view"},
 		{"PATCH", "/api/groups/loaders/{id}", "/api/groups/loaders/" + ld, `{"schedule":"@hourly"}`, "stem_admin"},
+		{"DELETE", "/api/groups/loaders/{id}", "/api/groups/loaders/" + ld, "", "stem_admin"},
 		{"POST", "/api/groups/loaders/{id}/run", "/api/groups/loaders/" + ld + "/run", `{"kind":"preview"}`, "stem_admin"},
 		{"GET", "/api/groups/loaders/{id}/runs", "/api/groups/loaders/" + ld + "/runs", "", "stem_view"},
 		{"GET", "/api/groups/loaders/{id}/runs/{run_id}", "/api/groups/loaders/" + ld + "/runs/" + ldRun, "", "stem_admin"},
@@ -296,6 +297,7 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"GET", "/api/groups/loaders/{id}/unresolved", "/api/groups/loaders/" + ld + "/unresolved", "", "stem_admin"},
 	}
 	loaderAdmin := map[string]bool{"POST /api/groups/loaders": true, "PATCH /api/groups/loaders/{id}": true,
+		"DELETE /api/groups/loaders/{id}":   true,
 		"POST /api/groups/loaders/{id}/run": true, "POST /api/groups/loaders/{id}/runs/{run_id}/approve": true,
 		"POST /api/groups/loaders/{id}/runs/{run_id}/reject": true}
 	// the listings are gated too, by filtering: the table below names them so none is forgotten

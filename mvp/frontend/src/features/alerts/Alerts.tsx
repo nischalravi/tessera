@@ -1,6 +1,6 @@
 import { FormEvent, Fragment, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { BellRing, Check, CheckCheck, Mail, Pencil, Plus, Send, UserMinus, UserPlus, Webhook } from "lucide-react";
+import { BellRing, Check, CheckCheck, Mail, Pencil, Plus, Send, Trash2, UserMinus, UserPlus, Webhook } from "lucide-react";
 import {
   ALERT_SEVERITIES, AlertChannel, AlertChannelInput, AlertRow, AlertRule, AlertSeverity, alertsApi, fmtDate, relTime, severityTone, useApi,
 } from "../../api";
@@ -260,6 +260,7 @@ function RuleForm({ rule, onClose, onSaved }: { rule: AlertRule; onClose: () => 
 function ChannelList() {
   const { data, error, reload } = useApi<AlertChannel[]>("/alerts/channels");
   const toast = useToast();
+  const confirm = useConfirm();
   const [edit, setEdit] = useState<AlertChannel | "new" | null>(null);
   const [secret, setSecret] = useState<{ name: string; secret: string } | null>(null);
   if (!data) return <div className="card flush"><Loading error={error} /></div>;
@@ -267,6 +268,17 @@ function ChannelList() {
     try {
       const r = await alertsApi.testChannel(c.id);
       toast(r.ok ? `Test sent to ${c.name}` : `Test to ${c.name} failed: ${r.error}`, r.ok ? undefined : { kind: "error" });
+    } catch (e: any) {
+      toast(String(e.message ?? e), { kind: "error" });
+    }
+  };
+  const remove = async (c: AlertChannel) => {
+    const ok = await confirm({ title: `Delete ${c.name}?`, body: "The channel, its delivery history and its signing secret are deleted. Alerts stop going there. This cannot be undone.", confirmLabel: "Delete channel", danger: true });
+    if (ok === null) return;
+    try {
+      await alertsApi.deleteChannel(c.id);
+      toast(`${c.name} deleted`);
+      reload();
     } catch (e: any) {
       toast(String(e.message ?? e), { kind: "error" });
     }
@@ -297,7 +309,8 @@ function ChannelList() {
                     <td className="small hide-narrow">{c.min_severity === "low" ? "Every alert" : `${c.min_severity[0].toUpperCase() + c.min_severity.slice(1)} and above`}</td>
                     <td className="actions-cell">
                       <Button size="sm" icon={<Send size={14} />} onClick={() => test(c)}>Test</Button>{" "}
-                      <Button size="sm" variant="ghost" onClick={() => setEdit(c)}>Edit</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setEdit(c)}>Edit</Button>{" "}
+                      <Button size="sm" variant="danger" icon={<Trash2 size={14} />} disabled={c.enabled} title={c.enabled ? "Turn the channel off (Edit, untick Enabled) before deleting it" : undefined} aria-label={`Delete ${c.name}`} onClick={() => remove(c)}>Delete</Button>
                     </td>
                   </tr>
                 ))}

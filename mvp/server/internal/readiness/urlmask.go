@@ -239,6 +239,14 @@ func MaskedConfig(cfg ConnConfig) (ConnConfig, []string) {
 			masked = append(masked, name)
 		}
 	}
+	if am, hit := maskAttrMap(cfg.AttrMap); hit {
+		cfg.AttrMap = am
+		masked = append(masked, "attr_map")
+	}
+	if pe, hit := maskPrivileged(cfg.PrivilegedExpected); hit {
+		cfg.PrivilegedExpected = pe
+		masked = append(masked, "privileged_expected")
+	}
 	if len(cfg.Settings) > 0 {
 		cp := make(map[string]string, len(cfg.Settings))
 		for k, v := range cfg.Settings {
@@ -288,6 +296,46 @@ func MaskConfigMap(m map[string]any) []string {
 			}
 		}
 	}
+	if list, ok := m["attr_map"].([]any); ok {
+		hit := false
+		for _, x := range list {
+			if e, ok := x.(map[string]any); ok {
+				for _, f := range []string{"ldap", "target", "scope"} {
+					if v, ok := e[f].(string); ok {
+						if mv := maskText(v); mv != v {
+							e[f], hit = mv, true
+						}
+					}
+				}
+			}
+		}
+		if hit {
+			masked = append(masked, "attr_map")
+		}
+	}
+	if pe, ok := m["privileged_expected"].(map[string]any); ok {
+		hit := false
+		for g, x := range pe {
+			list, _ := x.([]any)
+			for i, y := range list {
+				if v, ok := y.(string); ok {
+					if mv := maskText(v); mv != v {
+						list[i], hit = mv, true
+					}
+				}
+			}
+			if mg := maskText(g); mg != g {
+				delete(pe, g)
+				if prev, ok := pe[mg].([]any); ok {
+					list = append(prev, list...)
+				}
+				pe[mg], hit = list, true
+			}
+		}
+		if hit {
+			masked = append(masked, "privileged_expected")
+		}
+	}
 	if st, ok := m["settings"].(map[string]any); ok {
 		for k, x := range st {
 			if v, ok := x.(string); ok && urlSetting(k, v) {
@@ -327,6 +375,8 @@ func keepMaskedURLs(cur, next *ConnConfig) {
 			}
 		}
 	}
+	keepMaskedAttrMap(cur, next)
+	keepMaskedPrivileged(cur, next)
 	for k, v := range next.Settings {
 		if o, ok := cur.Settings[k]; ok && v != o && urlSetting(k, o) && v == MaskURL(o) {
 			next.Settings[k] = o
@@ -439,4 +489,98 @@ func urlASCIIError(cur, cfg ConnConfig) error {
 	}
 	return &Error{Status: http.StatusBadRequest, Code: CodeURLNonASCIIAuthority,
 		Msg: "a URL's scheme and host must be ASCII; give an international host name as punycode (xn--)", Fields: bad}
+}
+
+// maskAttrMap returns m with each mapping's fields masked as free text, and whether any was. m is not modified.
+func maskAttrMap(m []AttrMapping) ([]AttrMapping, bool) {
+	var cp []AttrMapping
+	for i, e := range m {
+		me := AttrMapping{LDAP: maskText(e.LDAP), Target: maskText(e.Target), Scope: maskText(e.Scope)}
+		if me != e {
+			if cp == nil {
+				cp = slices.Clone(m)
+			}
+			cp[i] = me
+		}
+	}
+	if cp == nil {
+		return m, false
+	}
+	return cp, true
+}
+
+// maskPrivileged returns pe with each group name and member masked as free text, and whether any was. Groups whose
+// names mask to the same text are merged. pe is not modified.
+func maskPrivileged(pe map[string][]string) (map[string][]string, bool) {
+	hit := false
+	for g, members := range pe {
+		if maskText(g) != g || slices.ContainsFunc(members, func(v string) bool { return maskText(v) != v }) {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return pe, false
+	}
+	out := make(map[string][]string, len(pe))
+	for g, members := range pe {
+		mg := maskText(g)
+		ms := make([]string, len(members))
+		for i, v := range members {
+			ms[i] = maskText(v)
+		}
+		out[mg] = append(out[mg], ms...)
+	}
+	return out, true
+}
+
+// keepMaskedAttrMap restores a mapping field that is exactly the mask of the stored one at the same position.
+func keepMaskedAttrMap(cur, next *ConnConfig) {
+	for i := range next.AttrMap {
+		if i >= len(cur.AttrMap) {
+			break
+		}
+		o, n := cur.AttrMap[i], &next.AttrMap[i]
+		for _, f := range []struct {
+			old string
+			p   *string
+		}{{o.LDAP, &n.LDAP}, {o.Target, &n.Target}, {o.Scope, &n.Scope}} {
+			if *f.p != f.old && *f.p == maskText(f.old) {
+				*f.p = f.old
+			}
+		}
+	}
+}
+
+// keepMaskedPrivileged restores a group name that is exactly the mask of one stored name (when only one stored name
+// masks to it and the name is not itself stored), and a member that is the mask of the stored member at the same
+// position of the same group.
+func keepMaskedPrivileged(cur, next *ConnConfig) {
+	if len(cur.PrivilegedExpected) == 0 || len(next.PrivilegedExpected) == 0 {
+		return
+	}
+	byMask := map[string][]string{}
+	for g := range cur.PrivilegedExpected {
+		if mg := maskText(g); mg != g {
+			byMask[mg] = append(byMask[mg], g)
+		}
+	}
+	out := make(map[string][]string, len(next.PrivilegedExpected))
+	for g, members := range next.PrivilegedExpected {
+		if _, stored := cur.PrivilegedExpected[g]; !stored {
+			if olds := byMask[g]; len(olds) == 1 {
+				g = olds[0]
+			}
+		}
+		if olds, ok := cur.PrivilegedExpected[g]; ok {
+			members = slices.Clone(members)
+			for i, v := range members {
+				if i < len(olds) && v != olds[i] && v == maskText(olds[i]) {
+					members[i] = olds[i]
+				}
+			}
+		}
+		out[g] = members
+	}
+	next.PrivilegedExpected = out
 }

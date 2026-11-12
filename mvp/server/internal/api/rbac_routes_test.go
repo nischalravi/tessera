@@ -77,6 +77,7 @@ GET    /api/jml/leaver-plan/{identity_id}            graph.read      -
 GET    /api/siem/sinks                               siem.read       -  # issue #169
 POST   /api/siem/sinks                               siem.configure  STEP_UP_POLICY  # issue #169
 PUT    /api/siem/sinks/{sink_id}                     siem.configure  STEP_UP_POLICY  # issue #169
+DELETE /api/siem/sinks/{sink_id}                     siem.configure  STEP_UP_POLICY  # issue #963
 POST   /api/siem/sinks/{sink_id}/rewind              siem.configure  STEP_UP_POLICY  # issue #169, #520
 POST   /api/siem/sinks/{sink_id}/test                siem.configure  -  # issue #169
 GET    /api/admin/certificates                       connections.read    -
@@ -98,6 +99,7 @@ PUT    /api/alerts/rules/{rule_id}                   alerts.configure STEP_UP_PO
 GET    /api/alerts/channels                          alerts.configure -  # issue #168
 POST   /api/alerts/channels                          alerts.configure STEP_UP_POLICY  # issue #168
 PUT    /api/alerts/channels/{channel_id}             alerts.configure STEP_UP_POLICY  # issue #168
+DELETE /api/alerts/channels/{channel_id}             alerts.configure STEP_UP_POLICY  # issue #963
 POST   /api/alerts/channels/{channel_id}/test        alerts.configure -  # issue #168
 GET    /api/alerts/{alert_id}                        alerts.read     -  # issue #168
 POST   /api/alerts/{alert_id}/acknowledge            alerts.manage   -  # issue #168
@@ -145,9 +147,9 @@ POST   /api/breach/plans/{id}/verify                 secrets.rotate  STEP_UP_POL
 POST   /api/breach/plans/{id}/items/{item}/attest    secrets.rotate  STEP_UP_POLICY  # issue #475
 GET    /api/breach/plans/{id}/evidence               audit.read      -  # issue #475
 GET    /api/vms/sources                              connections.read -  # issue #304
-POST   /api/vms/sources                              connections.manage -  # issue #304
-PUT    /api/vms/sources/{source_id}                  connections.manage -  # issue #304
-DELETE /api/vms/sources/{source_id}                  connections.manage -  # issue #304
+POST   /api/vms/sources                              connections.manage STEP_UP_POLICY  # issues #304, #961
+PUT    /api/vms/sources/{source_id}                  connections.manage STEP_UP_POLICY  # issues #304, #961
+DELETE /api/vms/sources/{source_id}                  connections.manage STEP_UP_POLICY  # issues #304, #961
 POST   /api/vms/sync                                 lifecycle.manage -  # issue #304
 POST   /api/vms/sources/{source_id}/import           lifecycle.manage -  # issue #304
 GET    /api/vms/records                              connections.read -  # issue #304
@@ -171,6 +173,7 @@ DELETE /api/connections/{id}/checklist/{item}/skip   connections.manage -
 POST   /api/connections/{id}/transition              connections.manage -
 POST   /api/connections/{id}/activate                connections.activate STEP_UP_POLICY
 POST   /api/connections/{id}/retire                  connections.manage STEP_UP_POLICY
+DELETE /api/connections/{id}                         connections.manage STEP_UP_POLICY  # issue #963
 GET    /api/aws/connectors                           connections.read   -  # issue #26
 POST   /api/aws/connectors                           connections.manage STEP_UP_POLICY  # issue #26
 DELETE /api/aws/connectors/{id}                      connections.manage STEP_UP_POLICY  # issue #26
@@ -802,6 +805,7 @@ POST   /api/groups/loaders                           groups.loader.admin STEP_UP
 GET    /api/groups/loader-tasks                      groups.read     -  # issue #53: held runs (loader_held), for stem_admin on the folder
 GET    /api/groups/loaders/{id}                      groups.read     -  # issue #53: stem_view (the definition: stem_admin)
 PATCH  /api/groups/loaders/{id}                      groups.loader.admin STEP_UP_POLICY  # issue #53: stem_admin; a SQL loader needs a second approver
+DELETE /api/groups/loaders/{id}                      groups.loader.admin STEP_UP_POLICY  # issue #963: stem_admin; the loader must be disabled
 POST   /api/groups/loaders/{id}/run                  groups.loader.admin -  # issue #53: stem_admin
 GET    /api/groups/loaders/{id}/runs                 groups.read     -  # issue #53: stem_view
 GET    /api/groups/loaders/{id}/runs/{run_id}        groups.read     -  # issue #53: stem_admin

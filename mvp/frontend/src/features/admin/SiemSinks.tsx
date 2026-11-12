@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react";
-import { History, Plus, Radio, Send } from "lucide-react";
+import { History, Plus, Radio, Send, Trash2 } from "lucide-react";
 import { TwoAdminDialog } from "./TwoAdminDialog";
-import { TwoAdminType, siemFilterPayload, siemTargetPayload, twoAdminType } from "./twoAdmin";
+import { TwoAdminType, siemFilterPayload, siemSinkPayload, siemTargetPayload, twoAdminType } from "./twoAdmin";
 import { SiemDeadLetter, SiemFlavor, SiemFormat, SiemKind, SiemSink, SiemSinkInput, relTime, siemApi, siemSinkState, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { Badge, Button, Callout, Drawer, EmptyState, Loading, useConfirm, useToast } from "../../components";
@@ -20,6 +20,7 @@ export function SiemSinks() {
   const confirm = useConfirm();
   const [edit, setEdit] = useState<SiemSink | "new" | null>(null);
   const [dead, setDead] = useState<SiemSink | null>(null);
+  const [ask, setAsk] = useState<{ type: TwoAdminType; payload: Record<string, unknown>; what: string } | null>(null);
   if (!data) return <div className="card flush"><Loading error={error} /></div>;
   const test = async (k: SiemSink) => {
     if (k.needs_target) {
@@ -41,6 +42,18 @@ export function SiemSinks() {
       toast(`${k.name} will replay from the start`);
       reload();
     } catch (e: any) {
+      toast(String(e.message ?? e), { kind: "error" });
+    }
+  };
+  const remove = async (k: SiemSink) => {
+    try {
+      await siemApi.remove(k.id);
+      reload();
+    } catch (e: any) {
+      if (twoAdminType(e) === "siem.sink.delete") {
+        setAsk({ type: "siem.sink.delete", payload: siemSinkPayload(k.id), what: `Deleting ${k.name} stops its audit export for good: the sink, its sealed token and its dead letters are deleted once a second admin approves. Events already sent stay with the SIEM.` });
+        return;
+      }
       toast(String(e.message ?? e), { kind: "error" });
     }
   };
@@ -75,7 +88,7 @@ export function SiemSinks() {
                       </td>
                       <td className="small hide-narrow">{k.last_success_at ? relTime(k.last_success_at) : <span className="faint">Never</span>}</td>
                       <td className="actions-cell">
-                        {manage && <>{k.needs_target ? <Button size="sm" variant="primary" onClick={() => setEdit(k)}>Set target</Button> : <Button size="sm" icon={<Send size={14} />} onClick={() => test(k)}>Test</Button>}{" "}<Button size="sm" variant="ghost" icon={<History size={14} />} onClick={() => replay(k)}>Replay</Button>{" "}<Button size="sm" variant="ghost" onClick={() => setEdit(k)}>Edit</Button></>}
+                        {manage && <>{k.needs_target ? <Button size="sm" variant="primary" onClick={() => setEdit(k)}>Set target</Button> : <Button size="sm" icon={<Send size={14} />} onClick={() => test(k)}>Test</Button>}{" "}<Button size="sm" variant="ghost" icon={<History size={14} />} onClick={() => replay(k)}>Replay</Button>{" "}<Button size="sm" variant="ghost" onClick={() => setEdit(k)}>Edit</Button>{" "}<Button size="sm" variant="danger" icon={<Trash2 size={14} />} title="Deleting a sink needs a second admin" aria-label={`Delete ${k.name}`} onClick={() => remove(k)}>Delete</Button></>}
                       </td>
                     </tr>
                   );
@@ -89,6 +102,7 @@ export function SiemSinks() {
         Delivery is at least once and in ledger order: a sink resumes from the last event its destination accepted, so restarts and outages leave no gaps.
         JSON events are the export records (each carries <code>hash</code> and <code>prev_hash</code>; recompute them to check the chain). OCSF maps sign-ins to Authentication, role changes to Account Change and the rest to API Activity, with the chain fields under <code>unmapped.tessera</code>.
       </p>
+      {ask && <TwoAdminDialog type={ask.type} payload={ask.payload} what={ask.what} onClose={() => setAsk(null)} />}
       {edit && <SinkForm sink={edit === "new" ? null : edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload(); }} />}
       {dead && <DeadLetters sink={dead} onClose={() => setDead(null)} />}
     </div>
@@ -156,6 +170,10 @@ function SinkForm({ sink, onClose, onSaved }: { sink: SiemSink | null; onClose: 
       if (k && type === "siem.sink.filter") {
         const p = siemFilterPayload(k, { event_filter: body.event_filter ?? [], include_http: f.includeHttp });
         if (p) { setAsk({ type, payload: p, what: "The new event filter or include_http setting would stop events reaching the SOC, so a second admin must approve it." }); return; }
+      }
+      if (k && type === "siem.sink.disable") {
+        setAsk({ type, payload: siemSinkPayload(k.id), what: "Turning this sink off stops the audit feed reaching the SOC, so a second admin must approve it. Save your other changes with Enabled still ticked." });
+        return;
       }
       if (k && type === "siem.sink.target") {
         setAsk({ type, payload: siemTargetPayload(k.id, f.target), what: `Moving this sink to ${f.target.trim()} sends the audit feed to a different origin. A second admin must approve it. Once applied, the sink is disabled until you give it the new destination's token.` });

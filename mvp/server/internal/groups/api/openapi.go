@@ -160,6 +160,7 @@ var docList = []opDoc{
 	{Key: "GET /api/groups/loaders/{id}", Summary: "Get a loader (its definition needs stem_admin on its folder)", Tag: "loaders"},
 	{Key: "PATCH /api/groups/loaders/{id}", Summary: "Change a loader (a SQL loader needs a second admin's approval, except turning it off)", Tag: "loaders",
 		Body: "LoaderSpec", Approval: true},
+	{Key: "DELETE /api/groups/loaders/{id}", Summary: "Delete a disabled loader with its runs and credential (step-up; 409 loader_not_disabled while enabled, loader_has_groups while it manages groups)", Tag: "loaders"},
 	{Key: "POST /api/groups/loaders/{id}/run", Summary: "Run a loader now: full, incremental or a preview that applies nothing", Tag: "loaders", Body: "LoaderRunRequest"},
 	{Key: "GET /api/groups/loaders/{id}/runs", Summary: "A loader's runs, newest first", Tag: "loaders", Query: pairs(qPage)},
 	{Key: "GET /api/groups/loaders/{id}/runs/{run_id}", Summary: "One run, with its plan and downstream impact", Tag: "loaders"},

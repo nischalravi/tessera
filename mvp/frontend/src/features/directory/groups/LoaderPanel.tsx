@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { Eye, Play, Power } from "lucide-react";
+import { Eye, Play, Power, Trash2 } from "lucide-react";
 import { GrpLoader, LoaderRun, fmtDate, groupLoaders, loaderPending } from "../../../api";
 import { useSession } from "../../../app/auth";
 import { SourceDeletionGuard } from "../../admin/SourceDeletionGuard";
-import { Badge, Callout, CommandBar, Drawer, Loading, useToast } from "../../../components";
+import { Badge, Callout, CommandBar, Drawer, Loading, useConfirm, useToast } from "../../../components";
 import { errText, useLoad } from "./hooks";
 import { HeldRun, ImpactView, PlanView, RunRow, Trips } from "./LoaderRuns";
 import { lagText, loaderState, runSummary, scheduleText, typeLabel } from "./loaderModel";
@@ -36,6 +36,7 @@ function RunDrawer({ loaderId, run, onClose }: { loaderId: string; run: LoaderRu
  */
 export function LoaderPanel({ loader, onChanged }: { loader: GrpLoader; onChanged?: () => void }) {
   const toast = useToast();
+  const confirm = useConfirm();
   const { can } = useSession();
   const canAdmin = can("groups.loader.admin");
   const [busy, setBusy] = useState<string | null>(null);
@@ -72,6 +73,16 @@ export function LoaderPanel({ loader, onChanged }: { loader: GrpLoader; onChange
     onChanged?.();
   });
 
+  const remove = async () => {
+    const ok = await confirm({ title: `Delete ${loader.name}?`, body: "The source, its run history, its unresolved people and its credential are deleted. Groups it filled must be moved or deleted first. This cannot be undone.", confirmLabel: "Delete source", danger: true });
+    if (ok === null) return;
+    await act("delete", async () => {
+      await groupLoaders.remove(loader.id);
+      toast(`${loader.name} deleted`);
+      onChanged?.();
+    });
+  };
+
   return (
     <div className="stack">
       <CommandBar label={`Actions for ${loader.name}`} items={[
@@ -79,6 +90,8 @@ export function LoaderPanel({ loader, onChanged }: { loader: GrpLoader; onChange
         canAdmin && { label: "Preview", icon: <Eye size={16} />, onClick: () => run("preview"), disabled: busy !== null },
         canAdmin && loader.status !== "held" && { label: loader.status === "disabled" ? "Turn on" : "Turn off", icon: <Power size={16} />, onClick: toggle, disabled: busy !== null,
           title: loader.requires_approval && loader.status === "disabled" ? "Turning this source on needs a second administrator" : undefined },
+        canAdmin && { label: "Delete", icon: <Trash2 size={16} />, danger: true, onClick: remove, disabled: busy !== null || loader.status !== "disabled",
+          title: loader.status !== "disabled" ? "Turn the source off before deleting it" : undefined },
       ]} />
       {loader.requires_approval && <Callout tone="info">Creating this source, or changing its definition or credential, needs a second administrator's approval (it reads an outside system or runs a query). Turning it off, running it and previewing it do not.</Callout>}
       <dl className="kv">
