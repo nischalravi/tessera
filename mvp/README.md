@@ -915,7 +915,7 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET|PUT /api/admin/identity-rules` · `GET|PUT /api/admin/labels` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` (step-up; loosening a security rule is a two-admin `alerts.rule.loosen` change, issue #521) ·
-`GET|POST /api/alerts/channels` · `DELETE /api/alerts/channels/{id}` (step-up; 409 `channel_enabled` until the channel is disabled; removes its deliveries and sealed secret; audit `alert.channel.deleted`, issue #963) · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
+`GET|POST /api/alerts/channels` · `DELETE /api/alerts/channels/{id}` (step-up; always 409 `two_admin_change_required`, `change_type` `alerts.channel.delete`; 404 for a channel the tenant lacks; issues #963, #968) · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`; **disabling an enabled channel, a different recipient list or URL, and a higher `min_severity` are two-admin changes**: 409 `two_admin_change_required`, see "Alert channels: two-admin changes"; enabling, lowering `min_severity` and renaming stay single-admin) · `POST /api/alerts/channels/{id}/test` ·
 `GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
 `POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
@@ -1132,6 +1132,19 @@ Issue #111; packages `server/internal/evidence`, `graph.BuildAsOf`, schema `0260
   apostrophe. The PCI pack notes that exception-only campaigns may not satisfy requirement 7.2.4.
   The review campaigns file is built from the campaigns and their items; there was no separate review
   export to reuse.
+
+### Alert channels: two-admin changes
+
+A channel is how security alerts reach people, so anything that stops or redirects them goes through the admin change-request flow (issue #968), as SIEM sink disable and delete do. `PUT` and `DELETE /api/alerts/channels/{id}` answer 409 `two_admin_change_required` with a `change_type`; file `POST /api/admin/change-requests {"type":...,"payload":{...}}` and a different admin approves it (the requester cannot). Invalid input is a 422 first, whoever approves.
+
+| `type` | payload | applies |
+|---|---|---|
+| `alerts.channel.disable` | `{channel_id}` | turns an enabled channel off; audit `alert.channel.disabled` |
+| `alerts.channel.delete` | `{channel_id}` | deletes the channel (enabled or not), its deliveries and sealed secret; audit `alert.channel.deleted` |
+| `alerts.channel.target` | `{channel_id, target}` | new recipients of an **email** channel; audit `alert.channel.updated` |
+| `alerts.channel.severity` | `{channel_id, min_severity}` | raises `min_severity` (must be higher than now); audit `alert.channel.updated` with `previous_min_severity` |
+
+Each applied change is audited with its `change_id` in the applying transaction. A webhook URL carries a token in its path, so it is not put in a plain payload: the PUT answers 409 with `change_type` `config.proposal`, and the new URL goes through `POST /api/proposals/alert-channels/{id}`, which seals it. SQLite widens the type CHECK in `0008_admin_changes.sql` (and `DB.upgradeAdminChangeTypes` for older files); Postgres in migration `0976`.
 
 ### SIEM streaming
 

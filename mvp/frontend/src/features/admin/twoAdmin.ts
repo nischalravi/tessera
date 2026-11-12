@@ -2,9 +2,9 @@
 // become the payload of an admin change request. Pure helpers, no React, so `npm test` covers the mapping.
 
 /** The change types a 409 two_admin_change_required can name. */
-export type TwoAdminType = "siem.sink.filter" | "siem.sink.target" | "siem.sink.disable" | "siem.sink.delete" | "alerts.rule.loosen" | "breach.item.attest" | "provisioning.write_back.enable";
+export type TwoAdminType = "siem.sink.filter" | "siem.sink.target" | "siem.sink.disable" | "siem.sink.delete" | "alerts.rule.loosen" | "alerts.channel.disable" | "alerts.channel.delete" | "alerts.channel.target" | "alerts.channel.severity" | "breach.item.attest" | "provisioning.write_back.enable";
 
-const TYPES: readonly string[] = ["siem.sink.filter", "siem.sink.target", "siem.sink.disable", "siem.sink.delete", "alerts.rule.loosen", "breach.item.attest", "provisioning.write_back.enable"];
+const TYPES: readonly string[] = ["siem.sink.filter", "siem.sink.target", "siem.sink.disable", "siem.sink.delete", "alerts.rule.loosen", "alerts.channel.disable", "alerts.channel.delete", "alerts.channel.target", "alerts.channel.severity", "breach.item.attest", "provisioning.write_back.enable"];
 
 /** The change type to file when `err` is the API's 409 two_admin_change_required, else null. */
 export function twoAdminType(err: unknown): TwoAdminType | null {
@@ -36,6 +36,15 @@ export const siemTargetPayload = (sinkId: string, target: string) => ({ sink_id:
 /** siem.sink.disable and siem.sink.delete: the sink. */
 export const siemSinkPayload = (sinkId: string) => ({ sink_id: sinkId });
 
+/** alerts.channel.disable and alerts.channel.delete: the channel (issue #968). */
+export const alertChannelPayload = (channelId: string) => ({ channel_id: channelId });
+
+/** alerts.channel.target: the new recipient list, as typed (an email channel; a webhook URL goes by proposal). */
+export const alertChannelTargetPayload = (channelId: string, target: string) => ({ channel_id: channelId, target: target.trim() });
+
+/** alerts.channel.severity: the higher min_severity. */
+export const alertChannelSeverityPayload = (channelId: string, minSeverity: string) => ({ channel_id: channelId, min_severity: minSeverity });
+
 /** breach.item.attest: the plan, the item and what the person did (the server checks all three). */
 export const breachAttestPayload = (planId: string, itemId: string, note: string) => ({ plan_id: planId, item_id: itemId, note: note.trim() });
 
@@ -53,6 +62,10 @@ export const TWO_ADMIN_TITLE: Record<TwoAdminType, string> = {
   "siem.sink.target": "Moving this sink to another destination needs a second admin",
   "siem.sink.disable": "Turning this sink off needs a second admin",
   "siem.sink.delete": "Deleting this sink needs a second admin",
+  "alerts.channel.disable": "Turning this channel off needs a second admin",
+  "alerts.channel.delete": "Deleting this channel needs a second admin",
+  "alerts.channel.target": "Sending this channel's alerts to other recipients needs a second admin",
+  "alerts.channel.severity": "Raising this channel's minimum severity needs a second admin",
   "alerts.rule.loosen": "Loosening a security alert rule needs a second admin",
   "breach.item.attest": "Attesting a breach item needs a second admin",
   "provisioning.write_back.enable": "Turning on write-back needs a second admin",

@@ -89,3 +89,16 @@ test("turning a SIEM sink off or deleting it maps to its two-admin request", () 
   }
   assert.deepEqual(t.siemSinkPayload("s1"), { sink_id: "s1" });
 });
+
+test("alert channel changes map to their two-admin requests (issue #968)", () => {
+  for (const type of ["alerts.channel.disable", "alerts.channel.delete", "alerts.channel.target", "alerts.channel.severity"] as const) {
+    const e = new api.ApiError("x", 409, { error: "two_admin_change_required", change_type: type });
+    assert.equal(t.twoAdminType(e), type);
+    assert.ok(t.TWO_ADMIN_TITLE[type].includes("second admin"));
+  }
+  // a webhook URL goes by configuration proposal: the form cannot file it
+  assert.equal(t.twoAdminType(new api.ApiError("x", 409, { error: "two_admin_change_required", change_type: "config.proposal" })), null);
+  assert.deepEqual(t.alertChannelPayload("c1"), { channel_id: "c1" });
+  assert.deepEqual(t.alertChannelTargetPayload("c1", " a@b.example "), { channel_id: "c1", target: "a@b.example" });
+  assert.deepEqual(t.alertChannelSeverityPayload("c1", "critical"), { channel_id: "c1", min_severity: "critical" });
+});

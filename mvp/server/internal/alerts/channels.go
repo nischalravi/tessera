@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
@@ -174,22 +175,115 @@ func UpdateChannel(tx *store.TenantTx, sealer *seal.Sealer, id string, s Channel
 	return c, secret, tx.Audit(now, by.Display, "alert.channel.updated", d)
 }
 
-// DeleteChannel removes a disabled channel, its delivery rows and its sealed secret, and records alert.channel.deleted in the
-// same transaction. An enabled channel is refused (409 channel_enabled).
-func DeleteChannel(tx *store.TenantTx, id string, by Actor, now time.Time) error {
+// DeleteChannel removes a channel, enabled or not, with its delivery rows and its sealed secret after two admins
+// approved it (alerts.channel.delete, issue #968), and records alert.channel.deleted with the change id in the same
+// transaction. A channel is how security alerts reach people, so deleting it is never a single admin's call.
+func DeleteChannel(tx *store.TenantTx, id, changeID string, now time.Time) error {
 	c, err := tx.AlertChannel(id)
 	if errors.Is(err, store.ErrNotFound) {
 		return refuse(404, "channel_not_found", "channel not found")
 	} else if err != nil {
 		return err
 	}
-	if c.Enabled {
-		return refuse(409, "channel_enabled", "disable the channel before deleting it")
-	}
 	if err := tx.DeleteAlertChannel(id); err != nil {
 		return err
 	}
-	return tx.Audit(now, by.Display, "alert.channel.deleted", channelAudit(c, false))
+	return recordChange(tx, "alert.channel.deleted", append(channelAudit(c, false), ojson.KV{Key: "change_id", Value: changeID}), changeID, now)
+}
+
+// DisableChannel turns an enabled channel off after two admins approved it (alerts.channel.disable): a disabled
+// channel delivers nothing. Audited as alert.channel.disabled with the change id, in the same transaction.
+func DisableChannel(tx *store.TenantTx, id, changeID string, now time.Time) error {
+	c, err := tx.AlertChannel(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return refuse(404, "channel_not_found", "channel not found")
+	} else if err != nil {
+		return err
+	}
+	if !c.Enabled {
+		return refuse(409, "channel_disabled", "the channel is already disabled")
+	}
+	c.Enabled, c.UpdatedAt = false, now
+	if err := tx.UpdateAlertChannel(c); err != nil {
+		return err
+	}
+	return recordChange(tx, "alert.channel.disabled", append(channelAudit(c, false), ojson.KV{Key: "change_id", Value: changeID}), changeID, now)
+}
+
+// recordChange audits an applied admin change request, targeting the request, in the applying transaction.
+func recordChange(tx *store.TenantTx, action string, d ojson.Object, changeID string, now time.Time) error {
+	_, err := audit.Record(tx.Context(), tx, action, d, audit.At(now), audit.Target("admin_change", changeID))
+	return err
+}
+
+// SeverityRaises reports whether next is a higher min_severity than cur: fewer alerts reach the channel. An unknown
+// value is not a raise (the check that follows refuses it).
+func SeverityRaises(cur, next string) bool {
+	i, j := slices.Index(Severities, cur), slices.Index(Severities, next)
+	return i >= 0 && j > i
+}
+
+// TargetChanged reports whether target differs from the channel's own (an email list is compared as it is stored). An
+// address list that does not parse is not a change: the update's own check refuses it.
+func TargetChanged(c *store.AlertChannel, target string) bool {
+	t := strings.TrimSpace(target)
+	if c.Kind == "email" {
+		rs, err := Recipients(t)
+		if err != nil || len(rs) == 0 {
+			return false
+		}
+		t = strings.Join(rs, ", ")
+	}
+	return t != c.Target
+}
+
+// RetargetChannel sends an email channel's alerts to other recipients after two admins approved it
+// (alerts.channel.target). A webhook URL carries a token in its path, so it is never put in a plain change request: it
+// moves through a configuration proposal, which seals it (config.proposal). Audited as alert.channel.updated with the
+// change id, in the same transaction.
+func RetargetChannel(tx *store.TenantTx, id, target, changeID string, dev bool, now time.Time) error {
+	c, err := tx.AlertChannel(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return refuse(404, "channel_not_found", "channel not found")
+	} else if err != nil {
+		return err
+	}
+	if c.Kind != "email" {
+		return refuse(422, "invalid_kind", "only an email channel's recipients are changed here; a webhook URL goes through a configuration proposal")
+	}
+	sp := ChannelSpec{Name: c.Name, Kind: c.Kind, Target: target, MinSeverity: c.MinSeverity, Enabled: true}
+	if err := sp.check(dev); err != nil {
+		return err
+	}
+	if sp.Target == c.Target {
+		return refuse(409, "target_unchanged", "the channel already sends there")
+	}
+	c.Target, c.UpdatedAt = sp.Target, now
+	if err := tx.UpdateAlertChannel(c); err != nil {
+		return err
+	}
+	return recordChange(tx, "alert.channel.updated", append(channelAudit(c, false), ojson.KV{Key: "change_id", Value: changeID}), changeID, now)
+}
+
+// RaiseChannelSeverity raises a channel's min_severity after two admins approved it (alerts.channel.severity): the
+// channel then receives fewer alerts. Audited as alert.channel.updated with the change id and the previous severity.
+func RaiseChannelSeverity(tx *store.TenantTx, id, severity, changeID string, now time.Time) error {
+	c, err := tx.AlertChannel(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return refuse(404, "channel_not_found", "channel not found")
+	} else if err != nil {
+		return err
+	}
+	if !SeverityRaises(c.MinSeverity, severity) {
+		return refuse(409, "severity_not_raised", "the new min_severity is not higher than the current one")
+	}
+	prev := c.MinSeverity
+	c.MinSeverity, c.UpdatedAt = severity, now
+	if err := tx.UpdateAlertChannel(c); err != nil {
+		return err
+	}
+	return recordChange(tx, "alert.channel.updated",
+		append(channelAudit(c, false), ojson.KV{Key: "change_id", Value: changeID}, ojson.KV{Key: "previous_min_severity", Value: prev}), changeID, now)
 }
 
 // prepareUpdate loads channel id and runs every check UpdateChannel makes before it writes; it returns the channel and the
