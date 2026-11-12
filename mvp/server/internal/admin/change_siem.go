@@ -23,6 +23,20 @@ const TypeSiemSinkTarget = "siem.sink.target"
 // siemFilterPayload changes what a sink receives. event_filter ([] is every event) and include_http are each
 // optional (omitted keeps the current value), at least one is given. Narrowing either needs two admins: a filter
 // that lets fewer events through, or include_http true to false (it drops every http.request event, issue #520).
+// TypeSiemSinkDisable turns a SIEM sink off and TypeSiemSinkDelete deletes one. Either stops the audit feed reaching
+// the SOC, as narrowing the filter to nothing would, so each takes two admins. A disabled sink would not deliver its
+// own siem.sink.updated event, so the request and its approval are what the SOC sees; they reach the sink while it
+// is still enabled. Enabling a sink stays a plain PUT /api/siem/sinks/{id}.
+const (
+	TypeSiemSinkDisable = "siem.sink.disable"
+	TypeSiemSinkDelete  = "siem.sink.delete"
+)
+
+// siemSinkPayload names the sink to disable or delete.
+type siemSinkPayload struct {
+	SinkID string `json:"sink_id"`
+}
+
 type siemFilterPayload struct {
 	SinkID      string    `json:"sink_id"`
 	EventFilter *[]string `json:"event_filter,omitempty"`
@@ -39,6 +53,54 @@ func init() {
 		func(_ *env, v *siemFilterPayload) string { return "Change what SIEM sink " + v.SinkID + " receives" })
 	changeTypes[TypeSiemSinkTarget] = typed(TypeSiemSinkTarget, nil, planSiemTarget, applySiemTarget,
 		func(_ *env, v *siemTargetPayload) string { return "Move SIEM sink " + v.SinkID + " to " + v.Target })
+	changeTypes[TypeSiemSinkDisable] = typed(TypeSiemSinkDisable, nil, planSiemDisable, applySiemDisable,
+		func(_ *env, v *siemSinkPayload) string { return "Disable SIEM sink " + v.SinkID })
+	changeTypes[TypeSiemSinkDelete] = typed(TypeSiemSinkDelete, nil, planSiemDelete, applySiemDelete,
+		func(_ *env, v *siemSinkPayload) string { return "Delete SIEM sink " + v.SinkID })
+}
+
+func siemSinkOf(e *env, id string) (*store.SiemSink, error) {
+	k, err := e.tx.SiemSink(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, invalid("no SIEM sink %s", id)
+	}
+	return k, err
+}
+
+// planSiemDisable needs an enabled sink and always takes two admins.
+func planSiemDisable(e *env, v *siemSinkPayload) (plan, error) {
+	k, err := siemSinkOf(e, v.SinkID)
+	if err != nil {
+		return plan{}, err
+	}
+	if !k.Enabled {
+		return plan{}, invalid("SIEM sink %s is already disabled", v.SinkID)
+	}
+	return plan{twoPerson: true, target: k.ID}, nil
+}
+
+func applySiemDisable(e *env, ch *store.AdminChange, v *siemSinkPayload) error {
+	if _, err := planSiemDisable(e, v); err != nil {
+		return err
+	}
+	_, err := siem.DisableSink(e.tx, v.SinkID, ch.ID.String(), e.now)
+	return err
+}
+
+// planSiemDelete takes two admins whether the sink is enabled or not.
+func planSiemDelete(e *env, v *siemSinkPayload) (plan, error) {
+	k, err := siemSinkOf(e, v.SinkID)
+	if err != nil {
+		return plan{}, err
+	}
+	return plan{twoPerson: true, target: k.ID}, nil
+}
+
+func applySiemDelete(e *env, ch *store.AdminChange, v *siemSinkPayload) error {
+	if _, err := planSiemDelete(e, v); err != nil {
+		return err
+	}
+	return siem.DeleteSink(e.tx, v.SinkID, ch.ID.String(), e.now)
 }
 
 // planSiemFilter checks the sink and the settings and decides who approves: two admins when either narrows.

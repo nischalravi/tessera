@@ -2,9 +2,9 @@
 // become the payload of an admin change request. Pure helpers, no React, so `npm test` covers the mapping.
 
 /** The change types a 409 two_admin_change_required can name. */
-export type TwoAdminType = "siem.sink.filter" | "siem.sink.target" | "alerts.rule.loosen" | "breach.item.attest" | "provisioning.write_back.enable";
+export type TwoAdminType = "siem.sink.filter" | "siem.sink.target" | "siem.sink.disable" | "siem.sink.delete" | "alerts.rule.loosen" | "breach.item.attest" | "provisioning.write_back.enable";
 
-const TYPES: readonly string[] = ["siem.sink.filter", "siem.sink.target", "alerts.rule.loosen", "breach.item.attest", "provisioning.write_back.enable"];
+const TYPES: readonly string[] = ["siem.sink.filter", "siem.sink.target", "siem.sink.disable", "siem.sink.delete", "alerts.rule.loosen", "breach.item.attest", "provisioning.write_back.enable"];
 
 /** The change type to file when `err` is the API's 409 two_admin_change_required, else null. */
 export function twoAdminType(err: unknown): TwoAdminType | null {
@@ -33,6 +33,9 @@ export function siemFilterPayload(
 /** siem.sink.target: the new destination, as typed. */
 export const siemTargetPayload = (sinkId: string, target: string) => ({ sink_id: sinkId, target: target.trim() });
 
+/** siem.sink.disable and siem.sink.delete: the sink. */
+export const siemSinkPayload = (sinkId: string) => ({ sink_id: sinkId });
+
 /** breach.item.attest: the plan, the item and what the person did (the server checks all three). */
 export const breachAttestPayload = (planId: string, itemId: string, note: string) => ({ plan_id: planId, item_id: itemId, note: note.trim() });
 
@@ -48,6 +51,8 @@ export const provWriteBackPayload = (connectionId: string, configHash: string) =
 export const TWO_ADMIN_TITLE: Record<TwoAdminType, string> = {
   "siem.sink.filter": "Narrowing what this sink receives needs a second admin",
   "siem.sink.target": "Moving this sink to another destination needs a second admin",
+  "siem.sink.disable": "Turning this sink off needs a second admin",
+  "siem.sink.delete": "Deleting this sink needs a second admin",
   "alerts.rule.loosen": "Loosening a security alert rule needs a second admin",
   "breach.item.attest": "Attesting a breach item needs a second admin",
   "provisioning.write_back.enable": "Turning on write-back needs a second admin",

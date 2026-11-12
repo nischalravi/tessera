@@ -136,6 +136,10 @@ var (
 		UPDATE alert_channels SET name = @name, target = @target, secret_sealed = @secret, min_severity = @min_severity,
 			enabled = @enabled, updated_at = @updated_at
 		WHERE tenant_id = @tenant AND id = @id`)
+	alertChannelsDelete = tq("alert_channels.delete", `
+		DELETE FROM alert_channels WHERE tenant_id = @tenant AND id = @id`)
+	alertDeliveriesDeleteByChannel = tq("alert_deliveries.delete_by_channel", `
+		DELETE FROM alert_deliveries WHERE tenant_id = @tenant AND channel_id = @id`)
 
 	alertDeliveriesInsert = tq("alert_deliveries.insert", `
 		INSERT INTO alert_deliveries (id, tenant_id, alert_id, channel_id, reason, status, attempts, next_attempt_at, created_at)
@@ -332,6 +336,14 @@ func (tx *TenantTx) UpdateAlertChannel(c *AlertChannel) error {
 	return tx.execOne(alertChannelsUpdate, sql.Named("id", c.ID), sql.Named("name", c.Name), sql.Named("target", c.Target),
 		sql.Named("secret", c.SecretSealed), sql.Named("min_severity", c.MinSeverity), sql.Named("enabled", B(c.Enabled)),
 		sql.Named("updated_at", T(c.UpdatedAt)))
+}
+
+// DeleteAlertChannel removes a channel with its delivery rows; its sealed secret lives in the row. ErrNotFound if absent.
+func (tx *TenantTx) DeleteAlertChannel(id string) error {
+	if _, err := tx.exec(alertDeliveriesDeleteByChannel, sql.Named("id", id)); err != nil {
+		return err
+	}
+	return tx.execOne(alertChannelsDelete, sql.Named("id", id))
 }
 
 func scanDelivery(s scanner) (*AlertDelivery, error) {

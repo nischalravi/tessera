@@ -378,6 +378,48 @@ func (s *Service) Retire(c *store.TenantTx, connID, actor string, now time.Time)
 		{Key: "name", Value: conn.Name}})
 }
 
+// Delete removes a retired connection with its revisions, readiness evidence, provisioning rows and sealed
+// credentials, and records connection.deleted in the same transaction (issue #963). It refuses, with a 409 and a
+// code, a connection that is not retired (connection_not_retired), still owns synced objects
+// (connection_has_synced_objects: they are never cascade-deleted, so the deletion guard is not bypassed), has
+// provisioning ops or agent jobs in flight (connection_has_pending_ops), has a sync or other job running
+// (connection_syncing) or is named by a group loader, group provisioner or SSF transmitter (connection_in_use).
+func (s *Service) Delete(c *store.TenantTx, connID, actor string, now time.Time) error {
+	conn, err := c.Connection(connID)
+	if errors.Is(err, store.ErrNotFound) {
+		return notFound("no connection %s", connID)
+	} else if err != nil {
+		return err
+	}
+	if conn.RetiredAt == nil {
+		return conflict("connection_not_retired", "retire connection %s before deleting it", conn.Name)
+	}
+	u, err := c.ConnectionUsage(conn.ID, conn.System)
+	if err != nil {
+		return err
+	}
+	extra := func(e *Error) *Error {
+		e.Extra = map[string]any{"synced_objects": u.Objects(), "pending_ops": u.PendingOps, "running_jobs": u.RunningJobs,
+			"group_loaders": u.Loaders, "group_provisioners": u.Provisioners, "ssf_transmitters": u.Transmitters}
+		return e
+	}
+	switch {
+	case u.RunningJobs > 0:
+		return extra(conflict("connection_syncing", "%d job(s) are running on connection %s; wait for them to finish", u.RunningJobs, conn.Name))
+	case u.PendingOps > 0:
+		return extra(conflict("connection_has_pending_ops", "connection %s has %d provisioning operation(s) still pending", conn.Name, u.PendingOps))
+	case u.Objects() > 0:
+		return extra(conflict("connection_has_synced_objects", "connection %s still owns %d synced object(s); they are not deleted with it", conn.Name, u.Objects()))
+	case u.Referenced() > 0:
+		return extra(conflict("connection_in_use", "connection %s is still used by %d group loader(s), group provisioner(s) or SSF transmitter(s)", conn.Name, u.Referenced()))
+	}
+	if err := c.DeleteConnection(conn.ID, now); err != nil {
+		return err
+	}
+	return c.Audit(now, actor, "connection.deleted", ojson.Object{{Key: "connection_id", Value: conn.ID},
+		{Key: "name", Value: conn.Name}, {Key: "system", Value: conn.System}, {Key: "connector_type", Value: conn.ConnectorType}})
+}
+
 // Degrade moves a live revision to degraded (system; the scheduled checks of
 // DR-9 call it). Reads continue; write-back stops (CanWrite is false).
 func (s *Service) Degrade(c *store.TenantTx, connID, reason string, now time.Time) error {

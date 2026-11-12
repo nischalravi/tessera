@@ -27,6 +27,7 @@ import (
 //	POST   /api/groups/loaders                                {name, type, config, target_folder, ...}: STEP_UP_POLICY
 //	GET    /api/groups/loaders/{id}
 //	PATCH  /api/groups/loaders/{id}                           the fields to change: STEP_UP_POLICY
+//	DELETE /api/groups/loaders/{id}                           a disabled loader with its runs and credential: STEP_UP_POLICY
 //	POST   /api/groups/loaders/{id}/run                       {kind: full|incremental|preview}
 //	GET    /api/groups/loaders/{id}/runs?limit=&offset=
 //	GET    /api/groups/loaders/{id}/runs/{run_id}             with the plan and the downstream impact
@@ -52,6 +53,7 @@ func (s *Server) registerGroupsLoaderRoutes() {
 	s.handle(G, "/api/groups/loader-tasks", read, canRead, s.rd(s.listLoaderTasks))
 	s.handle(G, "/api/groups/loaders/{id}", read, canRead, s.rd(s.getGrpLoader))
 	s.handle(PA, "/api/groups/loaders/{id}", phased, cfgStepUp, s.rd(s.patchGrpLoader))
+	s.handle(http.MethodDelete, "/api/groups/loaders/{id}", write, cfgStepUp, s.rd(s.deleteGrpLoader))
 	s.handle(P, "/api/groups/loaders/{id}/run", phased, adm, s.rd(s.runGrpLoader))
 	s.handle(G, "/api/groups/loaders/{id}/runs", read, canRead, s.rd(s.listLoaderRuns))
 	s.handle(G, "/api/groups/loaders/{id}/runs/{run_id}", read, canRead, s.rd(s.getLoaderRun))
@@ -640,6 +642,27 @@ func (b *loaderPatch) disableOnly() bool {
 	return b.Status != nil && *b.Status == store.LoaderDisabled && b.Name == nil && b.ConnectionID == nil &&
 		len(b.Config) == 0 && b.TargetFolder == nil && b.NameTemplate == nil && b.OnMissingGroup == nil && b.AndGroup == nil &&
 		b.Schedule == nil && b.IncrementalSecs == nil && b.Failsafe == nil && b.Secret == nil
+}
+
+func (s *Server) deleteGrpLoader(r *http.Request, p *params) (int, any, error) {
+	id, err := grpPathID(p, "loader")
+	if err != nil {
+		return 0, nil, err
+	}
+	c := store.TxFrom(r.Context())
+	l, err := c.GrpLoader(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return 0, nil, grpNotFound("loader")
+	} else if err != nil {
+		return 0, nil, err
+	}
+	if err := grpErr(s.grpChecker(r).Require(privs.FolderObject(l.TargetFolder), privs.StemAdmin)); err != nil {
+		return 0, nil, err
+	}
+	if err := loaders.Delete(s.loaderSaveEnv(r, c, s.clock()), id); err != nil {
+		return 0, nil, grpErr(err)
+	}
+	return http.StatusOK, map[string]any{"deleted": true, "id": id}, nil
 }
 
 func (s *Server) patchGrpLoader(r *http.Request, p *params) (int, any, error) {

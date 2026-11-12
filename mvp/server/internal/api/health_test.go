@@ -161,7 +161,7 @@ func TestReadinessOpenAPI_CoversRoutes(t *testing.T) {
 			t.Errorf("%s %s is not documented", rt.method, path)
 		}
 	}
-	if n != 31 {
-		t.Errorf("%d readiness routes registered, want 31", n)
+	if n != 32 {
+		t.Errorf("%d readiness routes registered, want 32", n)
 	}
 }

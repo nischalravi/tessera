@@ -174,6 +174,24 @@ func UpdateChannel(tx *store.TenantTx, sealer *seal.Sealer, id string, s Channel
 	return c, secret, tx.Audit(now, by.Display, "alert.channel.updated", d)
 }
 
+// DeleteChannel removes a disabled channel, its delivery rows and its sealed secret, and records alert.channel.deleted in the
+// same transaction. An enabled channel is refused (409 channel_enabled).
+func DeleteChannel(tx *store.TenantTx, id string, by Actor, now time.Time) error {
+	c, err := tx.AlertChannel(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return refuse(404, "channel_not_found", "channel not found")
+	} else if err != nil {
+		return err
+	}
+	if c.Enabled {
+		return refuse(409, "channel_enabled", "disable the channel before deleting it")
+	}
+	if err := tx.DeleteAlertChannel(id); err != nil {
+		return err
+	}
+	return tx.Audit(now, by.Display, "alert.channel.deleted", channelAudit(c, false))
+}
+
 // prepareUpdate loads channel id and runs every check UpdateChannel makes before it writes; it returns the channel and the
 // origin it is moving from and to.
 func prepareUpdate(tx *store.TenantTx, id string, s ChannelSpec, dev bool) (*store.AlertChannel, ChannelSpec, string, string, error) {

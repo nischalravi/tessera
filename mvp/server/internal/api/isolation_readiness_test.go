@@ -67,6 +67,7 @@ var readinessRouteCases = map[string][]rdCase{
 		key: "connection"}},
 	"POST /api/connections/{id}/retire": {{method: "POST", path: onConn("/retire"), body: `{"confirm":true}`,
 		key: "connection:ad"}},
+	"DELETE /api/connections/{id}":        {{method: "DELETE", path: onConn(""), key: "connection:ad"}},
 	"POST /api/connections/{id}/validate": {{method: "POST", path: onConn("/validate"), key: "connection"}},
 	"GET /api/connections/{id}/validations/{run}": {
 		{method: "GET", path: func(a map[string]string, id string) string {

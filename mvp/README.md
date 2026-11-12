@@ -347,7 +347,16 @@ the revision get `403 two_person_rule`; the requester cancels and anyone else re
 `POST .../activation/reject`; `GET .../activation` shows the latest request. The gate itself
 (blocker `activation.approval`) refuses a write-enabled revision that has no approval, so no other
 caller can skip the second person. This request table stands in for the `connection.activate`
-admin-change type until Phase 0's admin-change workflow (PR12) lands. Non-demo connector types are
+admin-change type until Phase 0's admin-change workflow (PR12) lands.
+
+**Deleting a connection (issue #963):** `DELETE /api/connections/{id}` (`connections.manage` + step-up) removes
+a **retired** connection with its revisions, readiness evidence, provisioning rows and sealed credentials, and
+audits `connection.deleted` in the same transaction. It answers 409 with a code while something still depends on
+it: `connection_not_retired`, `connection_has_synced_objects` (accounts, groups, resources or permissions of its
+system: they are never cascade-deleted, so the deletion guard is not bypassed), `connection_has_pending_ops`
+(provisioning operations or agent jobs in flight), `connection_syncing` (a job running) and `connection_in_use`
+(a group loader, group provisioner or SSF transmitter names it). Its certificates stay as retired evidence without
+their key, and job history stays, unlinked. The UI offers it on the Activate step of a retired connection. Non-demo connector types are
 no longer refused with `phase0_required`: the gate alone decides (simulated evidence never
 satisfies it).
 
@@ -899,14 +908,14 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET /api/connectors/sync-status` · `PUT /api/connectors/sync-schedule` (see "Durable job queue") · `GET|POST /api/ssf/transmitters` · `GET|PUT|DELETE /api/ssf/transmitters/{id}` · `POST /api/ssf/transmitters/{id}/verify` ·
 `GET /api/ssf/events` · `POST /public/t/{slug}/ssf/{transmitter_id}/events` (SSF push, see "Shared Signals receiver") ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
-`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it; **moving to another origin is a two-admin change** `siem.sink.target` (issue #520), see Log streaming; omitted fields keep their value, `include_http` included) · `POST /api/siem/sinks/{id}/rewind {seq}` (step-up, issue #520) ·
+`GET|POST /api/siem/sinks` · `DELETE /api/siem/sinks/{id}` (step-up; always 409 `two_admin_change_required` with `change_type` `siem.sink.delete`: deleting a sink is a two-admin change, see Log streaming; issue #963) · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it; **moving to another origin is a two-admin change** `siem.sink.target` (issue #520), see Log streaming; omitted fields keep their value, `include_http` included) · `POST /api/siem/sinks/{id}/rewind {seq}` (step-up, issue #520) ·
 `POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` (a sink's `kind` is `syslog`, `webhook` or `s3`; `event_filter`, `region` and `access_key_id` are in the body and the view; narrowing `event_filter` is refused with 409 `two_admin_change_required`, see "Event filter") ·
 `GET|POST /api/admin/certificates` · `POST /api/admin/certificates/generate {connection_id}` · `POST /api/admin/certificates/{id}/promote|retire` ·
 `GET|PUT /api/admin/branding` · `GET /api/auth/branding?tenant=` · `GET /api/auth/branding/logo?tenant=` (the last two are public, see "Certificates, branding and identity rules") ·
 `GET|PUT /api/admin/identity-rules` · `GET|PUT /api/admin/labels` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` (step-up; loosening a security rule is a two-admin `alerts.rule.loosen` change, issue #521) ·
-`GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
+`GET|POST /api/alerts/channels` · `DELETE /api/alerts/channels/{id}` (step-up; 409 `channel_enabled` until the channel is disabled; removes its deliveries and sealed secret; audit `alert.channel.deleted`, issue #963) · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
 `GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
 `POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
@@ -1142,6 +1151,7 @@ The pull export (`/api/audit/export`) stays available.
     - Requests are signed with AWS Signature Version 4 (stdlib, checked against the AWS documentation vector) and go through `internal/safehttp`. Give the key `s3:PutObject` on the prefix only.
 - **Event filter (issue #498):** a sink can receive only some audit actions. `event_filter` is a list of actions (`grant.revoke`) or prefixes ending in `.*` (`auth.*`), `*` for all, empty for everything. A sink still needs `include_http` for `http.request`. Filtered-out events advance the cursor, but **Behind** still counts them (it is the distance to the ledger head). **Narrowing is a two-admin change (issue #511):** `PUT /api/siem/sinks/{id}` refuses a narrower filter (from empty or `*` to a list, or dropping an entry) with 409 `two_admin_change_required`; submit an admin change request `POST /api/admin/change-requests {"type":"siem.sink.filter","payload":{"sink_id","event_filter"}}` and a different admin approves it. Widening or clearing stays single-admin. Some actions reach every sink whatever its filter says: `siem.*`, `audit.*`, `admin.change.*`, `auth.break_glass*`, `breakglass.*`, `auth.step_up.*`, `auth.role.*`, `stepup.*` and `deletion_guard.*`, so a sink always learns that its own configuration changed (`siem.sink.filter_changed` records the old and new filter).
 - **Retargeting and `include_http` (issue #520):** `PUT /api/siem/sinks/{id}` is a partial update: an omitted field keeps its value (a rename no longer turns `include_http` off). Turning `include_http` from true to false drops every `http.request` event, so like a narrowing filter it is refused with 409 `two_admin_change_required` and goes through `siem.sink.filter` (payload `{sink_id, event_filter?, include_http?}`, at least one). Moving a sink to another **origin** (scheme, host, port; syslog host:port) is refused the same way and needs an admin change request `{"type":"siem.sink.target","payload":{"sink_id","target"}}` approved by a different admin. The request and its approval (`admin.change.*`) reach the old destination while it is still the target. Applying it clears the sealed token (it never follows a sink to another origin), disables the sink and audits `siem.sink.retargeted` (`previous_origin`, `origin`, `change_id`); an admin then `PUT`s the new token with `enabled: true`. `POST /api/siem/sinks/{id}/rewind` needs a step-up like the other sink writes.
+- **Disabling and deleting (issue #963):** either stops the sink's audit export, so each is a two-admin change like a narrowing filter. `PUT /api/siem/sinks/{id}` with `enabled: false` on an enabled sink, and `DELETE /api/siem/sinks/{id}`, answer 409 `two_admin_change_required` (`change_type` `siem.sink.disable` or `siem.sink.delete`); submit `POST /api/admin/change-requests {"type":"siem.sink.disable"|"siem.sink.delete","payload":{"sink_id"}}` and a different admin approves it. The request and its approval reach the sink while it is still enabled. Applying a disable keeps the cursor and audits `siem.sink.disabled`; applying a delete (enabled or not) removes the sink, its dead letters and its sealed token and audits `siem.sink.deleted`, each with the `change_id`, in the applying transaction. Enabling a sink stays single-admin.
 - **Formats:**
   - `json` is the export record. It carries `hash` and `prev_hash`, so the SIEM can recompute the chain.
   - `ocsf` is OCSF 1.3: Authentication (3002) for sign-in and sign-out, Account Change (3001) for role grants and revokes and user disables, and API Activity (6003) for everything else.
@@ -5256,8 +5266,10 @@ LDAPS and StartTLS, no bind without TLS, bind refused), `internal/store` (`TestC
 - Routes: `GET|POST /api/groups/loaders`, `GET|PATCH /api/groups/loaders/{id}`,
   `POST .../{id}/run` (`{kind: full|incremental|preview}`; a failed run answers `502
   loader_run_failed` with the run), `GET .../{id}/runs[/{run_id}]`, `POST .../runs/{run_id}/approve`
-  and `/reject`, `GET .../{id}/unresolved`, `GET /api/groups/loader-tasks`. There is no delete: turn a
-  loader off. Audit events `groups.loader.created|updated`, `groups.loader.run.applied|held|failed|
+  and `/reject`, `GET .../{id}/unresolved`, `GET /api/groups/loader-tasks`, `DELETE .../{id}` (issue #963:
+  `groups.loader.admin` + step-up + `stem_admin` on the folder; 409 `loader_not_disabled` until it is turned off,
+  409 `loader_has_groups` while it still manages groups; removes its runs, unresolved people and sealed
+  credential). Audit events `groups.loader.created|updated|deleted`, `groups.loader.run.applied|held|failed|
   previewed|approved|rejected`.
 - Migration note: `admin_change_requests.type` gained `groups.loader.save` in `0008_admin_changes.sql`
   (a database created before this change must be reseeded).

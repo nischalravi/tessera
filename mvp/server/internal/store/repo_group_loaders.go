@@ -170,6 +170,12 @@ var (
 	grpLoaderUnresolvedDelete = tq("grp_loader_unresolved.delete", `DELETE FROM grp_loader_unresolved
 		WHERE tenant_id = @tenant AND loader_id = @loader_id AND source = @source AND identifier = @identifier`)
 
+	grpLoaderDelete             = tq("grp_loaders.delete", `DELETE FROM grp_loaders WHERE tenant_id = @tenant AND id = @id`)
+	grpLoaderRunsDeleteByLoader = tq("grp_loader_runs.delete_by_loader", `
+		DELETE FROM grp_loader_runs WHERE tenant_id = @tenant AND loader_id = @id`)
+	grpLoaderUnresolvedDeleteByLoader = tq("grp_loader_unresolved.delete_by_loader", `
+		DELETE FROM grp_loader_unresolved WHERE tenant_id = @tenant AND loader_id = @id`)
+
 	grpGroupsOfLoader = tq("grp_groups.of_loader", `SELECT `+grpGroupCols+` FROM grp_groups g
 		WHERE g.tenant_id = @tenant AND g.loader_id = @loader_id ORDER BY lower(g.name), g.id`)
 	grpDmBySource = tq("grp_dm.by_source", `SELECT `+dmCols+` FROM grp_direct_memberships d
@@ -395,6 +401,17 @@ func (tx *TenantTx) GrpLoaderLastRun(loaderID, kind string) (*GrpLoaderRun, erro
 func (tx *TenantTx) DecideGrpLoaderRun(id, status, by string, at time.Time) error {
 	return tx.execOne(grpLoaderRunDecide, sql.Named("id", id), sql.Named("status", status), sql.Named("decided_by", by),
 		sql.Named("decided_at", RT(at)))
+}
+
+// DeleteGrpLoader removes a loader with its runs and unresolved subjects; its sealed credential lives in the row.
+// ErrNotFound if this tenant has no such loader.
+func (tx *TenantTx) DeleteGrpLoader(id string) error {
+	for _, st := range []tstmt{grpLoaderUnresolvedDeleteByLoader, grpLoaderRunsDeleteByLoader} {
+		if _, err := tx.exec(st, sql.Named("id", id)); err != nil {
+			return err
+		}
+	}
+	return tx.execOne(grpLoaderDelete, sql.Named("id", id))
 }
 
 // UpsertGrpLoaderUnresolved records a subject a run could not resolve: the
