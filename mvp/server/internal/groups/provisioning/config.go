@@ -141,7 +141,7 @@ type Compiled struct {
 // keeps reports whether raw is the value stored under the same target setting (a value only counts for its own setting).
 func (c *Compiled) keeps(field, raw string) bool { return raw != "" && c.keep[field] == raw }
 
-// storedTargetURLs lists the URL settings of a stored target configuration.
+// storedTargetURLs lists the URL and host settings (url, base_url, read_url, server_name) of a stored target configuration.
 func storedTargetURLs(config json.RawMessage) map[string]string {
 	var cc struct {
 		Target map[string]any `json:"target"`
@@ -150,7 +150,7 @@ func storedTargetURLs(config json.RawMessage) map[string]string {
 		return nil
 	}
 	out := map[string]string{}
-	for _, k := range []string{"url", "base_url", "read_url"} {
+	for _, k := range []string{"url", "base_url", "read_url", "server_name"} {
 		if v, ok := cc.Target[k].(string); ok {
 			out[k] = v
 		}
