@@ -556,10 +556,20 @@ func TestNoInsecureHostKeyOutsideTests(t *testing.T) {
 			t.Fatal(err)
 		}
 		src := string(b)
+		if f == "sftpauth.go" { // the one password sign-in (SFTP only): exactly this line, nothing else
+			if strings.Count(src, passwordAuthLine) != 1 {
+				t.Errorf("sftpauth.go must define passwordAuth exactly as %q", passwordAuthLine)
+			}
+			src = strings.Replace(src, passwordAuthLine, "", 1)
+		}
 		for _, bad := range []string{"InsecureIgnoreHostKey", "Password(", "KeyboardInteractive", "os/exec", "fmt.Sprintf(\"getent", "http.DefaultClient"} {
-			if strings.Contains(src, bad) && !(bad == "Password(" && f == "sftpauth.go") { // sftpauth.go: SFTP only, see Read
+			if strings.Contains(src, bad) {
 				t.Errorf("%s contains %s", f, bad)
 			}
+		}
+		// passwordAuth is called in one place only: open, when the connector has no key
+		if n := strings.Count(src, "passwordAuth()"); (f == "unixssh.go" && n != 1) || (f != "unixssh.go" && n != 0) {
+			t.Errorf("%s calls passwordAuth %d times", f, n)
 		}
 		if strings.Contains(src, ".Run(") && f != "unixssh.go" {
 			t.Errorf("%s runs a command", f)
@@ -580,7 +590,14 @@ func TestNoInsecureHostKeyOutsideTests(t *testing.T) {
 	}
 }
 
+// passwordAuthLine is the only place the package may build a password sign-in.
+const passwordAuthLine = "func (c *Connector) passwordAuth() ssh.AuthMethod { return ssh.Password(c.cfg.Password.Reveal()) }"
+
 func TestPasswordLoginNeverRunsCommands(t *testing.T) {
+	// the command primitive itself refuses a session that signed in with a password
+	if _, err := (&session{}).run(context.Background(), cmdPasswd, maxPasswd); !errors.Is(err, ErrPasswordCommand) {
+		t.Fatalf("run on a password session = %v", err)
+	}
 	dialed := false
 	dial := func(context.Context, string, string) (net.Conn, error) { dialed = true; return nil, errors.New("no") }
 	c, err := New(Config{Host: "h.example", Username: "feeds", HostKey: "SHA256:" + strings.Repeat("A", 43),
@@ -588,7 +605,7 @@ func TestPasswordLoginNeverRunsCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Read(context.Background()); err == nil || dialed || strings.Contains(err.Error(), "pw") {
+	if _, err := c.Read(context.Background()); !errors.Is(err, ErrPasswordCommand) || dialed || strings.Contains(err.Error(), "pw") {
 		t.Fatalf("Read = %v, dialed = %v", err, dialed)
 	}
 	if _, err := New(Config{Host: "h.example", Username: "feeds", HostKey: "SHA256:" + strings.Repeat("A", 43)}, connsync.Runtime{}, dial); err == nil {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
@@ -41,6 +42,15 @@ func TestVmsSFTPAPI(t *testing.T) {
 
 	if rec := reqDo(h, viewer, "POST", "/api/vms/sources", body("SFTP", pw, sftpSet(nil))); rec.Code != 403 {
 		t.Errorf("viewer POST: %d", rec.Code)
+	}
+	// adding or changing a credential-bearing feed needs a recent strong sign-in (step-up)
+	stale := signIn(t, f.DB, f.B.ID, authtest.User{Email: "stale@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}},
+		authtest.Ctx{AAL: 2, Phr: true, AuthTime: now.Add(-20 * time.Minute)}, now)
+	for _, m := range []string{"POST /api/vms/sources", "PUT /api/vms/sources/vms_x", "DELETE /api/vms/sources/vms_x"} {
+		method, target, _ := strings.Cut(m, " ")
+		if rec := reqDo(h, stale, method, target, body("SFTP", pw, sftpSet(nil))); rec.Code != 401 || !strings.Contains(rec.Body.String(), "step_up_required") {
+			t.Errorf("%s with a stale sign-in: %d %s", m, rec.Code, rec.Body)
+		}
 	}
 	bad := map[string]string{
 		"no host key":       body("S1", pw, sftpSet(func(m map[string]any) { delete(m, "host_key") })),

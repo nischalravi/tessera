@@ -3168,11 +3168,11 @@ and the review queue are shared.
   It is read on the hourly `vms_sync` like an HTTPS feed (and by "Read now"), through the same intake. Each sync's
   `vms.sync` audit event carries `file_sha256` and `file_bytes` (also in the sync report), and the source's
   create/update events carry the non-secret SFTP settings. Same routes and permissions as an HTTPS feed
-  (connections.manage to save, lifecycle.manage to read now). No schema change: the settings live in the source's
+  (connections.manage with step-up to save, lifecycle.manage to read now). No schema change: the settings live in the source's
   `settings` JSON and the credential in `credential_enc`. Tests use an in-process SFTP server:
   `go test -race ./internal/connectors/vms ./internal/vms`, `go test -race -run VmsSFTP ./internal/api`.
   Settings > Admin > Contractor feeds > New feed > CSV file > "SFTP drop".
-- **API.** `GET|POST /api/vms/sources`, `PUT|DELETE /api/vms/sources/{id}` (connections.read|manage),
+- **API.** `GET|POST /api/vms/sources`, `PUT|DELETE /api/vms/sources/{id}` (connections.read|manage; creating, changing and deleting a feed also need step-up, as for connection credentials),
   `POST /api/vms/sync {source_id?}` and `POST /api/vms/sources/{id}/import` (`lifecycle.manage`, because they
   create and end people), `GET /api/vms/records`. Queue job `vms_sync` runs hourly per tenant (a tenant with
   nothing to read leaves no run). Audit events: `vms.source_created|updated|removed`, `vms.sync`,

@@ -40,7 +40,8 @@ import (
 // base URL needs a new one. A record becomes an intake event of channel vms;
 // every contractor needs a sponsor (a record without one is held in review and
 // creates nobody) and its end date drives the leaver plan (the lifecycle
-// sweep). Reading needs connections.read, changing a feed connections.manage,
+// sweep). Reading needs connections.read, changing a feed connections.manage
+// with a recent strong sign-in (step-up, as for connection credentials and provisioning targets),
 // reading one now or importing a file lifecycle.manage (it creates and ends people).
 
 const (
@@ -83,9 +84,9 @@ var vmsNameRE = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._()-]{0,99}$`)
 func (s *Server) registerVmsRoutes() {
 	G, P := http.MethodGet, http.MethodPost
 	s.handle(G, "/api/vms/sources", read, need(auth.PermConnectionsRead), s.listVmsSources)
-	s.handle(P, "/api/vms/sources", write, need(auth.PermConnectionsManage), s.createVmsSource)
-	s.handle(http.MethodPut, "/api/vms/sources/{source_id}", write, need(auth.PermConnectionsManage), s.updateVmsSource)
-	s.handle(http.MethodDelete, "/api/vms/sources/{source_id}", write, need(auth.PermConnectionsManage), s.deleteVmsSource)
+	s.handle(P, "/api/vms/sources", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.createVmsSource)
+	s.handle(http.MethodPut, "/api/vms/sources/{source_id}", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.updateVmsSource)
+	s.handle(http.MethodDelete, "/api/vms/sources/{source_id}", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.deleteVmsSource)
 	s.handle(P, "/api/vms/sync", phased, need(auth.PermLifecycleManage), s.syncVms)
 	s.handle(P, "/api/vms/sources/{source_id}/import", phased, Route{Perm: auth.PermLifecycleManage, BodyType: "text/csv"}, s.importVms)
 	s.handle(G, "/api/vms/records", read, need(auth.PermConnectionsRead), s.listVmsRecords)
