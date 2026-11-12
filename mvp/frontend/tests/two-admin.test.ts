@@ -102,3 +102,28 @@ test("alert channel changes map to their two-admin requests (issue #968)", () =>
   assert.deepEqual(t.alertChannelTargetPayload("c1", " a@b.example "), { channel_id: "c1", target: "a@b.example" });
   assert.deepEqual(t.alertChannelSeverityPayload("c1", "critical"), { channel_id: "c1", min_severity: "critical" });
 });
+
+test("twoAdminTypes reads every change a 409 names, falling back to the single change_type (issue #973)", () => {
+  const mk = (body: any, status = 409) => new api.ApiError("x", status, { error: "two_admin_change_required", ...body });
+  assert.deepEqual(t.twoAdminTypes(mk({ change_type: "alerts.channel.disable", change_types: ["alerts.channel.disable", "alerts.channel.severity"] })), ["alerts.channel.disable", "alerts.channel.severity"]);
+  assert.deepEqual(t.twoAdminTypes(mk({ change_type: "alerts.channel.disable" })), ["alerts.channel.disable"]);
+  assert.deepEqual(t.twoAdminTypes(mk({ change_types: ["a"] }, 422)), []);
+  assert.deepEqual(t.twoAdminTypes(new Error("x")), []);
+});
+
+test("one alert channel save with several changes files every one, and lists the one it cannot (issue #973)", () => {
+  let n = 0;
+  const { items, notFiled } = t.alertChannelChanges(
+    ["alerts.channel.disable", "alerts.channel.severity", "alerts.channel.rotate_secret", "alerts.channel.disable", "config.proposal", "x.y"],
+    "c1", { target: " a@b.example ", min: "critical" }, () => "whsec_" + ++n,
+  );
+  assert.deepEqual(items.map((i) => i.type), ["alerts.channel.disable", "alerts.channel.severity", "alerts.channel.rotate_secret"]);
+  assert.deepEqual(items[1].payload, { channel_id: "c1", min_severity: "critical" });
+  // the new secret travels as client_secret, never in the payload
+  assert.deepEqual(items[2].payload, { channel_id: "c1" });
+  assert.equal(items[2].secret, "whsec_1");
+  assert.equal(items[0].secret, undefined);
+  assert.equal(notFiled.length, 2);
+  assert.ok(notFiled[0].includes("webhook URL"));
+  assert.ok(t.TWO_ADMIN_TITLE["alerts.channel.rotate_secret"].includes("second admin"));
+});

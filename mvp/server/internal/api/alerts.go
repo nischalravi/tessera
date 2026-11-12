@@ -455,26 +455,40 @@ func (s *Server) updateAlertChannel(_ http.ResponseWriter, r *http.Request, p *p
 		return nil, alertErr(err)
 	}
 	// Anything that stops or redirects security alerts takes two admins (issue #968): turning an enabled channel off,
-	// another recipient list or URL, a higher min_severity. Enabling, lowering min_severity and renaming stay here.
+	// another recipient list or URL, a higher min_severity, a new signing secret (#973). Enabling, lowering min_severity
+	// and renaming stay here. A save that holds several of these answers one 409 that names every change to file
+	// (change_types, in order; change_type is the first), so the UI can file them all instead of dropping the rest.
+	var need []string
+	var webhookMove bool
 	if b.Enabled != nil && !*b.Enabled && cur.Enabled {
-		return nil, channelTwoAdmin("disabling a channel stops its alerts", admin.TypeAlertChannelDisable, "{channel_id}")
+		need = append(need, admin.TypeAlertChannelDisable)
 	}
 	if b.Target != nil && alerts.TargetChanged(cur, *b.Target) {
 		if cur.Kind != "email" {
-			// A webhook URL carries a token: it must not sit in a plain change request payload. The proposal route seals it
-			// but only a machine client may file one, so a person is told the path that works for them too: add a channel
-			// with the new URL (one admin) and delete this one (two admins). The message never echoes the URL.
-			return nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
-				Msg: "sending a webhook channel somewhere else needs a second admin, and its URL carries a token, so it is " +
-					"never put in a change request: add a channel with the new URL, then file " + admin.TypeAlertChannelDelete +
-					" for this one (POST /api/admin/change-requests, payload {channel_id}); a machine client with " +
-					"config.propose can instead propose the new URL (POST /api/proposals/alert-channels/" + cur.ID + ")",
-				Extra: map[string]any{"change_type": admin.TypeConfigProposal}}
+			webhookMove = true
+		} else {
+			need = append(need, admin.TypeAlertChannelTarget)
 		}
-		return nil, channelTwoAdmin("changing a channel's recipients redirects its alerts", admin.TypeAlertChannelTarget, "{channel_id, target}")
 	}
 	if alerts.SeverityRaises(cur.MinSeverity, b.MinSeverity) {
-		return nil, channelTwoAdmin("raising min_severity means the channel receives fewer alerts", admin.TypeAlertChannelSeverity, "{channel_id, min_severity}")
+		need = append(need, admin.TypeAlertChannelSeverity)
+	}
+	if b.RotateSecret && cur.Kind == "webhook" {
+		need = append(need, admin.TypeAlertChannelRotate)
+	}
+	if webhookMove {
+		// A webhook URL carries a token: it must not sit in a plain change request payload. The proposal route seals it
+		// but only a machine client may file one, so a person is told the path that works for them too: add a channel
+		// with the new URL (one admin) and delete this one (two admins). The message never echoes the URL.
+		return nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
+			Msg: "sending a webhook channel somewhere else needs a second admin, and its URL carries a token, so it is " +
+				"never put in a change request: add a channel with the new URL, then file " + admin.TypeAlertChannelDelete +
+				" for this one (POST /api/admin/change-requests, payload {channel_id}); a machine client with " +
+				"config.propose can instead propose the new URL (POST /api/proposals/alert-channels/" + cur.ID + ")",
+			Extra: map[string]any{"change_type": admin.TypeConfigProposal, "change_types": append([]string{admin.TypeConfigProposal}, need...)}}
+	}
+	if len(need) > 0 {
+		return nil, channelTwoAdmin(need)
 	}
 	c, secret, err := alerts.UpdateChannel(tx, s.alertSealer(), cur.ID, b.spec(cur), s.cfg.Env == config.Dev, by, s.clock().UTC())
 	if err != nil {
@@ -494,16 +508,29 @@ func (s *Server) deleteAlertChannel(_ http.ResponseWriter, r *http.Request, p *p
 	} else if err != nil {
 		return nil, err
 	}
-	return nil, channelTwoAdmin("deleting a channel stops its alerts", admin.TypeAlertChannelDelete, "{channel_id}")
+	return nil, channelTwoAdmin(admin.TypeAlertChannelDelete)
 }
 
-// channelTwoAdmin is the 409 that names the change request to file.
-func channelTwoAdmin(what, changeType, payload string) error {
+// channelTwoAdmin is the 409 that names the change requests to file. change_type is the first of them, for a client
+// that files one; change_types is every one the save needs.
+func channelTwoAdmin(types ...any) error {
+	var ts []string
+	for _, t := range types {
+		switch v := t.(type) {
+		case string:
+			ts = append(ts, v)
+		case []string:
+			ts = append(ts, v...)
+		}
+	}
 	return &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
-		Msg: what + " and needs a second admin: submit a change request of type " + changeType +
-			" (POST /api/admin/change-requests, payload " + payload + ") for a different admin to approve",
-		Extra: map[string]any{"change_type": changeType}}
+		Msg: "this needs a second admin: submit a change request of type " + strings.Join(ts, ", ") +
+			" (POST /api/admin/change-requests; payloads: " + channelPayloadHint + ") for a different admin to approve",
+		Extra: map[string]any{"change_type": ts[0], "change_types": ts}}
 }
+
+const channelPayloadHint = "disable and delete {channel_id}, target {channel_id, target}, severity {channel_id, min_severity}, " +
+	"rotate_secret {channel_id} with the new secret as client_secret"
 
 // testAlertChannel sends a test message outside any transaction, then
 // records the result.
