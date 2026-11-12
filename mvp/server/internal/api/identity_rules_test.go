@@ -91,13 +91,18 @@ func TestIdentityRulesPUT(t *testing.T) {
 		"bad attribute":   {`{"version":1,"correlation_order":["email"],"authoritative":{"salary":"okta"},"dormant_service_days":45,"dormant_ai_agent_days":10,"dormant_people_days":60}`, 422},
 		"zero days":       {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":0,"dormant_ai_agent_days":10,"dormant_people_days":60}`, 422},
 		"people zero":     {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10,"dormant_people_days":0}`, 422},
-		"people missing":  {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10}`, 422},
 		"people too long": {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10,"dormant_people_days":3651}`, 422},
 		"unknown field":   {`{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":5,"dormant_ai_agent_days":10,"dormant_people_days":60,"x":1}`, 422},
 	} {
 		if rec := reqDo(h, policy, "PUT", "/api/admin/identity-rules", tc.body); rec.Code != tc.code {
 			t.Errorf("%s: %d %s, want %d", name, rec.Code, rec.Body, tc.code)
 		}
+	}
+	// an older client that omits dormant_people_days keeps the stored value
+	rec = reqDo(h, policy, "PUT", "/api/admin/identity-rules", `{"version":1,"correlation_order":["email"],"authoritative":{},"dormant_service_days":46,"dormant_ai_agent_days":10}`)
+	var kept identityRulesView
+	if err := json.Unmarshal(rec.Body.Bytes(), &kept); err != nil || rec.Code != 200 || kept.Rules.DormantPeopleDays != 60 || kept.Rules.DormantServiceDays != 46 {
+		t.Errorf("PUT without dormant_people_days: %d %s", rec.Code, rec.Body)
 	}
 	// the change is audited with the old values
 	auditor := signIn(t, f.DB, f.B.ID, authtest.User{Email: "au@b.example", Roles: []auth.Role{auth.RoleAuditor}}, authtest.Phr, now)
@@ -111,5 +116,17 @@ func TestIdentityRulesPUT(t *testing.T) {
 	var a identityRulesView
 	if err := json.Unmarshal(rec.Body.Bytes(), &a); err != nil || a.Rules.Version != 0 || a.Rules.DormantServiceDays != 30 || a.Rules.DormantPeopleDays != 90 || a.Rules.CorrelationOrder[0] != "external_id" {
 		t.Errorf("tenant A sees B's rules: %+v", a.Rules)
+	}
+}
+
+// A tenant that never saved rules and an older client omit dormant_people_days: the default 90 applies.
+func TestIdentityRulesPUTOmittedPeopleDaysDefaults(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	policy := signIn(t, f.DB, f.B.ID, authtest.User{Email: "pa@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}}, authtest.Phr, storetest.Now)
+	rec := reqDo(h, policy, "PUT", "/api/admin/identity-rules", `{"version":0,"correlation_order":["email"],"authoritative":{},"dormant_service_days":45,"dormant_ai_agent_days":10}`)
+	var v identityRulesView
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil || rec.Code != 200 || v.Rules.DormantPeopleDays != 90 {
+		t.Errorf("PUT on defaults without dormant_people_days: %d %s", rec.Code, rec.Body)
 	}
 }

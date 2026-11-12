@@ -125,6 +125,8 @@ func (s *Server) identityRules(_ http.ResponseWriter, r *http.Request, _ *params
 type putIdentityRulesBody struct {
 	Version int `json:"version"`
 	idrules.Rules
+	// People shadows Rules.DormantPeopleDays: older clients omit it, and the stored value (or the default) is kept.
+	People *int `json:"dormant_people_days"`
 }
 
 func (s *Server) putIdentityRules(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -135,7 +137,17 @@ func (s *Server) putIdentityRules(_ http.ResponseWriter, r *http.Request, p *par
 	if err := decodeBody(r, &b, false); err != nil {
 		return nil, err
 	}
-	if _, _, err := idrules.Save(store.TxFrom(r.Context()), b.Rules, b.Version, principal(r).Display, s.clock().UTC()); err != nil {
+	c := store.TxFrom(r.Context())
+	if b.People != nil {
+		b.Rules.DormantPeopleDays = *b.People
+	} else {
+		cur, _, err := idrules.Load(c)
+		if err != nil {
+			return nil, err
+		}
+		b.Rules.DormantPeopleDays = cur.DormantPeopleDays
+	}
+	if _, _, err := idrules.Save(c, b.Rules, b.Version, principal(r).Display, s.clock().UTC()); err != nil {
 		return nil, cfgErr(err)
 	}
 	return s.identityRules(nil, r, p)
