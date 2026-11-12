@@ -81,38 +81,72 @@ const (
 // connDeleteSteps run in order: children before parents. The sealed credentials go with their rows
 // (connection_credentials, provisioning_targets.credential_enc); a certificate row stays as evidence but
 // loses its sealed key and its link to the connection; job history stays, unlinked.
+var (
+	connStep_del_stg_identities       = tq("connections.del_stg_identities", `DELETE FROM stg_identities WHERE stg_identities.tenant_id = @tenant AND run_id IN (`+runsOf+`)`)
+	connStep_del_stg_accounts         = tq("connections.del_stg_accounts", `DELETE FROM stg_accounts WHERE stg_accounts.tenant_id = @tenant AND run_id IN (`+runsOf+`)`)
+	connStep_del_stg_groups           = tq("connections.del_stg_groups", `DELETE FROM stg_groups WHERE stg_groups.tenant_id = @tenant AND run_id IN (`+runsOf+`)`)
+	connStep_del_stg_memberships      = tq("connections.del_stg_memberships", `DELETE FROM stg_memberships WHERE stg_memberships.tenant_id = @tenant AND run_id IN (`+runsOf+`)`)
+	connStep_del_stg_attr_stats       = tq("connections.del_stg_attr_stats", `DELETE FROM stg_attr_stats WHERE stg_attr_stats.tenant_id = @tenant AND run_id IN (`+runsOf+`)`)
+	connStep_del_check_results        = tq("connections.del_check_results", `DELETE FROM readiness_check_results WHERE readiness_check_results.tenant_id = @tenant AND run_id IN (`+runsOf+`)`)
+	connStep_del_recon_findings       = tq("connections.del_recon_findings", `DELETE FROM recon_findings WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_recon_runs           = tq("connections.del_recon_runs", `DELETE FROM recon_runs WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_attestations         = tq("connections.del_attestations", `DELETE FROM readiness_attestations WHERE readiness_attestations.tenant_id = @tenant AND revision_id IN (`+revsOf+`)`)
+	connStep_del_item_states          = tq("connections.del_item_states", `DELETE FROM readiness_item_states WHERE readiness_item_states.tenant_id = @tenant AND revision_id IN (`+revsOf+`)`)
+	connStep_del_live_attestations    = tq("connections.del_live_attestations", `DELETE FROM readiness_live_attestations WHERE readiness_live_attestations.tenant_id = @tenant AND revision_id IN (`+revsOf+`)`)
+	connStep_del_baselines            = tq("connections.del_baselines", `DELETE FROM readiness_baselines WHERE readiness_baselines.tenant_id = @tenant AND revision_id IN (`+revsOf+`)`)
+	connStep_del_skips                = tq("connections.del_skips", `DELETE FROM readiness_skips WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_scores               = tq("connections.del_scores", `DELETE FROM readiness_scores WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_activation_requests  = tq("connections.del_activation_requests", `DELETE FROM connection_activation_requests WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_check_runs           = tq("connections.del_check_runs", `DELETE FROM readiness_check_runs WHERE readiness_check_runs.tenant_id = @tenant AND revision_id IN (`+revsOf+`)`)
+	connStep_clear_active_revision    = tq("connections.clear_active_revision", `UPDATE connections SET active_revision_id = NULL WHERE tenant_id = @tenant AND id = @id`)
+	connStep_del_revisions            = tq("connections.del_revisions", `DELETE FROM connection_revisions WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_overlays             = tq("connections.del_overlays", `DELETE FROM readiness_overlays WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_agent_jobs           = tq("connections.del_agent_jobs", `DELETE FROM agent_jobs WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_unlink_bundle_account_op = tq("connections.unlink_bundle_account_op", `UPDATE guest_bundle_items SET account_op_id = NULL WHERE guest_bundle_items.tenant_id = @tenant AND account_op_id IN (`+opsOf+`)`)
+	connStep_unlink_bundle_grant_op   = tq("connections.unlink_bundle_grant_op", `UPDATE guest_bundle_items SET grant_op_id = NULL WHERE guest_bundle_items.tenant_id = @tenant AND grant_op_id IN (`+opsOf+`)`)
+	connStep_unlink_bundle_remove_op  = tq("connections.unlink_bundle_remove_op", `UPDATE guest_bundle_items SET remove_op_id = NULL WHERE guest_bundle_items.tenant_id = @tenant AND remove_op_id IN (`+opsOf+`)`)
+	connStep_del_prov_findings        = tq("connections.del_prov_findings", `DELETE FROM provisioning_findings WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_prov_ops             = tq("connections.del_prov_ops", `DELETE FROM provisioning_ops WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_prov_targets         = tq("connections.del_prov_targets", `DELETE FROM provisioning_targets WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_credentials          = tq("connections.del_credentials", `DELETE FROM connection_credentials WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_limits               = tq("connections.del_limits", `DELETE FROM connection_limits WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_worker_states        = tq("connections.del_worker_states", `DELETE FROM worker_target_states WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_del_containment_retries  = tq("connections.del_containment_retries", `DELETE FROM containment_retries WHERE tenant_id = @tenant AND connection_id = @id`)
+	connStep_unlink_job_runs          = tq("connections.unlink_job_runs", `UPDATE job_runs SET connection_id = NULL WHERE tenant_id = @tenant AND connection_id = @id`)
+)
+
 var connDeleteSteps = []tstmt{
-	tq("connections.del_stg_identities", `DELETE FROM stg_identities WHERE tenant_id = @tenant AND run_id IN (`+runsOf+`)`),
-	tq("connections.del_stg_accounts", `DELETE FROM stg_accounts WHERE tenant_id = @tenant AND run_id IN (`+runsOf+`)`),
-	tq("connections.del_stg_groups", `DELETE FROM stg_groups WHERE tenant_id = @tenant AND run_id IN (`+runsOf+`)`),
-	tq("connections.del_stg_memberships", `DELETE FROM stg_memberships WHERE tenant_id = @tenant AND run_id IN (`+runsOf+`)`),
-	tq("connections.del_stg_attr_stats", `DELETE FROM stg_attr_stats WHERE tenant_id = @tenant AND run_id IN (`+runsOf+`)`),
-	tq("connections.del_check_results", `DELETE FROM readiness_check_results WHERE tenant_id = @tenant AND run_id IN (`+runsOf+`)`),
-	tq("connections.del_recon_findings", `DELETE FROM recon_findings WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_recon_runs", `DELETE FROM recon_runs WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_attestations", `DELETE FROM readiness_attestations WHERE tenant_id = @tenant AND revision_id IN (`+revsOf+`)`),
-	tq("connections.del_item_states", `DELETE FROM readiness_item_states WHERE tenant_id = @tenant AND revision_id IN (`+revsOf+`)`),
-	tq("connections.del_live_attestations", `DELETE FROM readiness_live_attestations WHERE tenant_id = @tenant AND revision_id IN (`+revsOf+`)`),
-	tq("connections.del_baselines", `DELETE FROM readiness_baselines WHERE tenant_id = @tenant AND revision_id IN (`+revsOf+`)`),
-	tq("connections.del_skips", `DELETE FROM readiness_skips WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_scores", `DELETE FROM readiness_scores WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_activation_requests", `DELETE FROM connection_activation_requests WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_check_runs", `DELETE FROM readiness_check_runs WHERE tenant_id = @tenant AND revision_id IN (`+revsOf+`)`),
-	tq("connections.clear_active_revision", `UPDATE connections SET active_revision_id = NULL WHERE tenant_id = @tenant AND id = @id`),
-	tq("connections.del_revisions", `DELETE FROM connection_revisions WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_overlays", `DELETE FROM readiness_overlays WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_agent_jobs", `DELETE FROM agent_jobs WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.unlink_bundle_account_op", `UPDATE guest_bundle_items SET account_op_id = NULL WHERE tenant_id = @tenant AND account_op_id IN (`+opsOf+`)`),
-	tq("connections.unlink_bundle_grant_op", `UPDATE guest_bundle_items SET grant_op_id = NULL WHERE tenant_id = @tenant AND grant_op_id IN (`+opsOf+`)`),
-	tq("connections.unlink_bundle_remove_op", `UPDATE guest_bundle_items SET remove_op_id = NULL WHERE tenant_id = @tenant AND remove_op_id IN (`+opsOf+`)`),
-	tq("connections.del_prov_findings", `DELETE FROM provisioning_findings WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_prov_ops", `DELETE FROM provisioning_ops WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_prov_targets", `DELETE FROM provisioning_targets WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_credentials", `DELETE FROM connection_credentials WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_limits", `DELETE FROM connection_limits WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_worker_states", `DELETE FROM worker_target_states WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.del_containment_retries", `DELETE FROM containment_retries WHERE tenant_id = @tenant AND connection_id = @id`),
-	tq("connections.unlink_job_runs", `UPDATE job_runs SET connection_id = NULL WHERE tenant_id = @tenant AND connection_id = @id`),
+	connStep_del_stg_identities,
+	connStep_del_stg_accounts,
+	connStep_del_stg_groups,
+	connStep_del_stg_memberships,
+	connStep_del_stg_attr_stats,
+	connStep_del_check_results,
+	connStep_del_recon_findings,
+	connStep_del_recon_runs,
+	connStep_del_attestations,
+	connStep_del_item_states,
+	connStep_del_live_attestations,
+	connStep_del_baselines,
+	connStep_del_skips,
+	connStep_del_scores,
+	connStep_del_activation_requests,
+	connStep_del_check_runs,
+	connStep_clear_active_revision,
+	connStep_del_revisions,
+	connStep_del_overlays,
+	connStep_del_agent_jobs,
+	connStep_unlink_bundle_account_op,
+	connStep_unlink_bundle_grant_op,
+	connStep_unlink_bundle_remove_op,
+	connStep_del_prov_findings,
+	connStep_del_prov_ops,
+	connStep_del_prov_targets,
+	connStep_del_credentials,
+	connStep_del_limits,
+	connStep_del_worker_states,
+	connStep_del_containment_retries,
+	connStep_unlink_job_runs,
 }
 
 var (

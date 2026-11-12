@@ -88,6 +88,9 @@ func TestIsolation_GroupLoaderStatements(t *testing.T) {
 		if err := c.SetGrpLoaderStatus(la.ID, store.LoaderDisabled, now); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("SetGrpLoaderStatus(A's) = %v, want ErrNotFound", err)
 		}
+		if err := c.DeleteGrpLoader(la.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("DeleteGrpLoader(A's) = %v, want ErrNotFound", err)
+		}
 		if err := c.RecordGrpLoaderRan(la.ID, store.RunFull, now, nil); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("RecordGrpLoaderRan(A's) = %v, want ErrNotFound", err)
 		}
@@ -270,7 +273,7 @@ func loaderStr(s string) *string { return &s }
 // groupLoadersCovered lists the repository methods of GR-10 that the tests above exercise.
 func groupLoadersCovered() map[string]bool {
 	m := map[string]bool{}
-	for _, name := range []string{"InsertGrpLoader", "GrpLoader", "GrpLoaderByName", "GrpLoaders", "UpdateGrpLoader", "SetGrpLoaderStatus",
+	for _, name := range []string{"InsertGrpLoader", "GrpLoader", "GrpLoaderByName", "GrpLoaders", "UpdateGrpLoader", "DeleteGrpLoader", "SetGrpLoaderStatus",
 		"RecordGrpLoaderRan", "InsertGrpLoaderRun", "GrpLoaderRun", "GrpLoaderRuns", "GrpLoaderRunCount", "GrpLoaderHeldRuns",
 		"GrpLoaderLastRun", "DecideGrpLoaderRun", "UpsertGrpLoaderUnresolved", "PruneGrpLoaderUnresolved", "DeleteGrpLoaderUnresolved",
 		"GrpLoaderUnresolved", "GrpLoaderUnresolvedCount", "GrpGroupsOfLoader", "GrpDirectBySource", "EdgesTo"} {
