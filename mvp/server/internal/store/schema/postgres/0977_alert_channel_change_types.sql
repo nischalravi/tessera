@@ -1,7 +1,7 @@
 -- Widens the admin_change_requests type CHECK to admit alerts.channel.disable, .delete, .target and
 -- .severity (issue #968): disabling, deleting, retargeting or raising the min_severity of an alert channel stops or redirects
 -- security alerts, so each is a two-admin change request (internal/admin/change_alert_channels.go;
--- SQLite: 0008_admin_changes.sql and DB.upgradeAdminChangeTypes). The list is every type of 0975_siem_sink_remove_change_types.sql and
+-- SQLite: 0008_admin_changes.sql and DB.upgradeAdminChangeTypes). The list is every type of 0976_siem_sink_remove_change_types.sql (renumbered by #971) and
 -- these four: a migration after this one that adds a type must add it here too.
 
 -- +goose Up
