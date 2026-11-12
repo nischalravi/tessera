@@ -84,7 +84,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     -- the automatic least-privilege policy from the access-as-code repository (internal/admin/change_lp_auto.go, issue #664)
     'lp.auto_policy.apply',
     -- applying the policy bundle at a commit of the default branch, with its prediction (internal/admin/change_policy_sync.go, issue #657)
-    'policy.sync.apply')),
+    'policy.sync.apply',
+    -- disabling or deleting a SIEM sink stops its audit export, so each takes two admins (internal/admin/change_siem.go, issue #963)
+    'siem.sink.disable','siem.sink.delete')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

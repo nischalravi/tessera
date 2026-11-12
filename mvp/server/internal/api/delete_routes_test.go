@@ -11,6 +11,8 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
+	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -124,68 +126,117 @@ func TestDeleteAlertChannelAPI_CrossTenant(t *testing.T) {
 	}
 }
 
+// TestDeleteSiemSinkAPI: deleting or disabling a sink stops its audit export, so each is a two-admin change request
+// (siem.sink.delete, siem.sink.disable), as narrowing its filter is. The DELETE and the PUT that turns it off answer
+// 409 two_admin_change_required; the requester cannot approve their own request.
 func TestDeleteSiemSinkAPI(t *testing.T) {
-	f := storetest.TwoTenants(t)
-	h := siemServer(t, f, &okSender{})
-	now := storetest.Now
-	admin := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ta@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, now)
-	au := signIn(t, f.DB, f.B.ID, authtest.User{Email: "au@b.example", Roles: []auth.Role{auth.RoleAuditor}}, authtest.Phr, now)
-	stale := deleteStaleLogin(t, f, f.B.ID, auth.RoleTenantAdmin)
+	e := newPrivEnv(t)
+	sealer, err := seal.New(seal.RandomBytes(32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.cfg.Siem = &siem.Service{DB: e.f.DB, Sealer: sealer,
+		NewSender: func(*store.SiemSink, string, string) (siem.Sender, error) { return &okSender{}, nil }}
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	au := e.as("auditor", []auth.Role{auth.RoleAuditor}, nil)
+	stale := deleteStaleLogin(t, e.f, e.f.B.ID, auth.RoleTenantAdmin)
+	h := e.srv.Handler()
 
-	rec := siemDo(h, admin, "POST", "/api/siem/sinks", `{"name":"Splunk","kind":"webhook","format":"json","target":"https://splunk.example:8088/c","flavor":"hec","token":"hec-123"}`)
-	if rec.Code != 201 {
-		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	v := e.admin.call("POST", "/api/siem/sinks", `{"name":"Splunk","kind":"webhook","format":"json","target":"https://splunk.example:8088/c","flavor":"hec","token":"hec-123"}`, 201)
+	id := v["id"].(string)
+	path := "/api/siem/sinks/" + id
+	sinkOf := func() (*store.SiemSink, error) {
+		var k *store.SiemSink
+		err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+			var err error
+			k, err = tx.SiemSink(id)
+			return err
+		})
+		return k, err
 	}
-	var v sinkView
-	_ = json.Unmarshal(rec.Body.Bytes(), &v)
-	path := "/api/siem/sinks/" + v.ID
-	var sealed []byte
-	_ = f.DB.ReadTenant(context.Background(), f.B.ID, func(tx *store.TenantTx) error {
-		k, err := tx.SiemSink(v.ID)
-		if err == nil {
-			sealed = k.SecretSealed
+	if k, err := sinkOf(); err != nil || len(k.SecretSealed) == 0 {
+		t.Fatalf("the sink has no sealed token to delete: %v", err)
+	}
+
+	if rec := au.do("DELETE", path, ""); rec.Code != 403 {
+		t.Errorf("auditor: %d %s", rec.Code, rec.Body)
+	}
+	if rec := corrDo(h, stale, "DELETE", path, ""); rec.Code != 401 || !strings.Contains(rec.Body.String(), "step_up_required") {
+		t.Errorf("stale sign-in: %d %s", rec.Code, rec.Body)
+	}
+	e.admin.call("DELETE", "/api/siem/sinks/nope", "", 404)
+
+	// one admin can neither disable nor delete the sink
+	got := e.admin.call("PUT", path, `{"name":"Splunk","enabled":false}`, 409)
+	if errCode(got) != "two_admin_change_required" || got["change_type"] != "siem.sink.disable" {
+		t.Errorf("disable at the PUT: %v", got)
+	}
+	got = e.admin.call("DELETE", path, "", 409)
+	if errCode(got) != "two_admin_change_required" || got["change_type"] != "siem.sink.delete" {
+		t.Errorf("delete: %v", got)
+	}
+	if k, err := sinkOf(); err != nil || !k.Enabled {
+		t.Fatalf("one admin changed the sink: %+v %v", k, err)
+	}
+
+	// disabling takes a second admin; enabling again is one
+	e.admin.call("POST", "/api/admin/change-requests", `{"type":"siem.sink.disable","payload":{"sink_id":"nope"}}`, 422)
+	ch := e.admin.call("POST", "/api/admin/change-requests", `{"type":"siem.sink.disable","payload":{"sink_id":"`+id+`"}}`, 201)
+	if ch["status"] != "pending_approval" || ch["two_person"] != true {
+		t.Fatalf("disable request = %v", ch)
+	}
+	approveChange(t, admin2, e.admin, ch)
+	if k, err := sinkOf(); err != nil || k.Enabled {
+		t.Fatalf("after the approved disable: %+v %v", k, err)
+	}
+	if n := deleteAuditCount(t, e.f.DB, e.f.B.ID, "siem.sink.disabled"); n != 1 {
+		t.Errorf("siem.sink.disabled audited %d times", n)
+	}
+	e.admin.call("POST", "/api/admin/change-requests", `{"type":"siem.sink.disable","payload":{"sink_id":"`+id+`"}}`, 422) // already off
+	e.admin.call("PUT", path, `{"name":"Splunk","enabled":false}`, 200)                                                    // keeps it off
+	e.admin.call("PUT", path, `{"name":"Splunk","enabled":true}`, 200)
+
+	// deleting takes a second admin too, enabled or not; the sealed token and the dead letters go with the row
+	if err := e.f.DB.InTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+		k, err := tx.SiemSink(id)
+		if err != nil {
+			return err
 		}
-		return err
-	})
-	if len(sealed) == 0 {
-		t.Fatal("the sink has no sealed token to delete")
+		return tx.DeadLetterSiemBatch(&store.SiemDeadLetter{ID: "dl-1", SinkID: id, FromSeq: k.CursorSeq + 1, ToSeq: k.CursorSeq + 1,
+			Events: 1, Error: "rejected", CreatedAt: storetest.Now})
+	}); err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range []struct {
-		name string
-		l    authtest.Login
-		path string
-		want int
-	}{
-		{"auditor is denied", au, path, 403},
-		{"stale sign-in needs step-up", stale, path, 401},
-		{"enabled sink is refused", admin, path, 409},
-		{"unknown id is 404", admin, "/api/siem/sinks/nope", 404},
-	} {
-		if rec := siemDo(h, c.l, "DELETE", c.path, ""); rec.Code != c.want {
-			t.Errorf("%s: %d %s, want %d", c.name, rec.Code, rec.Body, c.want)
-		}
+	ch = e.admin.call("POST", "/api/admin/change-requests", `{"type":"siem.sink.delete","payload":{"sink_id":"`+id+`"}}`, 201)
+	if ch["status"] != "pending_approval" || ch["two_person"] != true {
+		t.Fatalf("delete request = %v", ch)
 	}
-	if rec := siemDo(h, admin, "PUT", path, `{"name":"Splunk","enabled":false}`); rec.Code != 200 {
-		t.Fatalf("disable: %d %s", rec.Code, rec.Body)
+	if _, err := sinkOf(); err != nil {
+		t.Fatalf("the sink went before the approval: %v", err)
 	}
-	if rec := siemDo(h, admin, "DELETE", path, ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"deleted":true`) {
-		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
-	}
-	err := f.DB.ReadTenant(context.Background(), f.B.ID, func(tx *store.TenantTx) error { _, err := tx.SiemSink(v.ID); return err })
-	if !errors.Is(err, store.ErrNotFound) {
+	approveChange(t, admin2, e.admin, ch)
+	if _, err := sinkOf(); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("sink and its sealed token remain: %v", err)
 	}
-	if n := deleteAuditCount(t, f.DB, f.B.ID, "siem.sink.deleted"); n != 1 {
+	var dead []*store.SiemDeadLetter
+	_ = e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+		dead, _ = tx.SiemDeadLetters(id)
+		return nil
+	})
+	if len(dead) != 0 {
+		t.Errorf("dead letters remain: %d", len(dead))
+	}
+	if n := deleteAuditCount(t, e.f.DB, e.f.B.ID, "siem.sink.deleted"); n != 1 {
 		t.Errorf("siem.sink.deleted audited %d times", n)
 	}
 
-	// another tenant's sink answers like a missing id and is untouched
-	other := seedSiemSink(t, f.DB, f.A.ID, "a")
-	before := storetest.Dump(t, f.DB, f.A.ID)
-	if rec := siemDo(h, admin, "DELETE", "/api/siem/sinks/"+other, ""); rec.Code != http.StatusNotFound {
-		t.Errorf("cross-tenant: %d %s", rec.Code, rec.Body)
-	}
-	if storetest.Dump(t, f.DB, f.A.ID) != before {
+	// another tenant's sink answers like a missing id, at the route and as a request, and is untouched
+	other := seedSiemSink(t, e.f.DB, e.f.A.ID, "a")
+	before := storetest.Dump(t, e.f.DB, e.f.A.ID)
+	e.admin.call("DELETE", "/api/siem/sinks/"+other, "", http.StatusNotFound)
+	e.admin.call("POST", "/api/admin/change-requests", `{"type":"siem.sink.delete","payload":{"sink_id":"`+other+`"}}`, 422)
+	e.admin.call("POST", "/api/admin/change-requests", `{"type":"siem.sink.disable","payload":{"sink_id":"`+other+`"}}`, 422)
+	if storetest.Dump(t, e.f.DB, e.f.A.ID) != before {
 		t.Error("tenant A changed")
 	}
 }

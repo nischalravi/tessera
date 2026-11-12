@@ -22,8 +22,8 @@ import (
 //	GET  /api/siem/sinks                              sinks with their health and lag
 //	POST /api/siem/sinks                              add a sink
 //	PUT  /api/siem/sinks/{sink_id}                    change a sink (omitted fields keep their value; narrowing its event filter, turning include_http
-//	                                                  off, or moving it to another origin is a two-admin change request)
-//	DELETE /api/siem/sinks/{sink_id}                  delete a disabled sink (step-up; 409 sink_enabled while enabled)
+//	                                                  off, disabling it, or moving it to another origin is a two-admin change request)
+//	DELETE /api/siem/sinks/{sink_id}                  409 two_admin_change_required: deleting a sink is the change request siem.sink.delete
 //	POST /api/siem/sinks/{sink_id}/rewind {seq}       replay from seq+1 (0: everything; step-up)
 //	POST /api/siem/sinks/{sink_id}/test               send one test event now
 //	GET  /api/siem/sinks/{sink_id}/dead-letters       batches the destination rejected
@@ -232,15 +232,21 @@ func (s *Server) createSiemSink(_ http.ResponseWriter, r *http.Request, _ *param
 	return statusBody{http.StatusCreated, v}, nil
 }
 
+// deleteSiemSink never deletes: a sink's deletion ends its audit export, so it is the two-admin change request
+// siem.sink.delete, as narrowing what the sink receives is. It answers 404 for a sink the tenant does not have.
 func (s *Server) deleteSiemSink(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	by, err := siemActor(r)
-	if err != nil {
+	if _, err := siemActor(r); err != nil {
 		return nil, err
 	}
-	if err := siem.DeleteSink(store.TxFrom(r.Context()), p.path["sink_id"], by, s.clock().UTC()); err != nil {
-		return nil, siemErr(err)
+	if _, err := store.TxFrom(r.Context()).SiemSink(p.path["sink_id"]); errors.Is(err, store.ErrNotFound) {
+		return nil, errSinkNotFound
+	} else if err != nil {
+		return nil, err
 	}
-	return map[string]any{"deleted": true, "id": p.path["sink_id"]}, nil
+	return nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
+		Msg: "deleting a sink stops its audit export and needs a second admin: submit a change request of type " + admin.TypeSiemSinkDelete +
+			" (POST /api/admin/change-requests, payload {sink_id}) for a different admin to approve",
+		Extra: map[string]any{"change_type": admin.TypeSiemSinkDelete}}
 }
 
 func (s *Server) updateSiemSink(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -273,6 +279,14 @@ func (s *Server) updateSiemSink(_ http.ResponseWriter, r *http.Request, p *param
 			Msg: "narrowing what a sink receives (its event filter, or include_http off) needs a second admin: submit a change request of type " +
 				admin.TypeSiemSinkFilter + " (POST /api/admin/change-requests, payload {sink_id, event_filter and/or include_http}) for a different admin to approve",
 			Extra: map[string]any{"change_type": admin.TypeSiemSinkFilter}}
+	}
+	// Disabling an enabled sink stops its audit export (and its own siem.sink.updated event would never reach it): two
+	// admins, as deleting it is. Enabling it stays here.
+	if b.Enabled != nil && !*b.Enabled && cur.Enabled {
+		return nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
+			Msg: "disabling a sink stops its audit export and needs a second admin: submit a change request of type " + admin.TypeSiemSinkDisable +
+				" (POST /api/admin/change-requests, payload {sink_id}) for a different admin to approve",
+			Extra: map[string]any{"change_type": admin.TypeSiemSinkDisable}}
 	}
 	// Moving the sink to another origin sends the audit feed somewhere the SOC's collector does not watch: two admins
 	// (issue #520). A change of path on the same origin stays here.

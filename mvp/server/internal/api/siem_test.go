@@ -90,9 +90,14 @@ func TestSiemAPI(t *testing.T) {
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"health":{"status":"healthy"`) || !strings.Contains(rec.Body.String(), `"head_seq":`) {
 		t.Errorf("list: %d %s", rec.Code, rec.Body)
 	}
+	// disabling an enabled sink is a two-admin change request (siem.sink.disable)
+	if rec := siemDo(h, admin, "PUT", "/api/siem/sinks/"+v.ID, `{"name":"Splunk prod","enabled":false}`); rec.Code != 409 ||
+		!strings.Contains(rec.Body.String(), `"change_type":"siem.sink.disable"`) {
+		t.Errorf("disable at the PUT: %d %s", rec.Code, rec.Body)
+	}
 	// update keeps the token and target when omitted
-	rec = siemDo(h, admin, "PUT", "/api/siem/sinks/"+v.ID, `{"name":"Splunk prod","include_http":true,"enabled":false}`)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"has_token":true`) || !strings.Contains(rec.Body.String(), `"status":"paused"`) ||
+	rec = siemDo(h, admin, "PUT", "/api/siem/sinks/"+v.ID, `{"name":"Splunk prod","include_http":true}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"has_token":true`) || !strings.Contains(rec.Body.String(), `"enabled":true`) ||
 		!strings.Contains(rec.Body.String(), "splunk.example:8088") {
 		t.Errorf("update: %d %s", rec.Code, rec.Body)
 	}
