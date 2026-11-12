@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { History, Plus, Radio, Send } from "lucide-react";
+import { History, Plus, Radio, Send, Trash2 } from "lucide-react";
 import { TwoAdminDialog } from "./TwoAdminDialog";
 import { TwoAdminType, siemFilterPayload, siemTargetPayload, twoAdminType } from "./twoAdmin";
 import { SiemDeadLetter, SiemFlavor, SiemFormat, SiemKind, SiemSink, SiemSinkInput, relTime, siemApi, siemSinkState, useApi } from "../../api";
@@ -44,6 +44,17 @@ export function SiemSinks() {
       toast(String(e.message ?? e), { kind: "error" });
     }
   };
+  const remove = async (k: SiemSink) => {
+    const ok = await confirm({ title: `Delete ${k.name}?`, body: "The sink, its sealed token and its dead letters are deleted. Events already sent stay with the SIEM. This cannot be undone.", confirmLabel: "Delete sink", danger: true });
+    if (ok === null) return;
+    try {
+      await siemApi.remove(k.id);
+      toast(`${k.name} deleted`);
+      reload();
+    } catch (e: any) {
+      toast(String(e.message ?? e), { kind: "error" });
+    }
+  };
   return (
     <div className="stack">
       {manage && <div className="row"><Button variant="primary" icon={<Plus size={15} />} onClick={() => setEdit("new")}>New sink</Button></div>}
@@ -75,7 +86,7 @@ export function SiemSinks() {
                       </td>
                       <td className="small hide-narrow">{k.last_success_at ? relTime(k.last_success_at) : <span className="faint">Never</span>}</td>
                       <td className="actions-cell">
-                        {manage && <>{k.needs_target ? <Button size="sm" variant="primary" onClick={() => setEdit(k)}>Set target</Button> : <Button size="sm" icon={<Send size={14} />} onClick={() => test(k)}>Test</Button>}{" "}<Button size="sm" variant="ghost" icon={<History size={14} />} onClick={() => replay(k)}>Replay</Button>{" "}<Button size="sm" variant="ghost" onClick={() => setEdit(k)}>Edit</Button></>}
+                        {manage && <>{k.needs_target ? <Button size="sm" variant="primary" onClick={() => setEdit(k)}>Set target</Button> : <Button size="sm" icon={<Send size={14} />} onClick={() => test(k)}>Test</Button>}{" "}<Button size="sm" variant="ghost" icon={<History size={14} />} onClick={() => replay(k)}>Replay</Button>{" "}<Button size="sm" variant="ghost" onClick={() => setEdit(k)}>Edit</Button>{" "}<Button size="sm" variant="danger" icon={<Trash2 size={14} />} disabled={k.enabled} title={k.enabled ? "Turn the sink off (Edit, untick Enabled) before deleting it" : undefined} aria-label={`Delete ${k.name}`} onClick={() => remove(k)}>Delete</Button></>}
                       </td>
                     </tr>
                   );

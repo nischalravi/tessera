@@ -48,6 +48,8 @@ func (s *Server) registerReadinessRoutes() {
 	s.handle(P, "/api/connections/{id}/transition", write, need(auth.PermConnectionsManage), s.rd(s.transition))
 	s.handle(P, "/api/connections/{id}/activate", write, needStepUp(auth.PermConnectionsActivate, auth.StepUpPolicy), s.rd(s.activate))
 	s.handle(P, "/api/connections/{id}/retire", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.retire))
+	// Same permission and step-up as create and retire: the connection must be retired first (409 otherwise).
+	s.handle(http.MethodDelete, "/api/connections/{id}", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.deleteConnection))
 	s.registerActivationRoutes()
 	s.registerValidationRoutes()
 	s.registerDryRunRoutes()
@@ -525,4 +527,19 @@ func (s *Server) retire(r *http.Request, p *params) (int, any, error) {
 		return err
 	})
 	return http.StatusOK, out, err
+}
+
+// deleteConnection removes a retired connection that owns no synced objects and has nothing in flight.
+func (s *Server) deleteConnection(r *http.Request, p *params) (int, any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return 0, nil, err
+	}
+	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
+		return s.readiness.Delete(c, id, actor(r), now)
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, map[string]any{"deleted": true, "id": id}, nil
 }

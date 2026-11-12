@@ -347,7 +347,16 @@ the revision get `403 two_person_rule`; the requester cancels and anyone else re
 `POST .../activation/reject`; `GET .../activation` shows the latest request. The gate itself
 (blocker `activation.approval`) refuses a write-enabled revision that has no approval, so no other
 caller can skip the second person. This request table stands in for the `connection.activate`
-admin-change type until Phase 0's admin-change workflow (PR12) lands. Non-demo connector types are
+admin-change type until Phase 0's admin-change workflow (PR12) lands.
+
+**Deleting a connection (issue #963):** `DELETE /api/connections/{id}` (`connections.manage` + step-up) removes
+a **retired** connection with its revisions, readiness evidence, provisioning rows and sealed credentials, and
+audits `connection.deleted` in the same transaction. It answers 409 with a code while something still depends on
+it: `connection_not_retired`, `connection_has_synced_objects` (accounts, groups, resources or permissions of its
+system: they are never cascade-deleted, so the deletion guard is not bypassed), `connection_has_pending_ops`
+(provisioning operations or agent jobs in flight), `connection_syncing` (a job running) and `connection_in_use`
+(a group loader, group provisioner or SSF transmitter names it). Its certificates stay as retired evidence without
+their key, and job history stays, unlinked. The UI offers it on the Activate step of a retired connection. Non-demo connector types are
 no longer refused with `phase0_required`: the gate alone decides (simulated evidence never
 satisfies it).
 
@@ -899,14 +908,14 @@ both refusals too. A decider with no user at all, the scheduler, is not refused)
 `GET /api/connectors/sync-status` · `PUT /api/connectors/sync-schedule` (see "Durable job queue") · `GET|POST /api/ssf/transmitters` · `GET|PUT|DELETE /api/ssf/transmitters/{id}` · `POST /api/ssf/transmitters/{id}/verify` ·
 `GET /api/ssf/events` · `POST /public/t/{slug}/ssf/{transmitter_id}/events` (SSF push, see "Shared Signals receiver") ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
-`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it; **moving to another origin is a two-admin change** `siem.sink.target` (issue #520), see Log streaming; omitted fields keep their value, `include_http` included) · `POST /api/siem/sinks/{id}/rewind {seq}` (step-up, issue #520) ·
+`GET|POST /api/siem/sinks` · `DELETE /api/siem/sinks/{id}` (step-up; 409 `sink_enabled` until the sink is disabled; removes its dead letters and sealed token; audit `siem.sink.deleted`, issue #963) · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it; **moving to another origin is a two-admin change** `siem.sink.target` (issue #520), see Log streaming; omitted fields keep their value, `include_http` included) · `POST /api/siem/sinks/{id}/rewind {seq}` (step-up, issue #520) ·
 `POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` (a sink's `kind` is `syslog`, `webhook` or `s3`; `event_filter`, `region` and `access_key_id` are in the body and the view; narrowing `event_filter` is refused with 409 `two_admin_change_required`, see "Event filter") ·
 `GET|POST /api/admin/certificates` · `POST /api/admin/certificates/generate {connection_id}` · `POST /api/admin/certificates/{id}/promote|retire` ·
 `GET|PUT /api/admin/branding` · `GET /api/auth/branding?tenant=` · `GET /api/auth/branding/logo?tenant=` (the last two are public, see "Certificates, branding and identity rules") ·
 `GET|PUT /api/admin/identity-rules` · `GET|PUT /api/admin/labels` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` (step-up; loosening a security rule is a two-admin `alerts.rule.loosen` change, issue #521) ·
-`GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
+`GET|POST /api/alerts/channels` · `DELETE /api/alerts/channels/{id}` (step-up; 409 `channel_enabled` until the channel is disabled; removes its deliveries and sealed secret; audit `alert.channel.deleted`, issue #963) · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
 `GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
 `POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
@@ -5236,8 +5245,10 @@ LDAPS and StartTLS, no bind without TLS, bind refused), `internal/store` (`TestC
 - Routes: `GET|POST /api/groups/loaders`, `GET|PATCH /api/groups/loaders/{id}`,
   `POST .../{id}/run` (`{kind: full|incremental|preview}`; a failed run answers `502
   loader_run_failed` with the run), `GET .../{id}/runs[/{run_id}]`, `POST .../runs/{run_id}/approve`
-  and `/reject`, `GET .../{id}/unresolved`, `GET /api/groups/loader-tasks`. There is no delete: turn a
-  loader off. Audit events `groups.loader.created|updated`, `groups.loader.run.applied|held|failed|
+  and `/reject`, `GET .../{id}/unresolved`, `GET /api/groups/loader-tasks`, `DELETE .../{id}` (issue #963:
+  `groups.loader.admin` + step-up + `stem_admin` on the folder; 409 `loader_not_disabled` until it is turned off,
+  409 `loader_has_groups` while it still manages groups; removes its runs, unresolved people and sealed
+  credential). Audit events `groups.loader.created|updated|deleted`, `groups.loader.run.applied|held|failed|
   previewed|approved|rejected`.
 - Migration note: `admin_change_requests.type` gained `groups.loader.save` in `0008_admin_changes.sql`
   (a database created before this change must be reseeded).

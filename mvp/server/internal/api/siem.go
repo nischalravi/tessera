@@ -23,6 +23,7 @@ import (
 //	POST /api/siem/sinks                              add a sink
 //	PUT  /api/siem/sinks/{sink_id}                    change a sink (omitted fields keep their value; narrowing its event filter, turning include_http
 //	                                                  off, or moving it to another origin is a two-admin change request)
+//	DELETE /api/siem/sinks/{sink_id}                  delete a disabled sink (step-up; 409 sink_enabled while enabled)
 //	POST /api/siem/sinks/{sink_id}/rewind {seq}       replay from seq+1 (0: everything; step-up)
 //	POST /api/siem/sinks/{sink_id}/test               send one test event now
 //	GET  /api/siem/sinks/{sink_id}/dead-letters       batches the destination rejected
@@ -33,6 +34,7 @@ func (s *Server) registerSiemRoutes() {
 	s.handle(http.MethodGet, "/api/siem/sinks", read, readS, s.listSiemSinks)
 	s.handle(http.MethodPost, "/api/siem/sinks", write, configureStepUp, s.createSiemSink)
 	s.handle(http.MethodPut, "/api/siem/sinks/{sink_id}", write, configureStepUp, s.updateSiemSink)
+	s.handle(http.MethodDelete, "/api/siem/sinks/{sink_id}", write, configureStepUp, s.deleteSiemSink)
 	s.handle(http.MethodPost, "/api/siem/sinks/{sink_id}/rewind", write, configureStepUp, s.rewindSiemSink)
 	s.handle(http.MethodPost, "/api/siem/sinks/{sink_id}/test", phased, configure, s.rd(s.testSiemSink))
 	s.handle(http.MethodGet, "/api/siem/sinks/{sink_id}/dead-letters", read, readS, s.siemDeadLetters)
@@ -228,6 +230,17 @@ func (s *Server) createSiemSink(_ http.ResponseWriter, r *http.Request, _ *param
 		return nil, err
 	}
 	return statusBody{http.StatusCreated, v}, nil
+}
+
+func (s *Server) deleteSiemSink(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	by, err := siemActor(r)
+	if err != nil {
+		return nil, err
+	}
+	if err := siem.DeleteSink(store.TxFrom(r.Context()), p.path["sink_id"], by, s.clock().UTC()); err != nil {
+		return nil, siemErr(err)
+	}
+	return map[string]any{"deleted": true, "id": p.path["sink_id"]}, nil
 }
 
 func (s *Server) updateSiemSink(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {

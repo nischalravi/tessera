@@ -193,6 +193,40 @@
       }
      }
     ]
+   },
+   "delete": {
+    "summary": "Delete a retired connection with its revisions, readiness evidence and sealed credentials",
+    "description": "Permission: connections.manage + step-up (issue #963). 409 connection_not_retired until retired; 409 connection_has_synced_objects, connection_has_pending_ops, connection_syncing or connection_in_use while something still depends on it. Synced objects are never deleted with it.",
+    "responses": {
+     "200": {
+      "description": "{deleted, id}"
+     },
+     "404": {
+      "description": "not_found"
+     },
+     "409": {
+      "description": "connection_not_retired | connection_has_synced_objects | connection_has_pending_ops | connection_syncing | connection_in_use"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
    }
   },
   "/api/connections/{id}/config": {

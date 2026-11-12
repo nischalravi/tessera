@@ -689,6 +689,24 @@ func Rewind(tx *store.TenantTx, id string, seq int64, by Actor, now time.Time) (
 		{Key: "from_seq", Value: from}, {Key: "to_seq", Value: seq}})
 }
 
+// DeleteSink removes a disabled sink, its dead letters and its sealed token, and records siem.sink.deleted in the same
+// transaction. An enabled sink is refused (409 sink_enabled).
+func DeleteSink(tx *store.TenantTx, id string, by Actor, now time.Time) error {
+	k, err := tx.SiemSink(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return refuse(404, "sink_not_found", "sink not found")
+	} else if err != nil {
+		return err
+	}
+	if k.Enabled {
+		return refuse(409, "sink_enabled", "disable the sink before deleting it")
+	}
+	if err := tx.DeleteSiemSink(id); err != nil {
+		return err
+	}
+	return tx.Audit(now, by.Display, "siem.sink.deleted", sinkAudit(k, false))
+}
+
 // TestSink sends one synthetic event to a sink now, outside any transaction.
 func (s *Service) TestSink(ctx context.Context, t tenancy.ID, slug string, k *store.SiemSink) error {
 	snd, err := s.sender(t, k, slug)
