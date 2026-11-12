@@ -1144,7 +1144,7 @@ A channel is how security alerts reach people, so anything that stops or redirec
 | `alerts.channel.target` | `{channel_id, target}` | new recipients of an **email** channel; audit `alert.channel.updated` |
 | `alerts.channel.severity` | `{channel_id, min_severity}` | raises `min_severity` (must be higher than now); audit `alert.channel.updated` with `previous_min_severity` |
 
-Each applied change is audited with its `change_id` in the applying transaction. A webhook URL carries a token in its path, so it is not put in a plain payload: the PUT answers 409 with `change_type` `config.proposal`, and the new URL goes through `POST /api/proposals/alert-channels/{id}`, which seals it. SQLite widens the type CHECK in `0008_admin_changes.sql` (and `DB.upgradeAdminChangeTypes` for older files); Postgres in migration `0977`.
+Each applied change is audited with its `change_id` in the applying transaction. A webhook URL carries a token in its path, so it is not put in a plain payload: the PUT answers 409 with `change_type` `config.proposal`. A person adds a channel with the new URL and files `alerts.channel.delete` for the old one; a machine client with `config.propose` can instead propose the new URL through `POST /api/proposals/alert-channels/{id}`, which seals it. An `alerts.channel.target` request is checked in full (1 to 20 addresses) when filed, approved and applied. SQLite widens the type CHECK in `0008_admin_changes.sql` (and `DB.upgradeAdminChangeTypes` for older files); Postgres in migration `0977`.
 
 ### SIEM streaming
 

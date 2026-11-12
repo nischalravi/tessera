@@ -237,6 +237,24 @@ func TargetChanged(c *store.AlertChannel, target string) bool {
 	return t != c.Target
 }
 
+// CheckRetarget validates a new recipient list for email channel c as the update would (1 to MaxRecipients addresses)
+// and returns it normalized. It refuses a webhook (its URL carries a token and never goes in a plain change request)
+// and a list that equals the current one. The change request runs it when filed, when approved and when applied, so a
+// request that could never apply is refused up front.
+func CheckRetarget(c *store.AlertChannel, target string, dev bool) (string, error) {
+	if c.Kind != "email" {
+		return "", refuse(422, "invalid_kind", "only an email channel's recipients are changed here; a webhook URL carries a token")
+	}
+	sp := ChannelSpec{Name: c.Name, Kind: c.Kind, Target: target, MinSeverity: c.MinSeverity, Enabled: true}
+	if err := sp.check(dev); err != nil {
+		return "", err
+	}
+	if sp.Target == c.Target {
+		return "", refuse(409, "target_unchanged", "the channel already sends there")
+	}
+	return sp.Target, nil
+}
+
 // RetargetChannel sends an email channel's alerts to other recipients after two admins approved it
 // (alerts.channel.target). A webhook URL carries a token in its path, so it is never put in a plain change request: it
 // moves through a configuration proposal, which seals it (config.proposal). Audited as alert.channel.updated with the
@@ -248,17 +266,11 @@ func RetargetChannel(tx *store.TenantTx, id, target, changeID string, dev bool, 
 	} else if err != nil {
 		return err
 	}
-	if c.Kind != "email" {
-		return refuse(422, "invalid_kind", "only an email channel's recipients are changed here; a webhook URL goes through a configuration proposal")
-	}
-	sp := ChannelSpec{Name: c.Name, Kind: c.Kind, Target: target, MinSeverity: c.MinSeverity, Enabled: true}
-	if err := sp.check(dev); err != nil {
+	t, err := CheckRetarget(c, target, dev)
+	if err != nil {
 		return err
 	}
-	if sp.Target == c.Target {
-		return refuse(409, "target_unchanged", "the channel already sends there")
-	}
-	c.Target, c.UpdatedAt = sp.Target, now
+	c.Target, c.UpdatedAt = t, now
 	if err := tx.UpdateAlertChannel(c); err != nil {
 		return err
 	}

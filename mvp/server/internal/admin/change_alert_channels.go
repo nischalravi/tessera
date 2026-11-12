@@ -99,10 +99,14 @@ func planChannelTarget(e *env, v *alertChannelTargetPayload) (plan, error) {
 		return plan{}, err
 	}
 	if c.Kind != "email" {
-		return plan{}, invalid("a webhook URL carries a token: change it with a configuration proposal (POST /api/proposals/alert-channels/%s)", c.ID)
+		return plan{}, invalid("a webhook URL carries a token, so it is never put in a change request: add a channel with the new URL and file %s for this one, or have a machine client propose it (POST /api/proposals/alert-channels/%s)", TypeAlertChannelDelete, c.ID)
 	}
-	if !alerts.TargetChanged(c, v.Target) {
-		return plan{}, invalid("the channel already sends there, or the target is not valid")
+	if _, err := alerts.CheckRetarget(c, v.Target, !e.svc.Prod); err != nil {
+		var re *alerts.Error
+		if errors.As(err, &re) {
+			return plan{}, invalid("%s", re.Msg)
+		}
+		return plan{}, err
 	}
 	return plan{twoPerson: true, target: c.ID}, nil
 }

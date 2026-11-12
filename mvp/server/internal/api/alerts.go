@@ -461,10 +461,14 @@ func (s *Server) updateAlertChannel(_ http.ResponseWriter, r *http.Request, p *p
 	}
 	if b.Target != nil && alerts.TargetChanged(cur, *b.Target) {
 		if cur.Kind != "email" {
-			// a webhook URL carries a token: it must not sit in a plain change request payload, so it is sealed in a proposal
+			// A webhook URL carries a token: it must not sit in a plain change request payload. The proposal route seals it
+			// but only a machine client may file one, so a person is told the path that works for them too: add a channel
+			// with the new URL (one admin) and delete this one (two admins). The message never echoes the URL.
 			return nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
-				Msg: "sending a webhook channel somewhere else needs a second admin: submit a configuration proposal " +
-					"(POST /api/proposals/alert-channels/" + cur.ID + ") with the new URL for a different admin to approve",
+				Msg: "sending a webhook channel somewhere else needs a second admin, and its URL carries a token, so it is " +
+					"never put in a change request: add a channel with the new URL, then file " + admin.TypeAlertChannelDelete +
+					" for this one (POST /api/admin/change-requests, payload {channel_id}); a machine client with " +
+					"config.propose can instead propose the new URL (POST /api/proposals/alert-channels/" + cur.ID + ")",
 				Extra: map[string]any{"change_type": admin.TypeConfigProposal}}
 		}
 		return nil, channelTwoAdmin("changing a channel's recipients redirects its alerts", admin.TypeAlertChannelTarget, "{channel_id, target}")

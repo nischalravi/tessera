@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -216,6 +217,102 @@ func TestAlertChannelChangeRequests_CrossTenant(t *testing.T) {
 	}
 	if storetest.Dump(t, e.f.DB, e.f.A.ID) != before {
 		t.Error("tenant A changed")
+	}
+}
+
+// TestAlertChannelChangeRequests_StaleSelfAndSecrets (issue #968 review): a request is checked again when approved, so one
+// the tenant has moved past applies nothing; the requester is refused with self_approval_refused; a recipient list the
+// apply would refuse is refused when filed; and a webhook URL's token is never stored, echoed or audited on the way to
+// the 409.
+func TestAlertChannelChangeRequests_StaleSelfAndSecrets(t *testing.T) {
+	e := newPrivEnv(t)
+	sealer, err := seal.New(seal.RandomBytes(32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.cfg.Alerts = &alerts.Service{DB: e.f.DB, Sealer: sealer, Mail: alerts.LogMailer{}}
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	file := func(typ, payload string, want int) map[string]any {
+		return e.admin.call("POST", "/api/admin/change-requests", `{"type":"`+typ+`","payload":`+payload+`}`, want)
+	}
+	approveURL := func(ch map[string]any) (string, string) {
+		return "/api/admin/change-requests/" + ch["id"].(string) + "/approve", `{"payload_hash":"` + ch["payload_hash"].(string) + `"}`
+	}
+	chanOf := func(id string) (*store.AlertChannel, error) {
+		var c *store.AlertChannel
+		err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+			var err error
+			c, err = tx.AlertChannel(id)
+			return err
+		})
+		return c, err
+	}
+	mail := e.admin.call("POST", "/api/alerts/channels", `{"name":"Mail","kind":"email","target":"soc@b.example","min_severity":"low"}`, 201)
+	mid := mail["id"].(string)
+
+	// self-approval is refused by name, not merely not 200
+	ch := file("alerts.channel.severity", `{"channel_id":"`+mid+`","min_severity":"medium"}`, 201)
+	u, body := approveURL(ch)
+	if got := e.admin.call("POST", u, body, 403); errCode(got) != "self_approval_refused" {
+		t.Errorf("self-approval: %v", got)
+	}
+
+	// stale severity: another approved raise overtakes it, so approving the first would lower min_severity
+	ch2 := file("alerts.channel.severity", `{"channel_id":"`+mid+`","min_severity":"critical"}`, 201)
+	approveChange(t, admin2, e.admin, ch2)
+	admin2.call("POST", u, body, 422)
+	if c, _ := chanOf(mid); c.MinSeverity != "critical" {
+		t.Errorf("a stale raise changed min_severity to %q", c.MinSeverity)
+	}
+
+	// more recipients than the apply allows: refused when filed, not left to fail on approval
+	many := make([]string, alerts.MaxRecipients+1)
+	for i := range many {
+		many[i] = "r" + strconv.Itoa(i) + "@b.example"
+	}
+	file("alerts.channel.target", `{"channel_id":"`+mid+`","target":"`+strings.Join(many, ", ")+`"}`, 422)
+
+	// stale target and disable: the channel is deleted before they are approved
+	tgt := file("alerts.channel.target", `{"channel_id":"`+mid+`","target":"new@b.example"}`, 201)
+	dis := file("alerts.channel.disable", `{"channel_id":"`+mid+`"}`, 201)
+	del := file("alerts.channel.delete", `{"channel_id":"`+mid+`"}`, 201)
+	approveChange(t, admin2, e.admin, del)
+	for _, c := range []map[string]any{tgt, dis} {
+		u, body := approveURL(c)
+		admin2.call("POST", u, body, 422)
+	}
+	if _, err := chanOf(mid); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a stale request brought the channel back: %v", err)
+	}
+	if n := deleteAuditCount(t, e.f.DB, e.f.B.ID, "alert.channel.disabled"); n != 0 {
+		t.Errorf("a stale disable was audited as applied (%d)", n)
+	}
+
+	// a webhook URL: the 409 does not echo it, no request holds it, no audit event records it
+	const token = "SECRETtok3n9f8e7d"
+	hook := e.admin.call("POST", "/api/alerts/channels", `{"name":"Hook","kind":"webhook","target":"https://hooks.slack.com/services/T0/B0/x","min_severity":"high"}`, 201)
+	hid := hook["id"].(string)
+	rec := e.admin.do("PUT", "/api/alerts/channels/"+hid, `{"name":"Hook","target":"https://hooks.slack.com/services/T0/B0/`+token+`"}`)
+	if rec.Code != 409 || strings.Contains(rec.Body.String(), token) || !strings.Contains(rec.Body.String(), "alerts.channel.delete") {
+		t.Errorf("webhook retarget: %d %s", rec.Code, rec.Body)
+	}
+	rec = e.admin.do("POST", "/api/admin/change-requests", `{"type":"alerts.channel.target","payload":{"channel_id":"`+hid+`","target":"https://hooks.slack.com/services/T0/B0/`+token+`"}}`)
+	if rec.Code != 422 || strings.Contains(rec.Body.String(), token) {
+		t.Errorf("webhook target request: %d %s", rec.Code, rec.Body)
+	}
+	if rec := e.admin.do("GET", "/api/admin/change-requests", ""); strings.Contains(rec.Body.String(), token) {
+		t.Error("a change request holds the webhook token")
+	}
+	if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+		evs, err := tx.AuditEvents(store.AuditFilter{})
+		for _, ev := range evs {
+			if strings.Contains(string(ev.Detail), token) || strings.Contains(string(ev.HTTP), token) {
+				t.Errorf("audit event %s records the webhook token", ev.Action)
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
