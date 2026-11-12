@@ -219,3 +219,7 @@ inside the page body differs.
 No fixture was changed. The new `settings.sftp` member of a contractor feed and the `file_sha256` and
 `file_bytes` members of a sync report are `omitempty`: a response for a feed that is not an SFTP drop is
 byte-identical to before.
+
+## Issue #968 (alert channel two-admin changes)
+
+No fixture changed. None of the 160 fixtures calls `PUT` or `DELETE /api/alerts/channels/{id}`, whose responses are the ones that changed (now 409 `two_admin_change_required` for a disable, a new recipient list or URL, a higher `min_severity`, and always for a delete).

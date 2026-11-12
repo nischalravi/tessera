@@ -4392,7 +4392,7 @@ export const alertsApi = {
   createChannel: (body: AlertChannelInput) => api<AlertChannel>("/alerts/channels", body),
   updateChannel: (id: string, body: AlertChannelInput) => api<AlertChannel>(`/alerts/channels/${encodeURIComponent(id)}`, body, "PUT"),
   testChannel: (id: string) => api<{ ok: boolean; error?: string }>(`/alerts/channels/${encodeURIComponent(id)}/test`, {}),
-  /** Delete a disabled channel with its sealed secret (409 channel_enabled while it is on). */
+  /** Delete a channel with its sealed secret: always 409 two_admin_change_required (alerts.channel.delete, issue #968). */
   deleteChannel: (id: string) => api<DeleteResult>(`/alerts/channels/${encodeURIComponent(id)}`, undefined, "DELETE"),
 };
 
@@ -4631,7 +4631,7 @@ export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
   | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
   | "groups.loader.save" | "retention.update" | "deletion_guard.update" | "siem.sink.filter"
-  | "siem.sink.target" | "siem.sink.disable" | "siem.sink.delete" | "alerts.rule.loosen" | "breach.item.attest" | "provisioning.write_back.enable" | "config.proposal";
+  | "siem.sink.target" | "siem.sink.disable" | "siem.sink.delete" | "alerts.channel.disable" | "alerts.channel.delete" | "alerts.channel.target" | "alerts.channel.severity" | "alerts.rule.loosen" | "breach.item.attest" | "provisioning.write_back.enable" | "config.proposal";
 
 export interface AdminPersonRef { id: string; display_name: string }
 

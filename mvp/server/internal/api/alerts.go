@@ -28,8 +28,9 @@ import (
 //	PUT  /api/alerts/rules/{rule_id}                  change a rule's settings (step-up; loosening a security rule is a two-admin change request)
 //	GET  /api/alerts/channels                         delivery channels (targets redacted)
 //	POST /api/alerts/channels                         add a channel (webhooks: the secret is shown once)
-//	PUT  /api/alerts/channels/{channel_id}            change a channel
-//	DELETE /api/alerts/channels/{channel_id}          delete a disabled channel (step-up; 409 channel_enabled while enabled)
+//	PUT  /api/alerts/channels/{channel_id}            change a channel (disabling it, a new recipient list or URL and a higher min_severity
+//	                                                  are 409 two_admin_change_required: alerts.channel.disable|target|severity, issue #968)
+//	DELETE /api/alerts/channels/{channel_id}          409 two_admin_change_required: deleting a channel is the change request alerts.channel.delete
 //	POST /api/alerts/channels/{channel_id}/test       send a test message now
 //	GET  /api/alerts/{alert_id}                       one alert with its deliveries
 //	POST /api/alerts/{alert_id}/acknowledge|resolve|assign
@@ -449,6 +450,32 @@ func (s *Server) updateAlertChannel(_ http.ResponseWriter, r *http.Request, p *p
 	} else if err != nil {
 		return nil, err
 	}
+	// A request that is invalid on its face is a 422 whoever approves it.
+	if err := alerts.CheckChannel(tx, cur.ID, b.spec(cur), s.cfg.Env == config.Dev); err != nil {
+		return nil, alertErr(err)
+	}
+	// Anything that stops or redirects security alerts takes two admins (issue #968): turning an enabled channel off,
+	// another recipient list or URL, a higher min_severity. Enabling, lowering min_severity and renaming stay here.
+	if b.Enabled != nil && !*b.Enabled && cur.Enabled {
+		return nil, channelTwoAdmin("disabling a channel stops its alerts", admin.TypeAlertChannelDisable, "{channel_id}")
+	}
+	if b.Target != nil && alerts.TargetChanged(cur, *b.Target) {
+		if cur.Kind != "email" {
+			// A webhook URL carries a token: it must not sit in a plain change request payload. The proposal route seals it
+			// but only a machine client may file one, so a person is told the path that works for them too: add a channel
+			// with the new URL (one admin) and delete this one (two admins). The message never echoes the URL.
+			return nil, &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
+				Msg: "sending a webhook channel somewhere else needs a second admin, and its URL carries a token, so it is " +
+					"never put in a change request: add a channel with the new URL, then file " + admin.TypeAlertChannelDelete +
+					" for this one (POST /api/admin/change-requests, payload {channel_id}); a machine client with " +
+					"config.propose can instead propose the new URL (POST /api/proposals/alert-channels/" + cur.ID + ")",
+				Extra: map[string]any{"change_type": admin.TypeConfigProposal}}
+		}
+		return nil, channelTwoAdmin("changing a channel's recipients redirects its alerts", admin.TypeAlertChannelTarget, "{channel_id, target}")
+	}
+	if alerts.SeverityRaises(cur.MinSeverity, b.MinSeverity) {
+		return nil, channelTwoAdmin("raising min_severity means the channel receives fewer alerts", admin.TypeAlertChannelSeverity, "{channel_id, min_severity}")
+	}
 	c, secret, err := alerts.UpdateChannel(tx, s.alertSealer(), cur.ID, b.spec(cur), s.cfg.Env == config.Dev, by, s.clock().UTC())
 	if err != nil {
 		return nil, alertErr(err)
@@ -456,15 +483,26 @@ func (s *Server) updateAlertChannel(_ http.ResponseWriter, r *http.Request, p *p
 	return s.channelViewOf(c, secret), nil
 }
 
-func (s *Server) deleteAlertChannel(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	by, err := alertActor(r)
-	if err != nil {
+// deleteAlertChannel never deletes: a channel is how security alerts reach people, so its deletion is the two-admin
+// change request alerts.channel.delete (issue #968). It answers 404 for a channel the tenant does not have.
+func (s *Server) deleteAlertChannel(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	if _, err := alertActor(r); err != nil {
 		return nil, err
 	}
-	if err := alerts.DeleteChannel(store.TxFrom(r.Context()), p.path["channel_id"], by, s.clock().UTC()); err != nil {
-		return nil, alertErr(err)
+	if _, err := store.TxFrom(r.Context()).AlertChannel(p.path["channel_id"]); errors.Is(err, store.ErrNotFound) {
+		return nil, &readiness.Error{Status: http.StatusNotFound, Code: "channel_not_found", Msg: "channel not found"}
+	} else if err != nil {
+		return nil, err
 	}
-	return map[string]any{"deleted": true, "id": p.path["channel_id"]}, nil
+	return nil, channelTwoAdmin("deleting a channel stops its alerts", admin.TypeAlertChannelDelete, "{channel_id}")
+}
+
+// channelTwoAdmin is the 409 that names the change request to file.
+func channelTwoAdmin(what, changeType, payload string) error {
+	return &readiness.Error{Status: http.StatusConflict, Code: "two_admin_change_required",
+		Msg: what + " and needs a second admin: submit a change request of type " + changeType +
+			" (POST /api/admin/change-requests, payload " + payload + ") for a different admin to approve",
+		Extra: map[string]any{"change_type": changeType}}
 }
 
 // testAlertChannel sends a test message outside any transaction, then

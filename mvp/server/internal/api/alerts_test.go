@@ -127,8 +127,12 @@ func TestAlertsAPI(t *testing.T) {
 		t.Errorf("plain-http webhook: %d %s", rec.Code, rec.Body)
 	}
 	// an update without a target keeps it; the kind cannot change
-	rec = alertsDo(h, admin, "PUT", "/api/alerts/channels/"+ch.ID, `{"name":"Slack #security","min_severity":"critical"}`)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"min_severity":"critical"`) || strings.Contains(rec.Body.String(), `"secret"`) {
+	// raising min_severity is a two-admin change (issue #968); lowering it is not
+	if rec := alertsDo(h, admin, "PUT", "/api/alerts/channels/"+ch.ID, `{"name":"Slack #security","min_severity":"critical"}`); rec.Code != 409 {
+		t.Errorf("raise min_severity: %d %s", rec.Code, rec.Body)
+	}
+	rec = alertsDo(h, admin, "PUT", "/api/alerts/channels/"+ch.ID, `{"name":"Slack #security","min_severity":"medium"}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"min_severity":"medium"`) || strings.Contains(rec.Body.String(), `"secret"`) {
 		t.Errorf("update: %d %s", rec.Code, rec.Body)
 	}
 	if rec := alertsDo(h, admin, "PUT", "/api/alerts/channels/"+ch.ID, `{"name":"x","kind":"email"}`); rec.Code != 422 {

@@ -98,8 +98,8 @@ GET    /api/alerts/rules                             alerts.read     -  # issue 
 PUT    /api/alerts/rules/{rule_id}                   alerts.configure STEP_UP_POLICY  # issue #168, #521
 GET    /api/alerts/channels                          alerts.configure -  # issue #168
 POST   /api/alerts/channels                          alerts.configure STEP_UP_POLICY  # issue #168
-PUT    /api/alerts/channels/{channel_id}             alerts.configure STEP_UP_POLICY  # issue #168
-DELETE /api/alerts/channels/{channel_id}             alerts.configure STEP_UP_POLICY  # issue #963
+PUT    /api/alerts/channels/{channel_id}             alerts.configure STEP_UP_POLICY  # issue #168, #968 (disable, URL or recipients, min_severity raise: 409 two_admin_change_required)
+DELETE /api/alerts/channels/{channel_id}             alerts.configure STEP_UP_POLICY  # issue #963, #968 (always 409 two_admin_change_required)
 POST   /api/alerts/channels/{channel_id}/test        alerts.configure -  # issue #168
 GET    /api/alerts/{alert_id}                        alerts.read     -  # issue #168
 POST   /api/alerts/{alert_id}/acknowledge            alerts.manage   -  # issue #168
