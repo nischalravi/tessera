@@ -4212,7 +4212,10 @@ export type VmsVendor = "fieldglass" | "beeline" | "csv";
 export interface VmsSettings {
   workers_path?: string; token_path?: string; page_size?: number;
   mapping?: Record<string, string>; date_format?: string; csv_path?: string;
+  sftp?: VmsSftp;
 }
+/** An SFTP drop (issue #961). The credential (password or private key) is write-only and sealed. */
+export interface VmsSftp { host: string; port?: number; path: string; username: string; host_key: string; auth: "password" | "key"; }
 export interface VmsSource {
   id: string; vendor: VmsVendor; name: string; base_url: string; settings: VmsSettings; has_credential: boolean;
   status: "active" | "paused"; last_sync_at: string | null; last_result: "ok" | "failed" | null; last_error: string | null;
@@ -4227,7 +4230,7 @@ export interface VmsRecord {
 }
 export interface VmsReport {
   source_id: string; name: string; vendor: VmsVendor; status: "ok" | "failed" | "skipped"; records: number;
-  applied: Record<string, number>; failed: number; error?: string;
+  applied: Record<string, number>; failed: number; error?: string; file_sha256?: string; file_bytes?: number;
 }
 export const vmsApi = {
   sourcesPath: "/vms/sources",

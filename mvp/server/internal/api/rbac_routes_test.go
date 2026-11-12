@@ -145,9 +145,9 @@ POST   /api/breach/plans/{id}/verify                 secrets.rotate  STEP_UP_POL
 POST   /api/breach/plans/{id}/items/{item}/attest    secrets.rotate  STEP_UP_POLICY  # issue #475
 GET    /api/breach/plans/{id}/evidence               audit.read      -  # issue #475
 GET    /api/vms/sources                              connections.read -  # issue #304
-POST   /api/vms/sources                              connections.manage -  # issue #304
-PUT    /api/vms/sources/{source_id}                  connections.manage -  # issue #304
-DELETE /api/vms/sources/{source_id}                  connections.manage -  # issue #304
+POST   /api/vms/sources                              connections.manage STEP_UP_POLICY  # issues #304, #961
+PUT    /api/vms/sources/{source_id}                  connections.manage STEP_UP_POLICY  # issues #304, #961
+DELETE /api/vms/sources/{source_id}                  connections.manage STEP_UP_POLICY  # issues #304, #961
 POST   /api/vms/sync                                 lifecycle.manage -  # issue #304
 POST   /api/vms/sources/{source_id}/import           lifecycle.manage -  # issue #304
 GET    /api/vms/records                              connections.read -  # issue #304

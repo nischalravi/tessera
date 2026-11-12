@@ -3,7 +3,9 @@ package vms
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +42,9 @@ type CSVResult struct {
 	// BadRows counts the rows that could not be read as a record (wrong number of
 	// fields); they are skipped and never quoted.
 	BadRows int
+	// Digest is the SHA-256 (hex) of the file as read, and Size its length in bytes.
+	Digest string
+	Size   int
 }
 
 // ParseCSV reads a CSV feed. asOf stamps the rows that carry no updated_at, so
@@ -52,6 +57,8 @@ func ParseCSV(r io.Reader, set Settings, asOf time.Time) (*CSVResult, error) {
 	if len(raw) > MaxCSVBytes {
 		return nil, fmt.Errorf("%w: the file is larger than %d MiB", ErrCSV, MaxCSVBytes>>20)
 	}
+	sum := sha256.Sum256(raw)
+	digest, size := hex.EncodeToString(sum[:]), len(raw)
 	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf")) // a spreadsheet's byte-order mark
 	if !utf8.Valid(raw) || bytes.IndexByte(raw, 0) >= 0 {
 		return nil, fmt.Errorf("%w: the file is not UTF-8 text", ErrCSV)
@@ -90,7 +97,7 @@ func ParseCSV(r io.Reader, set Settings, asOf time.Time) (*CSVResult, error) {
 	if set.DateFormat != "" {
 		layouts = []string{set.DateFormat}
 	}
-	out := &CSVResult{}
+	out := &CSVResult{Digest: digest, Size: size}
 	for n := 0; ; n++ {
 		row, err := cr.Read()
 		if errors.Is(err, io.EOF) {

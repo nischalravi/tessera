@@ -27,6 +27,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/intake"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -51,6 +52,8 @@ type Service struct {
 	RT     connsync.Runtime
 	Keyer  *identifiers.Keyer
 	Clock  timeutil.Clock
+	// SFTPDial replaces the guarded dialer of SFTP sources (tests only: nil in production).
+	SFTPDial safehttp.DialFunc
 	// Build replaces the connector construction (tests).
 	Build func(src *store.VmsSource, credential string) (connectors.VmsConnector, error)
 }
@@ -91,6 +94,9 @@ type Report struct {
 	Applied  map[string]int `json:"applied"`
 	Failed   int            `json:"failed"`
 	Error    string         `json:"error,omitempty"`
+	// FileSHA256 and FileBytes identify the file an SFTP source read (hex digest, length).
+	FileSHA256 string `json:"file_sha256,omitempty"`
+	FileBytes  int    `json:"file_bytes,omitempty"`
 }
 
 func (r *Report) count(outcome string) {
@@ -151,6 +157,10 @@ func (s *Service) connector(tenant tenancy.ID, src *store.VmsSource) (connectors
 	if err := unmarshalSettings(src.Settings, &set); err != nil {
 		return nil, err
 	}
+	if src.Vendor == store.VmsCSV && set.SFTP != nil {
+		return &feed.SFTPConnector{F: &feed.SFTPFetcher{SFTP: *set.SFTP, Credential: connsync.NewSecret(cred), RT: s.RT,
+			Settings: set, Now: s.now, Dial: s.SFTPDial}}, nil
+	}
 	if src.Vendor == store.VmsCSV {
 		if src.BaseURL == "" || set.CSVPath == "" {
 			return nil, nil
@@ -197,10 +207,14 @@ func (s *Service) syncOne(ctx context.Context, tenant tenancy.ID, src *store.Vms
 		return rep
 	}
 	var recs []*connectors.VmsRecord
-	if err := conn.VmsRecords(ctx, src.Cursor, func(r *connectors.VmsRecord) error {
+	err = conn.VmsRecords(ctx, src.Cursor, func(r *connectors.VmsRecord) error {
 		recs = append(recs, r)
 		return nil
-	}); err != nil {
+	})
+	if d, ok := conn.(interface{ FileDigest() (string, int) }); ok {
+		rep.FileSHA256, rep.FileBytes = d.FileDigest()
+	}
+	if err != nil {
 		return s.finishFailed(ctx, tenant, src, rep, err)
 	}
 	return s.apply(ctx, tenant, src, rep, recs, true)
@@ -314,6 +328,9 @@ func (s *Service) write(ctx context.Context, tenant tenancy.ID, src *store.VmsSo
 		}
 		d := ojson.Object{{Key: "source_id", Value: src.ID}, {Key: "vendor", Value: src.Vendor}, {Key: "status", Value: rep.Status},
 			{Key: "records", Value: rep.Records}, {Key: "failed", Value: rep.Failed}, {Key: "outcomes", Value: counts}}
+		if rep.FileSHA256 != "" { // the file an SFTP source read, so the audit trail says which bytes were applied
+			d = append(d, ojson.KV{Key: "file_sha256", Value: rep.FileSHA256}, ojson.KV{Key: "file_bytes", Value: rep.FileBytes})
+		}
 		_, err := audit.Record(tx.Context(), tx, "vms.sync", d, audit.At(now), audit.Target("vms_source", src.ID))
 		return err
 	})
