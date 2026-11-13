@@ -4094,7 +4094,8 @@ the matched identity, the outcome, `latency_ms` (receipt to the last action done
    `<issuer>/.well-known/ssf-configuration` (fetched through `internal/safehttp`; its `issuer` must
    equal the configured one).
 2. **Push** (RFC 8935). A push stream gets a generated receiver secret, returned once as
-   `receiver_secret` (stored sealed). Configure the transmitter to POST each SET to
+   `receiver_secret` (stored sealed); a caller-chosen `secret` must be 32 to 4096 characters (a poll token 16 to
+   4096; a secret already stored is never re-checked, issue #975). Configure the transmitter to POST each SET to
    `https://<tessera>/public/t/<tenant-slug>/ssf/<transmitter-id>/events` with
    `Authorization: Bearer <secret>` and `Content-Type: application/secevent+jwt`. Answers: `202` when
    accepted, otherwise `400 {"err": ..., "description": ...}` with `invalid_request`, `invalid_key`,

@@ -569,8 +569,12 @@ func keepMaskedPrivileged(cur, next *ConnConfig) {
 	out := make(map[string][]string, len(next.PrivilegedExpected))
 	for g, members := range next.PrivilegedExpected {
 		if _, stored := cur.PrivilegedExpected[g]; !stored {
+			// not when next also names the stored group itself: the two would collide, and which one survived would
+			// depend on map order (a real change could be dropped and planned as unchanged)
 			if olds := byMask[g]; len(olds) == 1 {
-				g = olds[0]
+				if _, both := next.PrivilegedExpected[olds[0]]; !both {
+					g = olds[0]
+				}
 			}
 		}
 		if olds, ok := cur.PrivilegedExpected[g]; ok {

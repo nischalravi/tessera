@@ -146,3 +146,24 @@ func TestKeepMaskedLegacy(t *testing.T) {
 		})
 	}
 }
+
+// A bundle that names a stored privileged group and also its mask must not have the two merged (map order would pick
+// which survives, and a real change could be planned as unchanged); a mask at another position or in another field
+// does not pull a stored value across.
+func TestKeepMaskedLegacy_NoCollisionOrMove(t *testing.T) {
+	cur := json.RawMessage(`{"attr_map":[{"ldap":"mail","target":"x"},{"ldap":"` + credURL + `","target":"y"}],"privileged_expected":{"` + credURL + `":["alice"]}}`)
+	next := json.RawMessage(`{"attr_map":[{"ldap":"` + maskText(credURL) + `","target":"x"},{"ldap":"cn","target":"` + maskText(credURL) + `"}],` +
+		`"privileged_expected":{"` + credURL + `":["alice","bob"],"` + maskText(credURL) + `":["alice"]}}`)
+	for range 50 {
+		var got ConnConfig
+		if err := json.Unmarshal(KeepMaskedLegacy(cur, next), &got); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got.PrivilegedExpected[credURL], []string{"alice", "bob"}) || len(got.PrivilegedExpected) != 2 {
+			t.Fatalf("privileged_expected collided: %v", got.PrivilegedExpected)
+		}
+		if got.AttrMap[0].LDAP == credURL || got.AttrMap[1].Target == credURL {
+			t.Fatalf("a stored value moved: %v", got.AttrMap)
+		}
+	}
+}
