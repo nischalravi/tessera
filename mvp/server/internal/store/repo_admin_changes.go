@@ -93,6 +93,11 @@ var (
 		SELECT `+adminChangeCols+` FROM admin_change_requests r
 		WHERE r.tenant_id = @tenant AND r.type = 'idp_connection.create' AND r.target_id = @target
 			AND r.status = 'applied' ORDER BY r.requested_at DESC, r.rowid DESC LIMIT 1`)
+	adminChangeSummaryPut = tq("admin_change_summaries.put", `
+		INSERT INTO admin_change_summaries (tenant_id, change_id, summary) VALUES (@tenant, @id, @summary)
+		ON CONFLICT (tenant_id, change_id) DO UPDATE SET summary = excluded.summary`)
+	adminChangeSummaryGet = tq("admin_change_summaries.get", `
+		SELECT s.summary FROM admin_change_summaries s WHERE s.tenant_id = @tenant AND s.change_id = @id`)
 	// the approver is not the requester and the request has not expired: both
 	// are checked in Go for a precise error and again here against a race
 	adminChangeApprove = tq("admin_change_requests.approve", `
@@ -750,4 +755,20 @@ func (tx *TenantTx) UpdateTenantSecurityContacts(contacts string) error {
 // suspended tenants and the platform tenant are never touched.
 func (tx *TenantTx) UpdateTenantStatus(status string) error {
 	return tx.execOwnTenant(tenantsSetStatus, sql.Named("status", status))
+}
+
+// SetAdminChangeSummary keeps the summary of request id as it reads now, to be shown once the change is made.
+func (tx *TenantTx) SetAdminChangeSummary(id uuid.UUID, summary string) error {
+	_, err := tx.exec(adminChangeSummaryPut, sql.Named("id", id.String()), sql.Named("summary", summary))
+	return err
+}
+
+// AdminChangeSummary returns the summary kept for request id, or ErrNotFound.
+func (tx *TenantTx) AdminChangeSummary(id uuid.UUID) (string, error) {
+	var s string
+	err := tx.queryRow(adminChangeSummaryGet, sql.Named("id", id.String())).Scan(&s)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	return s, err
 }

@@ -52,6 +52,11 @@ func (e *env) describe(ch *store.AdminChange) string {
 	if err != nil {
 		return ch.Type
 	}
+	if typ.keepSummary && ch.Status == store.ChangeApplied {
+		if s, err := e.tx.AdminChangeSummary(ch.ID); err == nil {
+			return s
+		}
+	}
 	return typ.summary(e, v)
 }
 
