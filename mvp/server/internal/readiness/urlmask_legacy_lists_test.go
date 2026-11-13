@@ -1,6 +1,7 @@
 package readiness
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -111,5 +112,58 @@ func TestKeepMasked_AttrMapAndPrivileged(t *testing.T) {
 	bad := ConnConfig{AttrMap: []AttrMapping{{LDAP: "https://a:b@c.example", Target: "x", Scope: "account"}}}
 	if err := urlCredentialError(cur, bad); err == nil || strings.Contains(err.Error(), "c.example") {
 		t.Errorf("got %v", err)
+	}
+}
+
+// KeepMaskedLegacy restores a stored legacy value only where the incoming one is exactly its mask (#975).
+func TestKeepMaskedLegacy(t *testing.T) {
+	cur := json.RawMessage(`{"attr_map":[{"ldap":"` + credURL + `","target":"x","scope":"account"}],"privileged_expected":{"admins":["alice","` + credURL + `"]},"host":"h"}`)
+	cases := []struct {
+		name, next, want string
+	}{
+		{"masked", `{"attr_map":[{"ldap":"` + maskText(credURL) + `","target":"x","scope":"account"}],"privileged_expected":{"admins":["alice","` + maskText(credURL) + `"]},"host":"h"}`, "keep"},
+		{"replaced", `{"attr_map":[{"ldap":"mail","target":"x","scope":"account"}],"host":"h"}`, "mail"},
+		{"no legacy keys", `{"host":"h2"}`, `{"host":"h2"}`},
+		{"not json", `[1]`, `[1]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := string(KeepMaskedLegacy(cur, json.RawMessage(tc.next)))
+			switch tc.want {
+			case "keep":
+				if strings.Count(got, "pwSECRET") != 2 || strings.Contains(got, "masked") {
+					t.Errorf("not kept: %s", got)
+				}
+			case "mail":
+				if strings.Contains(got, "pwSECRET") || !strings.Contains(got, "mail") {
+					t.Errorf("replaced value changed: %s", got)
+				}
+			default:
+				if got != tc.want {
+					t.Errorf("got %s", got)
+				}
+			}
+		})
+	}
+}
+
+// A bundle that names a stored privileged group and also its mask must not have the two merged (map order would pick
+// which survives, and a real change could be planned as unchanged); a mask at another position or in another field
+// does not pull a stored value across.
+func TestKeepMaskedLegacy_NoCollisionOrMove(t *testing.T) {
+	cur := json.RawMessage(`{"attr_map":[{"ldap":"mail","target":"x"},{"ldap":"` + credURL + `","target":"y"}],"privileged_expected":{"` + credURL + `":["alice"]}}`)
+	next := json.RawMessage(`{"attr_map":[{"ldap":"` + maskText(credURL) + `","target":"x"},{"ldap":"cn","target":"` + maskText(credURL) + `"}],` +
+		`"privileged_expected":{"` + credURL + `":["alice","bob"],"` + maskText(credURL) + `":["alice"]}}`)
+	for range 50 {
+		var got ConnConfig
+		if err := json.Unmarshal(KeepMaskedLegacy(cur, next), &got); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got.PrivilegedExpected[credURL], []string{"alice", "bob"}) || len(got.PrivilegedExpected) != 2 {
+			t.Fatalf("privileged_expected collided: %v", got.PrivilegedExpected)
+		}
+		if got.AttrMap[0].LDAP == credURL || got.AttrMap[1].Target == credURL {
+			t.Fatalf("a stored value moved: %v", got.AttrMap)
+		}
 	}
 }

@@ -345,7 +345,7 @@ func (r *alertChannelResource) Schema(_ context.Context, _ resource.SchemaReques
 			"min_severity": schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("high"),
 				Validators: []validator.String{oneOf("low", "medium", "high", "critical")}, Description: "The lowest severity that is sent. Default `high`."},
 			"enabled": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), Description: "Whether alerts are sent. Default true."},
-			"signing_secret": writeOnlySecret("A webhook's HMAC signing secret, 16 to 256 characters, which you also give the receiver. Required for a webhook "+
+			"signing_secret": writeOnlySecret("A webhook's HMAC signing secret, 32 to 256 characters, which you also give the receiver. Required for a webhook "+
 				"(the server cannot show you one it generated). Write-only: never in the plan or the state.", "signing_secret_version"),
 			"signing_secret_version": versionAttr("Any text; change it along with `signing_secret` to send the new secret."),
 		}),

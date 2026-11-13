@@ -1,6 +1,7 @@
 package readiness
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -568,8 +569,12 @@ func keepMaskedPrivileged(cur, next *ConnConfig) {
 	out := make(map[string][]string, len(next.PrivilegedExpected))
 	for g, members := range next.PrivilegedExpected {
 		if _, stored := cur.PrivilegedExpected[g]; !stored {
+			// not when next also names the stored group itself: the two would collide, and which one survived would
+			// depend on map order (a real change could be dropped and planned as unchanged)
 			if olds := byMask[g]; len(olds) == 1 {
-				g = olds[0]
+				if _, both := next.PrivilegedExpected[olds[0]]; !both {
+					g = olds[0]
+				}
 			}
 		}
 		if olds, ok := cur.PrivilegedExpected[g]; ok {
@@ -583,4 +588,42 @@ func keepMaskedPrivileged(cur, next *ConnConfig) {
 		out[g] = members
 	}
 	next.PrivilegedExpected = out
+}
+
+// KeepMaskedLegacy returns next (a connection config from an import bundle) with the legacy credentialed attr_map and
+// privileged_expected values of cur restored wherever next holds exactly their mask, so the import plan shows the
+// connection unchanged and applying it keeps the stored values. Other keys are left as they are; a config that does
+// not decode is returned as given.
+func KeepMaskedLegacy(cur, next json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(next, &m) != nil || m == nil {
+		return next
+	}
+	_, hasAttr := m["attr_map"]
+	_, hasPriv := m["privileged_expected"]
+	if !hasAttr && !hasPriv {
+		return next
+	}
+	// only these two keys matter here, so a config with other fields (or ones this build does not know) still decodes
+	var c, n ConnConfig
+	if json.Unmarshal(cur, &c) != nil || json.Unmarshal(next, &n) != nil {
+		return next
+	}
+	keepMaskedAttrMap(&c, &n)
+	keepMaskedPrivileged(&c, &n)
+	for k, v := range map[string]any{"attr_map": n.AttrMap, "privileged_expected": n.PrivilegedExpected} {
+		if _, ok := m[k]; !ok {
+			continue
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return next
+		}
+		m[k] = b
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return next
+	}
+	return out
 }

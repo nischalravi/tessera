@@ -336,6 +336,11 @@ func planConnections(tx *store.TenantTx, rd *readiness.Service, b *Bundle, p *Pl
 			c.Config = restoreKeys(l.cfg, c.Config, left)
 			b.Connections[i].Config = c.Config
 		}
+		if ok && c.ConnectorType == l.conn.ConnectorType {
+			// a legacy credentialed attr_map or privileged_expected value that comes back masked keeps the stored one
+			c.Config = readiness.KeepMaskedLegacy(l.cfg, c.Config)
+			b.Connections[i].Config = c.Config
+		}
 		switch {
 		case !ok && takenName[c.Name] != nil:
 			it.Action = Manual

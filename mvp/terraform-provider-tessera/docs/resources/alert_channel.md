@@ -67,7 +67,7 @@ resource "tessera_alert_channel" "mail" {
 - `target` (String) Email: up to 20 addresses separated by commas. A webhook uses `target_url`.
 - `enabled` (Boolean) Whether alerts are sent. Default true.
 - `min_severity` (String) `low`, `medium`, `high` (default) or `critical`.
-- `signing_secret` (String, Sensitive, Write-only) A webhook's HMAC signing secret, 16 to 256 characters. Required for a webhook.
+- `signing_secret` (String, Sensitive, Write-only) A webhook's HMAC signing secret, 32 to 256 characters. Required for a webhook.
 - `signing_secret_version` (String) Any text; change it along with `signing_secret` to send the new secret.
 
 ### Read-Only

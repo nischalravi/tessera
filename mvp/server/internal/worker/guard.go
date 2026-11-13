@@ -138,6 +138,9 @@ type Guard struct {
 	ConfigTTL time.Duration
 	// MaxRateWait bounds the wait for a rate-limit token (30 s).
 	MaxRateWait time.Duration
+	// Sleep waits for a rate-limit token (time.Sleep-like, ends early with the context's error). Tests inject
+	// one so the wait is observed, not timed.
+	Sleep func(ctx context.Context, d time.Duration) error
 	// OnCall, when set, is told the outcome of every call (metrics).
 	OnCall func(outcome string)
 
@@ -244,7 +247,7 @@ func (g *Guard) Do(ctx context.Context, t tenancy.ID, conn string, fn func(conte
 		g.report(OutcomeBreakerRejected)
 		return err
 	}
-	if err := gt.takeToken(ctx, g.now, l, g.maxRateWait()); err != nil {
+	if err := gt.takeToken(ctx, g.now, g.Sleep, l, g.maxRateWait()); err != nil {
 		gt.abandon()
 		if errors.Is(err, ErrRateLimited) {
 			g.report(OutcomeRateLimited)
@@ -348,7 +351,7 @@ func (gt *gtarget) abandon() {
 	gt.mu.Unlock()
 }
 
-func (gt *gtarget) takeToken(ctx context.Context, clock func() time.Time, l Limits, maxWait time.Duration) error {
+func (gt *gtarget) takeToken(ctx context.Context, clock func() time.Time, sleep func(context.Context, time.Duration) error, l Limits, maxWait time.Duration) error {
 	if l.RatePerMin <= 0 {
 		return nil
 	}
@@ -374,13 +377,24 @@ func (gt *gtarget) takeToken(ctx context.Context, clock func() time.Time, l Limi
 	if wait <= 0 {
 		return nil
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
+	if sleep == nil {
+		sleep = sleepCtx
+	}
+	if err := sleep(ctx, wait); err != nil {
 		gt.mu.Lock()
 		gt.tokens++ // never used
 		gt.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// sleepCtx waits d or until ctx ends.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
 		return ctx.Err()
 	case <-timer.C:
 		return nil
