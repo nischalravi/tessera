@@ -1,12 +1,16 @@
 package admin
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -75,7 +79,7 @@ func init() {
 		func(e *env, v *alertChannelPayload) string {
 			return "Replace the signing secret of alert channel " + channelLabel(e, v.ChannelID) + ": current \u2192 new (not shown)"
 		})
-	rot.submitSecret = func(e *env, _ any, id uuid.UUID, secret string) ([]byte, error) {
+	rot.submitSecret = func(e *env, v any, id uuid.UUID, secret string) ([]byte, error) {
 		switch {
 		case secret == "":
 			return nil, invalid("client_secret is required: the new signing secret, %d to %d characters", alerts.MinSigningSecret, alerts.MaxSigningSecret)
@@ -84,9 +88,53 @@ func init() {
 		case e.svc.Sealer == nil:
 			return nil, newErr(503, "sealer_unavailable", "no key-encryption key is configured to seal the signing secret")
 		}
-		return e.svc.Sealer.Seal([]byte(secret), secretAAD(e.tx.Tenant(), id))
+		c, err := alertChannelOf(e, v.(*alertChannelPayload).ChannelID)
+		if err != nil {
+			return nil, err
+		}
+		// The sealed blob also holds the fingerprint of the secret the channel has now, so a rotation filed before
+		// another rotation or a move to a new URL (which always brings its own secret) can never overwrite it.
+		b, err := json.Marshal(sealedRotation{Secret: secret, Base: secretBase(c)}) // #nosec G117 -- sealed on the next lines, never stored or logged in the clear
+		if err != nil {
+			return nil, err
+		}
+		return e.svc.Sealer.Seal(b, secretAAD(e.tx.Tenant(), id))
 	}
 	changeTypes[TypeAlertChannelRotate] = rot
+}
+
+// sealedRotation is the plaintext of an alerts.channel.rotate_secret request's secret_enc: the new secret and the
+// fingerprint of the channel's sealed secret when the request was filed. It never leaves the admin package.
+type sealedRotation struct {
+	Secret string `json:"secret"`
+	Base   string `json:"base"`
+}
+
+// secretBase fingerprints a channel's current sealed signing secret (a hash of the ciphertext, which is fresh on every
+// seal, so it changes whenever the secret is replaced, including by a move to another origin).
+func secretBase(c *store.AlertChannel) string {
+	h := sha256.Sum256(c.SecretSealed)
+	return hex.EncodeToString(h[:])
+}
+
+// openRotation opens the sealed rotation of ch into the env, for the re-plan at approve and apply.
+func (e *env) openRotation(ch *store.AdminChange) error {
+	if len(ch.SecretEnc) == 0 {
+		return conflict(ReasonPayloadTampered, "the sealed signing secret of the request is missing")
+	}
+	if e.svc.Sealer == nil {
+		return newErr(503, "sealer_unavailable", "no key-encryption key is configured to open the signing secret")
+	}
+	b, err := e.svc.Sealer.Open(ch.SecretEnc, secretAAD(e.tx.Tenant(), ch.ID))
+	if err != nil {
+		return conflict(ReasonPayloadTampered, "the sealed signing secret of the request does not open")
+	}
+	var r sealedRotation
+	if json.Unmarshal(b, &r) != nil || r.Secret == "" || r.Base == "" {
+		return conflict(ReasonPayloadTampered, "the sealed signing secret of the request does not open")
+	}
+	e.rotation, e.change = &r, ch.ID
+	return nil
 }
 
 // channelLabel names a channel in a summary: its name and type, or the id when the channel is gone. The name is the
@@ -198,22 +246,21 @@ func planChannelRotate(e *env, v *alertChannelPayload) (plan, error) {
 	if c.Kind != "webhook" {
 		return plan{}, invalid("only a webhook has a signing secret")
 	}
+	if e.rotation != nil && !seal.Equal([]byte(e.rotation.Base), []byte(secretBase(c))) {
+		return plan{}, conflict("stale_base", "the channel's signing secret was replaced since this request was filed "+
+			"(another rotation, or a new URL with its own secret): file a new request")
+	}
 	return plan{twoPerson: true, target: c.ID}, nil
 }
 
 func applyChannelRotate(e *env, ch *store.AdminChange, v *alertChannelPayload) error {
+	if e.rotation == nil {
+		if err := e.openRotation(ch); err != nil {
+			return err
+		}
+	}
 	if _, err := planChannelRotate(e, v); err != nil {
 		return err
 	}
-	if e.svc.Sealer == nil {
-		return newErr(503, "sealer_unavailable", "no key-encryption key is configured to seal the signing secret")
-	}
-	if len(ch.SecretEnc) == 0 {
-		return invalid("the sealed signing secret is missing")
-	}
-	secret, err := e.svc.Sealer.Open(ch.SecretEnc, secretAAD(e.tx.Tenant(), ch.ID))
-	if err != nil {
-		return fmt.Errorf("open the request's signing secret: %w", err)
-	}
-	return alerts.RotateChannelSecret(e.tx, e.svc.Sealer, v.ChannelID, string(secret), ch.ID.String(), e.now)
+	return alerts.RotateChannelSecret(e.tx, e.svc.Sealer, v.ChannelID, e.rotation.Secret, ch.ID.String(), e.now)
 }

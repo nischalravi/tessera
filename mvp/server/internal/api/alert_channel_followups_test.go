@@ -7,10 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 )
 
 // TestAlertChannelFollowups covers issue #973: rotate_secret is a two-admin change, summaries name the channel and the
@@ -139,5 +142,82 @@ func TestAlertChannelFollowups(t *testing.T) {
 	if got, want := types("/api/alerts/channels/"+hid, `{"name":"Hook","target":"https://hooks.slack.com/services/T0/B0/other","min_severity":"critical"}`),
 		[]string{"config.proposal", "alerts.channel.severity"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("webhook move needs %v, want %v", got, want)
+	}
+}
+
+// TestAlertChannelRotateLifecycle: the sealed secret of a rotate_secret request is cleared when the request is rejected or
+// cancelled, another tenant cannot file one for this tenant's channel, and a rotation filed before the channel's secret
+// was replaced is refused at approval (and ends) instead of overwriting the newer secret.
+func TestAlertChannelRotateLifecycle(t *testing.T) {
+	e := newPrivEnv(t)
+	sealer, err := seal.New(seal.RandomBytes(32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.cfg.Alerts = &alerts.Service{DB: e.f.DB, Sealer: sealer, Mail: alerts.LogMailer{}}
+	e.srv.admin.Sealer = sealer
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	hook := e.admin.call("POST", "/api/alerts/channels", `{"name":"Hook","kind":"webhook","target":"https://hooks.slack.com/services/T0/B0/TOKENx","min_severity":"high"}`, 201)
+	hid := hook["id"].(string)
+	file := func(c grpClient, secret string, want int) map[string]any {
+		return c.call("POST", "/api/admin/change-requests", `{"type":"alerts.channel.rotate_secret","payload":{"channel_id":"`+hid+`"},"client_secret":"`+secret+`"}`, want)
+	}
+	sealedOf := func(id string) []byte {
+		var enc []byte
+		if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+			ch, err := tx.AdminChange(uuid.MustParse(id))
+			if err == nil {
+				enc = ch.SecretEnc
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return enc
+	}
+
+	// another tenant's admin cannot reach this channel
+	l := signIn(t, e.f.DB, e.f.A.ID, authtest.User{Email: "admin@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	other := grpClient{client{t, l.Handler(e.srv.Handler())}}
+	file(other, "whsec_other_tenant_0123456789", 422)
+
+	// reject and cancel clear the sealed secret
+	rej := file(e.admin, "whsec_rejected_0123456789abcdef", 201)
+	if len(sealedOf(rej["id"].(string))) == 0 {
+		t.Fatal("a pending rotation holds no sealed secret")
+	}
+	admin2.call("POST", "/api/admin/change-requests/"+rej["id"].(string)+"/reject", "{}", 200)
+	if len(sealedOf(rej["id"].(string))) != 0 {
+		t.Error("a rejected rotation still holds its sealed secret")
+	}
+	can := file(e.admin, "whsec_cancelled_0123456789abcdef", 201)
+	e.admin.call("POST", "/api/admin/change-requests/"+can["id"].(string)+"/cancel", "", 200)
+	if len(sealedOf(can["id"].(string))) != 0 {
+		t.Error("a cancelled rotation still holds its sealed secret")
+	}
+
+	// two rotations filed against the same secret: once one applies, the other is stale and ends failed
+	first := file(e.admin, "whsec_first_0123456789abcdef", 201)
+	second := file(e.admin, "whsec_second_0123456789abcdef", 201)
+	approveChange(t, admin2, e.admin, first)
+	got := admin2.call("POST", "/api/admin/change-requests/"+second["id"].(string)+"/approve", `{"payload_hash":"`+second["payload_hash"].(string)+`"}`, 409)
+	if errCode(got) != "stale_base" {
+		t.Errorf("stale rotation approval = %v, want stale_base", got)
+	}
+	if len(sealedOf(second["id"].(string))) != 0 {
+		t.Error("the stale rotation still holds its sealed secret")
+	}
+	var plain []byte
+	if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+		c, err := tx.AlertChannel(hid)
+		if err == nil {
+			plain, err = sealer.Open(c.SecretSealed, alerts.SecretAAD(e.f.B.ID, hid))
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if string(plain) != "whsec_first_0123456789abcdef" {
+		t.Error("the stale rotation replaced the applied secret")
 	}
 }
