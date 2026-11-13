@@ -183,7 +183,7 @@ const MinSigningSecret = 32
 
 func checkNewSecret(typ string, sec map[string]string) error {
 	if v := sec["signing_secret"]; typ == TypeWebhook && v != "" && len(v) < MinSigningSecret {
-		return cfgErr("secret.signing_secret must be at least %d characters", MinSigningSecret)
+		return cfgErr("secret.signing_secret must be at least %d bytes", MinSigningSecret)
 	}
 	return nil
 }

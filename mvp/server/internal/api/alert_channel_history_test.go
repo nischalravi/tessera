@@ -182,13 +182,73 @@ func TestAlertChannelClosedRequestKeepsNameAfterDelete(t *testing.T) {
 	admin2.call("POST", "/api/admin/change-requests/"+rejected["id"].(string)+"/reject", "", 200)
 	e.admin.call("POST", "/api/admin/change-requests/"+cancelled["id"].(string)+"/cancel", "", 200)
 	approveChange(t, admin2, e.admin, del)
-	for name, ch := range map[string]map[string]any{"rejected": rejected, "cancelled": cancelled} {
+	// two rotations of a webhook channel filed against the same secret: the second ends failed (stale_base) once the
+	// first applies, and still shows the text it had when it was filed
+	hook := e.admin.call("POST", "/api/alerts/channels", `{"name":"Hooked","kind":"webhook","target":"https://hooks.slack.com/services/T0/B0/TOKENfailed7c","min_severity":"high"}`, 201)
+	rotate := func(secret string) map[string]any {
+		return e.admin.call("POST", "/api/admin/change-requests", `{"type":"alerts.channel.rotate_secret","payload":{"channel_id":"`+hook["id"].(string)+`"},"client_secret":"`+secret+`"}`, 201)
+	}
+	first, failed := rotate("whsec_first_0123456789abcdef-0123456789"), rotate("whsec_second_0123456789abcdef-0123456789")
+	approveChange(t, admin2, e.admin, first)
+	admin2.call("POST", "/api/admin/change-requests/"+failed["id"].(string)+"/approve", fmt.Sprintf(`{"payload_hash":%q}`, failed["payload_hash"]), 409)
+	for name, ch := range map[string]map[string]any{"rejected": rejected, "cancelled": cancelled, "failed": failed} {
 		got := e.admin.call("GET", "/api/admin/change-requests/"+ch["id"].(string), "", 200)
 		if got["status"] != name {
 			t.Fatalf("%s request status = %v", name, got["status"])
 		}
-		if s := got["summary"].(string); !strings.Contains(s, `"Doomed" (email`) {
+		want := `"Doomed" (email`
+		if name == "failed" {
+			want = `"Hooked" (webhook`
+		}
+		if s := got["summary"].(string); !strings.Contains(s, want) || strings.Contains(s, "TOKENfailed7c") {
 			t.Errorf("%s summary %q lacks the channel name", name, s)
 		}
+	}
+}
+
+// Issue #981: the summary kept when a request is filed is within 1000 characters for a long retarget too, and the
+// request then rejects cleanly and shows it.
+func TestAlertChannelRetargetLongRecipientsFileThenReject(t *testing.T) {
+	e := newPrivEnv(t)
+	sealer, err := seal.New(seal.RandomBytes(32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.cfg.Alerts = &alerts.Service{DB: e.f.DB, Sealer: sealer, Mail: alerts.LogMailer{}}
+	e.srv.admin.Sealer = sealer
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	list := func(prefix string) string {
+		var a []string
+		for i := 0; i < 20; i++ {
+			a = append(a, fmt.Sprintf("%s-%02d-%s@%s.example.com", prefix, i, strings.Repeat("l", 40), strings.Repeat("d", 30)))
+		}
+		return strings.Join(a, ", ")
+	}
+	mail := e.admin.call("POST", "/api/alerts/channels", `{"name":"Wide","kind":"email","target":"`+list("old")+`","min_severity":"low"}`, 201)
+	ch := e.admin.call("POST", "/api/admin/change-requests", `{"type":"alerts.channel.target","payload":{"channel_id":"`+mail["id"].(string)+`","target":"`+list("new")+`"}}`, 201)
+	id, err := uuid.Parse(ch["id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := func() string {
+		var s string
+		if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+			s, err = tx.AdminChangeSummary(id)
+			return err
+		}); err != nil {
+			t.Fatalf("no summary kept at filing: %v", err)
+		}
+		return s
+	}
+	if n := utf8.RuneCountInString(kept()); n < 1 || n > 1000 {
+		t.Errorf("filing-time summary has %d characters", n)
+	}
+	admin2.call("POST", "/api/admin/change-requests/"+id.String()+"/reject", "", 200)
+	got := e.admin.call("GET", "/api/admin/change-requests/"+id.String(), "", 200)
+	if got["status"] != "rejected" {
+		t.Fatalf("status = %v, want rejected", got["status"])
+	}
+	if s := got["summary"].(string); s != kept() || utf8.RuneCountInString(s) > 1000 {
+		t.Errorf("rejected summary has %d characters, differs from the kept one: %v", utf8.RuneCountInString(s), s != kept())
 	}
 }

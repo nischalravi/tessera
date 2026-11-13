@@ -411,3 +411,27 @@ func TestGroupsProvisioningRoutesRequireTenantAdmin(t *testing.T) {
 		}
 	}
 }
+
+// Issue #981: a webhook signing secret under the 32-byte floor is a 422 invalid_provisioner on create and update; the
+// body names the field and the minimum but never echoes the secret.
+func TestGroupsProvisioningWebhookSecretFloor(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	p := newProvAPI(t, f, f.B.ID)
+	const short = "short-webhook-secret-0123456789"
+	body := func(secret string) string {
+		return `{"name":"Hook","target_type":"webhook","secret":{"signing_secret":"` + secret + `"},
+ "config":{"account_system":"okta","target":{"url":"https://hooks.example.com/x"}}}`
+	}
+	rec := p.do("POST", "/api/groups/provisioners", body(short))
+	if rec.Code != 422 || !strings.Contains(rec.Body.String(), "invalid_provisioner") || !strings.Contains(rec.Body.String(), "signing_secret") {
+		t.Fatalf("short secret on create = %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), short) {
+		t.Errorf("the 400 echoes the secret: %s", rec.Body)
+	}
+	created := p.call("POST", "/api/groups/provisioners", body(strings.Repeat("k", 32)), 201)
+	rec = p.do("PATCH", "/api/groups/provisioners/"+created["id"].(string), `{"version":`+fmt.Sprint(created["version"])+`,"secret":{"signing_secret":"`+short+`"}}`)
+	if rec.Code != 422 || !strings.Contains(rec.Body.String(), "invalid_provisioner") || strings.Contains(rec.Body.String(), short) {
+		t.Errorf("short secret on update = %d %s", rec.Code, rec.Body)
+	}
+}

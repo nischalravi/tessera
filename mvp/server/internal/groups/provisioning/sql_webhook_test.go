@@ -476,8 +476,8 @@ func TestWebhook_Config(t *testing.T) {
 	}
 }
 
-// A webhook signing secret chosen now needs 32 characters, on create and on
-// update. One stored before the floor (16 to 31 characters) keeps working: an
+// A webhook signing secret chosen now needs 32 bytes, on create and on
+// update. One stored before the floor (16 to 31 bytes) keeps working: an
 // update that does not send a secret does not re-validate it.
 func TestWebhook_SigningSecretFloor(t *testing.T) {
 	x := newHarness(t, 1)
