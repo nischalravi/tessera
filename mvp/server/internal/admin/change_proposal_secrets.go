@@ -496,6 +496,9 @@ func OpenProposalSecrets(sealer *seal.Sealer, t tenancy.ID, id uuid.UUID, enc []
 // openSecrets loads the plaintext secrets of a config.proposal into the env for the validation or the apply. A blob that
 // does not open ends the request as tampered; the error carries no detail.
 func (e *env) openSecrets(ch *store.AdminChange) error {
+	if ch.Type == TypeAlertChannelRotate {
+		return e.openRotation(ch)
+	}
 	if ch.Type != TypeConfigProposal || len(ch.SecretEnc) == 0 {
 		return nil
 	}

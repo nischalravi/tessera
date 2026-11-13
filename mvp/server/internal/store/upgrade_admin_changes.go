@@ -28,6 +28,11 @@ var adminChangeNewTypes = [][2]string{
 	{"'policy.sync.apply'", "'lp.auto_policy.apply'"},
 	{"'siem.sink.disable'", "'policy.sync.apply'"},
 	{"'siem.sink.delete'", "'siem.sink.disable'"},
+	{"'alerts.channel.disable'", "'siem.sink.delete'"},
+	{"'alerts.channel.delete'", "'alerts.channel.disable'"},
+	{"'alerts.channel.target'", "'alerts.channel.delete'"},
+	{"'alerts.channel.severity'", "'alerts.channel.target'"},
+	{"'alerts.channel.rotate_secret'", "'alerts.channel.severity'"},
 }
 
 // upgradeAdminChangeTypes widens the type CHECK of admin_change_requests in a SQLite database created before
@@ -36,7 +41,7 @@ var adminChangeNewTypes = [][2]string{
 // table dropped, new one renamed, and the table's own indexes and triggers recreated. Foreign keys are off for
 // the rebuild (and checked before it commits), so the tables that point at it keep their rows. It does nothing
 // when the table is missing or already admits the type, so running it on every open is safe. Postgres changes
-// the CHECK in migrations 0640, 0671, 0770, 0790, 0820, 0937, 0950, 0952, 0956, 0958, 0960, 0962, 0964, 0969 and 0975.
+// the CHECK in migrations 0640, 0671, 0770, 0790, 0820, 0937, 0950, 0952, 0956, 0958, 0960, 0962, 0964, 0969, 0976, 0977 and 0978.
 func (d *DB) upgradeAdminChangeTypes(ctx context.Context) error {
 	var def string
 	err := d.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, adminChangeTable).Scan(&def)

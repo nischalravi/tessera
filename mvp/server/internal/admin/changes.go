@@ -152,6 +152,8 @@ type env struct {
 	secrets map[string]string
 	// change is the id of the request being filed, approved or applied: the fingerprint of a sealed URL is bound to it.
 	change uuid.UUID
+	// rotation is the opened secret of an alerts.channel.rotate_secret request being approved or applied (openSecrets).
+	rotation *sealedRotation
 }
 
 func (s *Service) env(tx *store.TenantTx, now time.Time, by uuid.UUID) *env {
@@ -529,7 +531,7 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, id uuid.UUID, 
 			return errApplierFailed
 		}
 		if _, err := typ.plan(pe, v); err != nil {
-			if ch.Type == TypePolicySyncApply && staleSyncErr(err) {
+			if (ch.Type == TypePolicySyncApply || ch.Type == TypeAlertChannelRotate) && staleSyncErr(err) {
 				// the reviewed plan can never apply: end the request (and free its commit) instead of leaving it pending
 				failure = err
 				return errApplierFailed

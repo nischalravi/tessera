@@ -6,7 +6,8 @@ import {
 } from "../../api";
 import { useSession } from "../../app/auth";
 import { TwoAdminDialog } from "../admin/TwoAdminDialog";
-import { alertLoosenPayload, twoAdminType } from "../admin/twoAdmin";
+import { TwoAdminBatchDialog } from "../admin/TwoAdminBatchDialog";
+import { TwoAdminType, alertChannelPayload, alertChannelChanges, alertLoosenPayload, twoAdminType, twoAdminTypes, ChannelChange } from "../admin/twoAdmin";
 import {
   Badge, Button, Callout, Column, CommandBar, DataTable, Drawer, EmptyState, Loading, Page, SidePanel, Tabs, useConfirm, useToast,
 } from "../../components";
@@ -263,6 +264,7 @@ function ChannelList() {
   const confirm = useConfirm();
   const [edit, setEdit] = useState<AlertChannel | "new" | null>(null);
   const [secret, setSecret] = useState<{ name: string; secret: string } | null>(null);
+  const [ask, setAsk] = useState<{ type: TwoAdminType; payload: Record<string, unknown>; what: string } | null>(null);
   if (!data) return <div className="card flush"><Loading error={error} /></div>;
   const test = async (c: AlertChannel) => {
     try {
@@ -273,13 +275,17 @@ function ChannelList() {
     }
   };
   const remove = async (c: AlertChannel) => {
-    const ok = await confirm({ title: `Delete ${c.name}?`, body: "The channel, its delivery history and its signing secret are deleted. Alerts stop going there. This cannot be undone.", confirmLabel: "Delete channel", danger: true });
+    const ok = await confirm({ title: `Delete ${c.name}?`, body: "The channel, its delivery history and its signing secret are deleted once a second admin approves. Alerts stop going there. This cannot be undone.", confirmLabel: "Request deletion", danger: true });
     if (ok === null) return;
     try {
       await alertsApi.deleteChannel(c.id);
       toast(`${c.name} deleted`);
       reload();
     } catch (e: any) {
+      if (twoAdminType(e) === "alerts.channel.delete") {
+        setAsk({ type: "alerts.channel.delete", payload: alertChannelPayload(c.id), what: `Deleting ${c.name} stops its alerts for good, so a second admin must approve it.` });
+        return;
+      }
       toast(String(e.message ?? e), { kind: "error" });
     }
   };
@@ -310,7 +316,7 @@ function ChannelList() {
                     <td className="actions-cell">
                       <Button size="sm" icon={<Send size={14} />} onClick={() => test(c)}>Test</Button>{" "}
                       <Button size="sm" variant="ghost" onClick={() => setEdit(c)}>Edit</Button>{" "}
-                      <Button size="sm" variant="danger" icon={<Trash2 size={14} />} disabled={c.enabled} title={c.enabled ? "Turn the channel off (Edit, untick Enabled) before deleting it" : undefined} aria-label={`Delete ${c.name}`} onClick={() => remove(c)}>Delete</Button>
+                      <Button size="sm" variant="danger" icon={<Trash2 size={14} />} title="Deleting a channel needs a second admin" aria-label={`Delete ${c.name}`} onClick={() => remove(c)}>Delete</Button>
                     </td>
                   </tr>
                 ))}
@@ -319,6 +325,7 @@ function ChannelList() {
           </div>
         </div>
       )}
+      {ask && <TwoAdminDialog type={ask.type} payload={ask.payload} what={ask.what} onClose={() => setAsk(null)} />}
       {edit && (
         <ChannelForm
           channel={edit === "new" ? null : edit}
@@ -330,12 +337,19 @@ function ChannelList() {
   );
 }
 
+/** A new webhook signing secret: 256 random bits, made here because the change request seals what the requester sends. */
+function newSigningSecret(): string {
+  const b = crypto.getRandomValues(new Uint8Array(32));
+  return "whsec_" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
 function ChannelForm({ channel, onClose, onSaved }: { channel: AlertChannel | null; onClose: () => void; onSaved: (c: AlertChannel) => void }) {
   const toast = useToast();
   const c = channel;
   const [f, setF] = useState({ name: c?.name ?? "", kind: c?.kind ?? ("webhook" as "email" | "webhook"), target: "", min: c?.min_severity ?? ("high" as AlertSeverity), enabled: c?.enabled ?? true, rotate: false });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [batch, setBatch] = useState<{ items: ChannelChange[]; notFiled: string[] } | null>(null);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -349,6 +363,12 @@ function ChannelForm({ channel, onClose, onSaved }: { channel: AlertChannel | nu
       toast(`${saved.name} saved`);
       onSaved(saved);
     } catch (err: any) {
+      // One save can need several two-admin changes (issue #973): file every one, and list any that cannot be filed.
+      const types = c ? twoAdminTypes(err) : [];
+      if (c && types.length) {
+        setBatch(alertChannelChanges(types, c.id, { target: f.target, min: f.min }, newSigningSecret));
+        return;
+      }
       setError(String(err.message ?? err));
     } finally {
       setBusy(false);
@@ -356,6 +376,7 @@ function ChannelForm({ channel, onClose, onSaved }: { channel: AlertChannel | nu
   };
   return (
     <Drawer title={c ? `Edit ${c.name}` : "New alert channel"} onClose={onClose}>
+      {batch && <TwoAdminBatchDialog items={batch.items} notFiled={batch.notFiled} onClose={() => setBatch(null)} />}
       <form className="stack" onSubmit={submit}>
         <label className="field">Name<input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={100} placeholder="e.g. Slack #security" /></label>
         {!c && (

@@ -47,7 +47,8 @@ func TestCredentialRebindAPI(t *testing.T) {
 		!strings.Contains(rec.Body.String(), `"credential_required"`) {
 		t.Errorf("channel origin change: %d %s", rec.Code, rec.Body)
 	}
-	if rec := alertsDo(ha, admin, "PUT", "/api/alerts/channels/"+c.ID, `{"name":"Hook","target":"https://evil.example/a","rotate_secret":true}`); rec.Code != 200 {
+	if rec := alertsDo(ha, admin, "PUT", "/api/alerts/channels/"+c.ID, `{"name":"Hook","target":"https://evil.example/a","rotate_secret":true}`); rec.Code != 409 ||
+		!strings.Contains(rec.Body.String(), `"two_admin_change_required"`) { // issue #968: a new webhook URL goes by proposal
 		t.Errorf("channel origin change with rotation: %d %s", rec.Code, rec.Body)
 	}
 }
