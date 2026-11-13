@@ -59,11 +59,12 @@ func TestAlertChannelFollowups(t *testing.T) {
 		t.Fatalf("rotate PUT: %v", got)
 	}
 	before := chanOf(hid).SecretSealed
-	file("alerts.channel.rotate_secret", `{"channel_id":"`+hid+`"}`, "", 422)                     // no secret
-	file("alerts.channel.rotate_secret", `{"channel_id":"`+hid+`"}`, "short", 422)                // too short
-	file("alerts.channel.rotate_secret", `{"channel_id":"`+mid+`"}`, newSecret, 422)              // email: nothing to rotate
-	file("alerts.channel.rotate_secret", `{"channel_id":"nope"}`, newSecret, 422)                 // unknown
-	file("alerts.channel.rotate_secret", `{"channel_id":"`+hid+`","secret":"x"}`, newSecret, 422) // no secret in a payload
+	file("alerts.channel.rotate_secret", `{"channel_id":"`+hid+`"}`, "", 422)                                             // no secret
+	file("alerts.channel.rotate_secret", `{"channel_id":"`+hid+`"}`, "short", 422)                                        // too short
+	file("alerts.channel.rotate_secret", `{"channel_id":"`+hid+`"}`, strings.Repeat("s", alerts.MinSigningSecret-1), 422) // one under the 32 floor
+	file("alerts.channel.rotate_secret", `{"channel_id":"`+mid+`"}`, newSecret, 422)                                      // email: nothing to rotate
+	file("alerts.channel.rotate_secret", `{"channel_id":"nope"}`, newSecret, 422)                                         // unknown
+	file("alerts.channel.rotate_secret", `{"channel_id":"`+hid+`","secret":"x"}`, newSecret, 422)                         // no secret in a payload
 	rot := file("alerts.channel.rotate_secret", `{"channel_id":"`+hid+`"}`, newSecret, 201)
 	if string(chanOf(hid).SecretSealed) != string(before) {
 		t.Fatal("the secret changed before the approval")
@@ -182,7 +183,7 @@ func TestAlertChannelRotateLifecycle(t *testing.T) {
 	file(other, "whsec_other_tenant_0123456789", 422)
 
 	// reject and cancel clear the sealed secret
-	rej := file(e.admin, "whsec_rejected_0123456789abcdef", 201)
+	rej := file(e.admin, "whsec_rejected_0123456789abcdef-0123456789", 201)
 	if len(sealedOf(rej["id"].(string))) == 0 {
 		t.Fatal("a pending rotation holds no sealed secret")
 	}
@@ -190,15 +191,15 @@ func TestAlertChannelRotateLifecycle(t *testing.T) {
 	if len(sealedOf(rej["id"].(string))) != 0 {
 		t.Error("a rejected rotation still holds its sealed secret")
 	}
-	can := file(e.admin, "whsec_cancelled_0123456789abcdef", 201)
+	can := file(e.admin, "whsec_cancelled_0123456789abcdef-0123456789", 201)
 	e.admin.call("POST", "/api/admin/change-requests/"+can["id"].(string)+"/cancel", "", 200)
 	if len(sealedOf(can["id"].(string))) != 0 {
 		t.Error("a cancelled rotation still holds its sealed secret")
 	}
 
 	// two rotations filed against the same secret: once one applies, the other is stale and ends failed
-	first := file(e.admin, "whsec_first_0123456789abcdef", 201)
-	second := file(e.admin, "whsec_second_0123456789abcdef", 201)
+	first := file(e.admin, "whsec_first_0123456789abcdef-0123456789", 201)
+	second := file(e.admin, "whsec_second_0123456789abcdef-0123456789", 201)
 	approveChange(t, admin2, e.admin, first)
 	got := admin2.call("POST", "/api/admin/change-requests/"+second["id"].(string)+"/approve", `{"payload_hash":"`+second["payload_hash"].(string)+`"}`, 409)
 	if errCode(got) != "stale_base" {
@@ -217,7 +218,7 @@ func TestAlertChannelRotateLifecycle(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if string(plain) != "whsec_first_0123456789abcdef" {
+	if string(plain) != "whsec_first_0123456789abcdef-0123456789" {
 		t.Error("the stale rotation replaced the applied secret")
 	}
 }
