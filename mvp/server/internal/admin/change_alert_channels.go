@@ -27,7 +27,9 @@ import (
 //	                         signed with the new one until it holds it). The requester chooses the secret and sends it as
 //	                         client_secret: it is sealed apart from the payload, never shown, and cleared when the request ends
 //
-// A summary names the channel (name and type) and the old and new value of the field that changes, never a secret.
+// A summary names the channel (name and type) and the old and new value of the field that changes, never a secret. It
+// is kept as it read when the request is applied (admin_change_summaries), so a reviewer reading history later still sees
+// the true old value and the name of a channel that is gone (issue #977).
 const (
 	TypeAlertChannelDisable  = "alerts.channel.disable"
 	TypeAlertChannelDelete   = "alerts.channel.delete"
@@ -101,6 +103,9 @@ func init() {
 		return e.svc.Sealer.Seal(b, secretAAD(e.tx.Tenant(), id))
 	}
 	changeTypes[TypeAlertChannelRotate] = rot
+	for _, t := range []string{TypeAlertChannelDisable, TypeAlertChannelDelete, TypeAlertChannelTarget, TypeAlertChannelSeverity, TypeAlertChannelRotate} {
+		changeTypes[t].keepSummary = true
+	}
 }
 
 // sealedRotation is the plaintext of an alerts.channel.rotate_secret request's secret_enc: the new secret and the

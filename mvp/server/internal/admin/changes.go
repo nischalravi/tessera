@@ -231,6 +231,9 @@ type changeType struct {
 	apply func(e *env, ch *store.AdminChange, v any) error
 	// summary is one non-secret line describing the change.
 	summary func(e *env, v any) string
+	// keepSummary keeps the summary as it reads just before the change is made and shows that once the request is
+	// applied, for a type whose summary compares live state (old -> new) that the change itself replaces (#977).
+	keepSummary bool
 	// submitSecret seals the client secret that travels with the request
 	// (idp_connection.create only); nil for the other types.
 	submitSecret func(e *env, v any, id uuid.UUID, secret string) ([]byte, error)
@@ -670,6 +673,11 @@ func (s *Service) apply(ctx context.Context, tenant tenancy.ID, id uuid.UUID, by
 		if err := ae.openSecrets(ch); err != nil {
 			failure = err
 			return errApplierFailed
+		}
+		if typ.keepSummary {
+			if err := tx.SetAdminChangeSummary(id, ae.describe(ch)); err != nil {
+				return err
+			}
 		}
 		if err := typ.apply(ae, ch, v); err != nil {
 			failure = err

@@ -308,6 +308,8 @@ var tables = []string{
 	"admin_change_target_checks",
 	// the snapshot of the people and entitlements a directory CSV import left (schema/0965_dirimport.sql)
 	"dirimport_records",
+	// the summary of an applied change request as it read when it was applied (schema/0967_admin_change_summaries.sql)
+	"admin_change_summaries",
 	// who asked to disable an account through the account route, for its re-enable's four eyes (schema/0966_account_disable_requests.sql)
 	"account_disable_requests",
 	// MCP resource bindings to an issuer and audience (schema/0700_mcp_resource_bindings.sql)

@@ -270,11 +270,13 @@ func RetargetChannel(tx *store.TenantTx, id, target, changeID string, dev bool, 
 	if err != nil {
 		return err
 	}
+	prev := c.Target // an email channel's recipients (CheckRetarget refused a webhook): addresses, never a URL
 	c.Target, c.UpdatedAt = t, now
 	if err := tx.UpdateAlertChannel(c); err != nil {
 		return err
 	}
-	return recordChange(tx, "alert.channel.updated", append(channelAudit(c, false), ojson.KV{Key: "change_id", Value: changeID}), changeID, now)
+	return recordChange(tx, "alert.channel.updated",
+		append(channelAudit(c, false), ojson.KV{Key: "change_id", Value: changeID}, ojson.KV{Key: "previous_target", Value: prev}), changeID, now)
 }
 
 // RotateChannelSecret replaces a webhook's signing secret with secret after two admins approved it
