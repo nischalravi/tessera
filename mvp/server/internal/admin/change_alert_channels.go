@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -150,6 +151,24 @@ func channelLabel(e *env, id string) string {
 		return id
 	}
 	return fmt.Sprintf("%q (%s, %s)", clip(c.Name), c.Kind, c.ID)
+}
+
+// renamedNote is " (now "<name>")" when ch names an alert channel that still exists under a different name than the
+// kept summary shows (renaming needs no second admin, so a request closed since then would read stale); empty when the
+// name is unchanged, the channel is gone (the stored text stands) or ch is not an alert-channel request.
+func renamedNote(e *env, ch *store.AdminChange, kept string) string {
+	if !strings.HasPrefix(ch.Type, "alerts.channel.") {
+		return ""
+	}
+	var p alertChannelPayload
+	if json.Unmarshal(ch.Payload, &p) != nil || p.ChannelID == "" {
+		return ""
+	}
+	c, err := e.tx.AlertChannel(p.ChannelID)
+	if err != nil || strings.Contains(kept, fmt.Sprintf("%q (%s, %s)", clip(c.Name), c.Kind, c.ID)) {
+		return ""
+	}
+	return fmt.Sprintf(" (now %q)", clip(c.Name))
 }
 
 func clip(s string) string {
