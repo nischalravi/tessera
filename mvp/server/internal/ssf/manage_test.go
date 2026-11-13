@@ -59,6 +59,7 @@ func TestCreateValidation(t *testing.T) {
 		"bad inline jwks":      {func(i *TransmitterInput) { i.JWKSURL = ""; i.JWKS = json.RawMessage(`{"keys":[]}`) }, "jwks:"},
 		"bad status":           {func(i *TransmitterInput) { i.Status = "on" }, "status must be"},
 		"short secret":         {func(i *TransmitterInput) { i.Secret = "short" }, "secret must be"},
+		"push secret under 32": {func(i *TransmitterInput) { i.Secret = strings.Repeat("s", MinPushSecret-1) }, "secret must be 32 to"},
 		"secret with a space":  {func(i *TransmitterInput) { i.Secret = "aaaaaaaaaaaaaaaa bbbb" }, "secret must be"},
 		"poll without url":     {func(i *TransmitterInput) { i.Delivery = "poll"; i.Secret = strings.Repeat("s", 20) }, "poll_url is required"},
 		"poll without token":   {func(i *TransmitterInput) { i.Delivery = "poll"; i.PollURL = "https://t.example/poll" }, "secret (the bearer token"},
@@ -83,8 +84,14 @@ func TestCreateValidation(t *testing.T) {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
 		}
 	}
-	// the connection implies the system
+	// a 32-character push secret is accepted (a 20-character poll token is too: "poll without url" fails on the URL)
 	in := good()
+	in.Name, in.Secret = "Push32", strings.Repeat("p", MinPushSecret)
+	if err := r.inA(func(c *store.TenantTx) error { _, _, err := r.svc.Create(c, in, "admin", now); return err }); err != nil {
+		t.Errorf("32-character push secret: %v", err)
+	}
+	// the connection implies the system
+	in = good()
 	in.SubjectSystem, in.ConnectionID = "", aConn
 	var x *store.SSFTransmitter
 	if err := r.inA(func(c *store.TenantTx) error {

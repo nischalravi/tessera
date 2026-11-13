@@ -64,6 +64,13 @@ func (e *ConfigError) Error() string { return e.Msg }
 // CodeURLNonASCIIAuthority is the error code of a transmitter URL whose scheme or host is not ASCII (as in readiness).
 const CodeURLNonASCIIAuthority = "url_non_ascii_authority"
 
+// MinPushSecret is the shortest caller-chosen push secret (the bearer a push transmitter presents); minPollSecret is
+// the shortest poll token, which the transmitter issues.
+const (
+	MinPushSecret = 32
+	minPollSecret = 16
+)
+
 func bad(format string, a ...any) error { return &ConfigError{Msg: fmt.Sprintf(format, a...)} }
 
 // ErrNoSuchTransmitter: no such transmitter in this tenant.
@@ -215,8 +222,14 @@ func (s *Service) merged(c *store.TenantTx, in TransmitterInput, old *store.SSFT
 	var generated string
 	switch {
 	case in.Secret != "":
-		if len(in.Secret) < 16 || len(in.Secret) > 4096 || !printable(in.Secret) || strings.Contains(in.Secret, " ") {
-			return nil, "", bad("secret must be 16 to 4096 printable characters without spaces")
+		// a push secret is the bearer Tessera checks, so a chosen one has the webhook floor; a poll token is issued by
+		// the transmitter and keeps the lower one. A stored secret is never re-checked.
+		floor := minPollSecret
+		if in.Delivery == store.SSFPush {
+			floor = MinPushSecret
+		}
+		if len(in.Secret) < floor || len(in.Secret) > 4096 || !printable(in.Secret) || strings.Contains(in.Secret, " ") {
+			return nil, "", bad("secret must be %d to 4096 printable characters without spaces", floor)
 		}
 		enc, err := s.sealSecret(c, x.ID, "secret_enc", in.Secret)
 		if err != nil {

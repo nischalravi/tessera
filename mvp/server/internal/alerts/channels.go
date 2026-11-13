@@ -46,7 +46,7 @@ type ChannelSpec struct {
 
 // MinSigningSecret and MaxSigningSecret bound a caller-chosen webhook signing secret.
 const (
-	MinSigningSecret = 16
+	MinSigningSecret = 32
 	MaxSigningSecret = 256
 )
 

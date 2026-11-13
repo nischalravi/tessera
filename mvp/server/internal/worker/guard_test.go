@@ -243,14 +243,15 @@ func TestGuard_RateLimit(t *testing.T) {
 	e := newEnv(t)
 	// 6000 a minute is 100 a second: one token per 10 ms
 	g := e.guard(worker.Limits{RatePerMin: 6000, Burst: 2})
-	start := time.Now()
+	var waits []time.Duration
+	g.Sleep = func(_ context.Context, d time.Duration) error { waits = append(waits, d); return nil }
 	for i := 0; i < 2; i++ {
 		if err := g.Do(t.Context(), tenantA, "c", ok); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if time.Since(start) > 5*time.Millisecond {
-		t.Errorf("the burst waited %s", time.Since(start))
+	if len(waits) != 0 {
+		t.Errorf("the burst waited %v", waits)
 	}
 	// the clock is fake and does not move: the bucket stays empty, so each call reserves a later token
 	g.MaxRateWait = 5 * time.Millisecond
@@ -262,12 +263,11 @@ func TestGuard_RateLimit(t *testing.T) {
 	var outcome string
 	g.OnCall = func(o string) { outcome = o }
 	g.MaxRateWait = time.Second
-	begin := time.Now()
 	if err := g.Do(t.Context(), tenantA, "c", ok); err != nil {
 		t.Fatal(err)
 	}
-	if w := time.Since(begin); w < 5*time.Millisecond || w > 500*time.Millisecond {
-		t.Errorf("waited %s for a token, want about 10ms", w)
+	if len(waits) != 1 || waits[0] < 9*time.Millisecond || waits[0] > 11*time.Millisecond {
+		t.Errorf("waits = %v, want one wait of about 10ms for a token", waits)
 	}
 	if outcome != worker.OutcomeOK {
 		t.Errorf("outcome = %q", outcome)
