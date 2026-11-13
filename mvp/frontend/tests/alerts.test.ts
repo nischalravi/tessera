@@ -41,3 +41,10 @@ test("severity tones", () => {
   assert.equal(api.severityTone("low"), "neutral");
   assert.deepEqual(api.ALERT_SEVERITIES, ["low", "medium", "high", "critical"]);
 });
+
+test("the channel form hint: shown once on create, a two-admin request on rotation (issue #981)", () => {
+  assert.match(api.channelSecretHint(false), /shown once after saving/);
+  const edit = api.channelSecretHint(true);
+  assert.match(edit, /second admin/);
+  assert.doesNotMatch(edit, /shown once after saving/);
+});

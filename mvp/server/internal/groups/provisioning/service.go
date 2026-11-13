@@ -175,6 +175,19 @@ func checkSecret(typ string, sec map[string]string) error {
 	return nil
 }
 
+// MinSigningSecret is the shortest webhook signing secret accepted when one is
+// chosen (alerts.MinSigningSecret has the same floor). It applies only to a
+// secret supplied on create or update: a stored secret of 16 to 31 bytes keeps
+// working, is never re-validated on read, apply or a config-only update.
+const MinSigningSecret = 32
+
+func checkNewSecret(typ string, sec map[string]string) error {
+	if v := sec["signing_secret"]; typ == TypeWebhook && v != "" && len(v) < MinSigningSecret {
+		return cfgErr("secret.signing_secret must be at least %d characters", MinSigningSecret)
+	}
+	return nil
+}
+
 func (s *Service) sealSecret(t tenancy.ID, id string, sec map[string]string) ([]byte, error) {
 	if s.Sealer == nil {
 		return nil, errors.New("provisioning: no key-encryption key is configured, so credentials cannot be stored")
@@ -287,6 +300,9 @@ func (s *Service) check(typ, name, schedule string, failsafe json.RawMessage) er
 // until an admin reviews the first full sync and sets the mode to active.
 func (s *Service) Create(tx *store.TenantTx, now time.Time, actor string, in CreateInput) (*store.Provisioner, error) {
 	if err := s.check(in.TargetType, in.Name, in.FullSchedule, in.Failsafe); err != nil {
+		return nil, err
+	}
+	if err := checkNewSecret(in.TargetType, in.Secret); err != nil {
 		return nil, err
 	}
 	if err := s.ValidateConfig(in.TargetType, in.Config, in.Secret); err != nil {
@@ -453,6 +469,9 @@ func (s *Service) Update(tx *store.TenantTx, now time.Time, actor, id string, in
 	}
 	sec, err := s.openSecret(tx.Tenant(), p)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkNewSecret(p.TargetType, in.Secret); err != nil {
 		return nil, err
 	}
 	for k, v := range in.Secret {

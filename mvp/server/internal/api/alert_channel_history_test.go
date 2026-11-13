@@ -158,3 +158,37 @@ func TestAlertChannelRetargetLongRecipientsApplies(t *testing.T) {
 		t.Errorf("kept summary has %d characters", n)
 	}
 }
+
+// Issue #981: a request that was rejected or cancelled keeps the channel name captured when it was filed, so history
+// still names a channel that was deleted afterwards (not the bare id), with no secret or URL.
+func TestAlertChannelClosedRequestKeepsNameAfterDelete(t *testing.T) {
+	e := newPrivEnv(t)
+	sealer, err := seal.New(seal.RandomBytes(32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.cfg.Alerts = &alerts.Service{DB: e.f.DB, Sealer: sealer, Mail: alerts.LogMailer{}}
+	e.srv.admin.Sealer = sealer
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	mail := e.admin.call("POST", "/api/alerts/channels", `{"name":"Doomed","kind":"email","target":"a@x.example","min_severity":"low"}`, 201)
+	id := mail["id"].(string)
+	file := func(typ, payload string) map[string]any {
+		return e.admin.call("POST", "/api/admin/change-requests", `{"type":"`+typ+`","payload":`+payload+`}`, 201)
+	}
+	pl := `{"channel_id":"` + id + `"}`
+	rejected := file("alerts.channel.disable", pl)
+	cancelled := file("alerts.channel.disable", pl)
+	del := file("alerts.channel.delete", pl)
+	admin2.call("POST", "/api/admin/change-requests/"+rejected["id"].(string)+"/reject", "", 200)
+	e.admin.call("POST", "/api/admin/change-requests/"+cancelled["id"].(string)+"/cancel", "", 200)
+	approveChange(t, admin2, e.admin, del)
+	for name, ch := range map[string]map[string]any{"rejected": rejected, "cancelled": cancelled} {
+		got := e.admin.call("GET", "/api/admin/change-requests/"+ch["id"].(string), "", 200)
+		if got["status"] != name {
+			t.Fatalf("%s request status = %v", name, got["status"])
+		}
+		if s := got["summary"].(string); !strings.Contains(s, `"Doomed" (email`) {
+			t.Errorf("%s summary %q lacks the channel name", name, s)
+		}
+	}
+}

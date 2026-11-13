@@ -345,7 +345,7 @@ func hookHarness(t *testing.T, h *hook, readURL string) (*harness, *store.Provis
 }
 
 func TestWebhook_SignedAndVerifiedByReadback(t *testing.T) {
-	h := newHook(t, "a-long-signing-secret")
+	h := newHook(t, "a-long-signing-secret-0123456789abcdef")
 	h.readable = true
 	x, p, g := hookHarness(t, h, "/read")
 	rep := x.full(p.ID)
@@ -391,7 +391,7 @@ func TestWebhook_SignedAndVerifiedByReadback(t *testing.T) {
 }
 
 func TestWebhook_WithoutReadEndpointOpsStayApplied(t *testing.T) {
-	h := newHook(t, "a-long-signing-secret")
+	h := newHook(t, "a-long-signing-secret-0123456789abcdef")
 	x, p, g := hookHarness(t, h, "")
 	rep := x.full(p.ID)
 	if rep.Summary.Verified != 0 || rep.Summary.Applied != 1 || !rep.Summary.Unverifiable {
@@ -414,7 +414,7 @@ func TestWebhook_WithoutReadEndpointOpsStayApplied(t *testing.T) {
 }
 
 func TestWebhook_FailuresDoNotLeakTheURL(t *testing.T) {
-	h := newHook(t, "a-long-signing-secret")
+	h := newHook(t, "a-long-signing-secret-0123456789abcdef")
 	h.status = 500
 	x, p, _ := hookHarness(t, h, "")
 	rep := x.full(p.ID)
@@ -450,7 +450,7 @@ func TestWebhook_Config(t *testing.T) {
 		})
 	}
 	ok := map[string]any{"url": "https://hooks.example.com/x"}
-	good := map[string]string{"signing_secret": "0123456789abcdef"}
+	good := map[string]string{"signing_secret": "0123456789abcdef0123456789abcdef"}
 	if err := create(good, ok); err != nil {
 		t.Fatal(err)
 	}
@@ -460,16 +460,83 @@ func TestWebhook_Config(t *testing.T) {
 	}{
 		"no secret":       {nil, ok},
 		"short secret":    {map[string]string{"signing_secret": "short"}, ok},
+		"31 chars":        {map[string]string{"signing_secret": strings.Repeat("a", 31)}, ok},
 		"a url with user": {good, map[string]any{"url": "https://u:p@hooks.example.com/x"}},
 		"not a url":       {good, map[string]any{"url": "hooks.example.com"}},
 		"ftp":             {good, map[string]any{"url": "ftp://hooks.example.com"}},
 		"a query string":  {good, map[string]any{"url": "https://hooks.example.com/x?token=abc"}},
 		"unknown field":   {good, map[string]any{"url": "https://h/x", "headers": "x"}},
-		"foreign secret":  {map[string]string{"signing_secret": "0123456789abcdef", "token": "x"}, ok},
+		"foreign secret":  {map[string]string{"signing_secret": "0123456789abcdef0123456789abcdef", "token": "x"}, ok},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := create(c.secret, c.target); err == nil {
 				t.Error("accepted")
+			}
+		})
+	}
+}
+
+// A webhook signing secret chosen now needs 32 characters, on create and on
+// update. One stored before the floor (16 to 31 characters) keeps working: an
+// update that does not send a secret does not re-validate it.
+func TestWebhook_SigningSecretFloor(t *testing.T) {
+	x := newHarness(t, 1)
+	x.svc.Open = nil
+	cfg := mustJSON(t, map[string]any{"account_system": "dir", "target": map[string]any{"url": "https://hooks.example.com/x"}})
+	long := strings.Repeat("k", MinSigningSecret)
+	var id string
+	var ver int64
+	if err := x.run(func(e model.Env) error {
+		p, err := x.svc.Create(e.Tx, x.now, "t", CreateInput{Name: "floor", TargetType: TypeWebhook, Config: cfg,
+			Secret: map[string]string{"signing_secret": long}})
+		if err == nil {
+			id, ver = p.ID, p.Version
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// a stored 16-character secret (from before the floor) still lets other fields change
+	if err := x.run(func(e model.Env) error {
+		p, err := e.Tx.Provisioner(id)
+		if err != nil {
+			return err
+		}
+		if p.SecretEnc, err = x.svc.sealSecret(e.Tx.Tenant(), id, map[string]string{"signing_secret": strings.Repeat("o", 16)}); err != nil {
+			return err
+		}
+		if err := e.Tx.UpdateProvisioner(p, x.now); err != nil {
+			return err
+		}
+		p, err = e.Tx.Provisioner(id)
+		ver = p.Version
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		secret string
+		ok     bool
+	}{
+		"no secret sent": {"", true},
+		"31 chars":       {strings.Repeat("a", 31), false},
+		"32 chars":       {long, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			nm := "floor-" + strings.ReplaceAll(name, " ", "-")
+			var sec map[string]string
+			if c.secret != "" {
+				sec = map[string]string{"signing_secret": c.secret}
+			}
+			err := x.run(func(e model.Env) error {
+				p, err := x.svc.Update(e.Tx, x.now, "t", id, UpdateInput{Version: ver, Name: &nm, Secret: sec})
+				if err == nil {
+					ver = p.Version
+				}
+				return err
+			})
+			if (err == nil) != c.ok {
+				t.Errorf("err = %v, want ok=%v", err, c.ok)
 			}
 		})
 	}
