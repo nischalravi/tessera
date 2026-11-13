@@ -100,10 +100,13 @@ func TestKeepSummaryTypesLeakNothing(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}
-				got := typ.summary(e, v)
-				for _, bad := range []string{tok, secret, "hooks.slack.com", "https://", "http://", "/services/"} {
-					if strings.Contains(got, bad) {
-						t.Errorf("%s summary for %s leaks %q: %s", name, id, bad, got)
+				// the applied text (typ.summary) and the text kept at filing (what describe stores) both
+				filed := &store.AdminChange{ID: uuid.New(), Type: name, Status: store.ChangePendingApproval, Payload: []byte(strings.Replace(raw, "%s", id, 1))}
+				for what, got := range map[string]string{"applied": typ.summary(e, v), "filing": clipSummary(e.describe(filed))} {
+					for _, bad := range []string{tok, secret, "hooks.slack.com", "https://", "http://", "/services/"} {
+						if strings.Contains(got, bad) {
+							t.Errorf("%s %s summary for %s leaks %q: %s", name, what, id, bad, got)
+						}
 					}
 				}
 			}

@@ -52,7 +52,12 @@ func (e *env) describe(ch *store.AdminChange) string {
 	if err != nil {
 		return ch.Type
 	}
-	if typ.keepSummary && ch.Status == store.ChangeApplied {
+	switch {
+	case !typ.keepSummary:
+	case ch.Status == store.ChangePendingApproval || ch.Status == store.ChangeCoolingOff:
+		// still open: read live state
+	default:
+		// applied (kept when it was applied) or closed without being applied (kept when it was filed)
 		if s, err := e.tx.AdminChangeSummary(ch.ID); err == nil {
 			return s
 		}

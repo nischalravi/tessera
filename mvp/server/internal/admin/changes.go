@@ -233,7 +233,9 @@ type changeType struct {
 	// summary is one non-secret line describing the change.
 	summary func(e *env, v any) string
 	// keepSummary keeps the summary as it reads just before the change is made and shows that once the request is
-	// applied, for a type whose summary compares live state (old -> new) that the change itself replaces (#977).
+	// applied, for a type whose summary compares live state (old -> new) that the change itself replaces (#977). It is also kept
+	// when the request is filed and shown once the request closes without being applied (rejected, cancelled, expired), so
+	// a channel deleted since then still shows by name.
 	// The kept text is stored, listed and audited as written, so the summary of such a type must never contain a
 	// secret or a URL (TestKeepSummaryTypesLeakNothing runs every such type through that check).
 	keepSummary bool
@@ -440,6 +442,12 @@ func (s *Service) submit(ctx context.Context, p *auth.Principal, in SubmitInput,
 		}
 		if err := tx.InsertAdminChange(ch); err != nil {
 			return err
+		}
+		if typ.keepSummary {
+			// as it reads at filing, so a request that is rejected or cancelled keeps the channel name after the channel is deleted
+			if err := tx.SetAdminChangeSummary(ch.ID, clipSummary(e.describe(ch))); err != nil {
+				return err
+			}
 		}
 		if clientID != "" {
 			if err := tx.InsertAdminChangeProposal(ch.ID, clientID, now); err != nil {
