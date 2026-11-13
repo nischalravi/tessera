@@ -2,8 +2,12 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
@@ -27,6 +31,7 @@ func TestAlertChannelChangeHistory(t *testing.T) {
 	const rotated = "whsec_history_rotation_0123456789"
 	hook := e.admin.call("POST", "/api/alerts/channels", `{"name":"Hook","kind":"webhook","target":"https://hooks.slack.com/services/T0/B0/`+tok+`","min_severity":"high"}`, 201)
 	mail := e.admin.call("POST", "/api/alerts/channels", `{"name":"Mail","kind":"email","target":"a@x.example, b@x.example","min_severity":"medium"}`, 201)
+	off := e.admin.call("POST", "/api/alerts/channels", `{"name":"Off","kind":"email","target":"c@x.example","min_severity":"low"}`, 201)
 	hid, mid := hook["id"].(string), mail["id"].(string)
 	oldSecret := hook["secret"].(string)
 	file := func(typ, payload, secret string) map[string]any {
@@ -43,19 +48,21 @@ func TestAlertChannelChangeHistory(t *testing.T) {
 	tgt := file("alerts.channel.target", `{"channel_id":"`+mid+`","target":"new1@x.example, new2@x.example"}`, "")
 	sev := file("alerts.channel.severity", `{"channel_id":"`+mid+`","min_severity":"critical"}`, "")
 	rot := file("alerts.channel.rotate_secret", `{"channel_id":"`+hid+`"}`, rotated)
+	dis := file("alerts.channel.disable", `{"channel_id":"`+off["id"].(string)+`"}`, "")
 	del := file("alerts.channel.delete", `{"channel_id":"`+hid+`"}`, "")
 	pending := []string{read(tgt), read(sev)}
-	for _, c := range []map[string]any{tgt, sev, rot} {
+	for _, c := range []map[string]any{tgt, sev, rot, dis} {
 		approveChange(t, admin2, e.admin, c)
 	}
 	approveChange(t, admin2, e.admin, del)
 
-	summaries := map[string]string{"target": read(tgt), "severity": read(sev), "rotate": read(rot), "delete": read(del)}
+	summaries := map[string]string{"target": read(tgt), "severity": read(sev), "rotate": read(rot), "delete": read(del), "disable": read(dis)}
 	for k, want := range map[string][]string{
 		"target":   {`"Mail" (email`, "a@x.example, b@x.example → new1@x.example, new2@x.example"},
 		"severity": {`"Mail" (email`, "medium → critical"},
 		"rotate":   {`"Hook" (webhook`},
 		"delete":   {`"Hook" (webhook`, "Delete"},
+		"disable":  {`"Off" (email`, "enabled \u2192 disabled"},
 	} {
 		for _, w := range want {
 			if !strings.Contains(summaries[k], w) {
@@ -108,5 +115,46 @@ func TestAlertChannelChangeHistory(t *testing.T) {
 	}
 	if !sawPrev {
 		t.Error("no alert.channel.updated event holds previous_target next to the new target")
+	}
+}
+
+// A retarget between two full recipient lists (20 long addresses each) applies; the kept summary stays within the
+// 1000 characters admin_change_summaries holds, whatever the lists.
+func TestAlertChannelRetargetLongRecipientsApplies(t *testing.T) {
+	e := newPrivEnv(t)
+	sealer, err := seal.New(seal.RandomBytes(32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.cfg.Alerts = &alerts.Service{DB: e.f.DB, Sealer: sealer, Mail: alerts.LogMailer{}}
+	e.srv.admin.Sealer = sealer
+	admin2 := e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil)
+	list := func(prefix string) string {
+		var a []string
+		for i := 0; i < 20; i++ {
+			a = append(a, fmt.Sprintf("%s-%02d-%s@%s.example.com", prefix, i, strings.Repeat("l", 40), strings.Repeat("d", 30)))
+		}
+		return strings.Join(a, ", ")
+	}
+	mail := e.admin.call("POST", "/api/alerts/channels", `{"name":"Wide","kind":"email","target":"`+list("old")+`","min_severity":"low"}`, 201)
+	ch := e.admin.call("POST", "/api/admin/change-requests", `{"type":"alerts.channel.target","payload":{"channel_id":"`+mail["id"].(string)+`","target":"`+list("new")+`"}}`, 201)
+	approveChange(t, admin2, e.admin, ch)
+	got := e.admin.call("GET", "/api/admin/change-requests/"+ch["id"].(string), "", 200)
+	if got["status"] != "applied" {
+		t.Fatalf("status after approve = %v, want applied", got["status"])
+	}
+	var kept string
+	if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+		id, err := uuid.Parse(ch["id"].(string))
+		if err != nil {
+			return err
+		}
+		kept, err = tx.AdminChangeSummary(id)
+		return err
+	}); err != nil {
+		t.Fatalf("no summary kept: %v", err)
+	}
+	if n := utf8.RuneCountInString(kept); n < 1 || n > 1000 {
+		t.Errorf("kept summary has %d characters", n)
 	}
 }

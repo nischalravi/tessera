@@ -32,6 +32,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
@@ -233,6 +234,8 @@ type changeType struct {
 	summary func(e *env, v any) string
 	// keepSummary keeps the summary as it reads just before the change is made and shows that once the request is
 	// applied, for a type whose summary compares live state (old -> new) that the change itself replaces (#977).
+	// The kept text is stored, listed and audited as written, so the summary of such a type must never contain a
+	// secret or a URL (TestKeepSummaryTypesLeakNothing runs every such type through that check).
 	keepSummary bool
 	// submitSecret seals the client secret that travels with the request
 	// (idp_connection.create only); nil for the other types.
@@ -675,7 +678,7 @@ func (s *Service) apply(ctx context.Context, tenant tenancy.ID, id uuid.UUID, by
 			return errApplierFailed
 		}
 		if typ.keepSummary {
-			if err := tx.SetAdminChangeSummary(id, ae.describe(ch)); err != nil {
+			if err := tx.SetAdminChangeSummary(id, clipSummary(ae.describe(ch))); err != nil {
 				return err
 			}
 		}
@@ -757,6 +760,19 @@ func decodeStored(ch *store.AdminChange) (*changeType, any, error) {
 	}
 	v, _, err := typ.decode(ch.Payload)
 	return typ, v, err
+}
+
+// maxSummaryChars is the most characters admin_change_summaries.summary holds (CHECK length(summary) BETWEEN 1 AND
+// 1000; SQLite and Postgres both count characters, not bytes).
+const maxSummaryChars = 1000
+
+// clipSummary cuts a summary to maxSummaryChars characters, never inside a character, ending in an ellipsis when cut,
+// so a long one can not fail the CHECK and leave the request stuck in cooling off.
+func clipSummary(s string) string {
+	if utf8.RuneCountInString(s) <= maxSummaryChars {
+		return s
+	}
+	return string([]rune(s)[:maxSummaryChars-1]) + "\u2026"
 }
 
 // ---------------------------------------------------------------- sweeper

@@ -93,13 +93,13 @@ var (
 		SELECT `+adminChangeCols+` FROM admin_change_requests r
 		WHERE r.tenant_id = @tenant AND r.type = 'idp_connection.create' AND r.target_id = @target
 			AND r.status = 'applied' ORDER BY r.requested_at DESC, r.rowid DESC LIMIT 1`)
-	// the approver is not the requester and the request has not expired: both
-	// are checked in Go for a precise error and again here against a race
 	adminChangeSummaryPut = tq("admin_change_summaries.put", `
 		INSERT INTO admin_change_summaries (tenant_id, change_id, summary) VALUES (@tenant, @id, @summary)
 		ON CONFLICT (tenant_id, change_id) DO UPDATE SET summary = excluded.summary`)
 	adminChangeSummaryGet = tq("admin_change_summaries.get", `
 		SELECT s.summary FROM admin_change_summaries s WHERE s.tenant_id = @tenant AND s.change_id = @id`)
+	// the approver is not the requester and the request has not expired: both
+	// are checked in Go for a precise error and again here against a race
 	adminChangeApprove = tq("admin_change_requests.approve", `
 		UPDATE admin_change_requests SET status = 'cooling_off', approved_by_user_id = @by, approved_at = @at,
 			effective_at = @effective_at
