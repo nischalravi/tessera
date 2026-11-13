@@ -124,3 +124,70 @@ func inTenant(t *testing.T, db *store.DB, fn func(tx *store.TenantTx) error) {
 		t.Fatal(err)
 	}
 }
+
+// A request closed without being applied (or failed) keeps the channel name it had when filed. A channel renamed since
+// then (no second admin needed) shows its current name alongside; a deleted channel keeps the stored text.
+func TestClosedSummaryShowsCurrentChannelName(t *testing.T) {
+	db := testkit.Open(t)
+	testkit.CreateTenant(t, db, summaryTenant, "acme")
+	svc := &Service{DB: db}
+	now := time.Now()
+	email := "req@x.example"
+	user := &store.PlatformUser{Email: &email, DisplayName: "req", CreatedAt: now}
+	mkCh := func(id, name string) *store.AlertChannel {
+		return &store.AlertChannel{ID: id, Name: name, Kind: "email", Target: "a@x.example", MinSeverity: "low", Enabled: true, CreatedAt: now, UpdatedAt: now}
+	}
+	inTenant(t, db, func(tx *store.TenantTx) error {
+		if err := tx.InsertPlatformUser(user); err != nil {
+			return err
+		}
+		if err := tx.InsertAlertChannel(mkCh("ch-ren", "Old name")); err != nil {
+			return err
+		}
+		return tx.InsertAlertChannel(mkCh("ch-del", "Doomed"))
+	})
+	for _, status := range []string{store.ChangeRejected, store.ChangeCancelled, store.ChangeExpired, store.ChangeFailed} {
+		t.Run(status, func(t *testing.T) {
+			file := func(tx *store.TenantTx, id string) *store.AdminChange {
+				ch := &store.AdminChange{Type: TypeAlertChannelDisable, Payload: []byte(`{"channel_id":"` + id + `"}`), PayloadHash: strings.Repeat("a", 64),
+					Status: store.ChangePendingApproval, TwoPerson: true, RequestedBy: user.ID, RequestedAt: now, ExpiresAt: now.Add(time.Hour)}
+				if err := tx.InsertAdminChange(ch); err != nil {
+					t.Fatal(err)
+				}
+				if err := tx.SetAdminChangeSummary(ch.ID, clipSummary(svc.env(tx, now, uuid.Nil).describe(ch))); err != nil {
+					t.Fatal(err)
+				}
+				ch.Status = status
+				return ch
+			}
+			inTenant(t, db, func(tx *store.TenantTx) error {
+				ren, del := file(tx, "ch-ren"), file(tx, "ch-del")
+				e := svc.env(tx, now, uuid.Nil)
+				if got := e.describe(ren); strings.Contains(got, "(now") || !strings.Contains(got, `"Old name"`) {
+					t.Errorf("unrenamed: %q", got)
+				}
+				c, _ := tx.AlertChannel("ch-ren")
+				c.Name = "New name"
+				if err := tx.UpdateAlertChannel(c); err != nil {
+					return err
+				}
+				got := e.describe(ren)
+				if !strings.Contains(got, `"Old name"`) || !strings.HasSuffix(got, ` (now "New name")`) {
+					t.Errorf("renamed: %q", got)
+				}
+				if err := tx.DeleteAlertChannel("ch-del"); err != nil {
+					return err
+				}
+				if got := e.describe(del); !strings.Contains(got, `"Doomed"`) || strings.Contains(got, "(now") {
+					t.Errorf("deleted: %q", got)
+				}
+				// reset for the next status
+				c.Name = "Old name"
+				if err := tx.UpdateAlertChannel(c); err != nil {
+					return err
+				}
+				return tx.InsertAlertChannel(mkCh("ch-del", "Doomed"))
+			})
+		})
+	}
+}

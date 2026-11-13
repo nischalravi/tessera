@@ -59,7 +59,7 @@ func (e *env) describe(ch *store.AdminChange) string {
 	default:
 		// applied (kept when it was applied) or closed without being applied (kept when it was filed)
 		if s, err := e.tx.AdminChangeSummary(ch.ID); err == nil {
-			return s
+			return s + renamedNote(e, ch, s)
 		}
 	}
 	return typ.summary(e, v)
