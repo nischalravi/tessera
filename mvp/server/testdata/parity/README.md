@@ -223,3 +223,7 @@ byte-identical to before.
 ## Issue #968 (alert channel two-admin changes)
 
 No fixture changed. None of the 160 fixtures calls `PUT` or `DELETE /api/alerts/channels/{id}`, whose responses are the ones that changed (now 409 `two_admin_change_required` for a disable, a new recipient list or URL, a higher `min_severity`, and always for a delete).
+
+## Issue #973 (alert channel follow-ups)
+
+No fixture changed. None of the 160 fixtures calls `PUT /api/alerts/channels/{id}`, whose 409 now also carries `change_types` and answers `rotate_secret` too, or reads a change request's `summary` for an alert channel.

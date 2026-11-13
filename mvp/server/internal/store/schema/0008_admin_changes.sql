@@ -88,7 +88,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     -- disabling or deleting a SIEM sink stops its audit export, so each takes two admins (internal/admin/change_siem.go, issue #963)
     'siem.sink.disable','siem.sink.delete',
     -- disabling, deleting, retargeting or raising the min_severity of an alert channel takes two admins (internal/admin/change_alert_channels.go, issue #968)
-    'alerts.channel.disable','alerts.channel.delete','alerts.channel.target','alerts.channel.severity')),
+    'alerts.channel.disable','alerts.channel.delete','alerts.channel.target','alerts.channel.severity',
+    -- replacing a webhook channel's signing secret takes two admins; the new secret is sealed apart from the payload (issue #973)
+    'alerts.channel.rotate_secret')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

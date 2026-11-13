@@ -277,6 +277,35 @@ func RetargetChannel(tx *store.TenantTx, id, target, changeID string, dev bool, 
 	return recordChange(tx, "alert.channel.updated", append(channelAudit(c, false), ojson.KV{Key: "change_id", Value: changeID}), changeID, now)
 }
 
+// RotateChannelSecret replaces a webhook's signing secret with secret after two admins approved it
+// (alerts.channel.rotate_secret). The secret is sealed under the channel's own AAD; the audit entry records that it
+// changed, with the change id, never its value.
+func RotateChannelSecret(tx *store.TenantTx, sealer *seal.Sealer, id, secret, changeID string, now time.Time) error {
+	c, err := tx.AlertChannel(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return refuse(404, "channel_not_found", "channel not found")
+	} else if err != nil {
+		return err
+	}
+	if c.Kind != "webhook" {
+		return refuse(422, "invalid_secret", "only a webhook has a signing secret")
+	}
+	if len(secret) < MinSigningSecret || len(secret) > MaxSigningSecret {
+		return refuse(422, "invalid_secret", "the signing secret is %d to %d characters", MinSigningSecret, MaxSigningSecret)
+	}
+	if sealer == nil {
+		return errors.New("alerts: no sealer for webhook secrets")
+	}
+	if c.SecretSealed, err = sealer.Seal([]byte(secret), SecretAAD(tx.Tenant(), c.ID)); err != nil {
+		return err
+	}
+	c.UpdatedAt = now
+	if err := tx.UpdateAlertChannel(c); err != nil {
+		return err
+	}
+	return recordChange(tx, "alert.channel.updated", append(channelAudit(c, true), ojson.KV{Key: "change_id", Value: changeID}), changeID, now)
+}
+
 // RaiseChannelSeverity raises a channel's min_severity after two admins approved it (alerts.channel.severity): the
 // channel then receives fewer alerts. Audited as alert.channel.updated with the change id and the previous severity.
 func RaiseChannelSeverity(tx *store.TenantTx, id, severity, changeID string, now time.Time) error {

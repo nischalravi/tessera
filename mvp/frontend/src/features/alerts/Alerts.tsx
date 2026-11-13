@@ -6,7 +6,8 @@ import {
 } from "../../api";
 import { useSession } from "../../app/auth";
 import { TwoAdminDialog } from "../admin/TwoAdminDialog";
-import { TwoAdminType, alertChannelPayload, alertChannelSeverityPayload, alertChannelTargetPayload, alertLoosenPayload, twoAdminType } from "../admin/twoAdmin";
+import { TwoAdminBatchDialog } from "../admin/TwoAdminBatchDialog";
+import { TwoAdminType, alertChannelPayload, alertChannelChanges, alertLoosenPayload, twoAdminType, twoAdminTypes, ChannelChange } from "../admin/twoAdmin";
 import {
   Badge, Button, Callout, Column, CommandBar, DataTable, Drawer, EmptyState, Loading, Page, SidePanel, Tabs, useConfirm, useToast,
 } from "../../components";
@@ -336,13 +337,19 @@ function ChannelList() {
   );
 }
 
+/** A new webhook signing secret: 256 random bits, made here because the change request seals what the requester sends. */
+function newSigningSecret(): string {
+  const b = crypto.getRandomValues(new Uint8Array(32));
+  return "whsec_" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
 function ChannelForm({ channel, onClose, onSaved }: { channel: AlertChannel | null; onClose: () => void; onSaved: (c: AlertChannel) => void }) {
   const toast = useToast();
   const c = channel;
   const [f, setF] = useState({ name: c?.name ?? "", kind: c?.kind ?? ("webhook" as "email" | "webhook"), target: "", min: c?.min_severity ?? ("high" as AlertSeverity), enabled: c?.enabled ?? true, rotate: false });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [ask, setAsk] = useState<{ type: TwoAdminType; payload: Record<string, unknown>; what: string } | null>(null);
+  const [batch, setBatch] = useState<{ items: ChannelChange[]; notFiled: string[] } | null>(null);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -356,17 +363,10 @@ function ChannelForm({ channel, onClose, onSaved }: { channel: AlertChannel | nu
       toast(`${saved.name} saved`);
       onSaved(saved);
     } catch (err: any) {
-      const type = c ? twoAdminType(err) : null;
-      if (c && type === "alerts.channel.disable") {
-        setAsk({ type, payload: alertChannelPayload(c.id), what: "Turning this channel off stops its alerts, so a second admin must approve it. Save your other changes with Enabled still ticked." });
-        return;
-      }
-      if (c && type === "alerts.channel.target") {
-        setAsk({ type, payload: alertChannelTargetPayload(c.id, f.target), what: `Sending this channel's alerts to ${f.target.trim()} redirects them, so a second admin must approve it.` });
-        return;
-      }
-      if (c && type === "alerts.channel.severity") {
-        setAsk({ type, payload: alertChannelSeverityPayload(c.id, f.min), what: "A higher minimum severity means this channel receives fewer alerts, so a second admin must approve it." });
+      // One save can need several two-admin changes (issue #973): file every one, and list any that cannot be filed.
+      const types = c ? twoAdminTypes(err) : [];
+      if (c && types.length) {
+        setBatch(alertChannelChanges(types, c.id, { target: f.target, min: f.min }, newSigningSecret));
         return;
       }
       setError(String(err.message ?? err));
@@ -376,7 +376,7 @@ function ChannelForm({ channel, onClose, onSaved }: { channel: AlertChannel | nu
   };
   return (
     <Drawer title={c ? `Edit ${c.name}` : "New alert channel"} onClose={onClose}>
-      {ask && <TwoAdminDialog type={ask.type} payload={ask.payload} what={ask.what} onClose={() => setAsk(null)} />}
+      {batch && <TwoAdminBatchDialog items={batch.items} notFiled={batch.notFiled} onClose={() => setBatch(null)} />}
       <form className="stack" onSubmit={submit}>
         <label className="field">Name<input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={100} placeholder="e.g. Slack #security" /></label>
         {!c && (

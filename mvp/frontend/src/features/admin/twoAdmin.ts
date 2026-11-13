@@ -2,9 +2,9 @@
 // become the payload of an admin change request. Pure helpers, no React, so `npm test` covers the mapping.
 
 /** The change types a 409 two_admin_change_required can name. */
-export type TwoAdminType = "siem.sink.filter" | "siem.sink.target" | "siem.sink.disable" | "siem.sink.delete" | "alerts.rule.loosen" | "alerts.channel.disable" | "alerts.channel.delete" | "alerts.channel.target" | "alerts.channel.severity" | "breach.item.attest" | "provisioning.write_back.enable";
+export type TwoAdminType = "siem.sink.filter" | "siem.sink.target" | "siem.sink.disable" | "siem.sink.delete" | "alerts.rule.loosen" | "alerts.channel.disable" | "alerts.channel.delete" | "alerts.channel.target" | "alerts.channel.severity" | "alerts.channel.rotate_secret" | "breach.item.attest" | "provisioning.write_back.enable";
 
-const TYPES: readonly string[] = ["siem.sink.filter", "siem.sink.target", "siem.sink.disable", "siem.sink.delete", "alerts.rule.loosen", "alerts.channel.disable", "alerts.channel.delete", "alerts.channel.target", "alerts.channel.severity", "breach.item.attest", "provisioning.write_back.enable"];
+const TYPES: readonly string[] = ["siem.sink.filter", "siem.sink.target", "siem.sink.disable", "siem.sink.delete", "alerts.rule.loosen", "alerts.channel.disable", "alerts.channel.delete", "alerts.channel.target", "alerts.channel.severity", "alerts.channel.rotate_secret", "breach.item.attest", "provisioning.write_back.enable"];
 
 /** The change type to file when `err` is the API's 409 two_admin_change_required, else null. */
 export function twoAdminType(err: unknown): TwoAdminType | null {
@@ -12,6 +12,18 @@ export function twoAdminType(err: unknown): TwoAdminType | null {
   if (!e || e.status !== 409 || e.code !== "two_admin_change_required") return null;
   const t = e.body?.change_type;
   return typeof t === "string" && TYPES.includes(t) ? (t as TwoAdminType) : null;
+}
+
+/**
+ * Every change type a 409 two_admin_change_required names (issue #973): change_types when the API sends it (one save can need
+ * several), else the single change_type. Unknown names are kept so the caller can say they were not filed. [] for any other error.
+ */
+export function twoAdminTypes(err: unknown): string[] {
+  const e = err as { status?: number; code?: string | null; body?: { change_type?: unknown; change_types?: unknown } } | null;
+  if (!e || e.status !== 409 || e.code !== "two_admin_change_required") return [];
+  const list = Array.isArray(e.body?.change_types) ? e.body!.change_types.filter((x): x is string => typeof x === "string") : [];
+  if (list.length) return list;
+  return typeof e.body?.change_type === "string" ? [e.body.change_type] : [];
 }
 
 const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x) => b.includes(x));
@@ -45,6 +57,45 @@ export const alertChannelTargetPayload = (channelId: string, target: string) => 
 /** alerts.channel.severity: the higher min_severity. */
 export const alertChannelSeverityPayload = (channelId: string, minSeverity: string) => ({ channel_id: channelId, min_severity: minSeverity });
 
+/** alerts.channel.rotate_secret: the channel only. The new secret goes as client_secret, never in the payload. */
+export const alertChannelRotatePayload = alertChannelPayload;
+
+/** One change an alert channel save needs filed. `secret` is the new signing secret to send as client_secret (rotate only). */
+export interface ChannelChange { type: TwoAdminType; payload: Record<string, unknown>; what: string; secret?: string }
+
+/**
+ * Turns the change types a 409 named into the requests to file (issue #973): every one the UI can file, in the API's order, and a
+ * line for each it cannot (a webhook URL carries a token, so it is never put in a change request).
+ */
+export function alertChannelChanges(
+  types: readonly string[], channelId: string, form: { target: string; min: string }, newSecret: () => string,
+): { items: ChannelChange[]; notFiled: string[] } {
+  const items: ChannelChange[] = [];
+  const notFiled: string[] = [];
+  for (const type of new Set(types)) {
+    switch (type) {
+      case "alerts.channel.disable":
+        items.push({ type, payload: alertChannelPayload(channelId), what: "Turn the channel off" });
+        break;
+      case "alerts.channel.target":
+        items.push({ type, payload: alertChannelTargetPayload(channelId, form.target), what: `Send its alerts to ${form.target.trim()}` });
+        break;
+      case "alerts.channel.severity":
+        items.push({ type, payload: alertChannelSeverityPayload(channelId, form.min), what: `Raise the minimum severity to ${form.min}` });
+        break;
+      case "alerts.channel.rotate_secret":
+        items.push({ type, payload: alertChannelRotatePayload(channelId), what: "Issue a new signing secret", secret: newSecret() });
+        break;
+      case "config.proposal":
+        notFiled.push("The new webhook URL: it carries a token, so it cannot go in a change request. Add a channel with the new URL and delete this one (needs a second admin), or have a machine client propose it.");
+        break;
+      default:
+        notFiled.push(`${type}: this form cannot file it.`);
+    }
+  }
+  return { items, notFiled };
+}
+
 /** breach.item.attest: the plan, the item and what the person did (the server checks all three). */
 export const breachAttestPayload = (planId: string, itemId: string, note: string) => ({ plan_id: planId, item_id: itemId, note: note.trim() });
 
@@ -66,6 +117,7 @@ export const TWO_ADMIN_TITLE: Record<TwoAdminType, string> = {
   "alerts.channel.delete": "Deleting this channel needs a second admin",
   "alerts.channel.target": "Sending this channel's alerts to other recipients needs a second admin",
   "alerts.channel.severity": "Raising this channel's minimum severity needs a second admin",
+  "alerts.channel.rotate_secret": "Issuing a new signing secret for this channel needs a second admin",
   "alerts.rule.loosen": "Loosening a security alert rule needs a second admin",
   "breach.item.attest": "Attesting a breach item needs a second admin",
   "provisioning.write_back.enable": "Turning on write-back needs a second admin",
