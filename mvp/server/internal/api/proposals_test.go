@@ -502,7 +502,7 @@ func TestProposalsAPI_SealedSecrets(t *testing.T) {
 	noTok := e.machineToken(noScope, "tenant-a", "tessera:read tessera:write")
 
 	const secret = "PLAINTEXT-s3cr3t-value-7"
-	hook := `{"name":"soc","kind":"webhook","target":"https://hooks.example.com/services/PLAINTEXT-s3cr3t-path","signing_secret":"` + secret + `-hook"}`
+	hook := `{"name":"soc","kind":"webhook","target":"https://hooks.example.com/services/PLAINTEXT-s3cr3t-path","signing_secret":"` + secret + `-hook-0123456789abcdef"}`
 	sink := `{"name":"splunk","kind":"webhook","format":"json","flavor":"hec","target":"https://splunk.example.com:8088/collector","token":"` + secret + `-hec"}`
 	conn := `{"name":"Okta prod","connector_type":"okta","config":{"org_url":"https://acme.okta.com"},"credential":{"secret":"` + secret + `-conn"}}`
 	paths := map[string]string{"/api/proposals/alert-channels": hook, "/api/proposals/siem-sinks": sink, "/api/proposals/connections": conn}
@@ -739,7 +739,7 @@ func TestProposalsAPI_SecretKindsAreTenantScoped(t *testing.T) {
 	const secret = "PLAINTEXT-xtenant-secret-9"
 	for path, payload := range map[string]string{
 		"/api/proposals/connections/" + bID:     `{"credential":{"secret":"` + secret + `"}}`,
-		"/api/proposals/alert-channels/" + chID: `{"target":"https://h.example.com/` + secret + `","signing_secret":"` + secret + `-hook"}`,
+		"/api/proposals/alert-channels/" + chID: `{"target":"https://h.example.com/` + secret + `","signing_secret":"` + secret + `-hook-0123456789abcdef"}`,
 		"/api/proposals/siem-sinks/" + skID:     `{"token":"` + secret + `"}`,
 	} {
 		rec := e.call(tok, "POST", path, payload)
@@ -748,8 +748,8 @@ func TestProposalsAPI_SecretKindsAreTenantScoped(t *testing.T) {
 		}
 	}
 	for _, payload := range []string{
-		`{"name":"x","kind":"webhook","Target":"https://h.example.com/` + secret + `","signing_secret":"` + secret + `-hook"}`,
-		`{"name":"x","kind":"webhook","target":"https://h.example.com/` + secret + `","Target_Origin":"https://trusted.example.com:443","signing_secret":"` + secret + `-hook"}`,
+		`{"name":"x","kind":"webhook","Target":"https://h.example.com/` + secret + `","signing_secret":"` + secret + `-hook-0123456789abcdef"}`,
+		`{"name":"x","kind":"webhook","target":"https://h.example.com/` + secret + `","Target_Origin":"https://trusted.example.com:443","signing_secret":"` + secret + `-hook-0123456789abcdef"}`,
 	} {
 		rec := e.call(tok, "POST", "/api/proposals/alert-channels", payload)
 		if rec.Code != 422 || strings.Contains(rec.Body.String(), secret) {

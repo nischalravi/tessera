@@ -1,6 +1,7 @@
 package readiness
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -111,5 +112,37 @@ func TestKeepMasked_AttrMapAndPrivileged(t *testing.T) {
 	bad := ConnConfig{AttrMap: []AttrMapping{{LDAP: "https://a:b@c.example", Target: "x", Scope: "account"}}}
 	if err := urlCredentialError(cur, bad); err == nil || strings.Contains(err.Error(), "c.example") {
 		t.Errorf("got %v", err)
+	}
+}
+
+// KeepMaskedLegacy restores a stored legacy value only where the incoming one is exactly its mask (#975).
+func TestKeepMaskedLegacy(t *testing.T) {
+	cur := json.RawMessage(`{"attr_map":[{"ldap":"` + credURL + `","target":"x","scope":"account"}],"privileged_expected":{"admins":["alice","` + credURL + `"]},"host":"h"}`)
+	cases := []struct {
+		name, next, want string
+	}{
+		{"masked", `{"attr_map":[{"ldap":"` + maskText(credURL) + `","target":"x","scope":"account"}],"privileged_expected":{"admins":["alice","` + maskText(credURL) + `"]},"host":"h"}`, "keep"},
+		{"replaced", `{"attr_map":[{"ldap":"mail","target":"x","scope":"account"}],"host":"h"}`, "mail"},
+		{"no legacy keys", `{"host":"h2"}`, `{"host":"h2"}`},
+		{"not json", `[1]`, `[1]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := string(KeepMaskedLegacy(cur, json.RawMessage(tc.next)))
+			switch tc.want {
+			case "keep":
+				if strings.Count(got, "pwSECRET") != 2 || strings.Contains(got, "masked") {
+					t.Errorf("not kept: %s", got)
+				}
+			case "mail":
+				if strings.Contains(got, "pwSECRET") || !strings.Contains(got, "mail") {
+					t.Errorf("replaced value changed: %s", got)
+				}
+			default:
+				if got != tc.want {
+					t.Errorf("got %s", got)
+				}
+			}
+		})
 	}
 }

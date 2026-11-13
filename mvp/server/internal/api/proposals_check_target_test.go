@@ -33,7 +33,7 @@ func TestProposalsAPI_CheckTarget(t *testing.T) {
 
 	const target = "https://hooks.example.com/services/PLAINTEXT-sealed-path"
 	const guess = "https://hooks.example.com/services/PLAINTEXT-guess-path"
-	rec := e.call(tok, "POST", "/api/proposals/alert-channels", `{"name":"soc","kind":"webhook","target":"`+target+`","signing_secret":"PLAINTEXT-signing-secret-1"}`)
+	rec := e.call(tok, "POST", "/api/proposals/alert-channels", `{"name":"soc","kind":"webhook","target":"`+target+`","signing_secret":"PLAINTEXT-signing-secret-0123456789"}`)
 	got := body(rec)
 	cid, hash := asString(got["change_id"]), asString(got["payload_hash"])
 	if rec.Code != 202 || got["target_fingerprint"] != nil {
