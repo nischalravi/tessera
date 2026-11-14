@@ -4383,6 +4383,13 @@ export interface AlertChannelInput {
 
 export const ALERT_SEVERITIES: AlertSeverity[] = ["low", "medium", "high", "critical"];
 
+/** What the alert-channel form says about a webhook's signing secret: shown once on create; rotation is a two-admin request. */
+export function channelSecretHint(existing: boolean): string {
+  return existing
+    ? "Rotating the signing secret needs a second admin to approve: saving with the box ticked opens the request, and the new secret is shown in that dialog."
+    : "Requests are signed with a secret shown once after saving.";
+}
+
 export const alertsApi = {
   acknowledge: (id: string) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/acknowledge`, {}),
   resolve: (id: string, note: string) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/resolve`, { note }),

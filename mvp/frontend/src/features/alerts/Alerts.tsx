@@ -2,7 +2,7 @@ import { FormEvent, Fragment, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BellRing, Check, CheckCheck, Mail, Pencil, Plus, Send, Trash2, UserMinus, UserPlus, Webhook } from "lucide-react";
 import {
-  ALERT_SEVERITIES, AlertChannel, AlertChannelInput, AlertRow, AlertRule, AlertSeverity, alertsApi, fmtDate, relTime, severityTone, useApi,
+  ALERT_SEVERITIES, AlertChannel, AlertChannelInput, AlertRow, AlertRule, AlertSeverity, alertsApi, channelSecretHint, fmtDate, relTime, severityTone, useApi,
 } from "../../api";
 import { useSession } from "../../app/auth";
 import { TwoAdminDialog } from "../admin/TwoAdminDialog";
@@ -396,7 +396,7 @@ function ChannelForm({ channel, onClose, onSaved }: { channel: AlertChannel | nu
         </label>
         <label className="row tight small"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Enabled</label>
         {c?.kind === "webhook" && <label className="row tight small"><input type="checkbox" checked={f.rotate} onChange={(e) => setF({ ...f, rotate: e.target.checked })} /> Issue a new signing secret</label>}
-        <p className="small muted">{f.kind === "webhook" ? "Requests are signed with a secret shown once after saving. Private and cloud-metadata addresses are refused." : "Email goes out through the server's TESSERA_NOTIFY setting."} Saving needs a recent strong sign-in.</p>
+        <p className="small muted">{f.kind === "webhook" ? channelSecretHint(!!c) + " Private and cloud-metadata addresses are refused." : "Email goes out through the server's TESSERA_NOTIFY setting."} Saving needs a recent strong sign-in.</p>
         {error && <Callout tone="bad">{error}</Callout>}
         <div className="row"><Button type="submit" variant="primary" disabled={busy}>{busy ? "Saving…" : "Save"}</Button><Button onClick={onClose}>Cancel</Button></div>
       </form>
